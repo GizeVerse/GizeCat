@@ -19,7 +19,7 @@ import {
   type PerceptionPreview,
   type SettingsViewState,
 } from '../../shared/ipc';
-import type { PatchResult } from '../../shared/settings';
+import { rejectConsentBypass, type PatchResult } from '../../shared/settings';
 import type { Logger, PerceptionService } from '../contracts';
 import { redactString } from '../diagnostics/redact';
 import { verifyIpcSender, type WindowRegistry } from '../security';
@@ -142,6 +142,11 @@ export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
   onSettings(IPC.settingsUpdate, (payload): PatchResult => {
     const parsed = SettingsPatchSchema.safeParse(payload);
     if (!parsed.success) return { ok: false, error: 'invalid patch' };
+    const bypass = rejectConsentBypass(parsed.data);
+    if (bypass !== null) {
+      log.warn('rejected settings patch touching consent fields');
+      return { ok: false, error: bypass };
+    }
     return deps.settings.patchUnknown(parsed.data);
   });
 

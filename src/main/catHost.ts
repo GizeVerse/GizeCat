@@ -9,6 +9,7 @@ import type { Point, Rect } from '../shared/geometry';
 import type { Settings } from '../shared/settings';
 import type { CatSim, SimEnv, SimEvent, SimOutput, SimRequest } from '../shared/sim';
 import type { WorldGeometry } from '../shared/world';
+import { simWorld } from '../core/display/simWorld';
 import type { ActivityMonitor, DisplayService, Logger, PerceptionService, Win32Api, WindowTracker } from './contracts';
 
 export const MIN_TICK_MS = 16;
@@ -420,7 +421,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       nudge();
     },
     onDisplayChanged(world) {
-      attempt(() => sim.setWorld(world), 'sim.setWorld');
+      attempt(() => sim.setWorld(simWorld(world)), 'sim.setWorld');
       fullscreenAt = -Infinity;
       enqueue({ type: 'display.changed' });
       nudge();

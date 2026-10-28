@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { app, BrowserWindow, globalShortcut, ipcMain, Menu, powerMonitor, safeStorage, screen, session, shell } from 'electron';
 import { createCatSim, migrateCatState, summarizeCat } from '../core/behavior';
+import { simWorld } from '../core/display/simWorld';
 import { createGestureRecognizer } from '../core/interaction/gestures';
 import type { AppStatus, SettingsViewState } from '../shared/ipc';
 import { IPC } from '../shared/ipc';
@@ -113,7 +114,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const initial = settings.get();
   attempt(log, 'window exclusions', () => tracker.setExclusions(initial.perception.excludedProcesses, initial.perception.excludedTitlePatterns));
 
-  const sim = createCatSim({ persisted: catLoad.cat, settings: initial, world: display.world, now: 0, random: Math.random, wallClock: Date.now });
+  const sim = createCatSim({ persisted: catLoad.cat, settings: initial, world: simWorld(display.world), now: 0, random: Math.random, wallClock: Date.now });
   const registry = createWindowRegistry();
 
   let host: CatHost | null = null;
@@ -122,6 +123,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     getCatDisplayId: () => host?.catDisplayId() ?? null,
     getForeground: () => tracker.getForeground(),
     isExcludedAt: (p) => tracker.isExcludedAt(p),
+    getExcludedRects: () => tracker.getExcludedRects(),
     isLocked: () => host?.locked ?? false,
   };
   let perception: PerceptionService | null = null;

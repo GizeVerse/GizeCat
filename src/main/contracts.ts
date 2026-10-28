@@ -58,8 +58,10 @@ export interface WindowTracker {
   getWindowRect(id: string): Rect | null;
   /** Ids of displays where a fullscreen app is in front. */
   getFullscreenDisplayIds(world: WorldGeometry): string[];
-  /** Root window id at a point, for privacy checks. */
+  /** True when the root window at p is excluded (or cannot be cleared). Privacy check. */
   isExcludedAt(p: Point): boolean;
+  /** Rects (px) of visible windows matching privacy exclusions; masked out of every frame. */
+  getExcludedRects(): Rect[];
   setExclusions(processes: readonly string[], titlePatterns: readonly string[]): void;
 }
 
@@ -70,6 +72,8 @@ export interface ActivityMonitor {
   /** Called by the host every tick with the latest cursor sample. */
   sample(now: number, cursor: Point | null): void;
   drainEvents(): SimEvent[];
+  /** Threshold for the second activity.userIdle event (the cat's sleep threshold). */
+  setSleepThresholdMs(ms: number): void;
   readonly idleMs: number;
   readonly typing: boolean;
   readonly typingIntensity: number;
@@ -84,6 +88,8 @@ export interface DisplayService {
   /** Overlay-local DIP -> physical. */
   fromLocalDip(displayId: string, p: Point): Point;
   displayAt(p: Point): string | null;
+  /** Re-reads the topology (e.g. after resume); true if it changed. */
+  refresh(): boolean;
   dispose(): void;
 }
 
@@ -93,6 +99,8 @@ export interface PerceptionHost {
   getCatDisplayId(): string | null;
   getForeground(): WindowInfo | null;
   isExcludedAt(p: Point): boolean;
+  /** Visible excluded windows (px); they are blacked out before analysis. */
+  getExcludedRects(): readonly Rect[];
   isLocked(): boolean;
 }
 

@@ -57,6 +57,8 @@ export class FakeHost implements PerceptionHost {
   getCatDisplayId = () => this.catDisplayId;
   getForeground = () => this.foreground;
   isExcludedAt = (p: Point) => this.excludedAt(p);
+  excludedRects: Rect[] = [];
+  getExcludedRects = () => this.excludedRects;
   isLocked = () => this.locked;
 }
 

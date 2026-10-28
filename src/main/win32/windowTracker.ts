@@ -482,6 +482,24 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       }
     },
 
+    getExcludedRects(): Rect[] {
+      // Fresh enumeration (only called per capture). Windows whose exclusion status
+      // cannot be determined are treated as excluded.
+      if (!api.available) return [];
+      try {
+        const rects: Rect[] = [];
+        for (const w of api.listAppWindows()) {
+          if (w.minimized || w.rect.width <= 0 || w.rect.height <= 0) continue;
+          const excluded = extended ? (extended.isWindowExcluded(w.id) ?? true) : w.excluded;
+          if (excluded) rects.push({ ...w.rect });
+        }
+        return rects;
+      } catch (e) {
+        reportError('excludedRects', e);
+        return [];
+      }
+    },
+
     setExclusions(processes: readonly string[], titlePatterns: readonly string[]) {
       rules.set(processes, titlePatterns);
       try {

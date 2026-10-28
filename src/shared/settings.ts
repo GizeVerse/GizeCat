@@ -196,6 +196,22 @@ export function migrateSettings(raw: unknown): Settings {
 export type PatchResult = { ok: true; settings: Settings } | { ok: false; error: string };
 
 /**
+ * Consent fields can only change through the explicit consent actions in main
+ * (grant*Consent / revokeConsent). A plain settings patch from a renderer may turn
+ * screen analysis OFF, but never on, and may never write the consent timestamp.
+ * Returns an error message, or null if the patch is acceptable.
+ */
+export function rejectConsentBypass(patch: unknown): string | null {
+  if (patch === null || typeof patch !== 'object') return null;
+  const perception = (patch as Record<string, unknown>)['perception'];
+  if (perception === null || typeof perception !== 'object') return null;
+  const p = perception as Record<string, unknown>;
+  if ('consentAt' in p) return 'perception.consentAt can only be changed by the consent dialog';
+  if ('visualMode' in p && p['visualMode'] !== 'off') return 'screen analysis can only be enabled through the consent dialog';
+  return null;
+}
+
+/**
  * Applies a patch from an untrusted source (the settings renderer). Unlike loading
  * from disk, invalid values are rejected rather than silently defaulted: every
  * patched leaf must survive parsing unchanged.
