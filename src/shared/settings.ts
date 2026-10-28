@@ -88,6 +88,8 @@ const AppearanceSchema = z.object({
   animationSpeed: field(z.number().min(0.5).max(1.5), 1),
   shadow: field(z.boolean(), true),
   emotes: field(z.boolean(), true),
+  /** Exclude the overlays from screenshots/screen sharing (WDA_EXCLUDEFROMCAPTURE). */
+  hideFromScreenCapture: field(z.boolean(), false),
 });
 
 const BehaviorSchema = z.object({
@@ -143,7 +145,8 @@ const AiSchema = z.object({
   ollamaModel: field(z.string().max(200), ''),
   openaiBaseUrl: field(z.string().max(200), 'http://127.0.0.1:1234/v1'),
   openaiModel: field(z.string().max(200), ''),
-  anthropicModel: field(z.string().max(100), ''),
+  /** Smallest current vision-capable Claude model (docs.claude.com, verified 2026-10-28). */
+  anthropicModel: field(z.string().max(100), 'claude-haiku-5-5'),
   minIntervalSec: field(z.number().int().min(30).max(86400), 120),
   maxPerHour: field(z.number().int().min(1).max(60), 12),
   timeoutSec: field(z.number().int().min(3).max(120), 30),
@@ -151,6 +154,8 @@ const AiSchema = z.object({
 
 const DiagnosticsSchema = z.object({
   logLevel: field(z.enum(['error', 'warn', 'info', 'debug']), 'info'),
+  /** Compatibility switch (applies at next launch) for GPUs that render transparent windows black. */
+  hardwareAcceleration: field(z.boolean(), true),
 });
 
 export const SettingsSchema = z.object({

@@ -1,0 +1,44 @@
+appId: io.github.enesiltas.desktopcat
+productName: Desktop Cat
+copyright: Copyright © 2026 enesiltas
+electronVersion: 44.9.3
+npmRebuild: false
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - "!out/preview/**"
+  - assets/**/*
+  - package.json
+  - LICENSE
+  - "!**/*.map"
+asar: true
+asarUnpack:
+  - node_modules/koffi/**
+  - node_modules/@koromix/koffi-win32-x64/**
+extraMetadata:
+  main: out/main/index.js
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  executableName: DesktopCat
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Desktop Cat
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  uninstallDisplayName: Desktop Cat
+  artifactName: Desktop-Cat-Setup-${version}.${ext}
+  license: LICENSE
+publish: null
