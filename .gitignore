@@ -5,3 +5,7 @@ release/
 .claude/worktrees/
 .claude/state/
 *.log
+
+# Claude Code engineering standard (local state)
+.claude/handoff.md
+.claude/settings.local.json

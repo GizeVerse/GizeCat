@@ -1,0 +1,24 @@
+{
+  "verify": {
+    "fast": [
+      { "name": "typecheck", "cmd": "npm run typecheck", "timeoutSec": 600 },
+      { "name": "lint", "cmd": "npm run lint", "timeoutSec": 900 },
+      { "name": "unit", "cmd": "npx vitest run", "timeoutSec": 900 }
+    ],
+    "full": [
+      { "name": "typecheck", "cmd": "npm run typecheck", "timeoutSec": 600 },
+      { "name": "lint", "cmd": "npm run lint", "timeoutSec": 900 },
+      { "name": "unit", "cmd": "npx vitest run", "timeoutSec": 900 },
+      { "name": "build", "cmd": "node scripts/build.mjs", "timeoutSec": 300 },
+      { "name": "e2e", "cmd": "npx playwright test", "timeoutSec": 1200, "requires": { "probe": "node -e \"require('fs').accessSync('node_modules/electron/path.txt')\"" } }
+    ]
+  },
+  "invariants": [
+    { "id": "consent-guard", "files": ["src/main/ipc/handlers.ts"], "mustContain": ["rejectConsentBypass"], "reason": "renderer patches must never enable screen analysis or write consentAt (docs/PRIVACY.md)" },
+    { "id": "privacy-defaults-off", "files": ["src/shared/settings.ts"], "mustContain": ["visualMode: field(z.enum(['off', 'local-stats', 'ai']), 'off')", "allowCloud: field(z.boolean(), false)"], "reason": "screen analysis and cloud egress are off by default (docs/PRIVACY.md)" },
+    { "id": "sandboxed-renderers", "files": ["src/main/overlay/overlayWindow.ts", "src/main/settingsWindow.ts"], "mustContain": ["sandbox: true", "contextIsolation: true", "nodeIntegration: false"], "reason": "renderer isolation (docs/THREAT_MODEL.md T1)" },
+    { "id": "no-test-surface-when-packaged", "files": ["src/main/index.ts"], "mustContain": ["isTestMode(process.env) && !app.isPackaged", "hasFlag(process.argv, '--dev') && !app.isPackaged"], "reason": "test hooks and DevTools never exist in packaged builds (docs/THREAT_MODEL.md T13)" }
+  ],
+  "guard": { "rules": [], "protectedPaths": [] },
+  "stopGate": { "enabled": true, "ignore": ["**/*.md", "docs/**"] }
+}

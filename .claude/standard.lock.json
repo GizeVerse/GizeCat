@@ -1,0 +1,23 @@
+{
+  "standard": "1.1.0",
+  "installedFrom": "claude-standard",
+  "files": {
+    ".claude/agents/reviewer.md": "d7f5ce0d54b379ccd24e480e56905b05dda044abd0aa9109a9ad7972d5a8dd72",
+    ".claude/agents/security-reviewer.md": "752a9148fde38ec6ebc7baa09f8edb8ec17e1ba7f3f8b7cd34c7db50a74160a8",
+    ".claude/agents/verifier.md": "8a5fa8e71d9180b6e4878cb310368dca3a73c26b3ddc7e34c7382b9cee86f415",
+    ".claude/hooks/guard.mjs": "c831992c1f4f32d94b710abdd4879887e32fbcc9d54ddab7061212e356b9cd34",
+    ".claude/hooks/invariant-guard.mjs": "c92e9a96dcdc1346d16794f0aaca8292f759c39f4e907c5312ae7f27191aa5dd",
+    ".claude/hooks/lib.mjs": "9cda980d062a2c2a88768d8ed369568d4fd97b806578817efe404744b23b45ea",
+    ".claude/hooks/session-context.mjs": "4fb284f252a988f8aad237324f3ef2650d0784a8e15157d01160715719e03339",
+    ".claude/hooks/stop-gate.mjs": "12a053e55229249179f4f71797d11845d288339fe5a1cd795e26ee618ae73ffb",
+    ".claude/rules/standard.md": "55b5023678550b98cf94759154cb6bb1871628d1c75ac8f1194076856a9f2be3",
+    ".claude/scripts/selftest.mjs": "9001d3e662d2e0da5044133071b0090f3344f85fc9f2d31c959069deae240e33",
+    ".claude/scripts/verify.mjs": "fe52ad4a54557801d7e891c72c0318de162e4a5b53ba244f94318c4a61dfb060",
+    ".claude/skills/audit/SKILL.md": "091091be70b3d59f65554a422a7229d936cf3ebf432a9b69cc359273b5632895",
+    ".claude/skills/handoff/SKILL.md": "a71d56bfc44e970505dfe557cd2acd86ce1d6d493f55be6968d375e9e64d028d",
+    ".claude/skills/implement/SKILL.md": "1b7d0b7291529d4315cbb6ccb21ae5542cc4a45d46592a6c38acf252d633acc6",
+    ".claude/skills/release/SKILL.md": "9ee9af76e5604489d95a9a725d76aa1c23f6e57b94f854bbe3c1cc3b64ca027c",
+    ".claude/skills/security-audit/SKILL.md": "a845e467b66e483b3142412ac628e750da6eecd3103fcbbdefb24b6d7d2b0306",
+    ".claude/skills/verify/SKILL.md": "e73fbb41fa2c9d595d4cefdb9b24477b0af6879894e01054026fac1454e23dac"
+  }
+}
