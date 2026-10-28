@@ -22,6 +22,9 @@ export interface ActionTargets {
   exportDiagnostics(): Promise<ActionResult>;
   openLogsFolder(): Promise<ActionResult>;
   openSettings(): void;
+  /** v1.1: the only path that changes the launch-at-sign-in preference (main-owned). */
+  setLaunchAtLogin(on: boolean): ActionResult;
+  dismissLaunchNotice(): ActionResult;
   quit(): void;
 }
 
@@ -91,6 +94,12 @@ export function createActionRunner(deps: {
         return { ok: true };
       case 'completeFirstRun':
         return applyPatch({ general: { firstRunCompleted: true } });
+      case 'enableLaunchAtLogin':
+        return targets.setLaunchAtLogin(true);
+      case 'disableLaunchAtLogin':
+        return targets.setLaunchAtLogin(false);
+      case 'dismissLaunchNotice':
+        return targets.dismissLaunchNotice();
       case 'quit':
         // Let the IPC reply reach the renderer before windows start closing.
         defer(() => targets.quit());

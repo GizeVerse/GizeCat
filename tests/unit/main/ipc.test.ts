@@ -45,6 +45,8 @@ function setup() {
     exportDiagnostics: () => Promise.resolve({ ok: true, message: 'saved' }),
     openLogsFolder: () => Promise.resolve({ ok: true }),
     openSettings: () => calls.push('openSettings'),
+    setLaunchAtLogin: (on) => (calls.push(`launch:${on}`), { ok: true }),
+    dismissLaunchNotice: () => (calls.push('dismissNotice'), { ok: true }),
     quit: () => calls.push('quit'),
   };
   const runner = createActionRunner({

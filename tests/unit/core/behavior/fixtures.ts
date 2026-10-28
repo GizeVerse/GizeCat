@@ -93,6 +93,8 @@ export class Harness {
       foreground: e.foreground ?? null,
       platforms: e.platforms ?? platformsFrom(windows),
       getWindowRect: e.getWindowRect ?? ((id: string) => windows[id] ?? null),
+      surfaces: e.surfaces ?? [],
+      getSurface: e.getSurface ?? (() => null),
       fullscreenDisplayIds: e.fullscreenDisplayIds ?? [],
       paused: e.paused ?? false,
       hidden: e.hidden ?? false,

@@ -16,6 +16,8 @@ function env(now: number, over: Partial<SimEnv> = {}): SimEnv {
     foreground: null,
     platforms: [],
     getWindowRect: () => null,
+    surfaces: [],
+    getSurface: () => null,
     fullscreenDisplayIds: [],
     paused: false,
     hidden: false,

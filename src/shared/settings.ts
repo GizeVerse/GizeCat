@@ -7,7 +7,7 @@ import { DEFAULT_TOGGLE_SHORTCUT, MAX_SHORTCUT_LENGTH, parseShortcut } from './s
  * value is missing or invalid, so a partially corrupt file degrades field by field
  * instead of resetting everything.
  */
-export const SETTINGS_SCHEMA_VERSION = 1;
+export const SETTINGS_SCHEMA_VERSION = 2;
 
 /** Behaviours the user can switch off individually. */
 export const TOGGLEABLE_BEHAVIORS = [
@@ -18,6 +18,12 @@ export const TOGGLEABLE_BEHAVIORS = [
   'perchOnWindows',
   'zoomies',
   'grooming',
+  /** v1.1: react to / ride the (auto-hide) taskbar. */
+  'taskbarPlay',
+  /** v1.1: climb window sides and walk along window tops between corners. */
+  'climbWindows',
+  /** v1.1: discover browser tab strips (UI Automation, geometry only) and walk on them. */
+  'tabStrips',
 ] as const;
 export type ToggleableBehavior = (typeof TOGGLEABLE_BEHAVIORS)[number];
 
@@ -88,7 +94,6 @@ const ShortcutSchema = z
 
 const GeneralSchema = z.object({
   catName: field(z.string().trim().min(1).max(24), 'Miso'),
-  launchAtLogin: field(z.boolean(), false),
   shortcutsEnabled: field(z.boolean(), true),
   /** Electron accelerator that shows/hides the cat. */
   toggleShortcut: field(ShortcutSchema, DEFAULT_TOGGLE_SHORTCUT),
@@ -97,6 +102,27 @@ const GeneralSchema = z.object({
   startupState: field(z.enum(['visible', 'hidden', 'paused', 'remember']), 'visible'),
   /** Last visible/hidden/paused state, maintained by main for startupState 'remember'. */
   rememberedState: field(z.enum(['visible', 'hidden', 'paused']), 'visible'),
+});
+
+/**
+ * Launch at Windows sign-in (v1.1). MAIN-OWNED: renderer patches to this section are rejected;
+ * the user changes it only through the enable/disableLaunchAtLogin actions. Default for new
+ * installs is on ('unset' resolves to the product default), and an explicit opt-out (in the app
+ * or in Windows' Startup apps) is never overridden.
+ */
+const LoginItemSchema = z.object({
+  /** 'unset' = the user never chose; the product default (on) applies. */
+  preference: field(z.enum(['unset', 'enabled', 'disabled']), 'unset'),
+  /** Who produced the current preference. */
+  decidedBy: field(z.enum(['default', 'user', 'migration', 'windows']), 'default'),
+  /** Why startup is off, when it is: the user in the app, Windows Startup apps, or an entry removed outside the app. */
+  disabledBy: field(z.enum(['user', 'windows', 'external']).nullable(), null),
+  /** Executable path last registered by the app (to repair stale entries after moves), or null. */
+  registeredPath: field(z.string().max(1024).nullable(), null),
+  /** The v1 `general.launchAtLogin` value carried over by the migration, or null for v2-native files. */
+  v1Value: field(z.boolean().nullable(), null),
+  /** One-time notice that startup was turned on by default has been shown. */
+  noticeShown: field(z.boolean(), false),
 });
 
 const AppearanceSchema = z.object({
@@ -182,6 +208,7 @@ const DiagnosticsSchema = z.object({
 export const SettingsSchema = z.object({
   schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION).catch(SETTINGS_SCHEMA_VERSION).default(SETTINGS_SCHEMA_VERSION),
   general: GeneralSchema.prefault({}).catch(() => GeneralSchema.parse({})),
+  loginItem: LoginItemSchema.prefault({}).catch(() => LoginItemSchema.parse({})),
   appearance: AppearanceSchema.prefault({}).catch(() => AppearanceSchema.parse({})),
   behavior: BehaviorSchema.prefault({}).catch(() => BehaviorSchema.parse({})),
   interaction: InteractionSchema.prefault({}).catch(() => InteractionSchema.parse({})),
@@ -211,6 +238,22 @@ export function migrateSettings(raw: unknown): Settings {
     // v0 (pre-release prototypes) stored a flat object; nothing to carry over except known keys if present.
     obj.schemaVersion = 1;
   }
+  if (version < 2) {
+    // v1 -> v2: general.launchAtLogin (boolean, default false, always written) becomes the main-owned
+    // loginItem section. v1 true is an explicit opt-in. v1 false is ambiguous (default vs. opt-out),
+    // so it becomes 'unset' and is kept in v1Value; the login-item reconciler looks for evidence of a
+    // real opt-out (Windows Startup apps state, app logs) before applying the new default.
+    const general = obj.general !== null && typeof obj.general === 'object' && !Array.isArray(obj.general) ? { ...(obj.general as Record<string, unknown>) } : null;
+    const v1 = general && typeof general.launchAtLogin === 'boolean' ? general.launchAtLogin : null;
+    if (general) {
+      delete general.launchAtLogin;
+      obj.general = general;
+    }
+    if (obj.loginItem === undefined) {
+      obj.loginItem = v1 === true ? { preference: 'enabled', decidedBy: 'migration', v1Value: true } : { preference: 'unset', decidedBy: 'default', v1Value: v1 };
+    }
+    obj.schemaVersion = 2;
+  }
   return SettingsSchema.parse(obj);
 }
 
@@ -222,6 +265,18 @@ export type PatchResult = { ok: true; settings: Settings } | { ok: false; error:
  * screen analysis OFF, but never on, and may never write the consent timestamp.
  * Returns an error message, or null if the patch is acceptable.
  */
+/** Settings sections only the main process may change (renderer patches touching them are rejected). */
+export const MAIN_OWNED_SECTIONS = ['loginItem'] as const;
+
+/** Returns an error message when a renderer patch touches a main-owned section, else null. */
+export function rejectMainOwnedPatch(patch: unknown): string | null {
+  if (patch === null || typeof patch !== 'object') return null;
+  for (const section of MAIN_OWNED_SECTIONS) {
+    if (section in (patch as Record<string, unknown>)) return `${section} can only be changed through its dedicated actions`;
+  }
+  return null;
+}
+
 export function rejectConsentBypass(patch: unknown): string | null {
   if (patch === null || typeof patch !== 'object') return null;
   const perception = (patch as Record<string, unknown>)['perception'];

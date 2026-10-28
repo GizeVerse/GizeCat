@@ -58,6 +58,10 @@ export const ANIM_CLIPS = [
   'meow', // sitting meow (mouth opens), ~0.9 s
   'hide', // low crouch, ears back, peeking
   'rollOver', // playful belly-up wiggle (loop)
+  // v1.1: clinging to a vertical window edge and climbing (loop; rate scales with speed). Anchor = the
+  // grip point on the wall line at hind-paw height; the body extends upwards along the wall; facing +1
+  // means the wall is to the cat's right (it hangs on a window's LEFT edge), -1 the mirror image.
+  'climb',
 ] as const;
 export type AnimClip = (typeof ANIM_CLIPS)[number];
 

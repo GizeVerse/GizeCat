@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { BehaviorState, CatRenderState, HitRegion } from './cat';
 import type { CatSummary } from './catState';
 import type { PerceptionStatus, SceneReport, VisualEventKind, VisualFeatures } from './perception';
+import type { SurfaceStatus } from './surfaces';
 import type { PatchResult, Settings, SettingsPatch } from './settings';
 
 /** Custom privileged scheme serving bundled renderer files (never file://). */
@@ -91,6 +92,9 @@ export const SETTINGS_ACTIONS = [
   'openLogsFolder',
   'callCat',
   'completeFirstRun',
+  'enableLaunchAtLogin',
+  'disableLaunchAtLogin',
+  'dismissLaunchNotice',
   'quit',
 ] as const;
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number];
@@ -107,6 +111,22 @@ export const SetApiKeySchema = z
 
 export const SettingsPatchSchema = z.record(z.string().max(32), z.record(z.string().max(64), z.unknown()));
 
+/** Launch at Windows sign-in, as main sees it right now. */
+export interface LoginItemStatus {
+  /** Effective preference: 'unset' resolves to the product default (on). */
+  enabled: boolean;
+  preference: 'unset' | 'enabled' | 'disabled';
+  disabledBy: 'user' | 'windows' | 'external' | null;
+  /** Windows will start the app at sign-in (registry state read at last reconcile). */
+  active: boolean;
+  /** This build may write the registration (installed app); false for dev, test and unpacked builds. */
+  writable: boolean;
+  /** Short explanation when active differs from enabled (e.g. 'Disabled in Windows Startup apps'), or null. */
+  reason: string | null;
+  /** Show the one-time 'startup was turned on' notice. */
+  showNotice: boolean;
+}
+
 export interface AppStatus {
   version: string;
   visible: boolean;
@@ -116,7 +136,12 @@ export interface AppStatus {
   displayCount: number;
   perception: PerceptionStatus;
   windowAwareness: 'event-hooks' | 'polling' | 'unavailable';
+  /** @deprecated use loginItem.active */
   launchAtLoginActive: boolean;
+  /** v1.1 launch-at-sign-in state (main-owned). */
+  loginItem?: LoginItemStatus;
+  /** v1.1 environment observers (taskbar, window surfaces, tab strips). */
+  surfaces?: SurfaceStatus;
   shortcutRegistered: boolean;
   startedAt: number;
 }

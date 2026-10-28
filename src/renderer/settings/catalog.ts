@@ -14,6 +14,9 @@ export const BEHAVIOR_IDS = [
   'perchOnWindows',
   'zoomies',
   'grooming',
+  'taskbarPlay',
+  'climbWindows',
+  'tabStrips',
 ] as const satisfies readonly ToggleableBehavior[];
 
 export const PROVIDER_IDS = ['none', 'ollama', 'openai-compatible', 'anthropic'] as const satisfies readonly AiProviderId[];

@@ -4,6 +4,7 @@ import type { Point, Rect } from '../shared/geometry';
 import type { VisualSummary, SceneReport, PerceptionStatus } from '../shared/perception';
 import type { Settings } from '../shared/settings';
 import type { SimEvent } from '../shared/sim';
+import type { LedgeSurface, Surface, SurfaceStatus, TaskbarEdge } from '../shared/surfaces';
 import type { Platform, WindowInfo, WorldGeometry } from '../shared/world';
 
 export type Unsubscribe = () => void;
@@ -145,4 +146,74 @@ export interface SecretStore {
   has(name: 'anthropic' | 'openai-compatible'): boolean;
   get(name: 'anthropic' | 'openai-compatible'): string | null;
   set(name: 'anthropic' | 'openai-compatible', value: string | null): boolean;
+}
+
+// ---------------------------------------------------------------------------
+// v1.1 environment surfaces
+// ---------------------------------------------------------------------------
+
+/** One taskbar (primary Shell_TrayWnd or a Shell_SecondaryTrayWnd), physical px. */
+export interface TaskbarState {
+  /** HWND (decimal string) of the taskbar window. */
+  id: string;
+  displayId: string | null;
+  edge: TaskbarEdge;
+  autoHide: boolean;
+  /** Live window rect (moves off-screen while auto-hidden; a 1-2 px strip stays). */
+  rect: Rect;
+  /** Fully docked rect (where it is when shown). */
+  dockedRect: Rect;
+  /** 0..1 how much of its thickness is on screen. */
+  shownFraction: number;
+  phase: 'hidden' | 'showing' | 'shown' | 'hiding';
+  /** Edge-normal speed of the visible edge, px/s (negative = moving up for a bottom taskbar). */
+  speed: number;
+  validatedAt: number;
+}
+
+/**
+ * Observes taskbars with cheap, adaptive geometry sampling (no screen capture). Samples
+ * fast only while something is changing, the cursor is near an auto-hide edge, or the cat
+ * is on/near a taskbar.
+ */
+export interface TaskbarTracker {
+  readonly available: boolean;
+  start(): void;
+  stop(): void;
+  /** Called by the host with the cursor (px) and whether the cat is on/near a taskbar; returns the suggested next sample delay (ms). */
+  sample(now: number, cursor: Point | null, catNear: boolean): number;
+  taskbars(): readonly TaskbarState[];
+  /** Ledge surfaces for taskbars that currently support the cat. */
+  surfaces(): readonly LedgeSurface[];
+  drainEvents(): SimEvent[];
+  debugInfo(): Record<string, unknown>;
+}
+
+/** Browser tab-strip discovery via the UI Automation helper (geometry only, never names). */
+export interface TabStripService {
+  readonly status: SurfaceStatus['tabStrips'];
+  readonly statusReason: string | null;
+  start(): void;
+  stop(): void;
+  updateSettings(settings: Settings): void;
+  /** Hint which browser windows matter now (e.g. near the cat / foreground). Bounded; cheap. */
+  setInterest(windowIds: readonly string[], now: number): void;
+  /** Current tab-strip ledges (already clipped to safe walking spans). */
+  surfaces(): readonly LedgeSurface[];
+  drainEvents(): SimEvent[];
+  debugInfo(): Record<string, unknown>;
+  dispose(): Promise<void>;
+}
+
+/** Aggregates taskbars, window tops/sides and tab strips into one occlusion-aware surface set. */
+export interface SurfaceProvider {
+  readonly status: SurfaceStatus;
+  /** All usable surfaces, refreshed at most every maxAgeMs (taskbars always fresh). */
+  getSurfaces(now: number, maxAgeMs: number): readonly Surface[];
+  /** Fresh geometry of one surface (live OS read). */
+  getSurface(id: string, now: number): Surface | null;
+  drainEvents(): SimEvent[];
+  updateSettings(settings: Settings): void;
+  debugInfo(): Record<string, unknown>;
+  dispose(): Promise<void>;
 }

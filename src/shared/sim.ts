@@ -5,6 +5,7 @@ import type { PersistedCat } from './catState';
 import type { Point, Rect } from './geometry';
 import type { SceneReport, VisualSummary } from './perception';
 import type { Settings } from './settings';
+import type { Surface, TaskbarEdge } from './surfaces';
 import type { AppCategory, Platform, WindowInfo, WorldGeometry } from './world';
 
 /** Discrete stimuli delivered to the simulation since the previous tick. */
@@ -45,7 +46,14 @@ export type SimEvent =
   | { type: 'command.sleep' }
   | { type: 'command.wake' }
   | { type: 'command.play' }
-  | { type: 'lifecycle.quitRequested' };
+  | { type: 'lifecycle.quitRequested' }
+  // Environment surfaces (v1.1)
+  /** An auto-hide (or newly discovered) taskbar slid into view; `surfaceId` names its ledge in env.surfaces. */
+  | { type: 'taskbar.shown'; surfaceId: string; displayId: string | null; edge: TaskbarEdge }
+  /** A taskbar started sliding out / disappeared; its ledge leaves env.surfaces. */
+  | { type: 'taskbar.hidden'; surfaceId: string; displayId: string | null; edge: TaskbarEdge }
+  /** Observable change of a browser tab strip (geometry only; no tab names are ever read). */
+  | { type: 'tabs.changed'; surfaceId: string; ownerId: string; change: 'added' | 'removed' | 'selected' | 'geometry'; focusX: number | null };
 
 export type SimEventType = SimEvent['type'];
 
@@ -66,10 +74,17 @@ export interface SimEnv {
   /** 0..1 share of the last ~30 s with keyboard-like activity. */
   typingIntensity: number;
   foreground: WindowInfo | null;
-  /** Visible top edges of app windows (z-order aware), refreshed by the host. */
+  /** @deprecated v1 window top edges; superseded by `surfaces` (removed once the sim uses surfaces only). */
   platforms: readonly Platform[];
-  /** Fresh rectangle of a window (px), null if gone/minimized/hidden. Cheap; used for riding a perch. */
+  /** Fresh rectangle of a window (px), null if gone/minimized/hidden. */
   getWindowRect: (id: string) => Rect | null;
+  /**
+   * Every currently usable environmental surface (taskbars, window tops and sides, tab strips),
+   * z-order/occlusion aware, refreshed by the host (taskbars every host tick).
+   */
+  surfaces: readonly Surface[];
+  /** Fresh geometry of one surface by id (live OS read for the surface the cat is attached to), or null if gone. */
+  getSurface: (id: string) => Surface | null;
   /** Displays on which a fullscreen app is in front. */
   fullscreenDisplayIds: readonly string[];
   /** User pressed Pause: the cat settles where it is and stops autonomous behaviour. */
@@ -85,6 +100,8 @@ export interface SimEnv {
 export type SimSupport =
   | { kind: 'floor'; displayId: string }
   | { kind: 'window'; windowId: string }
+  /** Attached to an environmental surface (v1.1): standing on a ledge or clinging to a wall. */
+  | { kind: 'surface'; surfaceId: string; surfaceKind: Surface['kind']; orientation: Surface['orientation'] }
   | { kind: 'air' }
   | { kind: 'held' };
 

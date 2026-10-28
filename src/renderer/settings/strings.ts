@@ -246,6 +246,9 @@ export const S = {
       perchOnWindows: { title: 'Sit on windows', desc: 'Jumps onto the top edges of windows and rests there.' },
       zoomies: { title: 'Zoomies', desc: 'Sudden bursts of running around.' },
       grooming: { title: 'Grooming', desc: 'Licks its paws and cleans its face when relaxed.' },
+      taskbarPlay: { title: 'Play with the taskbar', desc: 'Notices an auto-hiding taskbar sliding in, may hop onto it and ride it, and drops back down when it hides.' },
+      climbWindows: { title: 'Climb windows', desc: 'Climbs the sides of windows and walks along their top edges between corners.' },
+      tabStrips: { title: 'Walk on browser tabs', desc: 'Finds the tab strip of Edge and Chrome windows (shape only, never tab names) and strolls along it without clicking anything.' },
     } satisfies Record<ToggleableBehavior, { title: string; desc: string }>,
   },
   interaction: {

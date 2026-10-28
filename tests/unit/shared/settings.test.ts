@@ -15,7 +15,7 @@ describe('settings schema', () => {
     expect(s.perception.consentAt).toBeNull();
     expect(s.ai.provider).toBe('none');
     expect(s.ai.allowCloud).toBe(false);
-    expect(s.general.launchAtLogin).toBe(false);
+    expect(s.loginItem).toMatchObject({ preference: 'unset', decidedBy: 'default', disabledBy: null });
     expect(s.perception.excludedProcesses).toEqual([...DEFAULT_EXCLUDED_PROCESSES]);
     expect(s.appearance.size).toBe(1);
   });
@@ -43,7 +43,7 @@ describe('settings schema', () => {
 
   it('migrates unversioned objects', () => {
     const s = migrateSettings({ general: { catName: 'Pixel' } });
-    expect(s.schemaVersion).toBe(1);
+    expect(s.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION);
     expect(s.general.catName).toBe('Pixel');
   });
 

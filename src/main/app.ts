@@ -158,7 +158,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     appPathArg: app.isPackaged ? null : appRoot,
     writesEnabled: !boot.flags.test,
   });
-  let loginActive = loginItem.isActive();
+  const loginActive = loginItem.isActive();
   const shortcuts = createShortcutManager(globalShortcut, logger.child('shortcuts'), () => {
     if (host) host.setHidden(!host.hidden);
   });
@@ -277,6 +277,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
   }
 
   const targets: ActionTargets = {
+    // Replaced by the v1.1 login-item reconciler (main-owned loginItem section).
+    setLaunchAtLogin: () => ({ ok: false, message: 'Launch at sign-in is not available in this build yet.' }),
+    dismissLaunchNotice: () => ({ ok: true }),
     setPaused: (p) => requireHost().setPaused(p),
     setHidden: (h) => requireHost().setHidden(h),
     callCat: () => requireHost().callCat(),
@@ -409,10 +412,6 @@ export function startApp(boot: AppBootstrap): RunningApp {
     logger.setLevel(next.diagnostics.logLevel);
     if (prev.general.shortcutsEnabled !== next.general.shortcutsEnabled || prev.general.toggleShortcut !== next.general.toggleShortcut) {
       applyShortcuts(next);
-    }
-    if (prev.general.launchAtLogin !== next.general.launchAtLogin) {
-      loginItem.onSettingChanged(next.general.launchAtLogin);
-      loginActive = loginItem.isActive();
     }
     if (prev.diagnostics.hardwareAcceleration !== next.diagnostics.hardwareAcceleration) {
       log.info('hardware acceleration setting changes at next launch', { enabled: next.diagnostics.hardwareAcceleration });

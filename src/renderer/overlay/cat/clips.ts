@@ -780,6 +780,8 @@ const CLIPS: Readonly<Record<AnimClip, ClipFn>> = {
   meow: clipMeow,
   hide: clipHide,
   rollOver: clipRollOver,
+  // TEMPORARY (v1.1 contract step): replaced by the real clinging/climbing clip in the renderer workstream.
+  climb: clipCrouch,
 };
 
 /** Samples `clip` at the context's phase into `out`. One-shot clips hold their last pose. */

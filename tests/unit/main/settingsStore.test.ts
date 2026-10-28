@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { defaultSettings } from '../../../src/shared/settings';
+import { defaultSettings, SETTINGS_SCHEMA_VERSION } from '../../../src/shared/settings';
 import { createJsonStore, type JsonStore } from '../../../src/main/store/jsonStore';
 import { createSettingsStore } from '../../../src/main/store/settingsStore';
 import { failFor, manualTimers, memoryLogger, removeDir, tempDir } from './helpers';
@@ -120,7 +120,7 @@ describe('settingsStore', () => {
     expect(r.status).toBe('corrupt');
     expect(store.dirty).toBe(true);
     store.flushSync();
-    expect(onDisk().schemaVersion).toBe(1);
+    expect(onDisk().schemaVersion).toBe(SETTINGS_SCHEMA_VERSION);
   });
 
   it('flushSync still writes while the debounced async write is in flight (session end)', async () => {
@@ -128,14 +128,14 @@ describe('settingsStore', () => {
     const slow = slowStore();
     const store = createSettingsStore({ store: slow.store, logger: memoryLogger(), setTimer: timers.setTimeout, clearTimer: timers.clearTimeout });
     store.load();
-    store.patch({ general: { launchAtLogin: true } });
+    store.patch({ general: { catName: 'Flushed' } });
     timers.advance(500);
     await Promise.resolve();
     expect(slow.releases).toHaveLength(1);
     expect(store.dirty).toBe(true);
     store.flushSync();
     expect(slow.syncWrites).toHaveLength(1);
-    expect((slow.syncWrites[0] as { general: { launchAtLogin: boolean } }).general.launchAtLogin).toBe(true);
+    expect((slow.syncWrites[0] as { general: { catName: string } }).general.catName).toBe('Flushed');
     expect(store.dirty).toBe(false);
     // The late async result changes nothing, and there is nothing left to write.
     slow.releases[0]!(false);

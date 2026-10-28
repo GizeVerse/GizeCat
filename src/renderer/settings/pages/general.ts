@@ -49,7 +49,8 @@ export function generalPage(ctx: PageContext): PageView {
     void runAction(ctx, ctx.store.view.status.paused ? 'resume' : 'pause', pauseBtn, pause.note);
   });
 
-  const launch = toggleRow(ctx, 'general', 'launchAtLogin', { title: G.launchTitle, desc: G.launchDesc, icon: 'startup' });
+  // v1.1: launch at sign-in moves to the main-owned loginItem model (enable/disableLaunchAtLogin actions).
+  const launch = { parts: row({ title: G.launchTitle, desc: G.launchDesc, icon: 'startup' }) };
   const startState = segmentedRow(
     ctx,
     'general',
@@ -96,8 +97,7 @@ export function generalPage(ctx: PageContext): PageView {
     if (status.paused) setNote(pause.note, G.pausedNow, 'info');
     else if (pause.note.classList.contains('tone-info')) setNote(pause.note, null);
 
-    const wantsLaunch = ctx.store.intended('general', 'launchAtLogin');
-    setNote(launch.parts.note, wantsLaunch && !status.launchAtLoginActive && !ctx.store.isSettling('general.launchAtLogin') ? G.launchInactive : null, 'warn');
+    setNote(launch.parts.note, status.launchAtLoginActive ? null : G.launchInactive, 'warn');
 
     const enabled = ctx.store.intended('general', 'shortcutsEnabled');
     shortcut.input.disabled = !enabled;

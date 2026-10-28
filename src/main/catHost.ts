@@ -266,6 +266,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       foreground,
       platforms,
       getWindowRect,
+      surfaces: [],
+      getSurface: () => null,
       fullscreenDisplayIds: fullscreenIds,
       paused,
       hidden,
