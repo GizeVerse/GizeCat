@@ -4,9 +4,12 @@
 import type { Logger } from '../contracts';
 import { LAUNCHED_AT_LOGIN_FLAG } from './launchArgs';
 
+/** Registry value name under HKCU\...\Run. Fixed so the uninstaller (build/installer.nsh) can remove it. */
+export const LOGIN_ITEM_NAME = 'io.github.enesiltas.desktopcat';
+
 export interface LoginItemApi {
-  getLoginItemSettings(options?: { path?: string; args?: string[] }): { openAtLogin: boolean; executableWillLaunchAtLogin?: boolean };
-  setLoginItemSettings(settings: { openAtLogin: boolean; path?: string; args?: string[] }): void;
+  getLoginItemSettings(options?: { path?: string; args?: string[]; name?: string }): { openAtLogin: boolean; executableWillLaunchAtLogin?: boolean };
+  setLoginItemSettings(settings: { openAtLogin: boolean; path?: string; args?: string[]; name?: string }): void;
 }
 
 export interface LoginItemController {
@@ -28,7 +31,7 @@ export interface LoginItemOptions {
 
 export function createLoginItemController(opts: LoginItemOptions): LoginItemController {
   const args = opts.appPathArg ? [`"${opts.appPathArg}"`, LAUNCHED_AT_LOGIN_FLAG] : [LAUNCHED_AT_LOGIN_FLAG];
-  const query = { path: opts.execPath, args };
+  const query = { path: opts.execPath, args, name: LOGIN_ITEM_NAME };
 
   return {
     isActive() {
@@ -46,7 +49,7 @@ export function createLoginItemController(opts: LoginItemOptions): LoginItemCont
         return;
       }
       try {
-        opts.api.setLoginItemSettings({ openAtLogin: next, path: opts.execPath, args });
+        opts.api.setLoginItemSettings({ openAtLogin: next, path: opts.execPath, args, name: LOGIN_ITEM_NAME });
         opts.logger.info('login item updated', { openAtLogin: next });
       } catch (err) {
         opts.logger.error('updating login item failed', { error: err });
