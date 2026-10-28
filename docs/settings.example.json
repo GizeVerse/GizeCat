@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "general": {
+    "catName": "Miso",
+    "launchAtLogin": false,
+    "shortcutsEnabled": true,
+    "toggleShortcut": "Control+Alt+Shift+C",
+    "firstRunCompleted": false
+  },
+  "appearance": {
+    "skin": "ginger",
+    "style": "smooth",
+    "size": 1,
+    "opacity": 1,
+    "animationSpeed": 1,
+    "shadow": true,
+    "emotes": true,
+    "hideFromScreenCapture": false
+  },
+  "behavior": {
+    "movementSpeed": 1,
+    "autonomy": 0.6,
+    "cursorPlay": 0.5,
+    "attentionSeeking": 0.35,
+    "activitySensitivity": 0.6,
+    "sleepAfterIdleMinutes": 5,
+    "allowMultiMonitor": true,
+    "reactToTyping": true,
+    "reactToWindows": true,
+    "fullscreenBehavior": "hide",
+    "disabledBehaviors": []
+  },
+  "interaction": {
+    "enabled": true,
+    "petting": true,
+    "dragging": true,
+    "throwing": true,
+    "patience": 0.5
+  },
+  "perception": {
+    "visualMode": "off",
+    "consentAt": null,
+    "paused": false,
+    "region": "around-cat",
+    "minIntervalSec": 20,
+    "excludedProcesses": [
+      "keepass.exe",
+      "keepassxc.exe",
+      "1password.exe",
+      "bitwarden.exe",
+      "dashlane.exe",
+      "lastpass.exe",
+      "enpass.exe",
+      "nordpass.exe",
+      "proton pass.exe",
+      "credentialuibroker.exe",
+      "consent.exe",
+      "logonui.exe",
+      "lockapp.exe",
+      "microsoft.aad.brokerplugin.exe",
+      "authenticator.exe",
+      "winauth.exe"
+    ],
+    "excludedTitlePatterns": [
+      "password",
+      "passwort",
+      "şifre",
+      "sign in",
+      "sign-in",
+      "log in",
+      "login",
+      "two-factor",
+      "2fa",
+      "one-time code",
+      "verification code",
+      "authenticator",
+      "credential",
+      "bank",
+      "banking",
+      "wallet",
+      "paypal",
+      "checkout",
+      "payment",
+      "private browsing",
+      "inprivate",
+      "incognito"
+    ]
+  },
+  "ai": {
+    "provider": "none",
+    "allowCloud": false,
+    "ollamaBaseUrl": "http://127.0.0.1:11434",
+    "ollamaModel": "",
+    "openaiBaseUrl": "http://127.0.0.1:1234/v1",
+    "openaiModel": "",
+    "anthropicModel": "claude-haiku-5-5",
+    "minIntervalSec": 120,
+    "maxPerHour": 12,
+    "timeoutSec": 30
+  },
+  "diagnostics": {
+    "logLevel": "info",
+    "hardwareAcceleration": true
+  }
+}
