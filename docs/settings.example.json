@@ -5,7 +5,9 @@
     "launchAtLogin": false,
     "shortcutsEnabled": true,
     "toggleShortcut": "Control+Alt+Shift+C",
-    "firstRunCompleted": false
+    "firstRunCompleted": false,
+    "startupState": "visible",
+    "rememberedState": "visible"
   },
   "appearance": {
     "skin": "ginger",
@@ -28,7 +30,8 @@
     "reactToTyping": true,
     "reactToWindows": true,
     "fullscreenBehavior": "hide",
-    "disabledBehaviors": []
+    "disabledBehaviors": [],
+    "chaseDurationSec": 4.5
   },
   "interaction": {
     "enabled": true,

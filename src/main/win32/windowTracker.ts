@@ -7,6 +7,8 @@
 // catches missed events, and a foreground poll is kept as a safety net even with hooks.
 // Without hooks the same reconcile + poll run alone ('polling'). Nothing runs on timers:
 // the host's tick drives all work, so the cost is bounded by the tick rate.
+// Move and close events carry the window's tracked `excluded` flag so the cat leaves
+// private windows alone; private windows never offer a perch platform.
 import type { Point, Rect } from '../../shared/geometry';
 import type { SimEvent } from '../../shared/sim';
 import type { Platform, WindowInfo, WorldGeometry } from '../../shared/world';
@@ -178,23 +180,24 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
   function settleMoves(id: string, entry: Tracked, p: Pending, prevRect: Rect | null, t: number): void {
     if (!p.sawMoveStart && !p.sawMoveEnd) return;
     const rectNow = entry.info.minimized ? null : entry.info.rect;
+    const excluded = entry.info.excluded;
     const finalMoving = p.lastMove === 'moveStart';
     if (!entry.moving && finalMoving) {
-      emit({ type: 'window.moveStart', id });
+      emit({ type: 'window.moveStart', id, excluded });
       entry.moving = true;
       entry.movingSince = t;
     } else if (entry.moving && !finalMoving) {
-      emit({ type: 'window.moveEnd', id, rect: rectNow });
+      emit({ type: 'window.moveEnd', id, rect: rectNow, excluded });
       entry.moving = false;
     } else if (!entry.moving && p.sawMoveStart) {
       // Press-drag-release inside one burst: report it only if the window actually moved.
       if (prevRect && rectNow && moved(prevRect, rectNow)) {
-        emit({ type: 'window.moveStart', id });
-        emit({ type: 'window.moveEnd', id, rect: rectNow });
+        emit({ type: 'window.moveStart', id, excluded });
+        emit({ type: 'window.moveEnd', id, rect: rectNow, excluded });
       }
     } else if (entry.moving && p.sawMoveEnd) {
-      emit({ type: 'window.moveEnd', id, rect: rectNow });
-      emit({ type: 'window.moveStart', id });
+      emit({ type: 'window.moveEnd', id, rect: rectNow, excluded });
+      emit({ type: 'window.moveStart', id, excluded });
       entry.movingSince = t;
     }
   }
@@ -205,7 +208,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
     if (!info) {
       if (prev) {
         windows.delete(id);
-        emit({ type: 'window.closed', id, rect: prev.lastRect, category: prev.info.category });
+        emit({ type: 'window.closed', id, rect: prev.lastRect, category: prev.info.category, excluded: prev.info.excluded });
         invalidateGeometry();
       }
       return;
@@ -309,18 +312,18 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
         emit({ type: 'window.restored', window: info });
       } else if (mode === 'polling' && !info.minimized && prevRect && moved(prevRect, info.rect)) {
         // Without hooks there are no move/size notifications: report the observed move.
-        emit({ type: 'window.moveStart', id: info.id });
-        emit({ type: 'window.moveEnd', id: info.id, rect: info.rect });
+        emit({ type: 'window.moveStart', id: info.id, excluded: info.excluded });
+        emit({ type: 'window.moveEnd', id: info.id, rect: info.rect, excluded: info.excluded });
       }
       if (prev.moving && t - prev.movingSince > STUCK_MOVE_MS) {
         prev.moving = false;
-        emit({ type: 'window.moveEnd', id: info.id, rect: info.minimized ? null : info.rect });
+        emit({ type: 'window.moveEnd', id: info.id, rect: info.minimized ? null : info.rect, excluded: info.excluded });
       }
     }
     for (const [id, prev] of windows) {
       if (seen.has(id) || pending.has(id)) continue;
       windows.delete(id);
-      if (emitEvents) emit({ type: 'window.closed', id, rect: prev.lastRect, category: prev.info.category });
+      if (emitEvents) emit({ type: 'window.closed', id, rect: prev.lastRect, category: prev.info.category, excluded: prev.info.excluded });
     }
     platformCache = null;
   }
@@ -433,7 +436,8 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       if (platformCache && t - platformCache.at <= maxAgeMs) return platformCache.platforms;
       try {
         // Owned dialogs, tool windows and our Settings window cut edges too; app windows
-        // alone are the fallback when the full z-order is not available.
+        // alone are the fallback when the full z-order is not available. Private windows
+        // cut edges but offer none (see computePlatforms).
         const occluders = extended?.listOccluders() ?? null;
         platformCache = { at: t, platforms: computePlatforms(freshList(t, maxAgeMs), MIN_PLATFORM_WIDTH, occluders) };
       } catch (e) {
@@ -528,9 +532,10 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       } catch (e) {
         reportError('exclusions', e);
       }
-      // Cached infos carry stale `excluded` flags.
+      // Cached and tracked infos carry stale `excluded` flags: re-list on the next drain.
       invalidateGeometry();
       fgRefreshedAt = -Infinity;
+      forceReconcile = true;
     },
 
     debugInfo(): WindowTrackerDebug {

@@ -25,7 +25,11 @@ export type Variant =
   | 'explore'
   | 'intro'
   | 'idleSleep'
-  | 'forced';
+  | 'forced'
+  | 'corner'
+  | 'surprise'
+  | 'playful'
+  | 'screen';
 
 export interface Candidate {
   state: BehaviorState;
@@ -46,6 +50,12 @@ export interface DecisionView {
   userIdleMs: number;
   /** Rapid foreground switching: observe instead of moving. */
   busySwitching: boolean;
+  /** The foreground app is a video player, game or media app (windowed): the cat keeps quiet. */
+  mediaForeground: boolean;
+  /** Coarse look of the screen from recent local statistics (Tier B) or an AI scene (Tier C); null when unknown or stale. */
+  screen: 'video' | 'busy' | 'quiet' | null;
+  /** Rough handling (throws, annoyed reactions) remembered from the last hour, across restarts. */
+  recentRough: number;
   /** 0..1 "the screen is dark" bias from perception. */
   darkBias: number;
   /** ms since the user last interacted with the cat. */
@@ -57,6 +67,10 @@ export interface DecisionView {
   favoriteSpot: { point: Point; distBodyLengths: number } | null;
   perchTarget: { windowId: string; point: Point } | null;
   wanderTarget: Point | null;
+  /** The far end of the floor the cat stands on, when it is a walk away. */
+  cornerTarget: Point | null;
+  /** The long cooldown of an occasional surprise startle has elapsed. */
+  surpriseReady: boolean;
   /** Most recent first, the activities chosen lately. */
   recentStates: readonly BehaviorState[];
   /** The state being left. */
@@ -95,15 +109,22 @@ export function scoreCandidates(v: DecisionView): Scored<Candidate>[] {
   const night = hour >= 23 || hour < 6;
   const crepuscular = (hour >= 17 && hour < 21) || (hour >= 5 && hour < 8);
   const autonomy = clamp01(b.autonomy);
-  const activeMul = (0.25 + 1.15 * autonomy) * (v.typing ? 0.3 : 1) * (v.busySwitching ? 0.35 : 1) * (night ? 0.75 : 1);
+  // 'React to typing' off: typing does not change what the cat does.
+  const typing = v.typing && b.reactToTyping;
+  const video = v.mediaForeground || v.screen === 'video';
+  const screenMul = video ? 0.4 : v.screen === 'busy' ? 0.8 : 1;
+  const activeMul = (0.25 + 1.15 * autonomy) * (typing ? 0.3 : 1) * (v.busySwitching ? 0.35 : 1) * (night ? 0.75 : 1) * screenMul;
   const calmMul = 1.3 - 0.6 * autonomy;
   const energyGate = clamp01((s.energy - 0.15) / 0.35);
   const sleepy = sleepiness(v);
   const idleSleep = userIdleForSleep(v);
   const playTime = crepuscular ? 1.15 : 1;
+  // Learned from past sessions: a cat petted often asks for affection more; rough handling makes it wary.
+  const petted = clamp01(v.prefs.petRatePerHour / 6);
+  const rough = clamp01(v.recentRough / 4);
 
   add(cand('idle'), 0.3 * calmMul * (0.8 + 0.4 * t.laziness));
-  add(cand('resting'), (0.12 + 0.22 * t.laziness + 0.3 * (1 - s.energy) + 0.15 * sleepy) * calmMul * (v.typing ? 1.3 : 1));
+  add(cand('resting'), (0.12 + 0.22 * t.laziness + 0.3 * (1 - s.energy) + 0.15 * sleepy) * calmMul * (typing ? 1.3 : 1) * (v.screen === 'quiet' ? 1.1 : 1));
   if (!v.disabled.has('grooming')) add(cand('grooming'), (0.14 + 0.12 * (1 - s.annoyance)) * calmMul);
 
   let nap = Math.pow(sleepy, 1.5) * 1.4;
@@ -120,30 +141,40 @@ export function scoreCandidates(v: DecisionView): Scored<Candidate>[] {
   if (v.wanderTarget) {
     add(cand('walking', { variant: 'wander', target: v.wanderTarget }), (0.12 + 0.22 * t.curiosity + 0.28 * s.boredom) * energyGate * activeMul);
   }
+  if (v.cornerTarget) {
+    add(cand('walking', { variant: 'corner', target: v.cornerTarget }), (0.03 + 0.16 * s.boredom) * energyGate * activeMul);
+  }
   if (v.foreground) {
-    const typingNear = v.typing && b.reactToTyping;
-    const score = (0.12 + 0.15 * t.affection + (v.typing ? 0.4 : 0) + (v.busySwitching ? 0.55 : 0)) * calmMul;
-    add(cand('watchingUser', { variant: typingNear && v.foreground.distBodyLengths > 6 ? 'nearby' : null, target: v.foreground.center }), score);
+    const nearby = typing && v.foreground.distBodyLengths > 6 && rough < 0.5;
+    const score = (0.12 + 0.15 * t.affection + (typing ? 0.4 : 0) + (v.busySwitching ? 0.55 : 0) + (video ? 0.25 : 0)) * calmMul;
+    add(cand('watchingUser', { variant: nearby ? 'nearby' : null, target: v.foreground.center }), score);
   }
   const c = v.cursor;
   if (c && c.distBodyLengths < 10 && c.speedDip > 20) {
-    add(cand('watchingCursor'), (0.12 + 0.5 * b.cursorPlay * t.playfulness) * (c.speedDip > 300 ? 1.3 : 1) * (v.typing ? 0.5 : 1));
+    add(cand('watchingCursor'), (0.12 + 0.5 * b.cursorPlay * t.playfulness) * (c.speedDip > 300 ? 1.3 : 1) * (typing ? 0.5 : 1));
   }
-  if (c && c.reachable && !v.typing && !v.disabled.has('chaseCursor') && c.speedDip > 150 && c.distBodyLengths < 12) {
-    add(cand('chasingCursor'), (0.06 + 0.8 * b.cursorPlay * t.playfulness) * (0.4 + v.prefs.cursorPlayAcceptance) * energyGate * activeMul * playTime);
+  // Pointer play scales the whole chase score: at 0 % the cat never chases on its own; a bored cat chases more.
+  if (c && c.reachable && !typing && !v.disabled.has('chaseCursor') && c.speedDip > 150 && c.distBodyLengths < 12) {
+    const cursorPlay = clamp01(b.cursorPlay);
+    add(cand('chasingCursor'), cursorPlay * (0.12 + 0.8 * t.playfulness) * (0.4 + v.prefs.cursorPlayAcceptance) * (0.5 + s.boredom) * energyGate * activeMul * playTime);
   }
-  if (!v.typing) {
+  if (!typing) {
     const play = (0.08 + 0.55 * t.playfulness * (0.3 + s.boredom)) * energyGate * activeMul * playTime;
     add(cand('playing', { variant: 'pawAt' }), play * 0.5);
-    add(cand('playing', { variant: 'rollOver' }), play * 0.35 * (0.5 + s.bond));
+    add(cand('playing', { variant: 'rollOver' }), play * 0.35 * (0.5 + s.bond) * (0.8 + 0.5 * petted) * (1 - 0.7 * rough));
     if (!v.disabled.has('zoomies') && s.energy > 0.55) add(cand('playing', { variant: 'zoomies' }), play * 0.18 * (0.5 + t.energyLevel));
   }
   if (!v.disabled.has('seekAttention') && v.userIdleMs < 60_000) {
     const minQuiet = 20 * 60_000 * (1.3 - clamp01(b.attentionSeeking));
     const quiet = clamp01((v.quietMs - minQuiet) / minQuiet);
-    const score = 1.2 * b.attentionSeeking * (0.3 + t.affection) * (0.3 + s.bond) * (0.3 + v.prefs.attentionAcceptance) * quiet * (v.typing ? 0.15 : 1);
+    const score =
+      1.2 * b.attentionSeeking * (0.3 + t.affection) * (0.3 + s.bond) * (0.3 + v.prefs.attentionAcceptance) * quiet * (typing ? 0.15 : 1) * (0.8 + 0.5 * petted) * (1 - 0.6 * rough);
     add(cand('seekingAttention'), score);
   }
+  // After rough handling the cat now and then keeps out of the way for a while.
+  if (rough > 0) add(cand('hiding'), 0.05 * rough * (1.2 - t.confidence) * (typing ? 0.5 : 1));
+  // A rare, mild start at nothing in particular (long cooldown, see surpriseReady).
+  if (v.surpriseReady && !typing) add(cand('startled', { variant: 'surprise' }), 0.02 * (0.5 + t.curiosity) * energyGate * activeMul);
   // Jumping up to explore a window top is 'Sit on windows', independent of 'Inspect windows'.
   if (v.perchTarget && !v.disabled.has('perchOnWindows')) {
     const score = (0.04 + 0.32 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * (0.6 + 0.4 * t.confidence);

@@ -64,6 +64,13 @@ export class RecentIds {
     this.ids.push(id);
     if (this.ids.length > this.max) this.ids.shift();
   }
+  delete(id: string): void {
+    const i = this.ids.indexOf(id);
+    if (i >= 0) this.ids.splice(i, 1);
+  }
+  get size(): number {
+    return this.ids.length;
+  }
 }
 
 export const CATEGORY_INTEREST: Readonly<Record<AppCategory, number>> = {

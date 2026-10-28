@@ -32,6 +32,15 @@ describe('General page: call button', () => {
   });
 });
 
+describe('Privacy page: minimum interval', () => {
+  it('presents the interval as a floor the app enforces, not as how often the cat looks', () => {
+    const desc = S.privacy.intervalDesc;
+    expect(desc).toMatch(/never captures more often than this/);
+    expect(desc).toMatch(/usually looks less often/);
+    expect(desc).toMatch(/AI page/);
+  });
+});
+
 describe('Diagnostics page: status', () => {
   it('says capture is suspended for a hidden cat instead of reporting a privacy pause', () => {
     const v = view({ mode: 'local-stats', paused: true, blockedReason: BLOCK_REASONS.paused }, { visible: false });

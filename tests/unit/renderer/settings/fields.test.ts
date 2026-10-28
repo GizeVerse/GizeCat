@@ -1,6 +1,7 @@
 // Guards the UI's mirrored ranges and id lists against the real zod schema.
 import { describe, expect, it } from 'vitest';
 import { SetApiKeySchema } from '../../../../src/shared/ipc';
+import { VISUAL_EVENT_KINDS } from '../../../../src/shared/perception';
 import { AI_PROVIDERS, applySettingsPatch, defaultSettings, TOGGLEABLE_BEHAVIORS } from '../../../../src/shared/settings';
 import { MAX_SHORTCUT_LENGTH as SHARED_MAX_SHORTCUT_LENGTH } from '../../../../src/shared/shortcut';
 import {
@@ -16,9 +17,11 @@ import {
   MAX_SHORTCUT_LENGTH,
   MAX_URL_LENGTH,
   PROVIDER_IDS,
+  STARTUP_STATES,
 } from '../../../../src/renderer/settings/catalog';
 import { intervalStops, nearestStopIndex, NUMERIC_FIELDS, snapToStep, formatValue } from '../../../../src/renderer/settings/fields';
 import { buildPatch } from '../../../../src/renderer/settings/patch';
+import { S } from '../../../../src/renderer/settings/strings';
 
 const accepts = (section: string, key: string, v: unknown): boolean => applySettingsPatch(defaultSettings(), { [section]: { [key]: v } }).ok;
 
@@ -39,9 +42,46 @@ describe('numeric field specs match the settings schema', () => {
 
   it('every snapped value on the grid is accepted', () => {
     for (const f of Object.values(NUMERIC_FIELDS)) {
-      if (f.step !== 0.05) continue;
+      if (f.step !== 0.05 && f.step !== 0.5) continue;
       for (let v = f.min; v <= f.max + 1e-9; v += f.step) expect(accepts(f.section, f.key, snapToStep(f, v))).toBe(true);
     }
+  });
+
+  it('every numeric setting has a UI range (none can be added to the schema without a control)', () => {
+    const covered = new Set(Object.values(NUMERIC_FIELDS).map((f) => `${f.section}.${f.key}`));
+    const numeric: string[] = [];
+    for (const [section, values] of Object.entries(defaultSettings())) {
+      if (values === null || typeof values !== 'object') continue;
+      for (const [key, v] of Object.entries(values as Record<string, unknown>)) if (typeof v === 'number') numeric.push(`${section}.${key}`);
+    }
+    expect(numeric).toContain('behavior.chaseDurationSec');
+    expect(numeric.filter((id) => !covered.has(id))).toEqual([]);
+  });
+
+  it('chase length covers 1-20 s in half seconds around the 4.5 s default', () => {
+    const f = NUMERIC_FIELDS.chaseDuration;
+    expect([f.section, f.key, f.min, f.max, f.step]).toEqual(['behavior', 'chaseDurationSec', 1, 20, 0.5]);
+    expect(defaultSettings().behavior.chaseDurationSec).toBe(4.5);
+    expect(formatValue(f.format, 4.5)).toBe('4.5 s');
+    expect(formatValue(f.format, 20)).toBe('20 s');
+    expect(snapToStep(f, 4.74)).toBe(4.5);
+  });
+});
+
+describe('startup state choices', () => {
+  it('offers exactly the values the schema accepts, each with a label', () => {
+    for (const v of STARTUP_STATES) expect(accepts('general', 'startupState', v)).toBe(true);
+    expect(accepts('general', 'startupState', 'minimized')).toBe(false);
+    expect(Object.keys(S.general.startupStates).sort()).toEqual([...STARTUP_STATES].sort());
+    expect(STARTUP_STATES[0]).toBe(defaultSettings().general.startupState);
+  });
+});
+
+describe('visual event labels', () => {
+  it('label every event kind the analyser can report', () => {
+    expect(Object.keys(S.privacy.events).sort()).toEqual([...VISUAL_EVENT_KINDS].sort());
+    expect(S.privacy.events.videoLike).toBe('Video-like');
+    expect(S.privacy.events.newElement).toBe('New element');
   });
 });
 

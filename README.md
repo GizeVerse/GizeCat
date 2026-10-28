@@ -12,7 +12,7 @@ A living desktop companion for Windows: **one** animated, persistent cat that li
 
 ## Install
 
-Run `release/Desktop-Cat-Setup-1.0.0.exe` (per-user install, no admin). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. Uninstall from Windows Settings → Apps.
+Build the installer with `npm run package` (see [Build, run, test](#build-run-test)) — no release is published yet — then run `release/Desktop-Cat-Setup-1.0.0.exe` (per-user install, no admin). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. Uninstall from Windows Settings → Apps.
 
 ## Controls
 
@@ -29,13 +29,13 @@ Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## What is implemented
 
-**Overlay & Windows integration.** One transparent, frameless, non-focusable, topmost overlay per display (sized to the work area), never moved or hidden (works around Electron's transparent-window bugs); main-process cursor polling decides click-through against the cat's reported hit region; hung/crashed renderers are forced click-through and recreated. Multi-monitor and mixed-DPI coordinates (physical px world, per-display DIP rendering), display add/remove/re-layout, auto-hide taskbars. Tray, global shortcut, single-instance lock (second launch surfaces the running cat), launch at sign-in (opt-in), graceful quit (the cat falls asleep, state saved), session-end/suspend saves, crash guard.
+**Overlay & Windows integration.** Rendering adapts its frame rate (display rate while moving, ~30 fps when calm, ~20 fps asleep). One transparent, frameless, non-focusable, topmost overlay per display (sized to the work area), never moved or hidden (works around Electron's transparent-window bugs); main-process cursor polling decides click-through against the cat's reported hit region; hung/crashed renderers are forced click-through and recreated. Multi-monitor and mixed-DPI coordinates (physical px world, per-display DIP rendering), display add/remove/re-layout, auto-hide taskbars. Tray, global shortcut, single-instance lock (second launch surfaces the running cat), launch at sign-in (opt-in), graceful quit (the cat falls asleep, state saved), session-end/suspend saves, crash guard.
 
 **The cat.** A 24-state behaviour machine (sleeping, waking, idle, walking, running, chasing/watching the cursor, curious, inspecting/perching on windows, watching you work, playing, petted, startled, annoyed, seeking attention, resting, grooming, hiding, falling asleep, held, jumping, falling, landing, away) with an explicit transition table, priorities, dwell times, cooldowns and anti-thrash rules; utility-scored autonomous choices with bounded seeded randomness; physics (gravity, ballistic jumps onto window tops, riding moving windows, drag and throw). Persistent personality (traits), needs (energy, boredom, bond, annoyance, fear), favourite spots, learned preferences and a small memory, in a versioned schema with migration and corrupt-file recovery.
 
 **Awareness (Tier A, always on, local).** WinEvent hooks (foreground, show/hide/destroy, minimise, move/size, cloak) with a reconcile poll; app categories from executable names; fullscreen detection (the cat gets out of the way); typing-like activity inferred from input without cursor motion (no keyboard hook); idle/return.
 
-**Perception (optional, OFF by default).** Tier B: tiny masked in-memory frames → brightness/contrast/colourfulness/edge density/change/motion (no semantic claims). Tier C: Ollama, OpenAI-compatible local servers, or Anthropic (`claude-haiku-5-5`), strict schema + 8-reaction allow-list, rate limits, circuit breaker; cloud requires a separate switch, and server-forwarded cloud models are detected and fail closed. Consent flow, exclusions (password managers, auth, banking, private browsing — including their dialogs), privacy pause, "preview what the cat sees". See [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/AI_SETUP.md](docs/AI_SETUP.md).
+**Perception (optional, OFF by default).** Tier B: a ~0.3 s burst of three tiny masked in-memory frames → brightness/contrast/colourfulness/edge density/change/motion and the coarse labels dark/bright, busy/quiet, motion/still, video-like, new element (no semantic claims). Tier C: Ollama, OpenAI-compatible local servers, or Anthropic (`claude-haiku-5-5`), strict schema + 8-reaction allow-list, rate limits, circuit breaker; cloud requires a separate switch, and server-forwarded cloud models are detected and fail closed. Consent flow, exclusions (password managers, auth, banking, private browsing — including their dialogs), privacy pause, "preview what the cat sees". See [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/AI_SETUP.md](docs/AI_SETUP.md).
 
 **Settings UI.** Welcome, General, Appearance, Behavior, Interaction, Privacy & Vision, AI, Personality, Diagnostics (live resource charts, log export), About. Light/dark, keyboard accessible.
 
@@ -56,10 +56,10 @@ Screenshots are of the real settings window driven by the real main process (`sc
 
 ## Build, run, test
 
-Requires Windows 10/11 x64, Node ≥ 22 (built with Node 26.4), npm.
+Requires Windows 10/11 x64, Node 22.13+, 24 or 26 (built with Node 26.4; enforced by `engines`), npm.
 
 ```powershell
-npm ci
+npm ci --ignore-scripts                 # no dependency needs install scripts
 node node_modules/electron/install.js   # Electron 44 downloads its binary lazily
 npm run dev                             # development build + run (separate userData via --user-data-dir if desired)
 npm run typecheck; npm run lint; npm test
@@ -78,7 +78,7 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 
 | Environment | What ran | Result |
 |---|---|---|
-| Windows 11 Home 10.0.26200, x64, one 1920×1200 display at 125 %, auto-hide taskbar | typecheck, lint, 1006 unit/integration tests, 18 Playwright E2E specs against the real app, Win32 probe (31 checks), desktop compositing QA, packaged-exe smoke, silent install/uninstall, resource benchmark | all pass — see [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
+| Windows 11 Home 10.0.26200, x64, one 1920×1200 display at 125 %, auto-hide taskbar | typecheck, lint, 1128 unit/integration tests (88 files), 22 Playwright E2E tests (6 spec files) against the real app, Win32 probe (31 checks), desktop compositing QA, packaged-exe smoke, silent install/uninstall, resource benchmark | all pass — see [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
 | Windows 10 | — | **not tested** (Win32 APIs used exist since 1903; expected to work) |
 | Multi-monitor / mixed DPI hardware | unit-tested with synthetic layouts only | **not tested on hardware** |
 | Real Ollama / LM Studio / Anthropic endpoints | adapters tested against local mock servers | **not tested against real providers** |

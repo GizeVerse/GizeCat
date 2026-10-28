@@ -1,5 +1,9 @@
 name: ci
 
+# NOTE: this workflow has not been executed yet (the repository has no remote and
+# GitHub Actions is unavailable for this account at the time of writing). It mirrors
+# the commands that were run locally; see docs/TEST_REPORT.md.
+
 on:
   push:
     branches: [main, 'feat/**']
@@ -23,8 +27,11 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - name: Install
-        run: npm ci
+      # No dependency needs an install script (koffi ships its prebuilt binary as an
+      # optional dependency, esbuild uses its platform package, Electron's binary is
+      # fetched explicitly below), so none are run.
+      - name: Install (no install scripts)
+        run: npm ci --ignore-scripts
       - name: Download Electron binary
         run: node node_modules/electron/install.js
       - name: Typecheck
@@ -37,8 +44,8 @@ jobs:
         run: npm run build
       - name: End-to-end (Playwright, Electron)
         run: npx playwright test
-      - name: Dependency audit (production)
-        run: npm audit --omit=dev --audit-level=high
+      - name: Dependency audit (all dependencies; Electron and zod are devDependencies but ship)
+        run: npm audit --audit-level=high
 
   package:
     needs: check
@@ -50,12 +57,16 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: node node_modules/electron/install.js
       - name: Package NSIS installer (unsigned)
         run: npm run package
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Smoke-test the packaged exe
+        run: node scripts/smoke-packaged.mjs
+      - name: Install / uninstall validation
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-cat-installer

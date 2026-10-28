@@ -42,6 +42,8 @@ export const MOVEMENT = {
   perchMovingGraceMs: 2500,
   /** Small playful hop height. */
   hopClearanceDip: 46,
+  /** Longest playful pounce toward the pointer, in body lengths. */
+  pounceMaxBodyLengths: 2.2,
 } as const;
 
 /** Arrival tolerance when walking to a point, in DIP. */

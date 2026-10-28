@@ -1,11 +1,19 @@
-// Screen capture via desktopCapturer. Frames are cropped, masked (cat and
-// excluded windows filled black) and downscaled entirely in memory; nothing is
-// written to disk and buffers are dropped after use.
+// Screen capture via desktopCapturer, entirely in memory; nothing is written to disk.
+//
+// Electron cannot grab a region: desktopCapturer returns a reduced-resolution image of
+// every display (sized so the region's crop covers the largest output). Each grab is
+// cropped to the region at once, the crop's pixels are copied into a buffer this module
+// owns, and every display image (and the crop, which would keep its display image
+// alive) is unreferenced right there. The copy is masked (cat and excluded windows
+// filled black) before it is downscaled, analysed, previewed or encoded for AI, and is
+// zeroed afterwards. Electron's own image memory cannot be zeroed: the garbage
+// collector frees it once unreferenced.
 import * as electron from 'electron';
 import { applyMasks, packFrame, type FrameBuffer } from '../../core/perception/frame';
 import { projectRect, scaledSize, type CaptureDisplay } from '../../core/perception/region';
 import type { Rect } from '../../shared/geometry';
 import type { Logger } from '../contracts';
+import { runBurst, type BurstClock, type BurstPlan } from './burst';
 
 export type { CaptureDisplay } from '../../core/perception/region';
 
@@ -17,14 +25,20 @@ export interface CaptureRequest {
   maskRectsPx: readonly Rect[];
   /** Tier B frame width cap (e.g. 256). */
   analysisMaxWidth: number;
-  /** Tier C image; null when no AI request can follow. */
+  /** Tier C image (from the first frame only); null when no AI request can follow. */
   jpeg: { maxWidth: number; quality: number } | null;
+  /** A short burst of analysis frames with the same masks; absent = one frame. */
+  burst?: BurstPlan;
+  /** Asked before each further burst frame; false ends the burst (the caller then discards the frames). */
+  stillClear?: () => boolean;
 }
 
 export interface CapturedFrame {
-  /** Masked BGRA frame, <= analysisMaxWidth wide. */
+  /** Masked BGRA frame, <= analysisMaxWidth wide (the burst's first frame). */
   analysis: FrameBuffer;
-  /** Masked JPEG bytes, <= jpeg.maxWidth wide, or null. */
+  /** Further masked frames of the burst, oldest first, same size as `analysis` (empty without a burst). */
+  burst: FrameBuffer[];
+  /** Masked JPEG bytes of the first frame, <= jpeg.maxWidth wide, or null. */
   jpeg: Uint8Array | null;
   durationMs: number;
 }
@@ -59,14 +73,9 @@ function toBitmapFrame(img: Electron.NativeImage): FrameBuffer {
   return { data, width: size.width, height: size.height, stride: Math.floor(data.length / size.height), format: 'bgra' };
 }
 
-function maskedScaled(cropped: Electron.NativeImage, maxWidth: number, regionPx: Rect, masks: readonly Rect[]): FrameBuffer {
-  const cur = cropped.getSize();
-  const target = scaledSize({ x: 0, y: 0, width: cur.width, height: cur.height }, maxWidth);
-  const img = target.width < cur.width ? cropped.resize({ width: target.width, height: target.height, quality: 'good' }) : cropped;
-  const frame = toBitmapFrame(img);
+function maskFrame(frame: FrameBuffer, regionPx: Rect, masks: readonly Rect[]): void {
   const rects = masks.map((m) => projectRect(m, regionPx, frame.width, frame.height, MASK_PAD)).filter((r): r is Rect => r !== null);
   applyMasks(frame, rects);
-  return frame;
 }
 
 function bitmapImage(frame: FrameBuffer): Electron.NativeImage {
@@ -76,7 +85,25 @@ function bitmapImage(frame: FrameBuffer): Electron.NativeImage {
   return electron.nativeImage.createFromBitmap(buf, { width: packed.width, height: packed.height });
 }
 
-export function createElectronFrameCapturer(logger: Logger): FrameCapturer {
+/** The masked region scaled to exactly `size` (every frame of a burst gets the same size), masked again at that size. */
+function scaledMasked(region: FrameBuffer, size: { width: number; height: number }, regionPx: Rect, masks: readonly Rect[]): FrameBuffer {
+  const img = bitmapImage(region);
+  const out = toBitmapFrame(size.width === region.width && size.height === region.height ? img : img.resize({ width: size.width, height: size.height, quality: 'good' }));
+  maskFrame(out, regionPx, masks);
+  return out;
+}
+
+interface Grab {
+  analysis: FrameBuffer;
+  jpeg: Uint8Array | null;
+}
+
+const wipeGrab = (g: Grab): void => {
+  g.analysis.data.fill(0);
+  g.jpeg?.fill(0);
+};
+
+export function createElectronFrameCapturer(logger: Logger, clock: Partial<BurstClock> = {}): FrameCapturer {
   const log = logger.child('capture');
 
   function getDisplays(): CaptureDisplay[] {
@@ -90,6 +117,58 @@ export function createElectronFrameCapturer(logger: Logger): FrameCapturer {
     }));
   }
 
+  /**
+   * One display grab, cropped to the region and copied into a buffer we own (unmasked).
+   * The display images go out of scope here, before any further processing.
+   */
+  async function grabRegion(req: CaptureRequest, wantedWidth: number, signal: AbortSignal): Promise<FrameBuffer> {
+    const { display, regionPx } = req;
+    const db = display.boundsPx;
+    // Ask for a thumbnail just large enough that the region crop covers the largest output.
+    const scale = Math.min(1, wantedWidth / regionPx.width);
+    const thumbnailSize = { width: Math.max(1, Math.round(db.width * scale)), height: Math.max(1, Math.round(db.height * scale)) };
+    const sources = await electron.desktopCapturer.getSources({ types: ['screen'], thumbnailSize, fetchWindowIcons: false });
+    try {
+      abortIfNeeded(signal);
+      const source = sources.find((s) => s.display_id === display.id) ?? (sources.length === 1 && getDisplays().length === 1 ? sources[0] : undefined);
+      if (!source) throw new CaptureError('could not match the display to a capture source');
+      const thumb = source.thumbnail;
+      if (thumb.isEmpty()) throw new CaptureError('the display capture was empty');
+      const ts = thumb.getSize();
+      const sx = ts.width / db.width;
+      const sy = ts.height / db.height;
+      const cx = Math.max(0, Math.floor((regionPx.x - db.x) * sx));
+      const cy = Math.max(0, Math.floor((regionPx.y - db.y) * sy));
+      const cw = Math.min(ts.width - cx, Math.max(1, Math.round(regionPx.width * sx)));
+      const ch = Math.min(ts.height - cy, Math.max(1, Math.round(regionPx.height * sy)));
+      if (cw <= 0 || ch <= 0) throw new CaptureError('capture region is outside the display');
+      // A crop still references its display image: copy its pixels out and let both go.
+      return toBitmapFrame(thumb.crop({ x: cx, y: cy, width: cw, height: ch }));
+    } finally {
+      sources.length = 0;
+    }
+  }
+
+  async function grabFrame(req: CaptureRequest, jpeg: CaptureRequest['jpeg'], signal: AbortSignal): Promise<Grab> {
+    const { regionPx, maskRectsPx } = req;
+    const region = await grabRegion(req, Math.max(req.analysisMaxWidth, jpeg?.maxWidth ?? 0), signal);
+    try {
+      abortIfNeeded(signal);
+      // Masked before anything else touches it: later steps only ever see black where private windows were.
+      maskFrame(region, regionPx, maskRectsPx);
+      const analysis = scaledMasked(region, scaledSize(regionPx, req.analysisMaxWidth), regionPx, maskRectsPx);
+      if (!jpeg) return { analysis, jpeg: null };
+      const big = scaledMasked(region, scaledSize(regionPx, jpeg.maxWidth), regionPx, maskRectsPx);
+      try {
+        return { analysis, jpeg: new Uint8Array(bitmapImage(big).toJPEG(Math.round(jpeg.quality))) };
+      } finally {
+        big.data.fill(0);
+      }
+    } finally {
+      region.data.fill(0);
+    }
+  }
+
   async function capture(req: CaptureRequest, signal: AbortSignal): Promise<CapturedFrame> {
     const t0 = performance.now();
     abortIfNeeded(signal);
@@ -97,46 +176,32 @@ export function createElectronFrameCapturer(logger: Logger): FrameCapturer {
     const db = display.boundsPx;
     if (regionPx.width <= 0 || regionPx.height <= 0 || db.width <= 0 || db.height <= 0) throw new CaptureError('empty capture region');
 
-    // Ask for a thumbnail just large enough that the region crop covers the largest output.
-    const wanted = Math.max(req.analysisMaxWidth, req.jpeg?.maxWidth ?? 0);
-    const scale = Math.min(1, wanted / regionPx.width);
-    const thumbnailSize = { width: Math.max(1, Math.round(db.width * scale)), height: Math.max(1, Math.round(db.height * scale)) };
-
-    const sources = await electron.desktopCapturer.getSources({ types: ['screen'], thumbnailSize, fetchWindowIcons: false });
-    const tGrab = performance.now();
-    abortIfNeeded(signal);
-    const source = sources.find((s) => s.display_id === display.id) ?? (sources.length === 1 && getDisplays().length === 1 ? sources[0] : undefined);
-    if (!source) throw new CaptureError('could not match the display to a capture source');
-    const thumb = source.thumbnail;
-    if (thumb.isEmpty()) throw new CaptureError('the display capture was empty');
-
-    const ts = thumb.getSize();
-    const sx = ts.width / db.width;
-    const sy = ts.height / db.height;
-    const cx = Math.max(0, Math.floor((regionPx.x - db.x) * sx));
-    const cy = Math.max(0, Math.floor((regionPx.y - db.y) * sy));
-    const cw = Math.min(ts.width - cx, Math.max(1, Math.round(regionPx.width * sx)));
-    const ch = Math.min(ts.height - cy, Math.max(1, Math.round(regionPx.height * sy)));
-    if (cw <= 0 || ch <= 0) throw new CaptureError('capture region is outside the display');
-    const cropped = thumb.crop({ x: cx, y: cy, width: cw, height: ch });
-
-    const analysis = maskedScaled(cropped, req.analysisMaxWidth, regionPx, req.maskRectsPx);
-    let jpeg: Uint8Array | null = null;
-    if (req.jpeg) {
-      const big = maskedScaled(cropped, req.jpeg.maxWidth, regionPx, req.maskRectsPx);
-      jpeg = new Uint8Array(bitmapImage(big).toJPEG(Math.round(req.jpeg.quality)));
-      big.data.fill(0);
-    }
+    let framesMs = 0;
+    const frames = await runBurst(
+      req.burst,
+      async (i) => {
+        const g0 = performance.now();
+        const g = await grabFrame(req, i === 0 ? req.jpeg : null, signal);
+        framesMs += performance.now() - g0;
+        return g;
+      },
+      { signal, release: wipeGrab, stillClear: req.stillClear, clock },
+    ).catch((e: unknown) => {
+      throw signal.aborted ? new CaptureError('capture cancelled') : e;
+    });
+    const [first, ...rest] = frames;
+    if (!first) throw new CaptureError('no frame was captured');
     const durationMs = Math.round(performance.now() - t0);
     log.debug('frame captured', {
-      grabMs: Math.round(tGrab - t0),
-      processMs: Math.round(performance.now() - tGrab),
+      frames: frames.length,
+      // Grabbing and processing the frames; the rest of totalMs is the wait between them.
+      framesMs: Math.round(framesMs),
       totalMs: durationMs,
-      width: analysis.width,
-      height: analysis.height,
-      jpegBytes: jpeg?.byteLength ?? 0,
+      width: first.analysis.width,
+      height: first.analysis.height,
+      jpegBytes: first.jpeg?.byteLength ?? 0,
     });
-    return { analysis, jpeg, durationMs };
+    return { analysis: first.analysis, burst: rest.map((g) => g.analysis), jpeg: first.jpeg, durationMs };
   }
 
   return {

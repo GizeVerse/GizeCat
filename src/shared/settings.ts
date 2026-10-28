@@ -21,7 +21,7 @@ export const TOGGLEABLE_BEHAVIORS = [
 ] as const;
 export type ToggleableBehavior = (typeof TOGGLEABLE_BEHAVIORS)[number];
 
-/** Processes whose windows are never captured or analysed (case-insensitive exe basenames). */
+/** Processes whose windows are never analysed, previewed or sent: blacked out in memory right after each grab, and capture is skipped while one is in front (case-insensitive exe basenames). */
 export const DEFAULT_EXCLUDED_PROCESSES: readonly string[] = [
   'keepass.exe',
   'keepassxc.exe',

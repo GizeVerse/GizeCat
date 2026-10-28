@@ -88,6 +88,7 @@ export function mapRenderState(out: SimOutput, appearance: Appearance, ctx: Rend
     style: appearance.style,
     shadow: appearance.shadow,
     animSpeed: appearance.animationSpeed,
+    reaction: out.reaction ? { kind: out.reaction.kind, at: out.reaction.at } : null,
   };
 }
 

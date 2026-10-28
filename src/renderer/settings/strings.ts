@@ -4,7 +4,7 @@ import type { MemoryDetail, MemoryKind } from '../../core/behavior/memory';
 import type { BehaviorState, RenderStyle, SkinId } from '../../shared/cat';
 import type { Counters, Preferences, Stats, Traits } from '../../shared/catState';
 import type { AppStatus } from '../../shared/ipc';
-import type { PerceptionMode } from '../../shared/perception';
+import type { PerceptionMode, VisualEventKind } from '../../shared/perception';
 import type { AiProviderId, Settings, ToggleableBehavior } from '../../shared/settings';
 import type { PageId } from './catalog';
 
@@ -160,6 +160,12 @@ export const S = {
     launchTitle: 'Start with Windows',
     launchDesc: 'Open Desktop Cat when you sign in.',
     launchInactive: 'Windows reports the startup entry as inactive. It may be disabled in Task Manager › Startup apps.',
+    startupStateTitle: 'When Desktop Cat starts',
+    startupStateDesc: 'How the cat appears each time the app starts, also when it starts with Windows.',
+    startupStates: { visible: 'Visible', hidden: 'Hidden', paused: 'Paused', remember: 'As I left it' } satisfies Record<
+      Settings['general']['startupState'],
+      string
+    >,
     shortcutsTitle: 'Keyboard shortcuts',
     shortcutsDesc: 'Global shortcuts that work in any app.',
     shortcutTitle: 'Hide/show shortcut',
@@ -215,6 +221,8 @@ export const S = {
     autonomyDesc: 'How often it starts doing things on its own.',
     cursorPlayTitle: 'Pointer play',
     cursorPlayDesc: 'How much it likes to chase and bat at your pointer.',
+    chaseTitle: 'Chase length',
+    chaseDesc: 'About how long one pointer chase lasts. Each chase varies a little around it.',
     attentionTitle: 'Attention seeking',
     attentionDesc: 'How often it asks for attention after quiet periods.',
     sensitivityTitle: 'Activity sensitivity',
@@ -286,7 +294,7 @@ export const S = {
     groupModeDesc: 'Optional. Lets the cat react to what happens on screen. Off by default.',
     modes: {
       off: { title: 'Off', desc: 'The cat only knows where windows are. It never looks at their contents.' },
-      'local-stats': { title: 'Local statistics', desc: 'Brightness, colour and movement numbers from a tiny image. No AI, all on this PC.' },
+      'local-stats': { title: 'Local statistics', desc: 'Brightness, colour and movement numbers from tiny images. No AI, all on this PC.' },
       ai: { title: 'AI vision', desc: 'An AI model gives a one-line description so the cat can react. Set up a provider on the AI page.' },
     } satisfies Record<Settings['perception']['visualMode'], { title: string; desc: string }>,
     modeLabel: 'Screen analysis mode',
@@ -297,7 +305,7 @@ export const S = {
     pauseDesc: 'Stops all capture immediately. Also available from the tray icon.',
     groupHow: 'What happens when it is on',
     how: [
-      { title: 'What is captured', text: 'One small, downscaled still image of the area you choose below. Never sound, never your keystrokes, never the clipboard.' },
+      { title: 'What is captured', text: 'Three small, downscaled images of the area you choose below, about 0.15 s apart (to tell movement from stillness). Private windows are blacked out in memory before anything else happens. Never sound, never your keystrokes, never the clipboard.' },
       { title: 'When', text: 'Only now and then, when something changes or the cat is curious, and never more often than the minimum interval below.' },
       {
         title: 'Where it is processed',
@@ -314,7 +322,8 @@ export const S = {
       string
     >,
     intervalTitle: 'Minimum time between analyses',
-    intervalDesc: 'The cat never looks more often than this.',
+    intervalDesc:
+      'Desktop Cat never captures more often than this. The cat only looks now and then, so it usually looks less often. AI vision also keeps to the limits on the AI page.',
     groupExclusions: 'Never analyse',
     groupExclusionsDesc: 'While one of these is in front, nothing is captured. Window titles are only compared in memory and never stored in logs.',
     processesTitle: 'Apps',
@@ -352,20 +361,22 @@ export const S = {
       bigChange: 'Big change',
       motion: 'Motion',
       still: 'Still',
-    },
+      videoLike: 'Video-like',
+      newElement: 'New element',
+    } satisfies Record<VisualEventKind, string>,
     consent: {
       localTitle: 'Turn on local statistics?',
       aiTitle: 'Turn on AI vision?',
       intro: 'Please read what will happen. You can turn it off again at any time.',
       localPoints: (region: string, interval: string) => [
-        `Desktop Cat will capture a small, downscaled image of: ${region.toLowerCase()}.`,
+        `Desktop Cat will capture three small, downscaled images (about 0.15 s apart) of: ${region.toLowerCase()}.`,
         `It looks at most once every ${interval}, and only when something changes or the cat is curious.`,
         'It computes brightness, colour, detail and movement numbers. No AI is involved.',
         'The image never leaves this PC and is discarded right after the numbers are computed.',
         'The cat and excluded apps or windows are blanked out; nothing is captured while they are in front or the PC is locked.',
       ],
       aiPoints: (region: string, interval: string, perHour: number) => [
-        `Desktop Cat will capture a small, downscaled image of: ${region.toLowerCase()}.`,
+        `Desktop Cat will capture three small, downscaled images (about 0.15 s apart) of: ${region.toLowerCase()}.`,
         `At most once every ${interval} and at most ${perHour} times per hour, the image is sent to the AI model below.`,
         'The model only returns a short label (type of scene, energy, a suggested reaction). It cannot control your PC.',
         'Images are never saved. The cat and excluded apps or windows are blanked out first.',

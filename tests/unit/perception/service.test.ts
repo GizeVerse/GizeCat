@@ -758,3 +758,128 @@ describe('preview, test, models, status, dispose', () => {
     expect(t.cap.requests.length).toBe(120);
   });
 });
+
+describe('capture bursts (motion over a fraction of a second)', () => {
+  /** Colourful 8-px checkerboard shifted by `shift` px: every block changes between neighbouring shifts. */
+  const scene = (shift: number) => makeFrame(256, 160, (x, y) => ((((x + shift) >> 3) + (y >> 3)) % 2 === 0 ? [220, 40, 40] : [30, 60, 200]));
+  const grey = () => makeFrame(256, 160, () => [90, 90, 90]);
+
+  /** Wraps the request's stillClear so a private app is in front only while it is asked (a momentary change). */
+  function momentaryPrivateApp(t: ReturnType<typeof setup>) {
+    const orig = t.cap.capture;
+    t.cap.capture = (req, signal) =>
+      orig(
+        {
+          ...req,
+          stillClear: () => {
+            t.host.foregroundExcluded = true;
+            const ok = req.stillClear!();
+            t.host.foregroundExcluded = false;
+            return ok;
+          },
+        },
+        signal,
+      );
+  }
+
+  it('one request takes one 3-frame burst ~150 ms apart, counted as one capture, with one AI image', async () => {
+    const t = setup(aiLocal());
+    await requestAndSettle(t, 'curious');
+    expect(t.cap.requests).toHaveLength(1);
+    expect(t.cap.requests[0]).toMatchObject({ burst: { frames: 3, intervalMs: 150 }, jpeg: { maxWidth: 512, quality: 60 } });
+    expect(t.cap.framesTaken).toEqual([3]);
+    expect(t.adapter.calls).toHaveLength(1);
+    expect(t.svc.status.capturesThisHour).toBe(1);
+  });
+
+  it('motion comes from the burst: a moving burst is motion, a change between captures is not', async () => {
+    const t = setup(localStats());
+    t.cap.frameFor = () => scene(0);
+    t.cap.burstFor = (_i, k) => scene(k * 8);
+    await requestAndSettle(t);
+    const [moving] = ofType(t.svc.drainEvents(), 'perception.visual');
+    expect(moving!.summary.features.motion).toBeGreaterThan(0.5);
+    expect(moving!.summary.events).toContain('motion');
+
+    const s = setup(localStats());
+    s.cap.frameFor = (i) => (i % 2 === 0 ? grey() : scene(0)); // a big change between captures, none inside a burst
+    await requestAndSettle(s);
+    s.svc.drainEvents();
+    s.clock.advance(20_000);
+    await requestAndSettle(s);
+    const [changed] = ofType(s.svc.drainEvents(), 'perception.visual');
+    expect(changed!.summary.features.changeFraction).toBeGreaterThan(0.5);
+    expect(changed!.summary.features.motion).toBe(0);
+    expect(changed!.summary.events).not.toContain('motion');
+  });
+
+  it('sustained colourful burst motion on two captures in a row is reported as videoLike', async () => {
+    const t = setup(localStats());
+    t.cap.frameFor = () => scene(0);
+    t.cap.burstFor = (_i, k) => scene(k * 8);
+    await requestAndSettle(t);
+    expect(ofType(t.svc.drainEvents(), 'perception.visual')[0]!.summary.events).not.toContain('videoLike');
+    t.clock.advance(20_000);
+    await requestAndSettle(t);
+    expect(ofType(t.svc.drainEvents(), 'perception.visual')[0]!.summary.events).toContain('videoLike');
+  });
+
+  it('a compact panel that appears between captures is reported as newElement', async () => {
+    const t = setup(localStats());
+    const panel = () => makeFrame(256, 160, (x, y) => (x >= 150 && x < 230 && y >= 10 && y < 50 ? [245, 245, 245] : [90, 90, 90]));
+    t.cap.frameFor = (i) => (i === 0 ? grey() : panel());
+    await requestAndSettle(t);
+    expect(ofType(t.svc.drainEvents(), 'perception.visual').flatMap((e) => e.summary.events)).not.toContain('newElement');
+    t.clock.advance(20_000);
+    await requestAndSettle(t);
+    const [ev] = ofType(t.svc.drainEvents(), 'perception.visual');
+    expect(ev!.summary.events).toContain('newElement');
+    expect(ev!.summary.events).not.toContain('bigChange');
+  });
+
+  it('a private window appearing between burst frames stops the burst and discards every frame', async () => {
+    const t = setup(aiLocal());
+    t.cap.duringBurst = (k) => {
+      if (k === 1) t.host.excludedRects = [{ x: 805, y: 505, width: 60, height: 40 }];
+    };
+    await requestAndSettle(t, 'curious');
+    expect(t.cap.framesTaken).toEqual([1]); // nothing was grabbed after it appeared
+    expect(t.svc.drainEvents()).toEqual([]);
+    expect(t.adapter.calls).toHaveLength(0);
+  });
+
+  it('a private app in front for a moment between burst frames discards the frames although it is gone again', async () => {
+    const t = setup(aiLocal());
+    momentaryPrivateApp(t);
+    await requestAndSettle(t, 'curious');
+    expect(t.cap.framesTaken).toEqual([1]);
+    expect(t.svc.drainEvents()).toEqual([]);
+    expect(t.adapter.calls).toHaveLength(0);
+    expect(t.svc.status.blockedReason).toBeNull();
+    expect(t.logger.entries.some((e) => e.msg.includes('the screen changed during the burst'))).toBe(true);
+
+    const p = setup(localStats());
+    momentaryPrivateApp(p);
+    expect(await p.svc.preview()).toMatchObject({ ok: false, blockedReason: expect.stringMatching(/changed while it was captured/) });
+    expect(p.cap.pngCalls).toBe(0);
+  });
+
+  it('a privacy pause during the burst discards the frames', async () => {
+    const t = setup(aiLocal());
+    t.cap.duringBurst = () => t.svc.setPaused(true);
+    await requestAndSettle(t, 'curious');
+    expect(t.svc.drainEvents()).toEqual([]);
+    expect(t.adapter.calls).toHaveLength(0);
+  });
+
+  it('the preview takes the same burst and reports its motion', async () => {
+    const t = setup(localStats());
+    t.cap.frameFor = () => scene(0);
+    t.cap.burstFor = (_i, k) => scene(k * 8);
+    const p = await t.svc.preview();
+    expect(p.ok).toBe(true);
+    expect(t.cap.requests[0]!.burst).toEqual({ frames: 3, intervalMs: 150 });
+    expect(p.summary!.features.motion).toBeGreaterThan(0.5);
+    expect(t.svc.status.capturesThisHour).toBe(1);
+  });
+});

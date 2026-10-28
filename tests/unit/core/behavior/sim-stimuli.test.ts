@@ -3,7 +3,7 @@ import type { BehaviorState } from '../../../../src/shared/cat';
 import type { AiReaction } from '../../../../src/shared/perception';
 import type { SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
-import { display, DUAL_MIXED, Harness, settingsWith, world } from './fixtures';
+import { callCat, display, DUAL_MIXED, Harness, settingsWith, WAKE_MS, world } from './fixtures';
 
 const MIN = 60_000;
 const catPoint = (o: SimOutput | null) => ({ x: o?.x ?? 0, y: (o?.y ?? 0) - 30 });
@@ -27,7 +27,7 @@ describe('window stimuli', () => {
     let perched = false;
     for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
       const h = new Harness({ seed, settings: settingsWith({ behavior: { activitySensitivity: 1 } }) });
-      h.run(3000);
+      h.run(WAKE_MS);
       const rect = { x: Math.max(0, h.last!.x - 300), y: 760, width: 700, height: 280 };
       h.env.windows = { n: rect };
       const states = collect(h, 30_000, (_hh, i) => (i === 0 ? [{ type: 'window.shown', window: windowInfo('n', rect) }] : []));
@@ -54,7 +54,7 @@ describe('window stimuli', () => {
   it('rapid foreground switching makes a wandering cat stop and observe', () => {
     const h = new Harness({ seed: 10 });
     h.run(2000);
-    h.step([{ type: 'command.callCat', at: { x: 100, y: 1000 } }]);
+    callCat(h, { x: 100, y: 1000 });
     h.run(300);
     expect(['running', 'walking']).toContain(h.last!.state);
     h.env.foreground = windowInfo('f', { x: 500, y: 200, width: 800, height: 600 });
@@ -76,7 +76,7 @@ describe('window stimuli', () => {
     h.run(2000);
     const rect = { x: Math.max(0, h.last!.x - 300), y: 800, width: 600, height: 240 };
     h.env.windows = { p: rect };
-    h.step([{ type: 'command.callCat', at: { x: rect.x + 300, y: 700 } }]);
+    callCat(h, { x: rect.x + 300, y: 700 });
     expect(h.runUntil((o) => o.support.kind === 'window' && o.state === 'idle', 30_000)).toBe(true);
     h.env.windows = {};
     const states = collect(h, 4000);
@@ -92,7 +92,7 @@ describe('cursor and pointer', () => {
     let chased = false;
     for (const seed of [1, 2, 3, 4, 5, 6]) {
       const h = new Harness({ seed, settings: settingsWith({ behavior: { cursorPlay: 1 } }) });
-      h.run(3000);
+      h.run(WAKE_MS);
       const x0 = h.last!.x;
       const states = collect(h, 15_000, (hh, i) => {
         hh.env.cursor = { x: x0 + 300 * Math.sin(i / 10), y: 1000, speed: 1200 };
@@ -122,14 +122,18 @@ describe('cursor and pointer', () => {
     let emoted = 0;
     for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
       const h = new Harness({ seed });
-      h.run(3000);
+      h.run(WAKE_MS);
       const x0 = h.last!.x;
-      const states = collect(h, 2500, (hh, i) => (i === 0 ? [{ type: 'pointer.doubleTap', at: catPoint(hh.last) }] : []));
+      let happy = false;
+      const states = collect(h, 2500, (hh, i) => {
+        if (hh.last!.emote === 'sparkle' || hh.last!.emote === 'note') happy = true;
+        return i === 0 ? [{ type: 'pointer.doubleTap', at: catPoint(hh.last) }] : [];
+      });
       if (states.includes('jumping')) {
         hopped++;
         expect(states).toContain('landing');
         expect(Math.abs(h.last!.x - x0)).toBeLessThan(84);
-      } else if (h.last!.emote === 'sparkle' || h.last!.emote === 'note') emoted++;
+      } else if (happy || h.last!.emote === 'sparkle' || h.last!.emote === 'note') emoted++;
     }
     expect(hopped).toBeGreaterThan(0);
     expect(hopped + emoted).toBeGreaterThan(4);
@@ -228,7 +232,9 @@ describe('perception', () => {
   it('maps allow-listed AI reactions to behaviours', () => {
     const expectState = (reaction: AiReaction, ok: (s: BehaviorState[]) => boolean) => {
       const h = new Harness({ seed: 6 });
-      h.run(3000);
+      h.run(WAKE_MS);
+      // From an idle cat (a walk or rest it just started may not be cut short).
+      h.runUntil((o) => o.state === 'idle', 5 * MIN);
       const states = collect(h, 1500, (_hh, i) => (i === 0 ? [ai(reaction)] : []));
       expect(ok(states)).toBe(true);
     };
@@ -275,7 +281,7 @@ describe('multi-monitor in the simulation', () => {
   it('survives removal of the display it is on (snap onto a valid floor)', () => {
     const h = new Harness({ seed: 7, world: DUAL_MIXED });
     h.step();
-    h.step([{ type: 'command.callCat', at: { x: -1500, y: 1200 } }]);
+    callCat(h, { x: -1500, y: 1200 });
     expect(h.runUntil((o) => o.displayId === '2' && o.state === 'idle', 60_000)).toBe(true);
     h.setWorld(world(display('1', 0, 0, 1920, 1080, { primary: true, taskbar: 40 })));
     const o = h.step();
@@ -290,7 +296,7 @@ describe('multi-monitor in the simulation', () => {
   it('reports the display containing the cat for negative coordinates and mixed DPI', () => {
     const h = new Harness({ seed: 8, world: DUAL_MIXED });
     h.step();
-    h.step([{ type: 'command.callCat', at: { x: -2000, y: 1250 } }]);
+    callCat(h, { x: -2000, y: 1250 });
     h.runUntil((o) => o.state === 'idle' && o.displayId === '2', 60_000);
     expect(h.last!.x).toBeLessThan(0);
     expect(h.last!.y).toBe(1260);

@@ -35,6 +35,23 @@ if ($result.installedExe) {
   $result.smokeExitCode = $LASTEXITCODE
 }
 
+# Upgrade in place: user data must survive installing over an existing install (and the
+# later uninstall). Uses the app's real per-user data folder ONLY if it does not exist yet
+# (so no real user data is ever touched) and deletes the marker folder at the end.
+$appData = Join-Path $env:APPDATA 'Desktop Cat'
+$result.upgradeTested = $false
+if ($result.installedExe -and -not (Test-Path $appData)) {
+  New-Item -ItemType Directory -Force $appData | Out-Null
+  $marker = '{"schemaVersion":1,"general":{"catName":"UpgradeMarker"}}'
+  Set-Content -Path (Join-Path $appData 'settings.json') -Value $marker -Encoding utf8 -NoNewline
+  $p2 = Start-Process -FilePath $setup.FullName -ArgumentList @('/S', "/D=$target") -Wait -PassThru
+  $result.upgradeExitCode = $p2.ExitCode
+  $result.upgradeExePresent = Test-Path $exe
+  $result.upgradeSingleUninstallEntry = (@(Find-UninstallKey).Count -eq 1)
+  $result.userDataSurvivedUpgrade = (Test-Path (Join-Path $appData 'settings.json')) -and ((Get-Content (Join-Path $appData 'settings.json') -Raw) -eq $marker)
+  $result.upgradeTested = $true
+}
+
 $uninstaller = Get-ChildItem $target -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($uninstaller) {
   $u = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/S') -Wait -PassThru
@@ -46,4 +63,14 @@ $result.uninstallEntryRemoved = (@(Find-UninstallKey).Count -eq 0)
 $result.startMenuShortcutRemoved = -not (Test-Path $startMenu)
 $result.desktopShortcutRemoved = -not (Test-Path $desktop)
 if (Test-Path $target) { Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue }
+if ($result.upgradeTested) {
+  $result.userDataSurvivedUninstall = Test-Path (Join-Path $appData 'settings.json')
+  Remove-Item -Recurse -Force $appData -ErrorAction SilentlyContinue
+}
+$upgradeOk = (-not $result.upgradeTested) -or (($result.upgradeExitCode -eq 0) -and $result.upgradeExePresent -and $result.upgradeSingleUninstallEntry -and $result.userDataSurvivedUpgrade -and $result.userDataSurvivedUninstall)
+$result.ok = $upgradeOk -and ($result.installExitCode -eq 0) -and $result.installedExe -and $result.uninstallEntry -and `
+  $result.startMenuShortcut -and $result.desktopShortcut -and ($result.smokeExitCode -eq 0) -and `
+  ($result.uninstallExitCode -eq 0) -and $result.exeRemoved -and $result.uninstallEntryRemoved -and `
+  $result.startMenuShortcutRemoved -and $result.desktopShortcutRemoved
 $result | ConvertTo-Json
+if (-not $result.ok) { exit 1 }

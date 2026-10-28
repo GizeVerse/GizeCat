@@ -42,8 +42,9 @@ function pushEdge(out: Platform[], id: string, r: Rect, above: readonly Rect[], 
 
 /**
  * Visible top edges of app windows. A window's edge is cut wherever a window above it
- * in z-order covers the edge row. Minimized windows are ignored entirely; maximized and
- * fullscreen windows produce no platform but still occlude the windows below them.
+ * in z-order covers the edge row. Minimized windows are ignored entirely; maximized,
+ * fullscreen and privacy-excluded windows (password managers, sign-in or banking
+ * windows) produce no platform but still occlude the windows below them.
  *
  * `occluders`, when known, is every shown window in z-order (top first), including
  * owned dialogs, tool windows and small windows that are not app windows: they cut the
@@ -52,7 +53,7 @@ function pushEdge(out: Platform[], id: string, r: Rect, above: readonly Rect[], 
 export function computePlatforms(windows: readonly WindowInfo[], minWidth = MIN_PLATFORM_WIDTH, occluders: readonly Occluder[] | null = null): Platform[] {
   const out: Platform[] = [];
   const above: Rect[] = [];
-  const offersEdge = (w: WindowInfo): boolean => !w.minimized && !w.maximized && !w.fullscreen;
+  const offersEdge = (w: WindowInfo): boolean => !w.minimized && !w.maximized && !w.fullscreen && !w.excluded;
   if (occluders) {
     const apps = new Map(windows.map((w) => [w.id, w]));
     for (const o of occluders) {

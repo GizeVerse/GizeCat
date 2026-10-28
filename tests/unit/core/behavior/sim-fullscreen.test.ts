@@ -5,7 +5,7 @@ import type { PersistedCat } from '../../../../src/shared/catState';
 import type { SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
 import { mulberry32, newPersistedCat } from '../../../../src/core/behavior';
-import { DUAL_FLAT, Harness, settingsWith } from './fixtures';
+import { callCat, DUAL_FLAT, Harness, settingsWith } from './fixtures';
 
 const MIN = 60_000;
 const WALL = 1_800_000_000_000;
@@ -71,7 +71,7 @@ describe('fullscreen displays are off limits', () => {
     h.run(MIN, 100);
     expect(h.last!.state).toBe('away');
     expect(h.last!.visible).toBe(false);
-    h.step([{ type: 'command.callCat', at: { x: 600, y: 1000 } }], 100);
+    callCat(h, { x: 600, y: 1000 }, 100);
     expect(h.last!.displayId).toBe('1');
     expect(h.last!.snap).toBe(true);
     expect(h.last!.state).not.toBe('away');
@@ -95,7 +95,7 @@ describe('fullscreen displays are off limits', () => {
     h.run(MIN, 100);
     expect(h.last!.state).toBe('sleeping');
     expect(h.last!.displayId).toBe('2');
-    h.step([{ type: 'command.callCat', at: { x: 400, y: 1000 } }], 100);
+    callCat(h, { x: 400, y: 1000 }, 100);
     expect(h.last!.displayId).toBe('1');
     expect(h.sim.debugInfo().mode).toBe('normal');
     expect(h.runUntil((o) => Math.abs(o.x - 400) < 5 && o.state === 'idle', 60_000)).toBe(true);
@@ -105,7 +105,7 @@ describe('fullscreen displays are off limits', () => {
     const h = new Harness({ seed: 7, world: DUAL_FLAT, persisted: restoredAt('1', 0.85), settings: settingsWith({ behavior: { fullscreenBehavior: 'ignore' } }) });
     h.env.fullscreenDisplayIds = ['2'];
     h.run(1000);
-    h.step([{ type: 'command.callCat', at: { x: 2600, y: 1000 } }]);
+    callCat(h, { x: 2600, y: 1000 });
     expect(h.runUntil((o) => o.displayId === '2' && Math.abs(o.x - 2600) < 5, 60_000)).toBe(true);
   });
 });

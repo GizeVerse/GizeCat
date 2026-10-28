@@ -2,7 +2,9 @@
 // zod in at runtime, which the renderer bundle does not need; the type-level checks
 // below fail to compile if the shared lists gain an id that is missing here, and a
 // unit test asserts the order matches.
-import type { AiProviderId, ToggleableBehavior } from '../../shared/settings';
+import type { AiProviderId, Settings, ToggleableBehavior } from '../../shared/settings';
+
+type StartupState = Settings['general']['startupState'];
 
 export const BEHAVIOR_IDS = [
   'chaseCursor',
@@ -16,10 +18,14 @@ export const BEHAVIOR_IDS = [
 
 export const PROVIDER_IDS = ['none', 'ollama', 'openai-compatible', 'anthropic'] as const satisfies readonly AiProviderId[];
 
+/** Choices of "When Desktop Cat starts" (general.startupState), in display order. */
+export const STARTUP_STATES = ['visible', 'hidden', 'paused', 'remember'] as const satisfies readonly StartupState[];
+
 type Missing<All, Listed> = Exclude<All, Listed>;
 const behaviorsComplete: [Missing<ToggleableBehavior, (typeof BEHAVIOR_IDS)[number]>] extends [never] ? true : false = true;
 const providersComplete: [Missing<AiProviderId, (typeof PROVIDER_IDS)[number]>] extends [never] ? true : false = true;
-export const CATALOG_COMPLETE = behaviorsComplete && providersComplete;
+const startupStatesComplete: [Missing<StartupState, (typeof STARTUP_STATES)[number]>] extends [never] ? true : false = true;
+export const CATALOG_COMPLETE = behaviorsComplete && providersComplete && startupStatesComplete;
 
 export const PAGE_IDS = [
   'welcome',

@@ -1,17 +1,17 @@
 // Overlay renderer runtime: receives render snapshots, interpolates, runs the frame loop
-// only while the cat is visible, clears and redraws only dirty regions, reports the hit
-// region and forwards pointer input. Never decides behaviour.
+// only while the cat is visible, draws at the display rate only while the cat moves fast
+// (frameRate.ts), clears and redraws only dirty regions, reports the hit region and
+// forwards pointer input. Never decides behaviour.
 import type { CatRenderState } from '../../shared/cat';
 import type { OverlayApi, OverlayConfig } from '../../shared/ipc';
 import type { Ctx2D } from './cat/draw';
+import { FramePacer, FULL_RATE_MS } from './frameRate';
 import { HIT_REFRESH_MS, HitRegionReporter } from './hitRegion';
 import { attachPointerInput } from './input';
 import { SnapshotInterpolator, type InterpSample } from './interpolation';
 import { CatScene, type DeviceRect, type Layer, type LayerProvider } from './scene';
 import { isOverlayConfig, isRenderState } from './validate';
 
-/** While asleep and still, draw at ~20 fps. */
-const QUIET_FRAME_MS = 48;
 const MAX_FRAME_DT_MS = 250;
 const MAX_CONSECUTIVE_ERRORS = 30;
 const ERROR_REPORT_INTERVAL_MS = 2000;
@@ -50,6 +50,7 @@ export class OverlayRuntime {
   private readonly interp = new SnapshotInterpolator();
   private readonly sample: InterpSample;
   private readonly scene = new CatScene(Math.random);
+  private readonly pacer = new FramePacer();
   private readonly hits: HitRegionReporter;
   private config: OverlayConfig = { displayId: '', scaleFactor: 1, debug: false };
   private dpr = 1;
@@ -232,7 +233,8 @@ export class OverlayRuntime {
       if (!this.interp.newest()?.visible) this.stopLoop();
       return;
     }
-    if (this.scene.isQuiet && !this.sample.snapped && Number.isFinite(this.lastUpdateAt) && now - this.lastUpdateAt < QUIET_FRAME_MS) return;
+    const first = this.sample.snapped || !Number.isFinite(this.lastUpdateAt);
+    if (!this.pacer.shouldDraw(now, first ? FULL_RATE_MS : this.scene.frameIntervalMs(this.sample.x, this.sample.y, st))) return;
 
     const dt = Number.isFinite(this.lastUpdateAt) ? Math.min(MAX_FRAME_DT_MS, Math.max(0, now - this.lastUpdateAt)) : 0;
     this.lastUpdateAt = now;

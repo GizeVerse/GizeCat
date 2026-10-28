@@ -1,6 +1,6 @@
 // Defensive shape check for render snapshots arriving over IPC. Main is trusted, but a
 // malformed snapshot must never crash the frame loop.
-import { ANIM_CLIPS, BEHAVIOR_STATES, EMOTES, RENDER_STYLES, SKINS, type CatRenderState } from '../../shared/cat';
+import { ANIM_CLIPS, BEHAVIOR_STATES, CAT_REACTIONS, EMOTES, RENDER_STYLES, SKINS, type CatReaction, type CatRenderState } from '../../shared/cat';
 import type { OverlayConfig } from '../../shared/ipc';
 
 const CLIPS: ReadonlySet<string> = new Set(ANIM_CLIPS);
@@ -8,9 +8,20 @@ const STATES: ReadonlySet<string> = new Set(BEHAVIOR_STATES);
 const EMOTE_SET: ReadonlySet<string> = new Set(EMOTES);
 const SKIN_SET: ReadonlySet<string> = new Set(SKINS);
 const STYLE_SET: ReadonlySet<string> = new Set(RENDER_STYLES);
+const REACTION_SET: ReadonlySet<string> = new Set(CAT_REACTIONS);
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
+function isReaction(v: unknown): v is CatReaction {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.kind === 'string' && REACTION_SET.has(r.kind) && isNum(r.at);
+}
+
+/**
+ * True for a usable snapshot. A malformed optional `reaction` never costs the frame: it is
+ * replaced with null on the snapshot (a copy IPC made for this renderer).
+ */
 export function isRenderState(v: unknown): v is CatRenderState {
   if (typeof v !== 'object' || v === null) return false;
   const s = v as Record<string, unknown>;
@@ -29,6 +40,7 @@ export function isRenderState(v: unknown): v is CatRenderState {
     const l = s.look as Record<string, unknown>;
     if (!isNum(l.x) || !isNum(l.y)) return false;
   }
+  if (s.reaction !== undefined && s.reaction !== null && !isReaction(s.reaction)) s.reaction = null;
   return true;
 }
 

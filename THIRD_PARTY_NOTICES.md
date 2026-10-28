@@ -11,6 +11,8 @@ Desktop Cat is MIT-licensed (see `LICENSE`). It ships or bundles the following t
 | Node.js (via Electron) | 24.22 | MIT and others | included in Electron's notices |
 | koffi | 3.3.4 | MIT, © Niels Martignène | native FFI module, `resources/app.asar.unpacked/node_modules/koffi` |
 | @koromix/koffi-win32-x64 | 3.3.4 | MIT, © Niels Martignène | prebuilt koffi binary |
+| node-addon-api (vendored in koffi) | as bundled by koffi 3.3.4 | MIT, © Node.js API collaborators | `node_modules/koffi/vendor/node-addon-api` |
+| node-api-headers (vendored in koffi) | as bundled by koffi 3.3.4 | MIT, © Node.js | `node_modules/koffi/vendor/node-api-headers` |
 
 ## Bundled into the application JavaScript
 

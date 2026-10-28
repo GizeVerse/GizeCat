@@ -125,7 +125,7 @@ describe('event coalescing', () => {
     tracker.start();
     api.remove('3');
     api.fire('destroy', '3');
-    expect(run(300)).toEqual([{ type: 'window.closed', id: '3', rect: rect(1, 2, 300, 200), category: 'browser' }]);
+    expect(run(300)).toEqual([{ type: 'window.closed', id: '3', rect: rect(1, 2, 300, 200), category: 'browser', excluded: false }]);
   });
 
   it('reports minimize and restore from state diffs', () => {
@@ -145,11 +145,11 @@ describe('event coalescing', () => {
     const { tracker, run } = setup(api);
     tracker.start();
     api.fire('moveStart', '3');
-    expect(run(300)).toEqual([{ type: 'window.moveStart', id: '3' }]);
+    expect(run(300)).toEqual([{ type: 'window.moveStart', id: '3', excluded: false }]);
     expect(run(2000)).toEqual([]);
     api.update('3', { rect: rect(400, 300, 300, 200) });
     api.fire('moveEnd', '3');
-    expect(run(300)).toEqual([{ type: 'window.moveEnd', id: '3', rect: rect(400, 300, 300, 200) }]);
+    expect(run(300)).toEqual([{ type: 'window.moveEnd', id: '3', rect: rect(400, 300, 300, 200), excluded: false }]);
   });
 
   it('drops a click on the title bar (start+end within one burst, no movement)', () => {
@@ -285,7 +285,7 @@ describe('reconcile', () => {
     expect(ev).toEqual(
       expect.arrayContaining([
         { type: 'window.shown', window: win('3', rect(5, 5, 400, 300)) },
-        { type: 'window.closed', id: '1', rect: rect(0, 0, 800, 600), category: 'other' },
+        { type: 'window.closed', id: '1', rect: rect(0, 0, 800, 600), category: 'other', excluded: false },
         { type: 'window.minimized', id: '2' },
       ]),
     );
@@ -299,8 +299,8 @@ describe('reconcile', () => {
     p.tracker.start();
     polling.update('1', { rect: rect(300, 0, 800, 600) });
     expect(p.run(3000)).toEqual([
-      { type: 'window.moveStart', id: '1' },
-      { type: 'window.moveEnd', id: '1', rect: rect(300, 0, 800, 600) },
+      { type: 'window.moveStart', id: '1', excluded: false },
+      { type: 'window.moveEnd', id: '1', rect: rect(300, 0, 800, 600), excluded: false },
     ]);
 
     const hooked = new FakeWin32Api().add(win('1', rect(0, 0, 800, 600)));
@@ -461,5 +461,82 @@ describe('privacy exclusions', () => {
     expect(tracker.isExcludedAt({ x: 10, y: 10 })).toBe(true);
     expect(tracker.isExcludedAt({ x: 610, y: 10 })).toBe(false);
     expect(tracker.getForeground()?.excluded).toBe(true);
+  });
+});
+
+describe('private windows in window events and platforms', () => {
+  it('move and close events carry the tracked excluded flag (hook mode)', () => {
+    const api = new FakeWin32Api()
+      .add(win('pm', rect(0, 0, 300, 200), { processName: 'keepassxc.exe', excluded: true }))
+      .add(win('ed', rect(400, 0, 300, 200)));
+    const { tracker, run } = setup(api);
+    tracker.start();
+    api.fire('moveStart', 'pm');
+    api.fire('moveStart', 'ed');
+    expect(run(300)).toEqual([
+      { type: 'window.moveStart', id: 'pm', excluded: true },
+      { type: 'window.moveStart', id: 'ed', excluded: false },
+    ]);
+    api.update('pm', { rect: rect(50, 50, 300, 200) });
+    api.fire('moveEnd', 'pm');
+    expect(run(300)).toEqual([{ type: 'window.moveEnd', id: 'pm', rect: rect(50, 50, 300, 200), excluded: true }]);
+    api.remove('pm');
+    api.fire('destroy', 'pm');
+    expect(run(300)).toEqual([{ type: 'window.closed', id: 'pm', rect: rect(50, 50, 300, 200), category: 'other', excluded: true }]);
+  });
+
+  it('synthesised moves, stuck-move ends and reconciled closes carry it too', () => {
+    const polling = new FakeWin32Api().add(win('pm', rect(0, 0, 800, 600), { excluded: true }));
+    polling.hooksAvailable = false;
+    const p = setup(polling);
+    p.tracker.start();
+    polling.update('pm', { rect: rect(300, 0, 800, 600) });
+    expect(p.run(3000)).toEqual([
+      { type: 'window.moveStart', id: 'pm', excluded: true },
+      { type: 'window.moveEnd', id: 'pm', rect: rect(300, 0, 800, 600), excluded: true },
+    ]);
+    polling.remove('pm');
+    expect(p.run(3000)).toEqual([{ type: 'window.closed', id: 'pm', rect: rect(300, 0, 800, 600), category: 'other', excluded: true }]);
+
+    const hooked = new FakeWin32Api().add(win('pm', rect(0, 0, 800, 600), { excluded: true }));
+    const h = setup(hooked);
+    h.tracker.start();
+    hooked.fire('moveStart', 'pm');
+    h.run(300);
+    expect(h.run(63_000)).toEqual([{ type: 'window.moveEnd', id: 'pm', rect: rect(0, 0, 800, 600), excluded: true }]);
+  });
+
+  it('a window that becomes private through new exclusions is reported as such from the next drain', () => {
+    const api = new FakeWin32Api().add(win('1', rect(0, 0, 500, 500), { processName: 'keepass.exe' }));
+    const { tracker, run } = setup(api);
+    tracker.start();
+    tracker.setExclusions(['keepass.exe'], []);
+    run(33);
+    api.remove('1');
+    api.fire('destroy', '1');
+    expect(run(300)).toEqual([{ type: 'window.closed', id: '1', rect: rect(0, 0, 500, 500), category: 'other', excluded: true }]);
+  });
+
+  it('private windows offer no perch platform but still hide the edges below them', () => {
+    const api = new FakeWin32Api()
+      .add(win('below', rect(100, 300, 500, 400)))
+      .add(win('pm', rect(250, 200, 200, 300), { processName: 'bitwarden.exe', excluded: true }));
+    const { tracker } = setup(api);
+    tracker.start();
+    expect(tracker.getPlatforms(0)).toEqual([
+      { windowId: 'below', y: 300, x0: 100, x1: 250 },
+      { windowId: 'below', y: 300, x0: 450, x1: 600 },
+    ]);
+  });
+
+  it('the same holds with the full z-order of the extended API', () => {
+    const api = new FakeExtendedWin32Api().add(win('b', rect(100, 300, 500, 400))).add(win('bank', rect(300, 100, 600, 400), { excluded: true }));
+    api.occluders = [
+      { id: 'bank', rect: rect(300, 100, 600, 400) },
+      { id: 'b', rect: rect(100, 300, 500, 400) },
+    ];
+    const { tracker } = setup(api);
+    tracker.start();
+    expect(tracker.getPlatforms(0)).toEqual([{ windowId: 'b', y: 300, x0: 100, x1: 300 }]);
   });
 });

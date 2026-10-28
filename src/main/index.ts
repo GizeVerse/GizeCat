@@ -56,7 +56,8 @@ function main(): void {
 /** Everything up to 'ready' (startApp runs after it). Throws on failure; boot.logger is set as soon as it exists. */
 function start(test: boolean, boot: { logger: RootLogger | null }): void {
   const startedAt = Date.now();
-  const dev = hasFlag(process.argv, '--dev');
+  // DevTools and other development affordances never exist in packaged builds.
+  const dev = hasFlag(process.argv, '--dev') && !app.isPackaged;
   const launchedAtLogin = hasFlag(process.argv, LAUNCHED_AT_LOGIN_FLAG);
 
   const userDataOverride = parseUserDataOverride(process.env, process.argv);

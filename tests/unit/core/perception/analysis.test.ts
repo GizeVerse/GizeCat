@@ -94,7 +94,7 @@ describe('FrameAnalyzer statistics', () => {
 });
 
 describe('FrameAnalyzer change detection', () => {
-  it('moving block: change box covers old and new position, motion rises', () => {
+  it('moving block: change box covers old and new position', () => {
     const a = new FrameAnalyzer();
     a.analyze(withBlock(20, 20), { at: 0 });
     const r = a.analyze(withBlock(100, 60), { at: 1000 });
@@ -107,27 +107,60 @@ describe('FrameAnalyzer change detection', () => {
     expect(box.y).toBeCloseTo(20 / H, 1);
     expect(box.x + box.width).toBeCloseTo(132 / W, 1);
     expect(box.y + box.height).toBeCloseTo(92 / H, 1);
-    expect(f.motion).toBeGreaterThan(0);
   });
 
-  it('motion is an EMA over frames and decays when the screen stops changing', () => {
+  it('change between captures minutes apart is not motion (motion comes from the burst only)', () => {
     const a = new FrameAnalyzer();
     const d = new VisualEventDeriver();
     let t = 0;
-    const big = [uniform(0), uniform(255)];
-    a.analyze(big[0]!, { at: t });
-    let last: VisualFeatures | null = null;
+    a.analyze(uniform(0), { at: t });
     for (let i = 1; i <= 6; i++) {
-      last = a.analyze(big[i % 2]!, { at: (t += 1000) }).features;
-      d.derive(last);
+      const f = a.analyze(i % 2 === 0 ? uniform(0) : uniform(255), { at: (t += 120_000) }).features;
+      expect(f.changeFraction).toBe(1);
+      expect(f.motion).toBe(0);
+      expect(d.derive(f)).not.toContain('motion');
     }
-    expect(last!.motion).toBeGreaterThan(0.9);
-    expect(d.derive(last!)).toContain('motion');
-    expect(d.derive(last!)).toContain('bigChange');
-    let ev: string[] = [];
-    for (let i = 0; i < 12; i++) ev = d.derive(a.analyze(uniform(255), { at: (t += 1000) }).features);
-    expect(ev).toContain('still');
+  });
+
+  it('a burst of moving frames measures motion within the capture and the label follows it', () => {
+    const a = new FrameAnalyzer();
+    const d = new VisualEventDeriver();
+    // A large bright square moving 40 px per frame (~150 ms): a fast animation.
+    const at = (i: number) => makeFrame(W, H, (x, y) => (x >= 20 + i * 40 && x < 120 + i * 40 && y >= 20 && y < 120 ? [250, 250, 250] : [30, 30, 30]));
+    const r = a.analyze(at(0), { at: 0, burst: [at(1), at(2)] });
+    expect(r.burstIntervals).toBe(2);
+    expect(r.features.changeFraction).toBeNull(); // no earlier capture to compare with
+    expect(r.features.motion).toBeGreaterThan(0.2);
+    expect(d.derive(r.features)).toContain('motion');
+    // The next capture: a still burst ends the motion at once.
+    const still = a.analyze(at(2), { at: 30_000, burst: [at(2), at(2)] });
+    expect(still.features.motion).toBe(0);
+    expect(still.features.changeFraction).toBe(0); // compared with the newest frame of the previous burst
+    const ev = d.derive(still.features);
     expect(ev).not.toContain('motion');
+    expect(ev).toContain('still');
+  });
+
+  it('a one-off change inside the burst is not motion (motion must last the whole burst)', () => {
+    const r = new FrameAnalyzer().analyze(uniform(20), { at: 0, burst: [uniform(220), uniform(220)] });
+    expect(r.burstIntervals).toBe(2);
+    expect(r.features.motion).toBe(0);
+    expect(new FrameAnalyzer().analyze(uniform(20), { at: 0, burst: [uniform(220)] }).features.motion).toBe(1);
+  });
+
+  it('burst frames are masked like the first frame and frames of another size are ignored', () => {
+    const mask = [{ x: 0, y: 0, width: 128, height: H }];
+    // Everything that changes is under the mask.
+    const left = (v: number) => makeFrame(W, H, (x) => (x < 128 ? [v, v, v] : [90, 90, 90]));
+    const b1 = left(200);
+    const r = new FrameAnalyzer().analyze(left(10), { at: 0, masks: mask, burst: [b1, left(10)] });
+    expect(r.burstIntervals).toBe(2);
+    expect(r.features.motion).toBe(0);
+    const o = 10 * b1.stride + 10 * 4;
+    expect([b1.data[o], b1.data[o + 1], b1.data[o + 2]]).toEqual([0, 0, 0]);
+    const odd = new FrameAnalyzer().analyze(uniform(10), { at: 0, burst: [makeFrame(W - 4, H, () => [250, 250, 250])] });
+    expect(odd.burstIntervals).toBe(0);
+    expect(odd.features.motion).toBe(0);
   });
 
   it('identical frames: zero change, no box', () => {
@@ -238,6 +271,58 @@ describe('VisualEventDeriver hysteresis', () => {
     expect(d.derive({ ...base, changeFraction: 0.3 })).not.toContain('bigChange');
   });
 
+  it('videoLike needs sustained burst motion in colourful content on two analyses in a row, and has hysteresis', () => {
+    const d = new VisualEventDeriver();
+    const video = { ...base, motion: 0.3, colorfulness: 0.35 };
+    expect(d.derive(video)).not.toContain('videoLike');
+    expect(d.derive(video)).toContain('videoLike');
+    expect(d.derive({ ...video, motion: 0.07, colorfulness: 0.16 })).toContain('videoLike');
+    expect(d.derive({ ...video, motion: 0.04 })).not.toContain('videoLike');
+    // A single qualifying analysis between calm ones never enters.
+    expect(d.derive(video)).not.toContain('videoLike');
+    expect(d.derive({ ...video, motion: 0 })).not.toContain('videoLike');
+    expect(d.derive(video)).not.toContain('videoLike');
+  });
+
+  it('videoLike is not reported for grey motion (e.g. scrolling text) however long it lasts', () => {
+    const d = new VisualEventDeriver();
+    for (let i = 0; i < 6; i++) expect(d.derive({ ...base, motion: 0.5, colorfulness: 0.08 })).not.toContain('videoLike');
+  });
+
+  it('newElement: a compact changed area that was not changing in the previous analysis', () => {
+    const d = new VisualEventDeriver();
+    const box = { x: 0.6, y: 0.1, width: 0.3, height: 0.3 };
+    expect(d.derive({ ...base, changeFraction: 0.08, changeBox: box })).toContain('newElement');
+    // The same area changing again (a playing video, an animation) is not new.
+    expect(d.derive({ ...base, changeFraction: 0.08, changeBox: box })).not.toContain('newElement');
+    // Elsewhere, it is.
+    expect(d.derive({ ...base, changeFraction: 0.06, changeBox: { x: 0.05, y: 0.5, width: 0.25, height: 0.3 } })).toContain('newElement');
+  });
+
+  it('newElement is not reported for tiny, huge, scattered or strip-shaped changes, or without a baseline', () => {
+    const fresh = () => new VisualEventDeriver();
+    expect(fresh().derive({ ...base, changeFraction: 0.01, changeBox: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 } })).not.toContain('newElement');
+    expect(fresh().derive({ ...base, changeFraction: 0.4, changeBox: { x: 0, y: 0, width: 0.7, height: 0.7 } })).not.toContain('newElement');
+    expect(fresh().derive({ ...base, changeFraction: 0.02, changeBox: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 } })).not.toContain('newElement');
+    // Two freshly typed lines across most of a 640x400 region: 0.7 wide x 0.1 tall is 11:1 on screen.
+    expect(fresh().derive({ ...base, changeFraction: 0.06, changeBox: { x: 0.1, y: 0.4, width: 0.7, height: 0.1 } }, 1.6)).not.toContain('newElement');
+    // A toast-sized panel (about 3.6:1 on screen) still counts.
+    expect(fresh().derive({ ...base, changeFraction: 0.12, changeBox: { x: 0.4, y: 0.7, width: 0.56, height: 0.25 } }, 1.6)).toContain('newElement');
+    expect(fresh().derive({ ...base, changeFraction: null, changeBox: null })).not.toContain('newElement');
+  });
+
+  it('reset forgets videoLike, its streak and the previous change box', () => {
+    const d = new VisualEventDeriver();
+    const video = { ...base, motion: 0.3, colorfulness: 0.35 };
+    d.derive(video);
+    d.reset();
+    expect(d.derive(video)).not.toContain('videoLike');
+    const box = { x: 0.6, y: 0.1, width: 0.3, height: 0.3 };
+    d.derive({ ...base, changeFraction: 0.08, changeBox: box });
+    d.reset();
+    expect(d.derive({ ...base, changeFraction: 0.08, changeBox: box })).toContain('newElement');
+  });
+
   it('still is never reported without a comparison frame', () => {
     const d = new VisualEventDeriver();
     expect(d.derive({ ...base, motion: 0, changeFraction: null })).not.toContain('still');
@@ -263,5 +348,26 @@ describe('performance', () => {
     console.log(`analysis 256x144: median ${median.toFixed(2)} ms, min ${times[0]!.toFixed(2)} ms, max ${times[times.length - 1]!.toFixed(2)} ms`);
     // Lenient bound: shared machine, parallel test workers.
     expect(median).toBeLessThan(20);
+  });
+
+  it('analyses a 3-frame 256x160 burst well within budget (target < 8 ms)', () => {
+    const rnd = mulberry32(7);
+    const make = () => makeFrame(256, 160, () => [Math.floor(rnd() * 256), Math.floor(rnd() * 256), Math.floor(rnd() * 256)]);
+    const pool = [make(), make(), make(), make()];
+    const masks = [{ x: 100, y: 40, width: 40, height: 60 }];
+    const a = new FrameAnalyzer();
+    const run = (i: number) => a.analyze(pool[i % 4]!, { at: i, masks, burst: [pool[(i + 1) % 4]!, pool[(i + 2) % 4]!] });
+    for (let i = 0; i < 10; i++) run(i);
+    const times: number[] = [];
+    for (let i = 10; i < 50; i++) {
+      const t0 = performance.now();
+      run(i);
+      times.push(performance.now() - t0);
+    }
+    times.sort((x, y) => x - y);
+    const median = times[Math.floor(times.length / 2)]!;
+    console.log(`burst analysis 3x256x160: median ${median.toFixed(2)} ms, min ${times[0]!.toFixed(2)} ms, max ${times[times.length - 1]!.toFixed(2)} ms`);
+    // Lenient bound: shared machine, parallel test workers.
+    expect(median).toBeLessThan(30);
   });
 });

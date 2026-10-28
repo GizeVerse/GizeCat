@@ -2,7 +2,7 @@
 // src/shared/settings.ts; tests/unit/renderer/settings/fields.test.ts checks every
 // bound against the real schema so the two cannot drift apart silently.
 import type { Settings } from '../../shared/settings';
-import { formatDuration, formatMinutes, formatMultiplier, formatPercent, formatPerHour } from './format';
+import { formatDuration, formatMinutes, formatMultiplier, formatPercent, formatPerHour, formatSeconds } from './format';
 
 export type SectionKey = Exclude<keyof Settings, 'schemaVersion'>;
 export type FieldKey<S extends SectionKey> = keyof Settings[S] & string;
@@ -13,7 +13,7 @@ export type BoolKey<S extends SectionKey> = KeysOfType<S, boolean>;
 export type NumKey<S extends SectionKey> = KeysOfType<S, number>;
 export type StrKey<S extends SectionKey> = KeysOfType<S, string>;
 
-export type ValueFormat = 'percent' | 'multiplier' | 'minutes' | 'duration' | 'perHour';
+export type ValueFormat = 'percent' | 'multiplier' | 'minutes' | 'duration' | 'perHour' | 'seconds';
 
 export interface RangeSpec {
   min: number;
@@ -40,6 +40,7 @@ export const NUMERIC_FIELDS = {
   cursorPlay: spec('behavior', 'cursorPlay', 0, 1, 0.05, 'percent'),
   attentionSeeking: spec('behavior', 'attentionSeeking', 0, 1, 0.05, 'percent'),
   activitySensitivity: spec('behavior', 'activitySensitivity', 0, 1, 0.05, 'percent'),
+  chaseDuration: spec('behavior', 'chaseDurationSec', 1, 20, 0.5, 'seconds'),
   sleepAfterIdleMinutes: spec('behavior', 'sleepAfterIdleMinutes', 1, 120, 1, 'minutes'),
   patience: spec('interaction', 'patience', 0, 1, 0.05, 'percent'),
   perceptionInterval: spec('perception', 'minIntervalSec', 5, 3600, 1, 'duration'),
@@ -60,6 +61,8 @@ export function formatValue(format: ValueFormat, value: number): string {
       return formatDuration(value);
     case 'perHour':
       return formatPerHour(value);
+    case 'seconds':
+      return formatSeconds(value);
   }
 }
 

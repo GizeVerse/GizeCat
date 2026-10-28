@@ -1,0 +1,67 @@
+// Feasibility spike behind ADR 0001 (transparent overlay cost, WinEvent hook delivery,
+// OS hit-testing through a click-through window). Prints one SPIKE_RESULT JSON line.
+//   node scripts/with-lock.mjs spike -- npx electron scripts/spike-overlay
+const { app, BrowserWindow, screen, desktopCapturer } = require('electron');
+const path = require('path');
+const koffi = require(path.join(__dirname, '..', '..', 'node_modules', 'koffi'));
+const out = {};
+const user32 = koffi.load('user32.dll');
+const POINT = koffi.struct('POINT', { x: 'long', y: 'long' });
+const WinEventProc = koffi.proto('void __stdcall WinEventProc(void *hook, uint32_t ev, void *hwnd, long idObject, long idChild, uint32_t thread, uint32_t time)');
+const SetWinEventHook = user32.func('void * __stdcall SetWinEventHook(uint32_t eMin, uint32_t eMax, void *hmod, WinEventProc *cb, uint32_t pid, uint32_t tid, uint32_t flags)');
+const UnhookWinEvent = user32.func('bool __stdcall UnhookWinEvent(void *hook)');
+const GetForegroundWindow = user32.func('void * __stdcall GetForegroundWindow()');
+const WindowFromPoint = user32.func('void * __stdcall WindowFromPoint(POINT pt)');
+const GetAncestor = user32.func('void * __stdcall GetAncestor(void *hwnd, uint32_t flags)');
+const counts = {};
+const cb = koffi.register((hook, ev) => { const k = ev.toString(16); counts[k] = (counts[k] || 0) + 1; }, koffi.pointer(WinEventProc));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function fail(e) { console.log('SPIKE_ERROR ' + (e && e.stack || e)); app.exit(1); }
+process.on('uncaughtException', fail);
+app.whenReady().then(async () => {
+  const d = screen.getPrimaryDisplay();
+  out.displays = screen.getAllDisplays().map((x) => ({ id: x.id, bounds: x.bounds, workArea: x.workArea, scale: x.scaleFactor, physWork: screen.dipToScreenRect(null, x.workArea) }));
+  const hook = SetWinEventHook(0x8000, 0x800B, null, cb, process.pid, 0, 0);
+  out.hookOk = !!hook;
+  const win = new BrowserWindow({ ...d.workArea, transparent: true, frame: false, resizable: false, movable: false, focusable: false, skipTaskbar: true, hasShadow: false, alwaysOnTop: true, backgroundColor: '#00000000', show: false, webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: false } });
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setIgnoreMouseEvents(true);
+  await win.loadFile(path.join(__dirname, 'index.html'));
+  win.showInactive();
+  const ourHwnd = win.getNativeWindowHandle().readBigUInt64LE(0);
+  await sleep(1500);
+  const pp = screen.dipToScreenPoint({ x: d.workArea.x + d.workArea.width - 300, y: d.workArea.y + 300 });
+  const root = GetAncestor(WindowFromPoint({ x: Math.round(pp.x), y: Math.round(pp.y) }), 2);
+  out.hitTestIgnored = { passesThrough: BigInt(koffi.address(root)) !== ourHwnd };
+  win.setIgnoreMouseEvents(false);
+  await sleep(200);
+  const h2 = GetAncestor(WindowFromPoint({ x: Math.round(pp.x), y: Math.round(pp.y) }), 2);
+  out.hitTestInteractive = { hitsOverlay: BigInt(koffi.address(h2)) === ourHwnd };
+  win.setIgnoreMouseEvents(true);
+  const w2 = new BrowserWindow({ width: 200, height: 100, x: d.workArea.x + 20, y: d.workArea.y + 20, show: false, focusable: false, skipTaskbar: true });
+  w2.showInactive(); await sleep(200); w2.setPosition(d.workArea.x + 60, d.workArea.y + 60); await sleep(200); w2.destroy();
+  await sleep(400);
+  out.winEventCounts = { ...counts };
+  out.foregroundNonNull = !!GetForegroundWindow();
+  app.getAppMetrics();
+  await sleep(6000);
+  out.metricsBigAnimating = app.getAppMetrics().map((m) => ({ type: m.type, cpu: +m.cpu.percentCPUUsage.toFixed(2), wsMB: Math.round(m.memory.workingSetSize / 1024) }));
+  out.fpsBig = win.getTitle();
+  const srcs = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 480, height: 270 } });
+  out.capture = srcs.map((s) => ({ display_id: s.display_id, size: s.thumbnail.getSize() }));
+  win.hide();
+  const small = new BrowserWindow({ width: 300, height: 200, x: d.workArea.x + 100, y: d.workArea.y + d.workArea.height - 200, transparent: true, frame: false, resizable: false, focusable: false, skipTaskbar: true, hasShadow: false, alwaysOnTop: true, backgroundColor: '#00000000', show: false, webPreferences: { sandbox: true, backgroundThrottling: false } });
+  small.setIgnoreMouseEvents(true); await small.loadFile(path.join(__dirname, 'index.html')); small.showInactive();
+  app.getAppMetrics();
+  await sleep(6000);
+  out.metricsSmallAnimating = app.getAppMetrics().map((m) => ({ type: m.type, cpu: +m.cpu.percentCPUUsage.toFixed(2) }));
+  out.fpsSmall = small.getTitle();
+  small.destroy();
+  await win.webContents.executeJavaScript('window.requestAnimationFrame=()=>0;1');
+  win.showInactive();
+  await sleep(1000); app.getAppMetrics(); await sleep(4000);
+  out.metricsBigIdle = app.getAppMetrics().map((m) => ({ type: m.type, cpu: +m.cpu.percentCPUUsage.toFixed(2) }));
+  UnhookWinEvent(hook); koffi.unregister(cb);
+  console.log('SPIKE_RESULT ' + JSON.stringify(out));
+  app.exit(0);
+}).catch(fail);

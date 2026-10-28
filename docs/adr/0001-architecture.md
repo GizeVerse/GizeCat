@@ -8,10 +8,10 @@
 | Concern | Decision |
 |---|---|
 | Stack | **Electron 44.9 + TypeScript 6.0 (strict)**, esbuild bundles, zod 4 validation, koffi 3.3 FFI for Win32. |
-| Why not Tauri | No Rust toolchain on the build machine; WebView2 transparent always-on-top windows have weaker click-through/topmost control; Electron gives a single, pinned Chromium for deterministic rendering and a mature NSIS packaging path. Cost: ~350 MB RAM baseline (measured), larger installer. |
-| Overlay | **One transparent, frameless, non-focusable, topmost BrowserWindow per display, sized to that display's work area.** Shown only while the cat intersects it. |
+| Why not Tauri | No Rust toolchain on the build machine; WebView2 transparent always-on-top windows have weaker click-through/topmost control; Electron gives a single, pinned Chromium for deterministic rendering and a mature NSIS packaging path. Cost: memory — about 550–610 MB summed working set across all app processes (shared pages counted more than once; see docs/TEST_REPORT.md) — and a ~116 MB installer. |
+| Overlay | **One transparent, frameless, non-focusable, topmost BrowserWindow per display, sized to that display's work area.** Every overlay stays shown and click-through for its whole life (hiding/moving transparent frameless windows triggers Electron bugs #41063, #27651, #54627); only the rendered content changes, and an overlay draws nothing while the cat is elsewhere. On a display change an affected overlay is destroyed and recreated rather than re-bounded. |
 | Click-through | Overlays ignore the mouse by default (`setIgnoreMouseEvents(true)` → `WS_EX_TRANSPARENT`). Main polls the cursor and turns interaction on **only while the cursor is inside the cat's reported hit region** and the renderer is healthy. No global mouse hook. |
-| Simulation | Pure TypeScript in `src/core` (no Electron/Node imports), hosted by the main process at 30 Hz awake / ≤10 Hz asleep / ~2 Hz hidden. World space = physical virtual-screen pixels. |
+| Simulation | Pure TypeScript in `src/core` (no Electron/Node imports), hosted by the main process: ~30 Hz while active, ~15 Hz calm, 5–7 Hz asleep, 4–5 Hz hidden (the sim caps its tick interval at 200 ms and the host catches up gaps ≤ 1 s in ≤ 250 ms sub-steps, so sim time tracks real time). Rendering is decoupled: the overlay interpolates snapshots at the display rate and throttles while calm. World space = physical virtual-screen pixels. |
 | Rendering | Renderer receives `CatRenderState` snapshots (overlay-local DIP), interpolates, and draws a **procedural vector rig** on Canvas 2D (all clips, blending, breathing, blinking, tail physics, look-at). Optional "pixel" style renders the same rig at low resolution with nearest-neighbour upscale. |
 | Windows awareness | koffi → `SetWinEventHook` (out-of-context, skip own process) for foreground/minimize/move-size/show/hide/destroy/cloak events on Electron's main thread, plus a slow reconcile poll. `GetLastInputInfo` for idle; "typing" = input without cursor motion (no keyboard hook). |
 | Perception | Tier A (metadata, always on), Tier B (opt-in local pixel statistics on a tiny, masked, in-memory frame), Tier C (opt-in AI vision via Ollama / OpenAI-compatible local server / Anthropic, strict schema + reaction allow-list). |
@@ -20,7 +20,7 @@
 
 ## Evidence behind the overlay decision (measured on the dev machine, Windows 11 26200, 1920×1200 @125%)
 
-Spike (`Electron 44.9.3`, Chromium 152), REAL measurements via `app.getAppMetrics()`:
+Spike (`Electron 44.9.3`, Chromium 152; reproducible with `npx electron scripts/spike-overlay`), REAL measurements via `app.getAppMetrics()`:
 
 - Full-work-area transparent overlay animating at 59 fps: GPU process ≈0.4 % CPU, renderer ≈0.2 % CPU.
 - Small 300×200 moving-content window: GPU ≈0.66 %, renderer ≈0.2 % — no meaningful advantage.

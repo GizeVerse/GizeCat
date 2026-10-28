@@ -39,6 +39,8 @@ const metrics = () =>
       cpu: m.reduce((s, p) => s + p.cpu.percentCPUUsage, 0),
       byType: Object.fromEntries(m.map((p) => [`${p.type}:${p.pid}`, Math.round(p.cpu.percentCPUUsage * 100) / 100])),
       workingSetMB: Math.round(m.reduce((s, p) => s + p.memory.workingSetSize, 0) / 1024),
+      // privateBytes (Windows): memory not shared with other processes, so it can be summed meaningfully.
+      privateMB: Math.round(m.reduce((s, p) => s + (p.memory.privateBytes ?? 0), 0) / 1024),
       mainHeapMB: Math.round(process.memoryUsage().heapUsed / 1048576),
       timers: count('Timeout'),
       handles: res.length,
@@ -66,17 +68,23 @@ try {
     await metrics();
     const samples = [];
     const states = new Set();
+    let asleepSamples = 0;
     for (let t = 0; t < phaseSec; t += sampleSec) {
       await sleep(sampleSec * 1000);
       samples.push(await metrics());
       const o = await hook('getSimOutput');
       if (o) states.add(o.state);
+      if (o && o.state === 'sleeping') asleepSamples++;
+      // Keep the asleep phase asleep: the cat may wake on its own (or because the user is active).
+      if (name === 'asleep' && o && o.state !== 'sleeping' && o.state !== 'fallingAsleep') await hook('injectEvent', { type: 'command.sleep' });
     }
     const avg = (k) => Math.round((samples.reduce((s, x) => s + x[k], 0) / samples.length) * 100) / 100;
     report.phases[name] = {
       cpuAvgPercentOfOneCore: avg('cpu'),
       cpuMaxPercentOfOneCore: Math.round(Math.max(...samples.map((s) => s.cpu)) * 100) / 100,
       workingSetMB: { first: samples[0].workingSetMB, last: samples.at(-1).workingSetMB },
+      privateMB: { first: samples[0].privateMB, last: samples.at(-1).privateMB },
+      asleepShare: Math.round((asleepSamples / samples.length) * 100) / 100,
       mainHeapMB: { first: samples[0].mainHeapMB, last: samples.at(-1).mainHeapMB },
       timers: { first: samples[0].timers, last: samples.at(-1).timers, max: Math.max(...samples.map((s) => s.timers)) },
       handles: { first: samples[0].handles, last: samples.at(-1).handles },

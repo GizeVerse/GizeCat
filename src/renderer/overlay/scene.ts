@@ -6,10 +6,11 @@ import type { Rect } from '../../shared/geometry';
 import { drawCat, drawShadow, type Ctx2D } from './cat/draw';
 import { drawEmote, EMOTE_RADIUS, EMOTE_SIZE, emoteFrame, type EmoteFrame } from './cat/emotes';
 import { clamp, smooth } from './cat/math';
-import { LEG_COUNT } from './cat/pose';
+import { LEG_COUNT, LEG_FN } from './cat/pose';
 import { CatPuppet } from './cat/puppet';
 import { applyMatX, applyMatY, HEAD_RX, HEAD_RY, OUTLINE_W, PAW_RX, TORSO_POINTS } from './cat/rig';
 import { getSkin, type Skin } from './cat/skins';
+import { frameIntervalMs, isFastMotion, type FrameMotion } from './frameRate';
 
 const TURN_MS = 170;
 /** Extra margin around the drawn cat for outline, halo and anti-aliasing (cat-local DIP). */
@@ -83,6 +84,26 @@ export class CatScene {
   private sleeping = false;
   private stateName = '';
   private clipName = '';
+  private clipStart = Number.NaN;
+  private reactionAt = Number.NaN;
+
+  // Frame-rate policy inputs: the scene's own clock (sum of frame dts), when motion was last
+  // fast, and the tracked pose points (tail tip, head front, near front paw; cat-local).
+  private clock = 0;
+  private lastFastAt = Number.NEGATIVE_INFINITY;
+  private poseSpeed = 0;
+  private hasPosePoints = false;
+  private readonly posePoints = new Float64Array(6);
+  private readonly motion: FrameMotion = {
+    clip: 'stand',
+    state: 'idle',
+    speed: 0,
+    vy: 0,
+    moved: false,
+    transition: false,
+    poseSpeed: 0,
+    quiet: false,
+  };
 
   constructor(random: () => number) {
     this.puppet = new CatPuppet(random);
@@ -103,6 +124,36 @@ export class CatScene {
     return this.sleeping && !this.moved && !this.emoteVisible && !this.puppet.animator.blending && this.turnElapsed >= TURN_MS;
   }
 
+  /** A cross-fade, facing turn or reaction layer moved the last frame. */
+  private get transitioning(): boolean {
+    return this.puppet.animator.blending || this.puppet.animator.reacting || this.turnElapsed < TURN_MS;
+  }
+
+  /**
+   * Minimum time (ms) until the next frame should be drawn (frameRate.ts): 0 while anything
+   * moves fast, ~33 when calm, 50 asleep and still. Judged from the last drawn frame and
+   * the pending sample (anchor x, y and its snapshot), so a change that starts fast motion
+   * (a new clip, a turn, a reaction, the anchor moving) is drawn at once.
+   */
+  frameIntervalMs(x: number, y: number, next: CatRenderState): number {
+    const m = this.motion;
+    m.clip = next.clip;
+    m.state = next.state;
+    m.speed = next.speed;
+    m.vy = next.vy;
+    m.moved = this.moved || Math.abs(x - this.x) > 0.01 || Math.abs(y - this.y) > 0.01;
+    const r = next.reaction;
+    m.transition =
+      this.transitioning ||
+      next.clip !== this.clipName ||
+      next.clipStartedAt !== this.clipStart ||
+      (next.facing === -1 ? -1 : 1) !== this.facingTo ||
+      (r !== undefined && r !== null && r.at !== this.reactionAt);
+    m.poseSpeed = this.poseSpeed;
+    m.quiet = this.isQuiet && next.state === 'sleeping';
+    return frameIntervalMs(m, this.clock - this.lastFastAt);
+  }
+
   update(input: SceneInput): void {
     const s = input.state;
     this.visible = s.visible;
@@ -113,8 +164,12 @@ export class CatScene {
     this.sleeping = s.state === 'sleeping';
     this.stateName = s.state;
     this.clipName = s.clip;
+    this.clipStart = s.clipStartedAt;
+    const reaction = s.reaction ?? null;
+    if (reaction) this.reactionAt = reaction.at;
     const scale = clamp(Number.isFinite(s.scale) && s.scale > 0 ? s.scale : 1, 0.2, 4);
     const dt = Number.isFinite(input.dtMs) ? Math.max(0, input.dtMs) : 0;
+    this.clock += dt;
 
     // Facing: a quick squash-turn instead of an instant mirror.
     const facing = s.facing === -1 ? -1 : 1;
@@ -160,6 +215,7 @@ export class CatScene {
         arousal: s.arousal,
         contentment: s.contentment,
         animSpeed: s.animSpeed,
+        reaction,
       },
       input.simTime,
       dt,
@@ -170,6 +226,44 @@ export class CatScene {
     this.emote = s.emote;
     this.emoteVisible = s.emote !== null && emoteFrame(input.simTime - s.emoteStartedAt, this.emoteF);
     this.computeGeometry();
+    this.trackMotion(s, dt, input.snapped);
+  }
+
+  /** Measures this frame's motion for the frame-rate policy (allocation-free). */
+  private trackMotion(s: CatRenderState, dt: number, snapped: boolean): void {
+    const rig = this.puppet.rig;
+    const m = rig.m;
+    const tail = this.puppet.tail;
+    const tip = tail.count - 1;
+    const paw = rig.legs[LEG_FN]!;
+    // A point at the front of the head, so head turns and tilts count, not just its centre.
+    const hx = rig.headX + HEAD_RX * Math.cos(rig.headRot);
+    const hy = rig.headY - HEAD_RX * Math.sin(rig.headRot);
+    const pts = this.posePoints;
+    // A snap resets the tail: that jump is not motion.
+    const measure = this.hasPosePoints && dt >= 1 && !snapped;
+    let fastest = 0;
+    for (let i = 0; i < 3; i++) {
+      const lx = i === 0 ? tail.x[tip]! : i === 1 ? hx : paw.fx;
+      const ly = i === 0 ? tail.y[tip]! : i === 1 ? hy : paw.fy;
+      const X = applyMatX(m, lx, ly);
+      const Y = applyMatY(m, lx, ly);
+      if (measure) fastest = Math.max(fastest, (Math.hypot(X - pts[i * 2]!, Y - pts[i * 2 + 1]!) * 1000) / dt);
+      pts[i * 2] = X;
+      pts[i * 2 + 1] = Y;
+    }
+    this.hasPosePoints = true;
+    this.poseSpeed = Number.isFinite(fastest) ? fastest : 0;
+    const mo = this.motion;
+    mo.clip = s.clip;
+    mo.state = s.state;
+    mo.speed = s.speed;
+    mo.vy = s.vy;
+    mo.moved = this.moved;
+    mo.transition = this.transitioning;
+    mo.poseSpeed = this.poseSpeed;
+    mo.quiet = this.isQuiet;
+    if (isFastMotion(mo)) this.lastFastAt = this.clock;
   }
 
   private get sx(): number {

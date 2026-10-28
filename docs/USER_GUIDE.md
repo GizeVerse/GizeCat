@@ -15,7 +15,8 @@
 | **Double-click** it | A happy hop. |
 | **Press and drag** | Picks it up by the scruff. Drop it anywhere — on the floor, on top of a window, on another monitor. Fling it and it flies (and may be a bit grumpy after a hard throw). |
 | **Right-click** it | Quick menu: Pet, Call to cursor, Play, Go to sleep / Wake up, Pause/Resume, Hide, Settings…, Quit. |
-| Move the cursor fast near it | Sometimes it gives chase for a few seconds, then loses interest. |
+| Move the cursor fast near it | Sometimes it gives chase for a few seconds (adjustable: Settings → Behavior → Chase length), may finish with a little pounce, then loses interest. A playful cat sometimes dodges a cursor rushing at it, then crouches facing it. |
+| Call it (tray, right-click menu, settings) | It usually comes over. An annoyed, scared or sleepy cat may ignore one call with a flick of the tail — never twice in a row, at most about one call in three. |
 
 Everywhere else the overlay is **click-through**: clicks go to the windows under it. Only the cat's own body catches the mouse.
 
@@ -25,6 +26,9 @@ The cat mostly sits, grooms, watches, loafs and naps, with short bursts of activ
 
 - A new window appears → it may get curious and go have a look, or jump onto its title bar and sit there. Move that window and it rides along; minimise or close it and the cat drops down, startled.
 - You switch apps a lot → it watches instead of running around.
+- A video, game or media player is in front (windowed) → it stays calmer and watches.
+- Now and then it wanders into a corner of the screen, or gives a small start at nothing in particular — rarely.
+- Windows of private apps (password managers, banking, sign-in dialogs; see Privacy & Vision → exclusions) are never followed, inspected or sat on. Title-based exclusions only apply while screen analysis is on, because titles are not read otherwise.
 - You type for a while → it settles nearby and watches you work (no keys are recorded — see the privacy policy).
 - You are away → it falls asleep, preferably in one of its favourite spots; when you come back it wakes with a stretch.
 - A fullscreen app, game or video is in front on its monitor → it gets out of the way (hidden by default; configurable to "quiet" or "ignore").
@@ -43,9 +47,9 @@ Left-click the tray icon to show/hide the cat. The tooltip always shows the stat
 
 | Page | What you can change |
 |---|---|
-| General | Name, launch at Windows sign-in (off by default), shortcut, pause/show/call |
+| General | Name, launch at Windows sign-in (off by default), how it starts (visible, hidden, paused, or as you left it), shortcut, pause/show/call |
 | Appearance | Coat (ginger, gray, black, tuxedo, calico, siamese, cream), smooth or pixel style, size, opacity, animation speed, shadow, emotes, hide from screenshots/screen sharing |
-| Behavior | Movement speed, how independent it is, cursor play, attention seeking, sensitivity to window/activity events, minutes of inactivity before it sleeps, multi-monitor roaming, reactions to typing/windows, fullscreen behaviour, individual behaviours on/off |
+| Behavior | Movement speed, how independent it is, cursor play, chase length, attention seeking, sensitivity to window/activity events, minutes of inactivity before it sleeps, multi-monitor roaming, reactions to typing/windows, fullscreen behaviour, individual behaviours on/off |
 | Interaction | Interactions on/off, petting, dragging, throwing, patience (how quickly repeated clicks annoy it) |
 | Privacy & Vision | Screen analysis mode and consent, privacy pause, capture region, interval, excluded apps and window titles, "Preview what the cat sees" |
 | AI | Optional AI provider (Ollama, OpenAI-compatible server, Anthropic), model, API key, limits, connection test — see [AI_SETUP.md](AI_SETUP.md) |

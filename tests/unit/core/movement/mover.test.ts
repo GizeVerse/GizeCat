@@ -410,3 +410,45 @@ describe('Mover: facing', () => {
     expect(d.m.vx).toBeLessThan(0);
   });
 });
+
+describe('Mover: playful pounce', () => {
+  it('pounces toward a point in a low hop, facing it, and lands on the same surface', () => {
+    const d = make();
+    d.step();
+    const x0 = d.m.x;
+    const bw = d.m.bodyWidth;
+    const target = x0 - 1.5 * bw;
+    expect(d.m.pounce(d.now, target)).toBe(true);
+    expect(d.m.facing).toBe(-1);
+    expect(d.m.mode).toBe('crouch');
+    let peak = d.m.y;
+    let tookOff = false;
+    expect(
+      d.until((r) => {
+        tookOff ||= r.tookOff;
+        peak = Math.min(peak, d.m.y);
+        return r.landed !== null;
+      }, 3000),
+    ).toBe(true);
+    expect(tookOff).toBe(true);
+    expect(d.m.x).toBeCloseTo(target, 0);
+    expect(d.m.y).toBe(1040);
+    expect(d.m.support).toEqual({ kind: 'floor', displayId: '1' });
+    // A low hop, not a leap.
+    expect(1040 - peak).toBeLessThan(MOVEMENT.hopClearanceDip + 40);
+  });
+
+  it('covers at most pounceMaxBodyLengths, and refuses tiny distances or when not standing', () => {
+    const d = make();
+    d.step();
+    const x0 = d.m.x;
+    const bw = d.m.bodyWidth;
+    expect(d.m.pounce(d.now, x0 + 0.1 * bw)).toBe(false);
+    expect(d.m.pounce(d.now, Number.NaN)).toBe(false);
+    expect(d.m.pounce(d.now, x0 + 10 * bw)).toBe(true);
+    expect(d.m.facing).toBe(1);
+    expect(d.m.pounce(d.now, x0 + 2 * bw)).toBe(false);
+    expect(d.until((r) => r.landed !== null, 3000)).toBe(true);
+    expect(d.m.x - x0).toBeCloseTo(MOVEMENT.pounceMaxBodyLengths * bw, 0);
+  });
+});

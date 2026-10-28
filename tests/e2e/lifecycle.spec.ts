@@ -1,5 +1,18 @@
 import { spawn } from 'node:child_process';
-import { electronBinary, expect, hook, launchApp, MAIN_ENTRY, quitApp, readLogLines, ROOT, testEnv, test, waitForCat } from './fixtures';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Page } from '@playwright/test';
+import { electronBinary, expect, hook, launchApp, MAIN_ENTRY, quitApp, readLogLines, ROOT, settingsPage, testEnv, test, waitForCat } from './fixtures';
+
+const savedGeneral = (userData: string): Record<string, unknown> =>
+  (JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')) as { general: Record<string, unknown> }).general;
+
+/** Switches the settings window to a page (navigation is hash-based). */
+async function showPage(page: Page, id: string): Promise<void> {
+  await page.evaluate((hash) => {
+    (globalThis as unknown as { location: { hash: string } }).location.hash = hash;
+  }, `#${id}`);
+}
 
 test.describe('lifecycle', () => {
   test('first run opens the welcome page; pause, hide, show, resume and quit work', async ({ userData }) => {
@@ -82,6 +95,75 @@ test.describe('lifecycle', () => {
     } finally {
       await quitApp(app);
     }
+  });
+
+  test('"Hidden" chosen under When Desktop Cat starts keeps the cat hidden after a restart', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      const page = await settingsPage(app);
+      await showPage(page, 'general');
+      const choice = page.getByRole('radiogroup', { name: 'When Desktop Cat starts' });
+      await choice.getByRole('radio', { name: 'Hidden' }).click();
+      await expect.poll(async () => (await hook(app, 'getSettings')).general.startupState).toBe('hidden');
+      await expect(choice.getByRole('radio', { name: 'Hidden' })).toHaveAttribute('aria-checked', 'true');
+
+      await showPage(page, 'behavior');
+      const chase = page.getByRole('slider', { name: 'Chase length' });
+      await expect(chase).toHaveAttribute('min', '1');
+      await expect(chase).toHaveAttribute('max', '20');
+      await expect(chase).toHaveAttribute('aria-valuetext', '4.5 s');
+      await chase.fill('8');
+      await expect.poll(async () => (await hook(app, 'getSettings')).behavior.chaseDurationSec).toBe(8);
+
+      await hook(app, 'runAction', 'completeFirstRun');
+      // The choice applies at the next start; this session's cat stays where it is.
+      expect((await hook(app, 'getStatus')).visible).toBe(true);
+    } finally {
+      expect(await quitApp(app)).toBe(0);
+    }
+    expect(savedGeneral(userData)['startupState']).toBe('hidden');
+
+    const again = await launchApp(userData);
+    try {
+      await waitForCat(again);
+      const s = await hook(again, 'getStatus');
+      expect([s.visible, s.paused]).toEqual([false, false]);
+      // The cat was hidden before the first tick: no overlay ever starts drawing it.
+      await new Promise((r) => setTimeout(r, 1500));
+      expect((await hook(again, 'getOverlays')).every((o) => o.visible && !o.active)).toBe(true);
+      expect((await hook(again, 'getSettings')).behavior.chaseDurationSec).toBe(8);
+    } finally {
+      expect(await quitApp(again)).toBe(0);
+    }
+    const lines = readLogLines(userData);
+    expect(lines.filter((l) => l.m === 'started').map((l) => (l.d as { startState?: string } | undefined)?.startState)).toEqual(['visible', 'hidden']);
+    expect(lines.filter((l) => l.l === 'error')).toEqual([]);
+  });
+
+  test('"As I left it" brings a paused cat back paused after a restart', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      expect((await hook(app, 'patchSettings', { general: { startupState: 'remember', firstRunCompleted: true } })).ok).toBe(true);
+      await hook(app, 'runAction', 'pause');
+      await expect.poll(async () => (await hook(app, 'getSettings')).general.rememberedState).toBe('paused');
+    } finally {
+      expect(await quitApp(app)).toBe(0);
+    }
+    expect(savedGeneral(userData)).toMatchObject({ startupState: 'remember', rememberedState: 'paused' });
+
+    const again = await launchApp(userData);
+    try {
+      await waitForCat(again);
+      const s = await hook(again, 'getStatus');
+      expect([s.visible, s.paused]).toEqual([true, true]);
+      await hook(again, 'runAction', 'resume');
+      await expect.poll(async () => (await hook(again, 'getSettings')).general.rememberedState).toBe('visible');
+    } finally {
+      expect(await quitApp(again)).toBe(0);
+    }
+    expect(savedGeneral(userData)['rememberedState']).toBe('visible');
   });
 
   test('injected sim events and time scale are accepted by the test surface only', async ({ userData }) => {

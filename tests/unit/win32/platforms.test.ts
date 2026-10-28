@@ -54,6 +54,23 @@ describe('computePlatforms', () => {
     expect(computePlatforms([min, behind])).toEqual([{ windowId: 'behind', y: 300, x0: 100, x1: 600 }]);
   });
 
+  it('privacy-excluded windows offer no edge but still occlude (no perching on a password manager)', () => {
+    const pm = win('pm', rect(250, 200, 300, 300), { excluded: true });
+    const behind = win('behind', rect(100, 300, 600, 400));
+    expect(computePlatforms([pm, behind])).toEqual([
+      { windowId: 'behind', y: 300, x0: 100, x1: 250 },
+      { windowId: 'behind', y: 300, x0: 550, x1: 700 },
+    ]);
+    const occluders = [
+      { id: 'pm', rect: pm.rect },
+      { id: 'behind', rect: behind.rect },
+    ];
+    expect(computePlatforms([pm, behind], 80, occluders)).toEqual([
+      { windowId: 'behind', y: 300, x0: 100, x1: 250 },
+      { windowId: 'behind', y: 300, x0: 550, x1: 700 },
+    ]);
+  });
+
   it('drops segments narrower than the minimum width', () => {
     const top = win('top', rect(170, 100, 360, 400), { maximized: true });
     const target = win('target', rect(100, 300, 500, 400)); // leaves [100,170) and [530,600): 70 px each

@@ -4,7 +4,7 @@ import type { SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
 import { TOGGLEABLE_BEHAVIORS } from '../../../../src/shared/settings';
 import { SLOWEST_TICK_MS } from '../../../../src/core/behavior/sim';
-import { DUAL_MIXED, Harness, settingsWith, SINGLE } from './fixtures';
+import { callCat, DUAL_MIXED, Harness, settingsWith, SINGLE } from './fixtures';
 
 const MIN = 60_000;
 
@@ -218,7 +218,7 @@ describe('quit', () => {
         h.step([{ type: 'pointer.dragEnd', at: { x: 900, y: 200 }, velocity: { x: 2000, y: -2000 } }]);
       },
     ],
-    ['running', (h) => h.step([{ type: 'command.callCat', at: { x: 100, y: 1000 } }])],
+    ['running', (h) => callCat(h, { x: 100, y: 1000 })],
     ['away', (h) => ((h.env.hidden = true), h.run(1000))],
     ['paused', (h) => ((h.env.paused = true), h.run(1000))],
   ];
@@ -321,7 +321,7 @@ describe('interaction', () => {
     h.step([{ type: 'command.sleep' }]);
     h.run(8000);
     expect(h.last!.state).toBe('sleeping');
-    h.step([{ type: 'command.callCat', at: { x: 200, y: 900 } }]);
+    callCat(h, { x: 200, y: 900 });
     expect(h.last!.state).toBe('wakingUp');
     const seen = new Set<BehaviorState>();
     const arrived = h.runUntil((o) => {
@@ -336,7 +336,7 @@ describe('interaction', () => {
 });
 
 describe('outputs', () => {
-  it('requests perception at most every 30 s and saves at most every 60 s', () => {
+  it('requests perception at most every minIntervalSec (default 20 s) and saves at most every 60 s', () => {
     const h = new Harness({ seed: 61 });
     const perception: number[] = [];
     const saves: number[] = [];
@@ -353,7 +353,7 @@ describe('outputs', () => {
     });
     expect(perception.length).toBeGreaterThan(0);
     expect(saves.length).toBeGreaterThan(1);
-    for (let i = 1; i < perception.length; i++) expect(perception[i]! - perception[i - 1]!).toBeGreaterThanOrEqual(30_000);
+    for (let i = 1; i < perception.length; i++) expect(perception[i]! - perception[i - 1]!).toBeGreaterThanOrEqual(20_000);
     for (let i = 1; i < saves.length; i++) expect(saves[i]! - saves[i - 1]!).toBeGreaterThanOrEqual(60_000);
   });
 
@@ -384,7 +384,7 @@ describe('outputs', () => {
   it('scales bounds and speeds with appearance.size and the display scale factor', () => {
     const h = new Harness({ seed: 63, world: DUAL_MIXED, settings: settingsWith({ appearance: { size: 2 } }) });
     h.step();
-    h.step([{ type: 'command.callCat', at: { x: -1500, y: 1200 } }]);
+    callCat(h, { x: -1500, y: 1200 });
     let maxSpeed = 0;
     h.runUntil((o) => {
       if (o.displayId === '2' && o.support.kind === 'floor') {
@@ -415,7 +415,7 @@ describe('memory learning', () => {
     const h = new Harness({ seed: 71, world: SINGLE, settings: settingsWith({ behavior: { sleepAfterIdleMinutes: 1 } }) });
     h.step();
     // Nap at the far left for a long time.
-    h.step([{ type: 'command.callCat', at: { x: 150, y: 1000 } }]);
+    callCat(h, { x: 150, y: 1000 });
     h.runUntil((o) => o.state === 'idle' && Math.abs(o.x - 150) < 5, 60_000);
     h.step([{ type: 'command.sleep' }]);
     h.run(8 * MIN, 250);
@@ -425,7 +425,7 @@ describe('memory learning', () => {
     expect(spots.length).toBeGreaterThan(0);
     expect(spots[0]!.xFrac).toBeCloseTo(150 / 1920, 2);
     // Move away, then let the user go idle: the cat walks back to its spot to sleep.
-    h.step([{ type: 'command.callCat', at: { x: 1700, y: 1000 } }]);
+    callCat(h, { x: 1700, y: 1000 });
     h.runUntil((o) => o.state === 'idle' && Math.abs(o.x - 1700) < 5, 60_000);
     let idle = 0;
     const slept = h.runUntil((o) => {

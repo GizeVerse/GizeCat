@@ -13,8 +13,6 @@ export interface AnalyzerOptions {
   minBlockCoverage: number;
   /** Ignore changed blocks with no changed neighbour (sensor/encoder noise, blinking carets). */
   suppressIsolatedBlocks: boolean;
-  /** EMA weight of the newest change fraction in `motion`. */
-  motionAlpha: number;
   /** |dx| + |dy| luma gradient (0..510) above which a pixel is a strong edge. */
   edgeThreshold: number;
   /** A previous frame older than this is not compared (the screen has moved on). */
@@ -26,13 +24,12 @@ export const DEFAULT_ANALYZER_OPTIONS: Readonly<AnalyzerOptions> = Object.freeze
   blockChangeThreshold: 10,
   minBlockCoverage: 0.5,
   suppressIsolatedBlocks: true,
-  motionAlpha: 0.4,
   edgeThreshold: 48,
   staleAfterMs: 10 * 60_000,
 });
 
 export interface AnalyzeInput {
-  /** Rects (frame pixel coords) to black out and exclude, e.g. the cat and excluded windows. */
+  /** Rects (frame pixel coords) to black out and exclude, e.g. the cat and excluded windows. Applied to every burst frame too. */
   masks?: readonly Rect[];
   /** Capture time (ms, same clock across calls). */
   at: number;
@@ -41,6 +38,12 @@ export interface AnalyzeInput {
    * frame with the same key and size; a different key starts a new baseline.
    */
   regionKey?: string;
+  /**
+   * Further frames of the same region taken a fraction of a second after `frame`
+   * (one capture burst, oldest first, same size and masks). `motion` is measured
+   * across them; without a burst it is 0. Frames of another size are ignored.
+   */
+  burst?: readonly FrameBuffer[];
 }
 
 export interface FrameAnalysis {
@@ -49,6 +52,8 @@ export interface FrameAnalysis {
   maskedFraction: number;
   /** Unmasked pixels that contributed to the statistics. */
   analysedPixels: number;
+  /** Frame-to-frame intervals of the burst that were compared for `motion`. */
+  burstIntervals: number;
 }
 
 /** Hasler & Suesstrunk "extremely colourful" level, used to normalise colourfulness to 0..1. */
@@ -65,31 +70,37 @@ interface Signature {
   regionKey: string;
 }
 
+interface Diff {
+  fraction: number;
+  box: VisualFeatures['changeBox'];
+}
+
 /**
  * Stateful analyser: keeps only a coarse grid of block means (not pixels) of the
- * previous frame for change detection, plus a motion EMA.
+ * newest frame of the previous analysis, for "what changed since the last look".
+ * Motion is measured within one capture burst only, so it reflects activity over
+ * a fraction of a second, never across captures that are minutes apart.
  */
 export class FrameAnalyzer {
   private readonly opts: AnalyzerOptions;
   private prev: Signature | null = null;
-  private motion = 0;
 
   constructor(options: Partial<AnalyzerOptions> = {}) {
     this.opts = { ...DEFAULT_ANALYZER_OPTIONS, ...options };
     if (!Number.isInteger(this.opts.blockSize) || this.opts.blockSize < 2) throw new RangeError('blockSize must be an integer >= 2');
   }
 
-  /** Forgets the previous frame and motion history. */
+  /** Forgets the previous frame. */
   reset(): void {
     this.prev = null;
-    this.motion = 0;
   }
 
-  /** Masks `frame` in place, then measures it. */
+  /** Masks `frame` (and the burst frames) in place, then measures them. */
   analyze(frame: FrameBuffer, input: AnalyzeInput): FrameAnalysis {
     assertValidFrame(frame);
     const { width, height, stride, data } = frame;
-    const { mask, maskedCount } = applyMasks(frame, input.masks ?? []);
+    const masks = input.masks ?? [];
+    const { mask, maskedCount } = applyMasks(frame, masks);
     const pixelCount = width * height;
     const rOff = frame.format === 'bgra' ? 2 : 0;
     const bOff = frame.format === 'bgra' ? 0 : 2;
@@ -143,12 +154,27 @@ export class FrameAnalyzer {
     }
 
     const edgeDensity = this.edgeDensity(luma, mask, width, height);
-    const sig = this.signature(luma, mask, width, height, input.at, input.regionKey ?? '');
+    const regionKey = input.regionKey ?? '';
+    const sig = this.signature(luma, mask, width, height, input.at, regionKey);
     const change = this.compare(sig, input.at);
-    this.prev = sig;
 
-    if (change.fraction !== null) this.motion += this.opts.motionAlpha * (change.fraction - this.motion);
-    else if (change.reset) this.motion = 0;
+    // Motion: the smallest share of changed blocks over the burst's intervals, so only
+    // change that keeps going (video, game, animation) counts, not a one-off update.
+    let latest = sig;
+    let motion = 0;
+    let intervals = 0;
+    for (const next of input.burst ?? []) {
+      assertValidFrame(next);
+      if (next.width !== width || next.height !== height) continue;
+      const nextMask = applyMasks(next, masks).mask;
+      const nextSig = this.signature(lumaPlane(next, nextMask), nextMask, width, height, input.at, regionKey);
+      const d = this.diff(latest, nextSig);
+      latest = nextSig;
+      if (d === null) continue;
+      motion = intervals === 0 ? d.fraction : Math.min(motion, d.fraction);
+      intervals++;
+    }
+    this.prev = latest;
 
     return {
       features: {
@@ -156,12 +182,13 @@ export class FrameAnalyzer {
         contrast: round4(contrast),
         colorfulness: round4(colorfulness),
         edgeDensity: round4(edgeDensity),
-        changeFraction: change.fraction === null ? null : round4(change.fraction),
-        changeBox: change.box,
-        motion: round4(clamp01(this.motion)),
+        changeFraction: change === null ? null : round4(change.fraction),
+        changeBox: change?.box ?? null,
+        motion: round4(clamp01(motion)),
       },
       maskedFraction: pixelCount > 0 ? round4(maskedCount / pixelCount) : 0,
       analysedPixels: n,
+      burstIntervals: intervals,
     };
   }
 
@@ -213,7 +240,8 @@ export class FrameAnalyzer {
     return { means, cols, rows, width, height, blockSize: bs, at, regionKey };
   }
 
-  private compare(cur: Signature, at: number): { fraction: number | null; box: VisualFeatures['changeBox']; reset: boolean } {
+  /** Change against the previous analysis; null when there is no comparable baseline. */
+  private compare(cur: Signature, at: number): Diff | null {
     const prev = this.prev;
     const comparable =
       prev !== null &&
@@ -223,8 +251,11 @@ export class FrameAnalyzer {
       prev.regionKey === cur.regionKey &&
       at >= prev.at &&
       at - prev.at <= this.opts.staleAfterMs;
-    if (!comparable) return { fraction: null, box: null, reset: true };
+    return comparable ? this.diff(prev, cur) : null;
+  }
 
+  /** Changed-block share and bounding box between two same-sized signatures; null when no block was comparable. */
+  private diff(prev: Signature, cur: Signature): Diff | null {
     const { cols, rows } = cur;
     const changed = new Uint8Array(cols * rows);
     let compared = 0;
@@ -235,7 +266,7 @@ export class FrameAnalyzer {
       compared++;
       if (Math.abs(a - b) > this.opts.blockChangeThreshold) changed[i] = 1;
     }
-    if (compared === 0) return { fraction: null, box: null, reset: false };
+    if (compared === 0) return null;
 
     let kept = 0;
     let minX = cols;
@@ -253,7 +284,7 @@ export class FrameAnalyzer {
         if (by > maxY) maxY = by;
       }
     }
-    if (kept === 0) return { fraction: 0, box: null, reset: false };
+    if (kept === 0) return { fraction: 0, box: null };
 
     const bs = cur.blockSize;
     const px0 = minX * bs;
@@ -268,9 +299,25 @@ export class FrameAnalyzer {
         width: round4((px1 - px0) / cur.width),
         height: round4((py1 - py0) / cur.height),
       },
-      reset: false,
     };
   }
+}
+
+/** Rec. 709 luma of every unmasked pixel (masked pixels stay 0 and are skipped by the mask). */
+function lumaPlane(frame: FrameBuffer, mask: Uint8Array): Uint8Array {
+  const { width, height, stride, data } = frame;
+  const rOff = frame.format === 'bgra' ? 2 : 0;
+  const bOff = frame.format === 'bgra' ? 0 : 2;
+  const luma = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    let o = y * stride;
+    const row = y * width;
+    for (let x = 0; x < width; x++, o += 4) {
+      if (mask[row + x] === 1) continue;
+      luma[row + x] = (54 * data[o + rOff]! + 183 * data[o + 1]! + 19 * data[o + bOff]!) >> 8;
+    }
+  }
+  return luma;
 }
 
 function hasChangedNeighbour(changed: Uint8Array, cols: number, rows: number, bx: number, by: number): boolean {

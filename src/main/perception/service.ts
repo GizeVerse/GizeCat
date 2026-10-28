@@ -1,5 +1,7 @@
 // PerceptionService: event-driven, rate-limited, privacy-gated screen analysis.
-// request() -> gate -> limits -> capture -> local stats -> (occasionally) AI.
+// request() -> gate -> limits -> capture burst -> local stats -> (occasionally) AI.
+// One capture is a short burst of frames (one gate decision, the same masks, all in
+// memory, counted once for the limits) so motion is measured over ~0.3 s.
 import { FrameAnalyzer, VisualEventDeriver } from '../../core/perception/analysis';
 import type { FrameBuffer } from '../../core/perception/frame';
 import { CircuitBreaker, RateLimiter } from '../../core/perception/limits';
@@ -31,10 +33,14 @@ import {
   type LocalityResult,
   type VisionAdapter,
 } from './adapters';
-import type { CapturedFrame, FrameCapturer } from './capture';
+import type { CaptureRequest, CapturedFrame, FrameCapturer } from './capture';
 
 export const PERCEPTION_LIMITS = Object.freeze({
   analysisMaxWidth: 256,
+  /** Frames per capture (one capture for the limits); only the first may become the AI image. */
+  burstFrames: 3,
+  /** Start-to-start time between the frames of a burst. */
+  burstIntervalMs: 150,
   jpegMaxWidth: 512,
   jpegQuality: 60,
   capturesPerHour: 120,
@@ -85,6 +91,7 @@ const covers = (outer: Rect, inner: Rect): boolean =>
   outer.x <= inner.x && outer.y <= inner.y && outer.x + outer.width >= inner.x + inner.width && outer.y + outer.height >= inner.y + inner.height;
 
 const EXCLUSIONS_MOVED = 'A private window moved while the screen was captured, so the image was discarded. Try again.';
+const BURST_INTERRUPTED = 'The screen changed while it was captured (a private app or window may have appeared), so the image was discarded. Try again.';
 
 interface Plan {
   choice: RegionChoice;
@@ -245,16 +252,18 @@ class PerceptionServiceImpl implements PerceptionService {
     const aiImage = (mode === 'ai-local' || mode === 'ai-cloud') && this.aiConfigProblem() === null;
     const ctl = new AbortController();
     this.previewCtl = ctl;
+    const watch = this.burstWatch(plan, ctl.signal);
     let frame: CapturedFrame | null = null;
     try {
-      frame = await this.capturer.capture(this.captureRequest(plan, aiImage), ctl.signal);
+      frame = await this.capturer.capture(this.captureRequest(plan, aiImage, watch.stillClear), ctl.signal);
       if (ctl.signal.aborted || this.disposed) return { ok: false, blockedReason: BLOCK_REASONS.paused };
       const recheck = this.gate(plan);
       if (!recheck.allowed) return { ok: false, blockedReason: recheck.reason };
       if (this.exclusionsMoved(plan)) return { ok: false, blockedReason: EXCLUSIONS_MOVED };
+      if (watch.interrupted()) return { ok: false, blockedReason: BURST_INTERRUPTED };
       const at = this.now();
-      const analysis = new FrameAnalyzer().analyze(frame.analysis, { masks: this.frameMasks(plan, frame.analysis), at });
-      const events = new VisualEventDeriver().derive(analysis.features);
+      const analysis = new FrameAnalyzer().analyze(frame.analysis, { masks: this.frameMasks(plan, frame.analysis), at, burst: frame.burst });
+      const events = new VisualEventDeriver().derive(analysis.features, regionAspect(plan));
       const imageDataUrl = aiImage && frame.jpeg ? `data:image/jpeg;base64,${Buffer.from(frame.jpeg).toString('base64')}` : this.capturer.encodePng(frame.analysis);
       return { ok: true, imageDataUrl, summary: this.summary(plan, analysis.features, events, at) };
     } catch (e) {
@@ -400,9 +409,10 @@ class PerceptionServiceImpl implements PerceptionService {
     this.captureLimiter.record(now);
     const ctl = new AbortController();
     this.captureCtl = ctl;
+    const watch = this.burstWatch(plan, ctl.signal);
     let frame: CapturedFrame;
     try {
-      frame = await this.capturer.capture(this.captureRequest(plan, aiPossible), ctl.signal);
+      frame = await this.capturer.capture(this.captureRequest(plan, aiPossible, watch.stillClear), ctl.signal);
     } catch (e) {
       if (ctl.signal.aborted) return;
       throw e;
@@ -425,12 +435,22 @@ class PerceptionServiceImpl implements PerceptionService {
         this.log.debug('frame dropped: excluded windows changed during capture');
         return;
       }
+      // Between two burst frames the gate or the private windows changed (maybe only for a moment).
+      if (watch.interrupted()) {
+        this.log.debug('frame dropped: the screen changed during the burst');
+        return;
+      }
       const at = this.now();
       const t0 = performance.now();
       const key = regionKey(plan.choice);
-      const analysis = this.analyzer.analyze(frame.analysis, { masks: this.frameMasks(plan, frame.analysis), at, regionKey: key });
-      const events = this.deriver.derive(analysis.features);
-      this.log.debug('frame analysed', { analyseMs: Math.round((performance.now() - t0) * 10) / 10, captureMs: frame.durationMs, reason });
+      const analysis = this.analyzer.analyze(frame.analysis, { masks: this.frameMasks(plan, frame.analysis), at, regionKey: key, burst: frame.burst });
+      const events = this.deriver.derive(analysis.features, regionAspect(plan));
+      this.log.debug('frame analysed', {
+        analyseMs: Math.round((performance.now() - t0) * 10) / 10,
+        captureMs: frame.durationMs,
+        burstIntervals: analysis.burstIntervals,
+        reason,
+      });
       this.lastChoice = plan.choice;
       this.lastCaptureAt = at;
       this.blockedReason = null;
@@ -744,13 +764,31 @@ class PerceptionServiceImpl implements PerceptionService {
     });
   }
 
-  private captureRequest(plan: Plan, withJpeg: boolean) {
+  private captureRequest(plan: Plan, withJpeg: boolean, stillClear: () => boolean): CaptureRequest {
     return {
       display: plan.choice.display,
       regionPx: plan.choice.regionPx,
       maskRectsPx: plan.masksPx,
       analysisMaxWidth: PERCEPTION_LIMITS.analysisMaxWidth,
       jpeg: withJpeg ? { maxWidth: PERCEPTION_LIMITS.jpegMaxWidth, quality: PERCEPTION_LIMITS.jpegQuality } : null,
+      burst: { frames: PERCEPTION_LIMITS.burstFrames, intervalMs: PERCEPTION_LIMITS.burstIntervalMs },
+      stillClear,
+    };
+  }
+
+  /**
+   * Before each further frame of a burst: the gate and the private windows are checked
+   * again with the masks the burst was planned with. Once that fails the burst stops,
+   * and the frames already taken are discarded even if the screen is clear again.
+   */
+  private burstWatch(plan: Plan, signal: AbortSignal): { stillClear: () => boolean; interrupted: () => boolean } {
+    let interrupted = false;
+    return {
+      stillClear: () => {
+        if (!interrupted && (signal.aborted || this.disposed || !this.gate(plan).allowed || this.exclusionsMoved(plan))) interrupted = true;
+        return !interrupted;
+      },
+      interrupted: () => interrupted,
     };
   }
 
@@ -834,9 +872,13 @@ class PerceptionServiceImpl implements PerceptionService {
 function wipe(frame: CapturedFrame | null): void {
   if (!frame) return;
   frame.analysis.data.fill(0);
+  for (const f of frame.burst) f.data.fill(0);
+  frame.burst = [];
   frame.jpeg?.fill(0);
   frame.jpeg = null;
 }
+
+const regionAspect = (plan: Plan): number => plan.choice.regionPx.width / Math.max(1, plan.choice.regionPx.height);
 
 /** Service with an explicit capturer (no Electron dependency); see index.ts for the app default. */
 export function createPerceptionServiceWith(deps: PerceptionServiceDeps & { capture: FrameCapturer }): PerceptionService {

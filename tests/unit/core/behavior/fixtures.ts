@@ -7,6 +7,8 @@ import { defaultSettings } from '../../../../src/shared/settings';
 import type { SimEnv, SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { DisplayGeometry, Platform, WorldGeometry } from '../../../../src/shared/world';
 import { createInstrumentedCatSim, mulberry32 } from '../../../../src/core/behavior';
+import type { DecisionView } from '../../../../src/core/behavior/decide';
+import { scoreCandidates } from '../../../../src/core/behavior/decide';
 import type { TransitionRecord } from '../../../../src/core/behavior';
 import type { CatSimImpl } from '../../../../src/core/behavior/sim';
 
@@ -135,6 +137,22 @@ export class Harness {
   }
 }
 
+/** Every launch starts with a short nap and a wake-up stretch (at most ~4.1 s); after this the cat is up. */
+export const WAKE_MS = 5000;
+
+/** Calls the cat. A call it ignores is repeated: it never ignores two in a row. */
+export function callCat(h: Harness, at: { x: number; y: number }, dt = 33): SimOutput {
+  const before = commandsIgnored(h);
+  h.step([{ type: 'command.callCat', at }], dt);
+  if (commandsIgnored(h) > before) h.step([{ type: 'command.callCat', at }], dt);
+  return h.last as SimOutput;
+}
+
+/** Calls and play commands the cat has ignored so far (diagnostics counter). */
+export function commandsIgnored(h: Harness): number {
+  return h.sim.debugInfo().commandsIgnored as number;
+}
+
 /** Window rects -> walkable top edges (no occlusion). */
 export function platformsFrom(windows: Record<string, Rect | null>): Platform[] {
   const out: Platform[] = [];
@@ -150,4 +168,43 @@ export function settingsWith(patch: { [K in keyof Settings]?: Partial<Settings[K
 
 export function insideAnyWorkArea(w: WorldGeometry, x: number, y: number, tol = 1): boolean {
   return w.displays.some((d) => x >= d.workAreaPx.x - tol && x <= d.workAreaPx.x + d.workAreaPx.width + tol && y >= d.workAreaPx.y - tol && y <= d.workAreaPx.y + d.workAreaPx.height + tol);
+}
+
+/** A decision context for scoring tests: an awake, energetic cat with a pointer and a foreground window around. */
+export function decisionView(o: Partial<DecisionView> = {}): DecisionView {
+  return {
+    traits: { playfulness: 0.6, curiosity: 0.6, affection: 0.6, laziness: 0.3, confidence: 0.5, energyLevel: 0.6 },
+    stats: { energy: 0.9, boredom: 0.5, bond: 0.5, annoyance: 0, fear: 0 },
+    prefs: { cursorPlayAcceptance: 0.5, attentionAcceptance: 0.5, petRatePerHour: 0 },
+    behavior: { ...defaultSettings().behavior, autonomy: 1, attentionSeeking: 1 },
+    disabled: new Set(),
+    localHour: 14,
+    typing: false,
+    userIdleMs: 0,
+    busySwitching: false,
+    mediaForeground: false,
+    screen: null,
+    recentRough: 0,
+    darkBias: 0,
+    quietMs: 2 * 3600_000,
+    awakeMs: 0,
+    cursor: { point: { x: 1000, y: 1000 }, speedDip: 400, distBodyLengths: 3, reachable: true },
+    foreground: { center: { x: 900, y: 500 }, distBodyLengths: 2 },
+    favoriteSpot: null,
+    perchTarget: null,
+    wanderTarget: { x: 1200, y: 1040 },
+    cornerTarget: null,
+    surpriseReady: false,
+    recentStates: [],
+    current: 'idle',
+    isCoolingDown: () => false,
+    ...o,
+  };
+}
+
+/** Summed utility of the candidates for `state` (and `variant`, when given). */
+export function scoreOf(v: DecisionView, state: BehaviorState, variant: string | null = null): number {
+  return scoreCandidates(v)
+    .filter((c) => c.item.state === state && (variant === null || c.item.variant === variant))
+    .reduce((a, c) => a + c.score, 0);
 }

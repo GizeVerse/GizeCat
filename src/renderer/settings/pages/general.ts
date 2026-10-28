@@ -1,7 +1,7 @@
 import type { AppStatus } from '../../../shared/ipc';
-import { MAX_CAT_NAME_LENGTH, MAX_SHORTCUT_LENGTH } from '../catalog';
+import { MAX_CAT_NAME_LENGTH, MAX_SHORTCUT_LENGTH, STARTUP_STATES } from '../catalog';
 import type { PageContext, PageView } from '../context';
-import { button, group, page, row, runAction, setButtonLabel, setNote, textRow, toggleRow } from '../controls';
+import { button, group, page, row, runAction, segmentedRow, setButtonLabel, setNote, textRow, toggleRow } from '../controls';
 import { h } from '../dom';
 import { S } from '../strings';
 import { validateCatName, validateShortcut } from '../validate';
@@ -50,6 +50,13 @@ export function generalPage(ctx: PageContext): PageView {
   });
 
   const launch = toggleRow(ctx, 'general', 'launchAtLogin', { title: G.launchTitle, desc: G.launchDesc, icon: 'startup' });
+  const startState = segmentedRow(
+    ctx,
+    'general',
+    'startupState',
+    STARTUP_STATES.map((v) => ({ value: v, label: G.startupStates[v] })),
+    { title: G.startupStateTitle, desc: G.startupStateDesc, icon: 'play' },
+  );
   const shortcuts = toggleRow(ctx, 'general', 'shortcutsEnabled', { title: G.shortcutsTitle, desc: G.shortcutsDesc, icon: 'keyboard' });
   const shortcut = textRow(ctx, 'general', 'toggleShortcut', {
     title: G.shortcutTitle,
@@ -71,7 +78,7 @@ export function generalPage(ctx: PageContext): PageView {
 
   const element = page(G.title, [
     group(G.groupCat, [name.parts.row, call.row, visibility.row, pause.row]),
-    group(G.groupStartup, [launch.parts.row, shortcuts.parts.row, shortcut.parts.row]),
+    group(G.groupStartup, [launch.parts.row, startState.parts.row, shortcuts.parts.row, shortcut.parts.row]),
     group(G.groupApp, [quit.row]),
   ]);
 

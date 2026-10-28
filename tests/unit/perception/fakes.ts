@@ -83,8 +83,14 @@ export class FakeCapturer implements FrameCapturer {
   requests: CaptureRequest[] = [];
   /** Produces frame i (default: alternating dark / bright, i.e. big change). */
   frameFor: (i: number) => FrameBuffer = (i) => makeFrame(256, 160, () => (i % 2 === 0 ? [15, 15, 15] : [240, 240, 240]));
+  /** Produces frame k (1..) of capture i's burst (default: the same picture as frame 0, i.e. no motion). */
+  burstFor: (i: number, k: number) => FrameBuffer = (i) => this.frameFor(i);
   /** Runs before the capture resolves (simulate the world changing mid-capture). */
   during: (() => void) | null = null;
+  /** Runs before burst frame k (1..) is taken, before the request's stillClear check. */
+  duringBurst: ((k: number) => void) | null = null;
+  /** Frames handed out per capture (first frame + burst). */
+  framesTaken: number[] = [];
   /** When set, capture waits for this promise. */
   gate: Promise<void> | null = null;
   pngCalls = 0;
@@ -98,7 +104,16 @@ export class FakeCapturer implements FrameCapturer {
     if (this.gate) await this.gate;
     this.during?.();
     if (signal.aborted) throw new Error('aborted');
-    return { analysis: this.frameFor(i), jpeg: req.jpeg ? JPEG_MARKER.slice() : null, durationMs: 3 };
+    const analysis = this.frameFor(i);
+    const burst: FrameBuffer[] = [];
+    for (let k = 1; k < (req.burst?.frames ?? 1); k++) {
+      this.duringBurst?.(k);
+      if (signal.aborted) throw new Error('aborted');
+      if (req.stillClear && !req.stillClear()) break;
+      burst.push(this.burstFor(i, k));
+    }
+    this.framesTaken.push(1 + burst.length);
+    return { analysis, burst, jpeg: req.jpeg ? JPEG_MARKER.slice() : null, durationMs: 3 };
   };
 
   encodePng = (_f: FrameBuffer) => {

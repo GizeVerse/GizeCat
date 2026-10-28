@@ -64,6 +64,12 @@ export function formatDuration(totalSeconds: number): string {
   return h === 0 || h === 24 ? F.days(h === 24 ? d + 1 : d) : F.join(F.days(d), F.hours(h));
 }
 
+/** Seconds to one decimal, without a trailing ".0": 4.5 -> "4.5 s", 5 -> "5 s". */
+export function formatSeconds(seconds: number): string {
+  const tenths = Math.round(Math.max(0, finiteOr(seconds, 0)) * 10);
+  return tenths % 10 === 0 ? F.seconds(tenths / 10) : F.secondsText(formatDecimal(tenths / 10, 1));
+}
+
 export function formatMinutes(minutes: number): string {
   return formatDuration(Math.round(finiteOr(minutes, 0)) * 60);
 }

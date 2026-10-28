@@ -37,6 +37,7 @@ export function behaviorPage(ctx: PageContext): PageView {
     sliderRow(ctx, F.movementSpeed, { title: B.speedTitle, desc: B.speedDesc, icon: 'behavior' }),
     sliderRow(ctx, F.autonomy, { title: B.autonomyTitle, desc: B.autonomyDesc, icon: 'lightbulb' }),
     sliderRow(ctx, F.cursorPlay, { title: B.cursorPlayTitle, desc: B.cursorPlayDesc, icon: 'mouse' }),
+    sliderRow(ctx, F.chaseDuration, { title: B.chaseTitle, desc: B.chaseDesc, icon: 'stopwatch' }),
     sliderRow(ctx, F.attentionSeeking, { title: B.attentionTitle, desc: B.attentionDesc, icon: 'message' }),
     sliderRow(ctx, F.activitySensitivity, { title: B.sensitivityTitle, desc: B.sensitivityDesc, icon: 'sparkle' }),
     sliderRow(ctx, F.sleepAfterIdleMinutes, { title: B.sleepTitle, desc: B.sleepDesc, icon: 'moon' }),

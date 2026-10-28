@@ -27,6 +27,7 @@ import { ENCRYPTION_UNAVAILABLE_MESSAGE, type ManagedSecretStore } from '../stor
 import type { SettingsStore } from '../store/settingsStore';
 import type { ActionRunner } from './actions';
 import { createRateLimiter } from './rateLimit';
+import { rejectMainOwnedFields } from './startupState';
 import { toPerceptionPreview } from './viewState';
 
 /** Shared overlay budget: pointer moves (the renderer caps them per time), hit regions, errors. */
@@ -161,6 +162,11 @@ export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
     if (bypass !== null) {
       log.warn('rejected settings patch touching consent fields');
       return { ok: false, error: bypass };
+    }
+    const owned = rejectMainOwnedFields(parsed.data);
+    if (owned !== null) {
+      log.warn('rejected settings patch touching fields main maintains');
+      return { ok: false, error: owned };
     }
     return deps.settings.patchUnknown(parsed.data);
   });

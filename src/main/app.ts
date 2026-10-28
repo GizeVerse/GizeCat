@@ -20,6 +20,7 @@ import { createDisplayService } from './display/displayService';
 import { createActionRunner, type ActionTargets, type AppAction } from './ipc/actions';
 import { registerIpcHandlers } from './ipc/handlers';
 import { createThrottle } from './ipc/rateLimit';
+import { applyViewState, createViewStateMemory, startupPlan } from './ipc/startupState';
 import { appRootFrom, appVersion } from './lifecycle/appInfo';
 import type { CrashGuard } from './lifecycle/crashGuard';
 import { createLoginItemController } from './lifecycle/loginItem';
@@ -359,6 +360,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
     broadcast.trigger();
   }
 
+  // Every way of hiding, showing, pausing or resuming ends in onStatusChange below.
+  const viewMemory = createViewStateMemory({ settings, logger: logger.child('startup-state') });
+
   host = createCatHost({
     sim,
     win32,
@@ -373,7 +377,11 @@ export function startApp(boot: AppBootstrap): RunningApp {
     cursorFallback,
     timeScale: boot.timeScale,
     onStatusChange: () => {
-      if (host) perception?.setPaused(host.hidden || host.locked);
+      const h = host;
+      if (h) {
+        perception?.setPaused(h.hidden || h.locked);
+        attempt(log, 'remember cat state', () => viewMemory.update(h));
+      }
       refreshUi();
     },
   });
@@ -525,10 +533,13 @@ export function startApp(boot: AppBootstrap): RunningApp {
     quit: () => app.quit(),
   });
 
-  // Start everything.
+  // Start everything. The start state is applied before the first tick, so a cat that
+  // starts hidden or paused never appears or moves first.
+  const plan = startupPlan(initial.general, boot.flags);
   attempt(log, 'window tracker start', () => tracker.start());
   attempt(log, 'activity monitor start', () => activity.start());
   host.updateSettings(initial);
+  applyViewState(host, plan.view);
   overlays.start();
   host.start();
   resources.start();
@@ -541,10 +552,11 @@ export function startApp(boot: AppBootstrap): RunningApp {
     win32: win32.available,
     perception: perception?.status.mode ?? 'unavailable',
     launchedAtLogin: boot.flags.launchedAtLogin,
+    startState: plan.view,
     test: boot.flags.test,
   });
 
-  if (!initial.general.firstRunCompleted && !boot.flags.launchedAtLogin) settingsWindow.open('welcome');
+  if (plan.openWelcome) settingsWindow.open('welcome');
 
   return {
     onSecondInstance() {

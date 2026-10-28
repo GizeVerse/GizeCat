@@ -7,6 +7,9 @@
   "license": "MIT",
   "private": true,
   "main": "out/main/index.js",
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:dev": "node scripts/build.mjs --dev",

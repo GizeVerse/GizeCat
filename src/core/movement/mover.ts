@@ -316,11 +316,27 @@ export class Mover {
 
   /** Small playful hop on the current surface. */
   hop(now: number): boolean {
+    return this.hopTo(now, this.x + this.facing * this.bodyWidth * 0.35);
+  }
+
+  /**
+   * Playful pounce toward `x` on the current surface: a low hop of at most
+   * MOVEMENT.pounceMaxBodyLengths, facing the target. False when it cannot pounce.
+   */
+  pounce(now: number, x: number): boolean {
+    if (this.modeValue !== 'ground' || !Number.isFinite(x)) return false;
+    const max = MOVEMENT.pounceMaxBodyLengths * this.bodyWidth;
+    const dx = clamp(x - this.x, -max, max);
+    if (Math.abs(dx) < this.bodyWidth * 0.25) return false;
+    this.setFacing(dx > 0 ? 1 : -1, now);
+    return this.hopTo(now, this.x + dx);
+  }
+
+  private hopTo(now: number, x: number): boolean {
     if (this.modeValue !== 'ground') return false;
     const s = this.surface;
-    const dx = this.facing * this.bodyWidth * 0.35;
     const r = this.rangeOn(s, this.x);
-    const landX = clamp(this.x + dx, r.x0, r.x1);
+    const landX = clamp(x, r.x0, r.x1);
     this.goal = null;
     this.leg = null;
     this.vx = 0;

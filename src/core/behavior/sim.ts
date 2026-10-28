@@ -1,13 +1,13 @@
 // The cat simulation: state machine, activities, stimuli, needs, memory and output.
 // Pure TypeScript; time, randomness and the environment are injected.
-import type { AnimClip, BehaviorState } from '../../shared/cat';
+import type { AnimClip, BehaviorState, CatReaction, CatReactionKind } from '../../shared/cat';
 import type { PersistedCat } from '../../shared/catState';
 import { PersistedCatSchema } from '../../shared/catState';
 import type { Point, Rect } from '../../shared/geometry';
 import { clamp, isFiniteRect, rectCenter } from '../../shared/geometry';
 import type { Settings, ToggleableBehavior } from '../../shared/settings';
 import type { CatSim, CatSimOptions, SimEnv, SimEvent, SimOutput, SimRequest } from '../../shared/sim';
-import type { WindowInfo, WorldGeometry } from '../../shared/world';
+import type { Platform, WindowInfo, WorldGeometry } from '../../shared/world';
 import type { LandingInfo, MoverConfig, MoverStep, Pace } from '../movement';
 import { Mover } from '../movement';
 import type { Activity, ActivityInit, FollowUp } from './activity';
@@ -62,8 +62,26 @@ export interface SimHooks {
   onTransition?: (r: TransitionRecord) => void;
 }
 
-const PERCEPTION_MIN_INTERVAL_MS = 30_000;
+/** Hard floor between perception requests; the user's minimum interval applies above it. */
+export const PERCEPTION_FLOOR_MS = 5000;
 const SAVE_MIN_INTERVAL_MS = 60_000;
+/** Body-language reactions (ear flick, tail flick, head tilt) start at most this often. */
+export const REACTION_MIN_GAP_MS = 400;
+/** How long a reaction stays in the output (the renderer plays it once per distinct start time). */
+const REACTION_HOLD_MS = 2000;
+/** A call or play command is never ignored more often than this, and never twice in a row. */
+export const MAX_COMMAND_IGNORE_CHANCE = 0.35;
+/** Typical chase length at chaseDurationSec = 4.5 (the middle of the chasingCursor dwell range). */
+const NOMINAL_CHASE_SEC = 4.5;
+/** How long the look of the screen from local statistics stays relevant. */
+const SCREEN_FRESH_MS = 3 * 60_000;
+/** Rough handling is remembered this long (wall clock, so it survives a restart). */
+const ROUGH_MEMORY_MS = 60 * 60_000;
+export const SURPRISE_COOLDOWN_MS = 20 * 60_000;
+const POUNCE_COOLDOWN_MS = 6000;
+export const PLAY_RETREAT_COOLDOWN_MS = 2 * 60_000;
+/** Closing speed (body lengths/s) of the pointer that a playful cat dodges. */
+const PLAY_RETREAT_APPROACH_BL_S = 4;
 const QUIT_DEADLINE_MS = 900;
 const FADE_MS = 400;
 const PET_RATE_TAU_MS = 2 * 3600_000;
@@ -158,6 +176,8 @@ export class CatSimImpl implements CatSim {
   private readonly habit = new Habituation();
   private readonly reactions = new Cooldowns();
   private readonly seenWindows = new RecentIds(128);
+  /** Windows the host marked as private: the cat does not follow, inspect or climb onto them. */
+  private readonly excludedWindows = new RecentIds(64);
   private readonly movingWindows = new Set<string>();
   private readonly cooldownUntil = new Map<BehaviorState, number>();
   private readonly changeTimes: number[] = [];
@@ -189,6 +209,11 @@ export class CatSimImpl implements CatSim {
   private contentment = 0.5;
   private glance: { target: Point; until: number } | null = null;
   private oneShot: { clip: AnimClip; until: number } | null = null;
+  private reaction: CatReaction | null = null;
+  private lastCommandIgnored = false;
+  private commandsIgnored = 0;
+  private screen: { kind: 'video' | 'busy' | 'quiet'; until: number } | null = null;
+  private prevCursorDistBl: number | null = null;
   private lastPerceptionAt = -Infinity;
   private lastSaveAt = -Infinity;
   private dirty = false;
@@ -237,12 +262,10 @@ export class CatSimImpl implements CatSim {
     const lp = restoring ? this.cat.lastPosition : null;
     this.mover = new Mover(opts.world, this.moverConfig(), { displayId: lp?.displayKey ?? null, xFrac: lp?.xFrac ?? range(this.random, 0.3, 0.7) });
     this.syncEmotes();
-    if (lp) {
-      this.act = makeActivity('sleeping', 'lifecycle', this.now, range(this.random, 700, 1300), { variant: 'intro' });
-    } else {
-      this.act = makeActivity('idle', 'lifecycle', this.now, this.dwellFor('idle'), {});
-      this.act.phase = 'sit';
-    }
+    // Every launch, a brand-new or recovered cat included, starts with a short nap and a wake-up stretch.
+    this.act = makeActivity('sleeping', 'lifecycle', this.now, range(this.random, 700, 1300), { variant: 'intro' });
+    // No surprise startle right after launch.
+    this.reactions.set('surprise', this.now, SURPRISE_COOLDOWN_MS / 2);
   }
 
   // ---- CatSim API -------------------------------------------------------------
@@ -262,8 +285,10 @@ export class CatSimImpl implements CatSim {
 
     // Displays with a fullscreen app in front are off limits: the cat neither walks nor jumps onto them.
     this.mover.setOffLimitsDisplays(this.settings.behavior.fullscreenBehavior === 'ignore' ? [] : env.fullscreenDisplayIds);
-    this.mover.sense(this.disabled.has('perchOnWindows') ? [] : env.platforms);
-    this.typing = env.typing || env.typingIntensity > 0.35;
+    if (env.foreground) this.notePrivacy(env.foreground.id, env.foreground.excluded);
+    this.mover.sense(this.disabled.has('perchOnWindows') ? [] : this.walkablePlatforms(env.platforms));
+    // 'React to typing' off: the cat does not notice typing at all.
+    this.typing = this.settings.behavior.reactToTyping && (env.typing || env.typingIntensity > 0.35);
     if (env.cursor) this.lastCursorSeenAt = this.now;
     this.updateMode();
     for (const ev of events) {
@@ -274,6 +299,7 @@ export class CatSimImpl implements CatSim {
       }
     }
     this.updateMode();
+    this.checkPlayfulRetreat();
 
     if (this.mode !== 'quit') {
       stepStats(this.cat.stats, { state: this.act.state, traits: this.cat.traits, patience: this.settings.interaction.patience }, dt);
@@ -367,6 +393,8 @@ export class CatSimImpl implements CatSim {
       changesLast10s: recent,
       transitionsTotal: this.transitionsTotal,
       invalidRequests: this.invalidRequests,
+      commandsIgnored: this.commandsIgnored,
+      screen: this.currentScreen(),
       invalidSamples: [...this.invalidSamples],
       eventErrors: this.eventErrors,
       lastTransitions: this.log.slice(-16).map((r) => ({ at: Math.round(r.at), from: r.from, to: r.to, cause: r.cause })),
@@ -426,6 +454,11 @@ export class CatSimImpl implements CatSim {
   private dwellFor(state: BehaviorState): number {
     const [lo, hi] = STATE_SPECS[state].dwellMs;
     if (hi <= 0) return 0;
+    // The chase length follows settings.behavior.chaseDurationSec; at the default it is the spec range.
+    if (state === 'chasingCursor') {
+      const sec = Number.isFinite(this.settings.behavior.chaseDurationSec) ? clamp(this.settings.behavior.chaseDurationSec, 1, 20) : NOMINAL_CHASE_SEC;
+      return range(this.random, lo, hi) * (sec / NOMINAL_CHASE_SEC);
+    }
     const autonomy = clamp(this.settings.behavior.autonomy, 0, 1);
     const mul = CALM_STATES.has(state) || state === 'resting' ? 1.4 - 0.8 * autonomy : 1;
     return clamp(range(this.random, lo, hi) * mul, lo, hi * 1.4);
@@ -462,6 +495,27 @@ export class CatSimImpl implements CatSim {
   private playOneShot(clip: AnimClip, ms: number): void {
     this.oneShot = { clip, until: this.now + ms };
     this.restartClip = true;
+  }
+
+  /** Starts a short body-language reaction on top of the clip, at most once per REACTION_MIN_GAP_MS. */
+  private react(kind: CatReactionKind): boolean {
+    if (this.reaction && this.now - this.reaction.at < REACTION_MIN_GAP_MS) return false;
+    this.reaction = { kind, at: this.now };
+    return true;
+  }
+
+  /** Records the host's privacy verdict for a window (undefined: no verdict in this event). */
+  private notePrivacy(id: string, excluded: boolean | undefined): void {
+    if (typeof id !== 'string' || excluded === undefined) return;
+    if (excluded) this.excludedWindows.add(id);
+    else this.excludedWindows.delete(id);
+  }
+
+  /** Window tops the cat may use: never those of private windows (the one it already sits on stays until it leaves). */
+  private walkablePlatforms(platforms: readonly Platform[]): readonly Platform[] {
+    if (this.excludedWindows.size === 0) return platforms;
+    const perch = this.mover.perchWindowId;
+    return platforms.filter((p) => p.windowId === perch || !this.excludedWindows.has(p.windowId));
   }
 
   private budgetAvailable(): boolean {
@@ -920,6 +974,33 @@ export class CatSimImpl implements CatSim {
     }
   }
 
+  /**
+   * Playful retreat: a playful, energetic cat now and then darts away from a pointer rushing
+   * at it, then turns back to face it in a crouch. Rare (long cooldown) and part of cursor play.
+   */
+  private checkPlayfulRetreat(): void {
+    const cur = this.cursorInfo();
+    const prev = this.prevCursorDistBl;
+    this.prevCursorDistBl = cur ? cur.distBodyLengths : null;
+    if (!cur || prev === null || this.dt <= 0 || this.mode !== 'normal' || this.typing) return;
+    const closing = ((prev - cur.distBodyLengths) * 1000) / this.dt;
+    if (cur.distBodyLengths > 2 || closing < PLAY_RETREAT_APPROACH_BL_S || !cur.reachable) return;
+    const a = this.act;
+    if (!(a.state === 'idle' || a.state === 'watchingCursor' || (a.state === 'walking' && a.variant === 'wander'))) return;
+    const st = this.cat.stats;
+    const t = this.cat.traits;
+    const cursorPlay = clamp(this.settings.behavior.cursorPlay, 0, 1);
+    if (this.disabled.has('chaseCursor') || !(cursorPlay > 0) || t.playfulness < 0.5 || st.energy < 0.5 || st.annoyance > 0.3 || st.fear > 0.2) return;
+    if (!this.reactions.ready('playRetreat', this.now)) return;
+    // One roll per rush of the pointer.
+    this.reactions.set('playRetreat', this.now, 5000);
+    if (!chance(this.random, Math.min(1, 2 * cursorPlay) * t.playfulness * 0.6)) return;
+    const target = this.retreatTarget();
+    if (!target) return;
+    const then: FollowUp = { state: 'watchingCursor', init: { variant: 'playful' } };
+    if (this.request('running', 'stimulus', { variant: 'playful', target, then }) === 'ok') this.reactions.set('playRetreat', this.now, PLAY_RETREAT_COOLDOWN_MS);
+  }
+
   // ---- activities -----------------------------------------------------------------
 
   private enterActivity(a: Activity): void {
@@ -949,10 +1030,13 @@ export class CatSimImpl implements CatSim {
         break;
       }
       case 'watchingCursor':
-        this.phase(a, 'main');
+        // After a playful dodge the cat turns back to the pointer in a crouch, ready to pounce.
+        if (a.variant === 'playful') this.phase(a, 'crouch', range(this.random, 600, 1100));
+        else this.phase(a, 'main');
         break;
       case 'curious': {
         this.emotes.show('question', this.now);
+        this.react('headTilt');
         const near = !a.target || Math.abs(a.target.x - this.mover.x) < 2.5 * this.bl;
         if (a.variant === 'look' || near) this.phase(a, 'look', range(this.random, 3000, 7000));
         else this.phase(a, 'approach');
@@ -973,7 +1057,9 @@ export class CatSimImpl implements CatSim {
         this.emotes.show('heart', this.now, true);
         break;
       case 'startled':
-        addStat(this.cat.stats, 'fear', 0.35);
+        // An occasional surprise at nothing in particular is a mild start, not a fright.
+        if (a.variant === 'surprise') this.reactions.set('surprise', this.now, SURPRISE_COOLDOWN_MS);
+        addStat(this.cat.stats, 'fear', a.variant === 'surprise' ? 0.12 : 0.35);
         this.emotes.show('exclaim', this.now, true);
         this.rememberEvent('startle');
         break;
@@ -1152,8 +1238,11 @@ export class CatSimImpl implements CatSim {
     }
   }
 
+  /** Greeting after the user returns: off at 'Attention seeking' 0 %, rarer below the default. */
   private greetFollowUp(): FollowUp | null {
     if (this.disabled.has('seekAttention') || !this.reactions.ready('greet', this.now)) return null;
+    const seeking = clamp(this.settings.behavior.attentionSeeking, 0, 1);
+    if (!(seeking > 0) || (seeking < 0.35 && !chance(this.random, seeking / 0.35))) return null;
     this.reactions.set('greet', this.now, 10 * 60_000);
     return { state: 'seekingAttention', init: { variant: 'greet' } };
   }
@@ -1179,7 +1268,7 @@ export class CatSimImpl implements CatSim {
       return;
     }
     const pace: Pace = a.state === 'running' ? 'run' : a.variant === 'favorite' || a.variant === 'nearby' ? 'slow' : 'walk';
-    this.goTo(a.target, pace, a.variant !== 'retreat');
+    this.goTo(a.target, pace, a.variant !== 'retreat' && a.variant !== 'playful');
   }
 
   private updChase(a: Activity): void {
@@ -1202,17 +1291,25 @@ export class CatSimImpl implements CatSim {
         if (this.phaseElapsed(a)) this.phase(a, 'approach');
         return;
       case 'pawAt':
+      case 'look':
         this.stop();
         this.mover.faceToward(cur.point.x, this.now);
         if (Math.abs(dx) > 1.6 * this.bl) this.phase(a, 'approach');
+        // 'Paw at the pointer' off: it sits and watches the pointer instead of batting at it.
+        else if (a.phase === 'pawAt' && this.disabled.has('pawAtCursor')) this.phase(a, 'look');
         return;
-      default:
-        if (Math.abs(dx) < 0.8 * this.bl && cur.point.y > this.mover.y - 1.6 * this.mover.bodyHeight) {
+      default: {
+        const low = cur.point.y > this.mover.y - 1.6 * this.mover.bodyHeight;
+        if (Math.abs(dx) < 0.8 * this.bl && low) {
           this.stop();
-          this.phase(a, 'pawAt');
+          this.phase(a, this.disabled.has('pawAtCursor') ? 'look' : 'pawAt');
           return;
         }
+        // Closing in, the cat may cover the last body length or two in one pounce.
+        const gap = Math.abs(dx) / this.bl;
+        if (gap >= 1 && gap <= 2.2 && this.perSecond(0.8) && this.tryPounce(cur, 1)) return;
         this.goTo({ x: cur.point.x, y: this.mover.y }, 'chase', false, 0.5 * this.bl);
+      }
     }
   }
 
@@ -1225,7 +1322,31 @@ export class CatSimImpl implements CatSim {
     }
     this.mover.faceToward(cur.point.x, this.now);
     if (a.phase === 'main' && cur.distBodyLengths < 3 && cur.speedDip > 200 && this.perSecond(0.3 * this.cat.traits.playfulness)) this.phase(a, 'crouch', 900);
-    else if (a.phase === 'crouch' && this.phaseElapsed(a)) this.phase(a, 'main');
+    else if (a.phase === 'crouch' && this.phaseElapsed(a)) {
+      // The wind-up ends in a pounce when the pointer is within reach on the cat's level.
+      const p = a.variant === 'playful' ? 0.8 : 0.25 + 0.5 * this.cat.traits.playfulness;
+      this.phase(a, 'main');
+      this.tryPounce(cur, p);
+    }
+  }
+
+  /**
+   * A short pounce toward the pointer on the current surface (cursor play, 'Chase the pointer').
+   * Bounded by a cooldown; the interrupted activity resumes after landing.
+   */
+  private tryPounce(cur: { point: Point; reachable: boolean }, p: number): boolean {
+    if (this.mode !== 'normal' || this.typing || this.disabled.has('chaseCursor') || !cur.reachable || !(this.settings.behavior.cursorPlay > 0)) return false;
+    const gap = Math.abs(cur.point.x - this.mover.x) / this.bl;
+    if (gap < 0.7 || gap > 2.6 || cur.point.y < this.mover.y - 1.6 * this.mover.bodyHeight) return false;
+    if (!this.reactions.ready('pounce', this.now) || !chance(this.random, p)) return false;
+    if (!this.mover.pounce(this.now, cur.point.x)) return false;
+    if (this.request('jumping', 'physical', { suspend: true }) !== 'ok') {
+      this.mover.cancelCrouch();
+      return false;
+    }
+    this.fallReason = 'jump';
+    this.reactions.set('pounce', this.now, POUNCE_COOLDOWN_MS);
+    return true;
   }
 
   private updCurious(a: Activity): void {
@@ -1392,7 +1513,7 @@ export class CatSimImpl implements CatSim {
   }
 
   private afterPetting(): FollowUp {
-    const sleepy = sleepiness({ stats: this.cat.stats, traits: this.cat.traits, localHour: this.env?.localHour ?? 12, darkBias: this.darkBias(), awakeMs: this.now - this.awakeSince });
+    const sleepy = this.currentSleepiness();
     if (this.mode === 'paused') return { state: 'resting', init: {} };
     if (sleepy > 0.5 && !this.coolingDown('fallingAsleep')) return { state: 'fallingAsleep', init: {} };
     const r = this.random();
@@ -1520,6 +1641,7 @@ export class CatSimImpl implements CatSim {
   // ---- events ---------------------------------------------------------------------
 
   private handleEvent(ev: SimEvent): void {
+    let relocated = false;
     switch (ev.type) {
       case 'lifecycle.quitRequested':
         this.startQuit();
@@ -1539,9 +1661,22 @@ export class CatSimImpl implements CatSim {
         return;
       case 'display.changed':
         return;
+      // Privacy verdicts are kept in every mode, so a window marked private stays off limits.
+      case 'window.shown':
+      case 'window.restored':
+        if (ev.window) this.notePrivacy(ev.window.id, ev.window.excluded);
+        break;
+      case 'window.foreground':
+        if (ev.window) this.notePrivacy(ev.window.id, ev.window.excluded);
+        break;
+      case 'window.moveStart':
+      case 'window.moveEnd':
+        this.notePrivacy(ev.id, ev.excluded);
+        break;
       case 'command.callCat':
         // Called while a fullscreen app keeps it hidden or quiet: it comes over to the caller's display.
         if (this.onFullscreenDisplay() && isFinitePoint(ev.at) && this.mover.relocate(ev.at)) {
+          relocated = true;
           this.snapNext = true;
           this.updateMode();
         }
@@ -1580,17 +1715,20 @@ export class CatSimImpl implements CatSim {
       case 'window.shown':
       case 'window.restored':
         return this.onWindowAppeared(ev.window, ev.type === 'window.shown');
-      case 'window.closed':
+      case 'window.closed': {
         this.movingWindows.delete(ev.id);
-        if (ev.rect && isFiniteRect(ev.rect)) this.onWindowClosed(ev.rect, ev.category);
+        const excluded = ev.excluded === true || this.excludedWindows.has(ev.id);
+        this.excludedWindows.delete(ev.id);
+        if (ev.rect && isFiniteRect(ev.rect)) this.onWindowClosed(ev.rect, ev.category, excluded);
         return;
+      }
       case 'window.foreground':
         return this.onForeground(ev.window, ev.switchesPerMinute);
       case 'window.moveStart':
-        return this.onMoveStart(ev.id);
+        return this.onMoveStart(ev.id, this.excludedWindows.has(ev.id));
       case 'window.moveEnd':
         this.movingWindows.delete(ev.id);
-        if (ev.rect && isFiniteRect(ev.rect)) this.onMoveEnd(ev.id, ev.rect);
+        if (ev.rect && isFiniteRect(ev.rect)) this.onMoveEnd(ev.id, ev.rect, this.excludedWindows.has(ev.id));
         return;
       case 'window.minimized':
         this.movingWindows.delete(ev.id);
@@ -1609,9 +1747,11 @@ export class CatSimImpl implements CatSim {
       case 'perception.visual':
         return this.onVisual(ev.summary.events, ev.summary.changeCenterPx, ev.summary.regionPx);
       case 'perception.ai':
+        // An AI-described video or game counts like video-like local statistics: the cat keeps calmer.
+        if (ev.report.scene === 'video' || ev.report.scene === 'game') this.screen = { kind: 'video', until: this.now + SCREEN_FRESH_MS };
         return this.onAi(ev.report.reaction, ev.report.interest, ev.regionPx);
       case 'command.callCat':
-        return this.onCallCat(ev.at);
+        return this.onCallCat(ev.at, relocated);
       case 'command.wake':
         if (ASLEEP_STATES.has(this.act.state) || this.act.state === 'resting') this.request('wakingUp', 'command');
         else this.playOneShot('meow', 900);
@@ -1719,6 +1859,8 @@ export class CatSimImpl implements CatSim {
     const n = this.tapTimes.length;
     const s = this.act.state;
     if (ASLEEP_STATES.has(s)) {
+      // A touch makes a sleeping cat flick an ear; often it wakes up.
+      this.react('earFlick');
       if (n >= 2 || chance(this.random, 0.5)) this.request('wakingUp', 'interaction');
       return;
     }
@@ -1732,6 +1874,7 @@ export class CatSimImpl implements CatSim {
     }
     this.setGlance(at, 1800);
     this.mover.faceToward(at.x, this.now);
+    this.react('earFlick');
     if (CALM_STATES.has(s) && chance(this.random, 0.6)) this.playOneShot('meow', 900);
     else this.emotes.show('question', this.now);
   }
@@ -1765,7 +1908,8 @@ export class CatSimImpl implements CatSim {
     this.seenWindows.add(w.id);
     const r = this.windowRelevanceFor(w.rect, w.category, w.excluded, novel, 'window');
     const center = rectCenter(w.rect);
-    const calm = CALM_STATES.has(this.act.state) || this.act.state === 'walking';
+    // A private window gets a glance at most: the cat does not walk over to it or sit and stare.
+    const calm = (CALM_STATES.has(this.act.state) || this.act.state === 'walking') && !w.excluded;
     if (r >= 0.5 && calm && !this.typing && !this.disabled.has('inspectWindows') && this.reactions.ready('approach', this.now)) {
       if (this.request('inspectingWindow', 'stimulus', { windowId: w.id, target: center }) === 'ok') {
         this.reactions.set('approach', this.now, 25_000);
@@ -1778,11 +1922,11 @@ export class CatSimImpl implements CatSim {
     if (r >= 0.1) this.setGlance(center, 1500);
   }
 
-  private onWindowClosed(rect: Rect, category: WindowInfo['category']): void {
+  private onWindowClosed(rect: Rect, category: WindowInfo['category'], excluded: boolean): void {
     if (!this.settings.behavior.reactToWindows || ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state)) return;
-    const r = this.windowRelevanceFor(rect, category, false, true, 'closed');
+    const r = this.windowRelevanceFor(rect, category, excluded, true, 'closed');
     const target = { x: rect.x + rect.width / 2, y: rect.y + rect.height };
-    const calm = CALM_STATES.has(this.act.state) || this.act.state === 'walking';
+    const calm = (CALM_STATES.has(this.act.state) || this.act.state === 'walking') && !excluded;
     if (r >= 0.3 && calm && !this.typing && this.reactions.take('exposed', this.now, 20_000)) {
       if (this.request('curious', 'stimulus', { target }) === 'ok') return;
     }
@@ -1790,6 +1934,8 @@ export class CatSimImpl implements CatSim {
   }
 
   private onForeground(w: WindowInfo | null, switchesPerMinute: number): void {
+    // 'React to windows' off: foreground changes, fast app switching included, are not noticed.
+    if (!this.settings.behavior.reactToWindows) return;
     if (Number.isFinite(switchesPerMinute) && switchesPerMinute >= 8) {
       this.busyUntil = this.now + 20_000;
       const s = this.act.state;
@@ -1799,26 +1945,27 @@ export class CatSimImpl implements CatSim {
       }
       return;
     }
-    if (!w || !this.settings.behavior.reactToWindows || !isFiniteRect(w.rect) || ASLEEP_STATES.has(this.act.state)) return;
+    if (!w || !isFiniteRect(w.rect) || ASLEEP_STATES.has(this.act.state)) return;
     const r = this.windowRelevanceFor(w.rect, w.category, w.excluded, false, 'foreground');
     if (r >= 0.15) this.setGlance(rectCenter(w.rect), 1200);
   }
 
-  private onMoveStart(id: string): void {
+  private onMoveStart(id: string, excluded: boolean): void {
     this.movingWindows.add(id);
     if (!this.settings.behavior.reactToWindows || this.mover.perchWindowId === id) return;
     const rect = this.safeWindowRect(id);
     if (!rect || ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state)) return;
-    const r = this.windowRelevanceFor(rect, 'unknown', false, false, 'move');
-    const calm = CALM_STATES.has(this.act.state);
+    const r = this.windowRelevanceFor(rect, 'unknown', excluded, false, 'move');
+    // A private window being moved gets a glance at most.
+    const calm = CALM_STATES.has(this.act.state) && !excluded;
     if (r >= 0.2 && calm && !this.typing && chance(this.random, 0.5 * this.cat.traits.curiosity) && this.reactions.take('follow', this.now, 30_000)) {
       if (this.request('walking', 'stimulus', { variant: 'follow', windowId: id, target: rectCenter(rect) }) === 'ok') return;
     }
     if (r >= 0.08) this.setGlance(rectCenter(rect), 2000);
   }
 
-  private onMoveEnd(id: string, rect: Rect): void {
-    if (!this.settings.behavior.reactToWindows || this.mover.perchWindowId === id) return;
+  private onMoveEnd(id: string, rect: Rect, excluded: boolean): void {
+    if (!this.settings.behavior.reactToWindows || this.mover.perchWindowId === id || excluded) return;
     if (ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state) || this.typing) return;
     const r = this.windowRelevanceFor(rect, 'unknown', false, false, 'moved');
     // Inspecting a moved window is 'Inspect windows'; it only climbs onto it when perching is on too.
@@ -1879,6 +2026,7 @@ export class CatSimImpl implements CatSim {
     const sens = this.settings.behavior.activitySensitivity;
     if (events.includes('dark')) this.darkUntil = this.now + 10 * 60_000;
     if (events.includes('bright')) this.darkUntil = -Infinity;
+    this.noteScreen(events);
     const s = this.act.state;
     if (ASLEEP_STATES.has(s) || PHYSICAL_STATES.has(s)) return;
     if (events.includes('bigChange')) {
@@ -1890,12 +2038,41 @@ export class CatSimImpl implements CatSim {
         if (this.request('curious', 'stimulus', { target: changeCenter }) === 'ok') return;
       }
     }
+    // Something video- or game-like is playing: the cat sits down and watches it, without walking over.
+    if (events.includes('videoLike') && CALM_STATES.has(s) && isFiniteRect(region) && this.reactions.ready('video', this.now)) {
+      this.reactions.set('video', this.now, 3 * 60_000);
+      const target = isFinitePoint(changeCenter) ? changeCenter : rectCenter(region);
+      if (s !== 'watchingUser' && chance(this.random, 0.2 + 0.5 * sens) && this.request('watchingUser', 'stimulus', { variant: 'screen', target }) === 'ok') return;
+      this.setGlance(target, 3000);
+      return;
+    }
+    // A compact new thing appeared: a curious cat may go and have a look; otherwise a head tilt.
+    if (events.includes('newElement') && isFinitePoint(changeCenter) && this.reactions.ready('newElement', this.now)) {
+      this.reactions.set('newElement', this.now, 45_000);
+      const go = CALM_STATES.has(s) && !this.typing && chance(this.random, (0.2 + 0.5 * this.cat.traits.curiosity) * sens);
+      if (go && this.request('curious', 'stimulus', { target: changeCenter }) === 'ok') return;
+      if (!ACTIVE_STATES.has(s)) {
+        this.setGlance(changeCenter, 1800);
+        this.react('headTilt');
+      }
+      return;
+    }
     if (events.includes('motion') && CALM_STATES.has(s) && isFiniteRect(region) && chance(this.random, 0.4 * sens) && this.reactions.take('motion', this.now, 60_000)) {
       const target = isFinitePoint(changeCenter) ? changeCenter : rectCenter(region);
       if (chance(this.random, 0.3 * this.cat.traits.curiosity) && !this.typing) this.request('curious', 'stimulus', { target });
       else if (s !== 'watchingUser') this.request('watchingUser', 'stimulus');
       else this.setGlance(target, 2000);
     }
+  }
+
+  private currentScreen(): 'video' | 'busy' | 'quiet' | null {
+    return this.screen && this.now < this.screen.until ? this.screen.kind : null;
+  }
+
+  /** The latest coarse look of the screen; it lowers activity for a while (see DecisionView.screen). */
+  private noteScreen(events: readonly string[]): void {
+    const kind = events.includes('videoLike') ? 'video' : events.includes('busy') ? 'busy' : events.includes('quiet') || events.includes('still') ? 'quiet' : null;
+    this.screen = kind ? { kind, until: this.now + SCREEN_FRESH_MS } : null;
   }
 
   private onAi(reaction: string, interest: number, region: Rect): void {
@@ -1937,9 +2114,18 @@ export class CatSimImpl implements CatSim {
     }
   }
 
-  private onCallCat(at: Point): void {
+  /** `relocated`: the call already brought the cat over from a fullscreen display; it then always comes. */
+  private onCallCat(at: Point, relocated: boolean): void {
     if (!isFinitePoint(at) || PHYSICAL_STATES.has(this.act.state)) return;
     this.noteInteraction();
+    // Already on its way to a call: a new call only changes where it goes.
+    const coming = (this.act.state === 'walking' || this.act.state === 'running') && this.act.variant === 'called';
+    if (!relocated && !coming && this.ignoresCommand()) {
+      // Not now: a flick of the tail and a look toward the caller, and it stays where it is.
+      this.react('tailFlick');
+      if (!ASLEEP_STATES.has(this.act.state)) this.setGlance(at, 1500);
+      return;
+    }
     const dest = this.mover.surfacePointFor(at);
     const far = Math.abs(dest.x - this.mover.x) > 6 * this.bl || Math.abs(dest.y - this.mover.y) > 2 * this.mover.bodyHeight;
     const target = { x: dest.x, y: dest.y };
@@ -1950,9 +2136,53 @@ export class CatSimImpl implements CatSim {
   private onPlayCommand(): void {
     if (PHYSICAL_STATES.has(this.act.state)) return;
     this.noteInteraction();
+    if (this.ignoresCommand()) {
+      this.react('tailFlick');
+      return;
+    }
     const zoom = !this.disabled.has('zoomies') && !this.typing && this.cat.stats.energy > 0.35 && chance(this.random, 0.4);
     const variant: Variant = zoom ? 'zoomies' : chance(this.random, 0.5) ? 'pawAt' : 'rollOver';
     this.request('playing', 'command', { variant });
+  }
+
+  /** Rolls whether the cat ignores a call or play command; never twice in a row. */
+  private ignoresCommand(): boolean {
+    if (this.lastCommandIgnored) {
+      this.lastCommandIgnored = false;
+      return false;
+    }
+    this.lastCommandIgnored = chance(this.random, this.commandIgnoreChance());
+    if (this.lastCommandIgnored) this.commandsIgnored++;
+    return this.lastCommandIgnored;
+  }
+
+  /**
+   * 0..MAX_COMMAND_IGNORE_CHANCE: an annoyed, frightened, sleepy, independent or barely
+   * bonded cat sometimes does not come; a content, bonded cat almost always does.
+   */
+  commandIgnoreChance(): number {
+    const st = this.cat.stats;
+    const t = this.cat.traits;
+    const lowBond = clamp((0.35 - st.bond) / 0.35, 0, 1);
+    const independence = (1 - t.affection) * (0.5 + 0.5 * t.confidence);
+    // Asleep makes it likelier, but not the short nap every launch starts with.
+    const napping = ASLEEP_STATES.has(this.act.state) && this.act.variant !== 'intro';
+    const sleepy = this.currentSleepiness() + (napping ? 0.5 : 0);
+    const rough = clamp(this.recentRough() / 4, 0, 1);
+    const p = 0.4 * st.annoyance + 0.3 * st.fear + 0.08 * lowBond + 0.08 * Math.min(1, sleepy) + 0.06 * independence + 0.05 * rough - 0.03;
+    return Number.isFinite(p) ? clamp(p, 0, MAX_COMMAND_IGNORE_CHANCE) : 0;
+  }
+
+  private currentSleepiness(): number {
+    return sleepiness({ stats: this.cat.stats, traits: this.cat.traits, localHour: this.env?.localHour ?? 12, darkBias: this.darkBias(), awakeMs: this.now - this.awakeSince });
+  }
+
+  /** Throws and annoyed reactions remembered within ROUGH_MEMORY_MS (wall clock, persisted). */
+  private recentRough(): number {
+    const since = this.wall() - ROUGH_MEMORY_MS;
+    let n = 0;
+    for (const e of this.cat.memory.recent) if (e.at >= since && (e.kind === 'throw' || e.kind === 'annoyed')) n++;
+    return n;
   }
 
   private windowRelevanceFor(rect: Rect, category: WindowInfo['category'], excluded: boolean, novel: boolean, kind: string): number {
@@ -1993,6 +2223,7 @@ export class CatSimImpl implements CatSim {
     const env = this.env as SimEnv;
     const cur = this.cursorInfo();
     const fg = env.foreground && !env.foreground.minimized && isFiniteRect(env.foreground.rect) ? env.foreground : null;
+    const media = fg !== null && (fg.category === 'video' || fg.category === 'game' || fg.category === 'media');
     return {
       traits: this.cat.traits,
       stats: this.cat.stats,
@@ -2003,6 +2234,9 @@ export class CatSimImpl implements CatSim {
       typing: this.typing,
       userIdleMs: Number.isFinite(env.userIdleMs) ? env.userIdleMs : 0,
       busySwitching: this.now < this.busyUntil,
+      mediaForeground: media,
+      screen: this.currentScreen(),
+      recentRough: this.recentRough(),
       darkBias: this.darkBias(),
       quietMs: this.now - this.lastInteractionAt,
       awakeMs: this.now - this.awakeSince,
@@ -2011,6 +2245,8 @@ export class CatSimImpl implements CatSim {
       favoriteSpot: this.favoriteSpotTarget(),
       perchTarget: this.perchTarget(),
       wanderTarget: this.wanderTarget(),
+      cornerTarget: this.cornerTarget(),
+      surpriseReady: this.reactions.ready('surprise', this.now),
       recentStates: this.recentStates,
       current: this.act.state,
       isCoolingDown: (s) => this.coolingDown(s),
@@ -2032,6 +2268,19 @@ export class CatSimImpl implements CatSim {
       if (Math.abs(x - m.x) >= 1.5 * this.bl) return { x, y: m.y };
     }
     return null;
+  }
+
+  /** The far end of the floor the cat stands on (a corner), when it is at least three body lengths away. */
+  private cornerTarget(): Point | null {
+    const m = this.mover;
+    const s = m.currentSurface;
+    const r = m.walkRange;
+    if (!s || !r || s.kind !== 'floor') return null;
+    const left = r.x0 + 0.6 * this.bl;
+    const right = r.x1 - 0.6 * this.bl;
+    if (right <= left) return null;
+    const x = m.x - left > right - m.x ? left : right;
+    return Math.abs(x - m.x) >= 3 * this.bl ? { x, y: m.y } : null;
   }
 
   private retreatTarget(): Point | null {
@@ -2135,7 +2384,7 @@ export class CatSimImpl implements CatSim {
       case 'seekingAttention':
         return a.phase === 'approach' ? null : cursor;
       case 'watchingUser':
-        return fg ?? cursor;
+        return a.variant === 'screen' && a.target ? a.target : (fg ?? cursor);
       case 'curious':
         return a.phase === 'look' ? a.target : null;
       case 'inspectingWindow': {
@@ -2226,7 +2475,9 @@ export class CatSimImpl implements CatSim {
 
     const requests = this.requests;
     const s = this.act.state;
-    if ((s === 'curious' || s === 'watchingUser') && this.mode === 'normal' && now - this.lastPerceptionAt >= PERCEPTION_MIN_INTERVAL_MS) {
+    const userIntervalMs = this.settings.perception.minIntervalSec * 1000;
+    const perceptionGapMs = Number.isFinite(userIntervalMs) ? Math.max(PERCEPTION_FLOOR_MS, userIntervalMs) : PERCEPTION_FLOOR_MS;
+    if ((s === 'curious' || s === 'watchingUser') && this.mode === 'normal' && now - this.lastPerceptionAt >= perceptionGapMs) {
       requests.push({ type: 'perception', reason: s === 'curious' ? 'curious' : 'watching', focus: look ?? { x: m.x, y: m.y - bh / 2 } });
       this.lastPerceptionAt = now;
     }
@@ -2258,6 +2509,7 @@ export class CatSimImpl implements CatSim {
       boundsPx: { x: m.x - bw / 2, y: m.y - bh, width: bw, height: bh },
       nextTickMs: this.nextTickMs(),
       requests,
+      reaction: visible && this.reaction && now - this.reaction.at < REACTION_HOLD_MS ? { ...this.reaction } : null,
     };
   }
 }

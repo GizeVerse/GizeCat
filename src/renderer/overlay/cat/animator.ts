@@ -1,9 +1,10 @@
 // Turns the brain's clip choice into a living pose: clip sampling, cross-fades on
 // clip changes, and procedural layers (breathing, blinks, ear twitches, glances,
-// look-at, mood on tail/ears/pupils, purr vibration, pendulum swing while held).
-import type { AnimClip } from '../../../shared/cat';
+// look-at, one-off reactions, mood on tail/ears/pupils, purr vibration, pendulum
+// swing while held).
+import type { AnimClip, CatReaction, CatReactionKind } from '../../../shared/cat';
 import { crossFadeMs, gaitHz, isGait, sampleClip, type ClipContext } from './clips';
-import { clamp, clamp01, damp, lerp, noise1, smooth, TAU } from './math';
+import { clamp, clamp01, damp, easeOut, lerp, noise1, pulse, smooth, TAU } from './math';
 import { blendPose, copyPose, createPose, sanitizePose, type Pose } from './pose';
 import { TORSO_T } from './rig';
 
@@ -21,7 +22,22 @@ export interface AnimInput {
   arousal: number;
   contentment: number;
   animSpeed: number;
+  /** One-off body-language reaction from the snapshot; plays once per distinct `at`. */
+  reaction?: CatReaction | null;
 }
+
+/** Length (s at animation speed 1) of each reaction layer. */
+export const REACTION_DURATION_S: Readonly<Record<CatReactionKind, number>> = {
+  earFlick: 0.3,
+  tailFlick: 0.4,
+  headTilt: 0.6,
+};
+/** Head tilt amplitude: about 12 degrees. */
+export const HEAD_TILT_RAD = (12 * Math.PI) / 180;
+/** An ear flicked back no further than this (rotation + flatness, as draw.ts combines them). */
+const EAR_BACK_LIMIT = 1.3;
+const EAR_FLICK_ROT = 0.62;
+const EAR_FLICK_FLAT = 0.2;
 
 /** Clips whose tail motion is authored; mood only lightly modulates them. */
 const TAIL_AUTHORED: ReadonlySet<AnimClip> = new Set<AnimClip>([
@@ -87,6 +103,15 @@ export class CatAnimator {
   private swing = 0;
   private swingVel = 0;
 
+  /** `at` of the newest reaction seen; each distinct one is considered once. */
+  private reactionSeen = Number.NaN;
+  /** Sim time (ms) each reaction kind last started, NaN when never. */
+  private readonly reactionStart: Record<CatReactionKind, number> = { earFlick: Number.NaN, tailFlick: Number.NaN, headTilt: Number.NaN };
+  /** Ear flick variant: 0 far ear, 1 near ear, 2 both. */
+  private earFlickWhich = 2;
+  private tiltSign = 1;
+  private reactionActive = false;
+
   constructor(private readonly random: () => number) {
     this.blinkTimer = 1 + random() * 3;
     this.earTimer = 3 + random() * 5;
@@ -100,6 +125,11 @@ export class CatAnimator {
   /** True while a cross-fade is still blending. */
   get blending(): boolean {
     return this.fadeElapsed < this.fadeDur;
+  }
+
+  /** True while a reaction layer (ear flick, tail flick, head tilt) moved the last pose. */
+  get reacting(): boolean {
+    return this.reactionActive;
   }
 
   /**
@@ -147,6 +177,8 @@ export class CatAnimator {
     this.applyLook(p, c, dt);
     this.applyBlink(p, dt);
     this.applyEarTwitch(p, input.sleeping, c.arousal, dt);
+    this.noteReaction(input.reaction, simTimeMs, animSpeed);
+    this.applyReactions(p, simTimeMs, animSpeed);
     this.applyMood(p, input.clip, c.arousal, c.contentment);
     this.applyPurr(p);
     this.applySwing(p, input.clip, motionX, dt);
@@ -260,6 +292,64 @@ export class CatAnimator {
     }
   }
 
+  /**
+   * Starts a reaction the first time its `at` is seen. A kind that is still playing is not
+   * restarted (that would pop), and one that started long ago (the cat just entered this
+   * overlay) has already ended, so it stays invisible. The variant derives from `at`, so
+   * every overlay drawing the cat across a monitor seam shows the same flick.
+   */
+  private noteReaction(r: CatReaction | null | undefined, simTimeMs: number, animSpeed: number): void {
+    if (!r || !Number.isFinite(r.at) || r.at === this.reactionSeen) return;
+    const dur = REACTION_DURATION_S[r.kind];
+    if (dur === undefined) return;
+    this.reactionSeen = r.at;
+    if (this.reactionAge(r.kind, simTimeMs, animSpeed) < dur) return;
+    this.reactionStart[r.kind] = r.at;
+    const h = noise1(Math.floor(r.at), 71);
+    if (r.kind === 'earFlick') this.earFlickWhich = h < -0.3 ? 0 : h < 0.3 ? 1 : 2;
+    else if (r.kind === 'headTilt') this.tiltSign = h < 0 ? -1 : 1;
+  }
+
+  /** Seconds (animation time) since a reaction kind started; NaN when it never did. */
+  private reactionAge(kind: CatReactionKind, simTimeMs: number, animSpeed: number): number {
+    return ((simTimeMs - this.reactionStart[kind]) * animSpeed) / 1000;
+  }
+
+  /** Progress 0..1 of a playing reaction, or -1 when it is not playing. */
+  private reactionPhase(kind: CatReactionKind, simTimeMs: number, animSpeed: number): number {
+    const s = this.reactionAge(kind, simTimeMs, animSpeed) / REACTION_DURATION_S[kind];
+    return s >= 0 && s < 1 ? s : -1;
+  }
+
+  /** Reaction layers on top of any clip; each is time-based and ends where it started. */
+  private applyReactions(p: Pose, simTimeMs: number, animSpeed: number): void {
+    let active = false;
+    const ear = this.reactionPhase('earFlick', simTimeMs, animSpeed);
+    if (ear >= 0) {
+      active = true;
+      // Snaps back in the first quarter, eases forward again over the rest.
+      const e = ear < 0.25 ? easeOut(ear / 0.25) : 1 - smooth((ear - 0.25) / 0.75);
+      if (this.earFlickWhich !== 1) flickEar(p, 'earBR', 'earBF', e);
+      if (this.earFlickWhich !== 0) flickEar(p, 'earFR', 'earFF', e);
+    }
+    const tail = this.reactionPhase('tailFlick', simTimeMs, animSpeed);
+    if (tail >= 0) {
+      active = true;
+      // A whip up and over with a smaller counter-swing, on a briefly stiffened tail. Mirrored
+      // with the roll, so a cat lying belly-up flicks it away from the ground, not into it.
+      const w = Math.sin(TAU * tail) * (1 - tail) * clamp(p.rollY, -1, 1);
+      p.tailCurl += 1.5 * w;
+      p.tailBase += 0.3 * w;
+      p.tailStiff = lerp(p.tailStiff, 0.95, Math.sin(Math.PI * tail));
+    }
+    const tilt = this.reactionPhase('headTilt', simTimeMs, animSpeed);
+    if (tilt >= 0) {
+      active = true;
+      p.headRot += this.tiltSign * HEAD_TILT_RAD * pulse(tilt, 0, 0.3, 0.6, 1);
+    }
+    this.reactionActive = active;
+  }
+
   private applyMood(p: Pose, clip: AnimClip, arousal: number, content: number): void {
     const w = TAIL_AUTHORED.has(clip) ? 0.25 : 1;
     const t = this.time;
@@ -295,4 +385,11 @@ export class CatAnimator {
     }
     if (Math.abs(this.swing) > 1e-4) p.rot += this.swing;
   }
+}
+
+/** Flicks one ear back by `e` of the full amount, less when it is already laid back. */
+function flickEar(p: Pose, rot: 'earBR' | 'earFR', flat: 'earBF' | 'earFF', e: number): void {
+  const room = clamp01((EAR_BACK_LIMIT - p[rot] - 0.95 * clamp01(p[flat])) / (EAR_FLICK_ROT + 0.95 * EAR_FLICK_FLAT));
+  p[rot] += EAR_FLICK_ROT * e * room;
+  p[flat] += EAR_FLICK_FLAT * e * room;
 }

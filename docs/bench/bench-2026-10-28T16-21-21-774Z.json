@@ -1,0 +1,157 @@
+{
+  "at": "2026-10-28T16:21:21.774Z",
+  "phaseSec": 90,
+  "sampleSec": 10,
+  "os": "Windows_NT 10.0.26200",
+  "cpus": 22,
+  "phases": {
+    "awake": {
+      "cpuAvgPercentOfOneCore": 1.27,
+      "cpuMaxPercentOfOneCore": 1.41,
+      "workingSetMB": {
+        "first": 566,
+        "last": 611
+      },
+      "mainHeapMB": {
+        "first": 11,
+        "last": 11
+      },
+      "timers": {
+        "first": 4,
+        "last": 4,
+        "max": 4
+      },
+      "handles": {
+        "first": 6,
+        "last": 6
+      },
+      "statesSeen": [
+        "idle",
+        "resting",
+        "grooming",
+        "playing"
+      ],
+      "lastByProcess": {
+        "Browser:29312": 0.06,
+        "GPU:55820": 0.92,
+        "Utility:27528": 0,
+        "Tab:16596": 0.29,
+        "Tab:55332": 0
+      }
+    },
+    "asleep": {
+      "cpuAvgPercentOfOneCore": 1.15,
+      "cpuMaxPercentOfOneCore": 1.35,
+      "workingSetMB": {
+        "first": 613,
+        "last": 602
+      },
+      "mainHeapMB": {
+        "first": 11,
+        "last": 11
+      },
+      "timers": {
+        "first": 4,
+        "last": 4,
+        "max": 4
+      },
+      "handles": {
+        "first": 6,
+        "last": 6
+      },
+      "statesSeen": [
+        "wakingUp",
+        "resting",
+        "watchingUser",
+        "grooming"
+      ],
+      "lastByProcess": {
+        "Browser:29312": 0.05,
+        "GPU:55820": 0.83,
+        "Utility:27528": 0,
+        "Tab:16596": 0.25,
+        "Tab:55332": 0
+      }
+    },
+    "hidden": {
+      "cpuAvgPercentOfOneCore": 0.03,
+      "cpuMaxPercentOfOneCore": 0.04,
+      "workingSetMB": {
+        "first": 548,
+        "last": 547
+      },
+      "mainHeapMB": {
+        "first": 11,
+        "last": 12
+      },
+      "timers": {
+        "first": 4,
+        "last": 4,
+        "max": 4
+      },
+      "handles": {
+        "first": 6,
+        "last": 6
+      },
+      "statesSeen": [
+        "away"
+      ],
+      "lastByProcess": {
+        "Browser:29312": 0.03,
+        "GPU:55820": 0,
+        "Utility:27528": 0,
+        "Tab:16596": 0,
+        "Tab:55332": 0
+      }
+    },
+    "paused": {
+      "cpuAvgPercentOfOneCore": 0.82,
+      "cpuMaxPercentOfOneCore": 1.27,
+      "workingSetMB": {
+        "first": 565,
+        "last": 567
+      },
+      "mainHeapMB": {
+        "first": 12,
+        "last": 13
+      },
+      "timers": {
+        "first": 4,
+        "last": 4,
+        "max": 4
+      },
+      "handles": {
+        "first": 6,
+        "last": 6
+      },
+      "statesSeen": [
+        "resting",
+        "fallingAsleep",
+        "sleeping"
+      ],
+      "lastByProcess": {
+        "Browser:29312": 0.03,
+        "GPU:55820": 0.34,
+        "Utility:27528": 0,
+        "Tab:16596": 0.14,
+        "Tab:55332": 0
+      }
+    }
+  },
+  "logProblems": {
+    "warn": 0,
+    "error": 0
+  },
+  "hostDebug": {
+    "ticks": 3734,
+    "tickErrors": 0,
+    "simNow": 376651.50499999995,
+    "timeScale": 1,
+    "paused": false,
+    "hidden": false,
+    "locked": false,
+    "pendingEvents": 0,
+    "droppedEvents": 0
+  },
+  "exitCode": 0
+}
