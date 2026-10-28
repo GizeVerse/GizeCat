@@ -66,6 +66,10 @@ export function manualTimers() {
     get size() {
       return pending.size;
     },
+    /** Moves the clock forward WITHOUT running timers (a blocked event loop); due timers fire late on the next advance. */
+    stall(ms: number): void {
+      now += ms;
+    },
     /** Advances the clock, running due timers in order (including ones they schedule). */
     advance(ms: number): void {
       const end = now + ms;

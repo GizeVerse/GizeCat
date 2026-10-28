@@ -79,21 +79,26 @@ describe('privacy: nothing is captured unless allowed', () => {
     expect(t.svc.status).toMatchObject({ mode: 'off', blockedReason: expect.stringMatching(/consent/i) });
   });
 
-  it('paused (runtime or persisted): never captures, preview and AI test refused', async () => {
+  it('paused (runtime or persisted): never captures or previews; only the user pause refuses the synthetic AI test', async () => {
     const t = setup(aiLocal());
+    // Runtime pause = the host's temporary suspension (cat hidden / screen locked).
     t.svc.setPaused(true);
     await requestAndSettle(t, 'curious');
     expect((await t.svc.preview()).ok).toBe(false);
-    expect((await t.svc.testAi()).ok).toBe(false);
     expect(t.cap.requests).toHaveLength(0);
     expect(t.adapter.calls).toHaveLength(0);
     expect(t.svc.status).toMatchObject({ paused: true, blockedReason: expect.stringMatching(/paused/i) });
+    // The AI test only sends a synthetic picture, so a hidden cat does not block it.
+    const test = await t.svc.testAi();
+    expect(test.ok).toBe(true);
+    expect(t.cap.requests).toHaveLength(0);
 
     t.svc.setPaused(false);
     t.svc.updateSettings(aiLocal({ perception: { paused: true } }));
     await requestAndSettle(t, 'curious');
     expect(t.cap.requests).toHaveLength(0);
     expect(t.svc.status.paused).toBe(true);
+    expect((await t.svc.testAi()).message).toMatch(/paused/i);
 
     t.svc.updateSettings(aiLocal());
     await requestAndSettle(t, 'curious');
@@ -107,6 +112,34 @@ describe('privacy: nothing is captured unless allowed', () => {
     expect(t.cap.requests).toHaveLength(0);
     expect(t.svc.status.blockedReason).toMatch(/private app/i);
     expect((await t.svc.preview()).blockedReason).toMatch(/private app/i);
+  });
+
+  it('a private dialog or popup in front (not an app window) blocks capture via the host verdict', async () => {
+    const t = setup(localStats());
+    t.host.foreground = window({ excluded: false, processName: 'notepad.exe' });
+    t.host.foregroundExcluded = true;
+    await requestAndSettle(t);
+    expect(t.cap.requests).toHaveLength(0);
+    expect(t.svc.status.blockedReason).toMatch(/private app/i);
+    expect((await t.svc.preview()).ok).toBe(false);
+  });
+
+  it('the foreground verdict failing blocks capture (fail closed)', async () => {
+    const t = setup(localStats());
+    t.host.isForegroundExcluded = () => {
+      throw new Error('enumeration failed');
+    };
+    await requestAndSettle(t);
+    expect(t.cap.requests).toHaveLength(0);
+    expect(t.svc.status.blockedReason).not.toBeNull();
+  });
+
+  it('a mask covering the whole region (fail-closed answer) blocks instead of analysing a black frame', async () => {
+    const t = setup(localStats());
+    t.host.excludedRects = [{ x: -100000, y: -100000, width: 200000, height: 200000 }];
+    await requestAndSettle(t);
+    expect(t.cap.requests).toHaveLength(0);
+    expect(t.svc.status.blockedReason).toMatch(/private window/i);
   });
 
   it('excluded window inside the capture area: blocked', async () => {

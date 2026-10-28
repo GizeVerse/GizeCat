@@ -15,6 +15,8 @@ import type { ActivityMonitor, DisplayService, Logger, PerceptionService, Win32A
 export const MIN_TICK_MS = 16;
 export const MAX_TICK_MS = 1000;
 export const MAX_DT_MS = 250;
+/** Real gaps up to this long are caught up in <= MAX_DT_MS sub-steps (timer lateness, slow hidden ticks, error back-off); longer stalls are clamped. */
+export const MAX_CATCHUP_MS = 1000;
 const HIDDEN_MIN_TICK_MS = 250;
 const HIDDEN_POLL_MS = 500;
 const MAX_EVENTS_PER_TICK = 64;
@@ -238,8 +240,9 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     const realDelta = lastReal === null ? 0 : Math.max(0, nowReal - lastReal);
     lastReal = nowReal;
     lastTickAt = nowReal;
-    // dt is clamped (no catch-up storm after a stall); a time scale > 1 sub-steps instead.
-    const simDelta = Math.min(realDelta * timeScale, MAX_DT_MS * Math.max(1, Math.ceil(timeScale)));
+    // Sim time tracks real time through ordinary gaps by sub-stepping (each step <= MAX_DT_MS);
+    // only stalls longer than MAX_CATCHUP_MS are clamped, so there is no catch-up storm after a stall.
+    const simDelta = Math.min(realDelta * timeScale, MAX_CATCHUP_MS * Math.max(1, Math.ceil(timeScale)));
     const steps = Math.max(1, Math.ceil(simDelta / MAX_DT_MS));
     const dt = simDelta / steps;
 

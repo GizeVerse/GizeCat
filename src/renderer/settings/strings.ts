@@ -332,6 +332,8 @@ export const S = {
     previewBlocked: (reason: string) => `No image was captured: ${reason}`,
     previewFailed: 'No image was captured.',
     previewImageAlt: 'Masked, downscaled image exactly as the cat analyses it',
+    previewImageAltAi: 'Masked image exactly as AI vision would send it to the provider (not sent now)',
+    previewAiNote: 'AI vision is on: this is the exact image that would be sent to the AI provider. It was not sent.',
     features: {
       brightness: 'Brightness',
       contrast: 'Contrast',

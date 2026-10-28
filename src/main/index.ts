@@ -43,7 +43,8 @@ function exitAfterStartupFailure(err: unknown, logger: RootLogger | null, test: 
 }
 
 function main(): void {
-  const test = isTestMode(process.env);
+  // The test surface (hooks, time scale) never exists in packaged builds, whatever the environment says.
+  const test = isTestMode(process.env) && !app.isPackaged;
   const boot: { logger: RootLogger | null } = { logger: null };
   try {
     start(test, boot);

@@ -115,6 +115,8 @@ export interface PerceptionHost {
   isExcludedAt(p: Point): boolean;
   /** Visible excluded windows (px); they are blacked out before analysis. */
   getExcludedRects(): readonly Rect[];
+  /** True when the real foreground window (or a window it belongs to) is private, or cannot be cleared. */
+  isForegroundExcluded(): boolean;
   isLocked(): boolean;
 }
 

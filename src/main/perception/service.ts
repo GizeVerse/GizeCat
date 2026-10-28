@@ -270,7 +270,9 @@ class PerceptionServiceImpl implements PerceptionService {
 
   async testAi(): Promise<{ ok: boolean; message: string; latencyMs?: number; report?: SceneReport }> {
     if (this.disposed) return { ok: false, message: 'Perception has stopped.' };
-    if (this.isPaused()) return { ok: false, message: BLOCK_REASONS.paused };
+    // The test sends a synthetic picture, never the screen: only the user's privacy
+    // pause applies, not the temporary suspension while the cat is hidden or locked.
+    if (this.settings.perception.paused) return { ok: false, message: BLOCK_REASONS.paused };
     const egress = this.egressDecision();
     // An unconfirmed model is asked about below, before anything is sent.
     if (!egress.allowed && egress.code !== 'model-unconfirmed') return { ok: false, message: egress.reason };
@@ -698,21 +700,28 @@ class PerceptionServiceImpl implements PerceptionService {
   }
 
   private gate(plan: Plan | null): GateDecision {
-    let state: { locked: boolean; foreground: WindowInfo | null };
+    let state: { locked: boolean; foreground: WindowInfo | null; foregroundExcluded: boolean };
     try {
-      state = { locked: this.host.isLocked(), foreground: this.host.getForeground() };
+      state = { locked: this.host.isLocked(), foreground: this.host.getForeground(), foregroundExcluded: this.host.isForegroundExcluded() };
     } catch (e) {
       this.log.warn('perception host state unavailable', { error: errorText(e) });
       return { allowed: false, code: 'excluded-foreground', reason: 'Could not check which app is in front, so the screen is not analysed.' };
     }
-    return decideCapture({
+    const decision = decideCapture({
       settings: this.settings,
       paused: this.isPaused(),
       locked: state.locked,
       foreground: state.foreground,
+      foregroundExcluded: state.foregroundExcluded,
       region: plan?.choice.regionPx ?? null,
       isExcludedAt: (p) => this.host.isExcludedAt(p),
     });
+    // A mask covering the whole region (e.g. the tracker's fail-closed answer) would
+    // only yield an all-black frame: treat it as a block instead of analysing/sending it.
+    if (decision.allowed && plan && plan.masksPx.some((m) => covers(m, plan.choice.regionPx))) {
+      return { allowed: false, code: 'excluded-region', reason: BLOCK_REASONS['excluded-region'] };
+    }
+    return decision;
   }
 
   /**

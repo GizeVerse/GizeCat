@@ -131,6 +131,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     getForeground: () => tracker.getForeground(),
     isExcludedAt: (p) => tracker.isExcludedAt(p),
     getExcludedRects: () => tracker.getExcludedRects(),
+    isForegroundExcluded: () => tracker.isForegroundExcluded(),
     isLocked: () => host?.locked ?? false,
   };
   let perception: PerceptionService | null = null;
@@ -498,7 +499,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
   // The cat lives in the tray: closing the settings window must not quit the app.
   app.on('window-all-closed', () => undefined);
 
-  installTestHooks({
+  if (boot.flags.test) installTestHooks({
     getSimOutput: () => requireHost().lastOutput,
     getOverlays: () => overlays.info(),
     getStatus: status,

@@ -158,26 +158,41 @@ describe('cat host loop', () => {
     h.timers.advance(0);
     expect(h.ticks).toHaveLength(1);
     expect(h.ticks[0]!.env).toMatchObject({ dt: 0, cursor: { x: 500, y: 500, speed: 42 }, userIdleMs: 1234, localHour: 14.5, paused: false, hidden: false });
+    // One render per host tick (catch-up sub-steps call sim.tick more than once).
     h.setNextTick(5);
     h.timers.advance(33);
-    expect(h.ticks).toHaveLength(2);
+    expect(h.renders).toHaveLength(2);
     h.setNextTick(5000);
     h.timers.advance(16);
-    expect(h.ticks).toHaveLength(3);
+    expect(h.renders).toHaveLength(3);
     h.timers.advance(999);
-    expect(h.ticks).toHaveLength(3);
+    expect(h.renders).toHaveLength(3);
     h.timers.advance(1);
-    expect(h.ticks).toHaveLength(4);
+    expect(h.renders).toHaveLength(4);
     h.host.stop();
   });
 
-  it('clamps dt to 250 ms', () => {
+  it('keeps each step <= 250 ms but catches up gaps up to 1 s, so sim time tracks real time', () => {
     const h = harness();
     h.setNextTick(1000);
     h.host.start();
     h.timers.advance(1000);
     expect(h.ticks.at(-1)!.env.dt).toBe(250);
-    expect(h.renders.at(-1)!.simNow).toBe(250);
+    expect(h.renders.at(-1)!.simNow).toBe(1000);
+    h.host.stop();
+  });
+
+  it('clamps stalls longer than 1 s (no catch-up storm)', () => {
+    const h = harness();
+    h.setNextTick(1000);
+    h.host.start();
+    h.timers.advance(0);
+    const before = h.ticks.length;
+    h.timers.stall(5000);
+    h.timers.advance(0);
+    expect(h.ticks.length - before).toBe(4);
+    expect(h.renders.at(-1)!.simNow).toBe(1000);
+    expect(h.ticks.every((t) => t.env.dt <= 250)).toBe(true);
     h.host.stop();
   });
 
@@ -277,9 +292,11 @@ describe('cat host loop', () => {
     h.throwNext();
     h.timers.advance(33);
     expect(h.log.entries.some((e) => e.level === 'error' && e.msg === 'simulation tick failed')).toBe(true);
-    const n = h.ticks.length;
+    const n = h.renders.length;
     h.timers.advance(1000);
-    expect(h.ticks.length).toBe(n + 1);
+    expect(h.renders.length).toBe(n + 1);
+    // The 1 s back-off is caught up, so sim time does not fall behind real time.
+    expect(h.renders.at(-1)!.simNow).toBeGreaterThanOrEqual(1000);
     expect(h.host.debug().tickErrors).toBe(1);
     h.host.stop();
   });

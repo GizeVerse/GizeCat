@@ -155,6 +155,8 @@ export interface CaptureGateInput {
   paused: boolean;
   locked: boolean;
   foreground: WindowInfo | null;
+  /** Host verdict for the REAL foreground window (incl. owned dialogs/popups the app-window filter skips); fail closed. */
+  foregroundExcluded?: boolean;
   /** Capture region in physical px; null when none could be determined. */
   region: Rect | null;
   /** Host check: is the top-level window at this physical point excluded? */
@@ -179,7 +181,7 @@ export function decideCapture(input: CaptureGateInput): GateDecision {
   if (!hasConsent(settings)) return block('no-consent');
   if (input.paused || settings.perception.paused) return block('paused');
   if (input.locked) return block('locked');
-  if (input.foreground?.excluded === true) return block('excluded-foreground');
+  if (input.foregroundExcluded === true || input.foreground?.excluded === true) return block('excluded-foreground');
   const region = input.region;
   if (!region || !(region.width > 0) || !(region.height > 0)) return block('no-region');
   for (const p of regionSamplePoints(region)) {

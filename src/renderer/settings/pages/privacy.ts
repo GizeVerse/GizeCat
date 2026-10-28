@@ -210,7 +210,7 @@ function previewRow(ctx: PageContext): HTMLElement {
         }
         const img =
           typeof res.imageDataUrl === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(res.imageDataUrl)
-            ? h('img', { class: 'preview-image', src: res.imageDataUrl, alt: P.previewImageAlt })
+            ? h('img', { class: 'preview-image', src: res.imageDataUrl, alt: res.imageDataUrl.startsWith('data:image/jpeg') ? P.previewImageAltAi : P.previewImageAlt })
             : null;
         const events = res.events ?? [];
         result.replaceChildren(
@@ -225,7 +225,7 @@ function previewRow(ctx: PageContext): HTMLElement {
               ]),
             ]),
           ]),
-          h('div', { class: 'preview-foot' }, [h('p', { class: 'preview-note' }, [icon('lock'), h('span', { text: P.previewNote })]), discard]),
+          h('div', { class: 'preview-foot' }, [h('p', { class: 'preview-note' }, [icon('lock'), h('span', { text: img && res.imageDataUrl?.startsWith('data:image/jpeg') ? P.previewAiNote : P.previewNote })]), discard]),
         );
         result.hidden = false;
       } catch (e) {
