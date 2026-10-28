@@ -1,0 +1,118 @@
+// Interfaces between main-process services. Implementations live in their own
+// folders; src/main/app.ts composes them. Coordinates are physical px unless noted.
+import type { Point, Rect } from '../shared/geometry';
+import type { VisualSummary, SceneReport, PerceptionStatus } from '../shared/perception';
+import type { Settings } from '../shared/settings';
+import type { SimEvent } from '../shared/sim';
+import type { Platform, WindowInfo, WorldGeometry } from '../shared/world';
+
+export type Unsubscribe = () => void;
+
+export interface Logger {
+  error(msg: string, data?: Record<string, unknown>): void;
+  warn(msg: string, data?: Record<string, unknown>): void;
+  info(msg: string, data?: Record<string, unknown>): void;
+  debug(msg: string, data?: Record<string, unknown>): void;
+  child(scope: string): Logger;
+}
+
+/** Thin, synchronous Win32 facade (koffi). Every method must be safe to call at any time and never throw. */
+export interface Win32Api {
+  readonly available: boolean;
+  getCursorPos(): Point | null;
+  /** ms since last input of any kind (GetLastInputInfo, wrap-safe). */
+  getIdleMs(): number | null;
+  isLeftButtonDown(): boolean;
+  getForegroundWindowId(): string | null;
+  /** Describes a top-level window; null if it is not an app window or is gone. Titles stay inside. */
+  describeWindow(id: string): WindowInfo | null;
+  /** Visible extended frame bounds of a window, null if gone/minimized/cloaked. */
+  getWindowRect(id: string): Rect | null;
+  /** App windows in z-order, top first (Alt-Tab-like filtering). */
+  listAppWindows(): WindowInfo[];
+  /** Topmost root window at a physical point (OS hit-testing). */
+  windowIdAtPoint(p: Point): string | null;
+  /** SHQueryUserNotificationState: fullscreen/presentation/D3D exclusive. */
+  getNotificationState(): 'fullscreen' | 'presentation' | 'd3d-fullscreen' | 'busy' | 'normal' | 'unknown';
+  /** Subscribes to WinEvent hooks; returns false when hooks are unavailable. */
+  subscribeWinEvents(handler: (ev: RawWinEvent) => void): Unsubscribe | null;
+  dispose(): void;
+}
+
+export interface RawWinEvent {
+  kind: 'foreground' | 'moveStart' | 'moveEnd' | 'minimizeStart' | 'minimizeEnd' | 'show' | 'hide' | 'destroy' | 'cloaked' | 'uncloaked';
+  id: string;
+  at: number;
+}
+
+/** Tracks windows and produces SimEvents + platforms. */
+export interface WindowTracker {
+  readonly mode: 'event-hooks' | 'polling' | 'unavailable';
+  start(): void;
+  stop(): void;
+  /** Drains events accumulated since the last call (bounded queue, coalesced). */
+  drainEvents(): SimEvent[];
+  getForeground(): WindowInfo | null;
+  /** Visible top edges of app windows, cached; refreshed at most every `maxAgeMs`. */
+  getPlatforms(maxAgeMs: number): readonly Platform[];
+  getWindowRect(id: string): Rect | null;
+  /** Ids of displays where a fullscreen app is in front. */
+  getFullscreenDisplayIds(world: WorldGeometry): string[];
+  /** Root window id at a point, for privacy checks. */
+  isExcludedAt(p: Point): boolean;
+  setExclusions(processes: readonly string[], titlePatterns: readonly string[]): void;
+}
+
+/** Coarse user-activity signals. Never records keys, text or clipboard. */
+export interface ActivityMonitor {
+  start(): void;
+  stop(): void;
+  /** Called by the host every tick with the latest cursor sample. */
+  sample(now: number, cursor: Point | null): void;
+  drainEvents(): SimEvent[];
+  readonly idleMs: number;
+  readonly typing: boolean;
+  readonly typingIntensity: number;
+  readonly cursorSpeed: number;
+}
+
+export interface DisplayService {
+  readonly world: WorldGeometry;
+  onChange(cb: (world: WorldGeometry) => void): Unsubscribe;
+  /** Physical -> overlay-local DIP for a given display. */
+  toLocalDip(displayId: string, p: Point): Point;
+  /** Overlay-local DIP -> physical. */
+  fromLocalDip(displayId: string, p: Point): Point;
+  displayAt(p: Point): string | null;
+  dispose(): void;
+}
+
+export interface PerceptionHost {
+  /** Cat's current bounds (px) so it can be masked out of frames. */
+  getCatBounds(): Rect | null;
+  getCatDisplayId(): string | null;
+  getForeground(): WindowInfo | null;
+  isExcludedAt(p: Point): boolean;
+  isLocked(): boolean;
+}
+
+export interface PerceptionService {
+  readonly status: PerceptionStatus;
+  updateSettings(settings: Settings): void;
+  /** Ask for an analysis; rate limits, consent and exclusions are enforced inside. */
+  request(reason: 'curious' | 'watching' | 'periodic' | 'event', focus: Point | null): void;
+  drainEvents(): SimEvent[];
+  setPaused(paused: boolean): void;
+  preview(): Promise<{ ok: boolean; imageDataUrl?: string; summary?: VisualSummary; blockedReason?: string }>;
+  testAi(): Promise<{ ok: boolean; message: string; latencyMs?: number; report?: SceneReport }>;
+  listModels(): Promise<{ ok: boolean; models: string[]; error?: string }>;
+  onStatusChange(cb: (s: PerceptionStatus) => void): Unsubscribe;
+  dispose(): void;
+}
+
+/** Encrypted secret storage (Electron safeStorage / DPAPI). Values never reach renderers or logs. */
+export interface SecretStore {
+  has(name: 'anthropic' | 'openai-compatible'): boolean;
+  get(name: 'anthropic' | 'openai-compatible'): string | null;
+  set(name: 'anthropic' | 'openai-compatible', value: string | null): boolean;
+}
