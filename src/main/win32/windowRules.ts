@@ -10,10 +10,12 @@ import {
   QUNS_PRESENTATION_MODE,
   QUNS_QUIET_TIME,
   QUNS_RUNNING_D3D_FULL_SCREEN,
+  WS_CAPTION,
   WS_DLGFRAME,
   WS_EX_APPWINDOW,
   WS_EX_NOACTIVATE,
   WS_EX_TOOLWINDOW,
+  WS_EX_TRANSPARENT,
   WS_EX_WINDOWEDGE,
   WS_THICKFRAME,
 } from './constants';
@@ -37,6 +39,12 @@ export const ignoresOwner = (exStyle: number): boolean => (exStyle & WS_EX_APPWI
 
 export const meetsMinimumSize = (r: Rect): boolean => r.width >= MIN_APP_WINDOW_WIDTH && r.height >= MIN_APP_WINDOW_HEIGHT;
 
+/** Click-through windows (WS_EX_TRANSPARENT): OS hit-testing passes through them. */
+export const isClickThrough = (exStyle: number): boolean => (exStyle & WS_EX_TRANSPARENT) !== 0;
+
+/** Styles of this app's overlays (tool, no-activate or click-through windows), as opposed to its Settings window. */
+export const isOverlayStyle = (exStyle: number): boolean => (exStyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)) !== 0;
+
 function covers(outer: RawRect, inner: RawRect): boolean {
   return outer.left <= inner.left && outer.top <= inner.top && outer.right >= inner.right && outer.bottom >= inner.bottom;
 }
@@ -49,6 +57,8 @@ export interface FullscreenProbe {
   /** DWM extended frame bounds (visible frame), if known. */
   frameRect: RawRect | null;
   monitorRect: RawRect;
+  /** Monitor work area (rcWork), if known. Equals monitorRect when the taskbar auto-hides. */
+  workRect: RawRect | null;
   style: number;
   exStyle: number;
   maximized: boolean;
@@ -60,12 +70,19 @@ export interface FullscreenProbe {
  * window-edge/tool-window style. That style test is what rules out maximized windows,
  * whose rect spills past the monitor. A non-maximized window whose visible frame is
  * exactly the monitor also counts (fullscreen apps that keep a thick frame).
+ *
+ * On a monitor whose work area is the whole monitor (auto-hide taskbar) a maximized
+ * window covers the monitor as well, so there a maximized window is never fullscreen,
+ * and a framed one only counts without a caption. Exclusive and presentation-mode
+ * fullscreen are still reported through the user notification state.
  */
 export function isFullscreenGeometry(p: FullscreenProbe): boolean {
   if (!covers(p.windowRect, p.monitorRect)) return false;
+  const workIsMonitor = p.workRect !== null && sameRect(p.workRect, p.monitorRect);
   const framed = (p.style & (WS_DLGFRAME | WS_THICKFRAME)) !== 0 || (p.exStyle & (WS_EX_WINDOWEDGE | WS_EX_TOOLWINDOW)) !== 0;
-  if (!framed) return true;
-  return !p.maximized && p.frameRect !== null && sameRect(p.frameRect, p.monitorRect);
+  if (!framed) return !(p.maximized && workIsMonitor);
+  if (p.maximized || p.frameRect === null || !sameRect(p.frameRect, p.monitorRect)) return false;
+  return !workIsMonitor || (p.style & WS_CAPTION) !== WS_CAPTION;
 }
 
 /**

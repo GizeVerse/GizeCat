@@ -1,5 +1,6 @@
 // Every user-visible string of the settings window lives here so the UI can be
 // localised later without touching the page code.
+import type { MemoryDetail, MemoryKind } from '../../core/behavior/memory';
 import type { BehaviorState, RenderStyle, SkinId } from '../../shared/cat';
 import type { Counters, Preferences, Stats, Traits } from '../../shared/catState';
 import type { AppStatus } from '../../shared/ipc';
@@ -145,6 +146,7 @@ export const S = {
     callTitle: 'Call the cat',
     callDesc: 'It walks over to your pointer.',
     callButton: (name: string) => `Call ${name}`,
+    callPaused: 'The cat is paused. Resume it to call it over.',
     visibilityTitle: 'Show or hide',
     visibilityDesc: 'A hidden cat keeps its memories and comes back where it was.',
     hide: 'Hide',
@@ -263,7 +265,7 @@ export const S = {
       },
       'ai-local': {
         title: 'AI vision · on this PC',
-        text: 'A small, masked image is described by an AI model on this computer. Nothing leaves this PC.',
+        text: 'A small, masked image is described by the AI server on this PC. Desktop Cat sends it nowhere else.',
       },
       'ai-cloud': {
         title: 'AI vision · CLOUD',
@@ -272,6 +274,10 @@ export const S = {
     } satisfies Record<PerceptionMode, { title: string; text: string }>,
     bannerProvider: (label: string) => `Provider: ${label}`,
     bannerPaused: 'Paused: nothing is captured until you resume.',
+    suspended: {
+      hidden: 'Not capturing while the cat is hidden. Show the cat to continue.',
+      locked: 'Not capturing while the PC is locked.',
+    },
     bannerBlocked: (reason: string) => `Not running right now: ${reason}`,
     bannerLastCapture: (when: string, count: number) => `Last analysis ${when} · ${plural(count, 'analysis', 'analyses')} this hour`,
     bannerNoCapture: 'No analysis has run yet.',
@@ -293,7 +299,10 @@ export const S = {
     how: [
       { title: 'What is captured', text: 'One small, downscaled still image of the area you choose below. Never sound, never your keystrokes, never the clipboard.' },
       { title: 'When', text: 'Only now and then, when something changes or the cat is curious, and never more often than the minimum interval below.' },
-      { title: 'Where it is processed', text: 'Local statistics and local AI run on this PC. Only a cloud AI provider, which you must choose and allow on the AI page, receives the image over the internet.' },
+      {
+        title: 'Where it is processed',
+        text: 'Local statistics run on this PC. AI vision sends the image only to the AI server you set up on the AI page. Other computers, cloud providers and Ollama “-cloud” models also need "Allow cloud". A server on this PC can still forward images to cloud models it offers.',
+      },
       { title: 'Never saved', text: 'Images are kept in memory only for the analysis and then discarded. They are never written to disk or logs.' },
       { title: 'Masked', text: 'The cat itself and every excluded window are blanked out before analysis. Nothing is captured while an excluded app is in front or the PC is locked.' },
     ],
@@ -361,12 +370,17 @@ export const S = {
       ],
       destination: 'Where the image goes',
       destNone: 'No AI provider is selected yet. Nothing will be sent until you choose one on the AI page.',
-      destLocal: (label: string) => `${label}. It runs on this PC, so the image does not leave your device.`,
+      destLocal: (label: string, host: string) =>
+        `${label}. The image is processed by the server at ${host} on this PC. If that server hands it to a cloud model (such as an Ollama “-cloud” model), it leaves this PC; Desktop Cat asks for "Allow cloud" for the cloud models it recognises.`,
       destRemote: (label: string) => `${label}. This is NOT on this PC: the image travels over the network to that computer.`,
       destCloud: (label: string) => `${label}. The image is sent over the internet to this company’s servers.`,
+      destCloudModel: (label: string, host: string) =>
+        `${label}. This is a cloud model: the Ollama server at ${host} forwards the image over the internet to ollama.com.`,
+      destInvalid: (label: string) => `${label}. This server address is not valid, so nothing is sent until you correct it on the AI page.`,
       cloudNotAllowed: '"Allow cloud" is off on the AI page, so nothing will be sent to a remote provider until you allow it.',
       confirm: 'I understand, turn it on',
     },
+    cloudModelLabel: (provider: string, model: string) => `${provider} cloud model “${model}”`,
   },
   ai: {
     title: 'AI',
@@ -379,10 +393,14 @@ export const S = {
     providerLabel: 'AI provider',
     providers: {
       none: { title: 'None', desc: 'No AI. Recommended unless you want to experiment.', badge: '' },
-      ollama: { title: 'Ollama', desc: 'Runs vision models on this PC with the free Ollama app. Images stay on your device.', badge: 'Local' },
+      ollama: {
+        title: 'Ollama',
+        desc: 'Runs vision models with the free Ollama app on this PC. Local models keep images on your device; Ollama “cloud” models send them to ollama.com.',
+        badge: 'Local',
+      },
       'openai-compatible': {
         title: 'OpenAI-compatible server',
-        desc: 'LM Studio, llama.cpp, vLLM and similar. Local when the address is on this PC; remote addresses count as cloud.',
+        desc: 'LM Studio, llama.cpp, vLLM and similar. Images go to the server you enter; remote addresses count as cloud.',
         badge: 'Local or remote',
       },
       anthropic: { title: 'Anthropic Claude', desc: 'Claude vision models in Anthropic’s cloud. Needs an API key; usage is billed by Anthropic.', badge: 'Cloud' },
@@ -500,36 +518,34 @@ export const S = {
       cursorPlayAcceptance: 'Joins pointer play',
       attentionAcceptance: 'Answers attention requests',
     } satisfies Record<keyof Preferences, string>,
+    // Keyed by the simulation's own kinds and detail tokens (src/core/behavior/memory.ts).
     memoryKinds: {
       pet: 'Was petted',
-      petted: 'Was petted',
-      click: 'Got a click',
-      tap: 'Got a click',
-      doubleClick: 'Got a double-click',
-      drag: 'Was carried',
-      dragged: 'Was carried',
-      throw: 'Was thrown',
-      thrown: 'Was thrown',
       nap: 'Took a nap',
-      sleep: 'Took a nap',
-      wake: 'Woke up',
       chase: 'Chased the pointer',
-      chaseEngaged: 'Played chase with you',
-      chaseIgnored: 'Chase was ignored',
+      inspect: 'Inspected a window',
+      startle: 'Got startled',
+      play: 'Played',
+      throw: 'Was thrown',
       attention: 'Asked for attention',
-      attentionAnswered: 'Got attention',
-      attentionIgnored: 'Was ignored',
-      inspectWindow: 'Inspected a window',
-      windowInspected: 'Inspected a window',
-      perch: 'Sat on a window',
-      startled: 'Got startled',
+      greet: 'Greeted you',
       annoyed: 'Got annoyed',
-      zoomies: 'Had the zoomies',
-      groom: 'Groomed',
-      session: 'You came back',
-      returned: 'You came back',
-      sawSomething: 'Noticed something on screen',
-    } as Readonly<Record<string, string>>,
+      called: 'Came when you called',
+      hide: 'Hid away',
+    } satisfies Record<MemoryKind, string>,
+    memoryDetails: {
+      engaged: 'you played along',
+      ignored: 'you were busy',
+      answered: 'you answered',
+      unanswered: 'no answer',
+      zoomies: 'had the zoomies',
+      pawAt: 'pawed at the pointer',
+      rollOver: 'rolled over',
+      hop: 'hopped around',
+      window: 'from on top of it',
+      floor: 'from the floor',
+      hard: 'quite hard',
+    } satisfies Record<MemoryDetail, string>,
   },
   states: {
     sleeping: 'Sleeping',
@@ -570,6 +586,7 @@ export const S = {
     displays: 'Displays',
     perception: 'Screen analysis',
     perceptionPaused: 'paused',
+    perceptionSuspended: { hidden: 'not capturing while the cat is hidden', locked: 'not capturing while the PC is locked' },
     capturesThisHour: 'Analyses this hour',
     lastCapture: 'Last analysis',
     lastError: 'Last perception error',

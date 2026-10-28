@@ -323,8 +323,8 @@ export function aiPage(ctx: PageContext): PageView {
     for (const [id, rows] of Object.entries(connection)) for (const r of rows) r.hidden = id !== provider;
     testBtn.disabled = provider === 'none';
     const cloud = ctx.store.intended('ai', 'allowCloud');
-    const target = providerTarget({ ...view.settings.ai, provider });
-    if (target.destination === 'cloud' || target.destination === 'remote') {
+    const target = providerTarget({ ...view.settings, ai: { ...view.settings.ai, provider } });
+    if (target.leavesDevice) {
       setNote(providerNote, cloud ? A.sendsOffDevice(target.label) : A.needsAllowCloud(target.label), cloud ? 'warn' : 'info');
     } else {
       setNote(providerNote, null);

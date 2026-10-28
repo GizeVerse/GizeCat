@@ -1,3 +1,4 @@
+import type { AppStatus } from '../../../shared/ipc';
 import { MAX_CAT_NAME_LENGTH, MAX_SHORTCUT_LENGTH } from '../catalog';
 import type { PageContext, PageView } from '../context';
 import { button, group, page, row, runAction, setButtonLabel, setNote, textRow, toggleRow } from '../controls';
@@ -6,6 +7,16 @@ import { S } from '../strings';
 import { validateCatName, validateShortcut } from '../validate';
 
 const G = S.general;
+
+/**
+ * The simulation ignores a call unless the cat is active, so the button matches the
+ * tray and the cat's menu: off while the cat is hidden or paused, with the reason shown.
+ */
+export function callButtonState(status: Pick<AppStatus, 'visible' | 'paused'>): { disabled: boolean; note: string | null } {
+  if (!status.visible) return { disabled: true, note: null };
+  if (status.paused) return { disabled: true, note: G.callPaused };
+  return { disabled: false, note: null };
+}
 
 export function generalPage(ctx: PageContext): PageView {
   const name = textRow(ctx, 'general', 'catName', {
@@ -68,7 +79,10 @@ export function generalPage(ctx: PageContext): PageView {
     setButtonLabel(callBtn, G.callButton(settings.general.catName));
     setButtonLabel(visBtn, status.visible ? G.hide : G.show);
     setButtonLabel(pauseBtn, status.paused ? G.resume : G.pause);
-    callBtn.disabled = !status.visible;
+    const callState = callButtonState(status);
+    callBtn.disabled = callState.disabled;
+    if (callState.note) setNote(call.note, callState.note, 'info');
+    else if (call.note.classList.contains('tone-info')) setNote(call.note, null);
     if (!status.visible) setNote(visibility.note, G.hiddenNow, 'info');
     else if (visibility.note.classList.contains('tone-info')) setNote(visibility.note, null);
     if (status.paused) setNote(pause.note, G.pausedNow, 'info');

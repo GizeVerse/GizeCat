@@ -4,7 +4,7 @@ import type { PageContext, PageView } from '../context';
 import { button, group, meter, page, row, runAction, type RowParts } from '../controls';
 import { confirmDanger } from '../dialog';
 import { h, icon } from '../dom';
-import { behaviorStateLabel, formatAge, formatCount, formatDecimal, formatPercent, formatRelativeTime, memoryKindLabel } from '../format';
+import { behaviorStateLabel, formatAge, formatCount, formatDecimal, formatPercent, formatRelativeTime, memoryDetailLabel, memoryKindLabel } from '../format';
 import { coatArt } from '../skins';
 import { S } from '../strings';
 
@@ -51,7 +51,7 @@ function memories(cat: CatSummary, now: number): HTMLElement {
       h('li', { class: 'timeline-item' }, [
         h('span', { class: 'timeline-dot', 'aria-hidden': 'true' }),
         h('span', { class: 'timeline-kind', text: memoryKindLabel(m.kind) }),
-        m.detail ? h('span', { class: 'timeline-detail', text: m.detail }) : null,
+        m.detail ? h('span', { class: 'timeline-detail', text: memoryDetailLabel(m.detail) }) : null,
         h('time', { class: 'timeline-time', datetime: new Date(m.at).toISOString(), text: formatRelativeTime(m.at, now) }),
       ]),
     ),

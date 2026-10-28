@@ -1,12 +1,13 @@
 // Win32Api (src/main/contracts.ts) on top of the typed native layer. Every public
 // method is guarded: failures are logged (rate-limited) and mapped to null/[]/false.
-import type { Point, Rect } from '../../shared/geometry';
-import { DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS } from '../../shared/settings';
+import { rectContains, type Point, type Rect } from '../../shared/geometry';
+import { DEFAULT_EXCLUDED_PROCESSES } from '../../shared/settings';
 import type { WindowInfo } from '../../shared/world';
 import type { Logger, RawWinEvent, Unsubscribe, Win32Api } from '../contracts';
 import { LruCache } from './collections';
 import {
   CHILDID_SELF,
+  DESKTOP_WINDOW_CLASSES,
   DPI_AWARENESS_PER_MONITOR_AWARE,
   EVENT_OBJECT_CLOAKED,
   EVENT_OBJECT_DESTROY,
@@ -22,6 +23,7 @@ import {
   GW_OWNER,
   GWL_EXSTYLE,
   GWL_STYLE,
+  MAX_OWNER_DEPTH,
   OBJID_WINDOW,
   SHELL_SURFACE_PROCESSES,
   SHELL_WINDOW_CLASSES,
@@ -35,8 +37,18 @@ import {
   WINEVENT_SKIPOWNPROCESS,
 } from './constants';
 import type { Hwnd, RawRect, Win32Native } from './native';
+import type { Occluder } from './platforms';
 import { categorizeProcess, ExclusionRules, exeBasename } from './processNames';
-import { ignoresOwner, isExcludedByExStyle, isFullscreenGeometry, mapNotificationState, meetsMinimumSize, toRect } from './windowRules';
+import {
+  ignoresOwner,
+  isClickThrough,
+  isExcludedByExStyle,
+  isFullscreenGeometry,
+  isOverlayStyle,
+  mapNotificationState,
+  meetsMinimumSize,
+  toRect,
+} from './windowRules';
 
 export interface Win32ApiOptions {
   /** Include this process's own windows and hook events. Diagnostic probes only. */
@@ -47,22 +59,48 @@ export interface Win32ApiOptions {
   processCacheTtlMs?: number;
 }
 
-/** Capabilities beyond the Win32Api contract that keep window titles inside this module. */
+/**
+ * Capabilities beyond the Win32Api contract that keep window titles inside this module.
+ * Privacy checks here see every shown top-level window (owned dialogs, tool windows,
+ * popups, small windows), not only Alt-Tab app windows. A window is private when it or
+ * a window in its owner chain matches the exclusions; this app's own windows never are.
+ */
 export interface Win32ApiExtensions {
-  /** Privacy exclusions used for WindowInfo.excluded and isWindowExcluded. */
+  /**
+   * Privacy exclusions used for WindowInfo.excluded and the checks below. Title patterns
+   * make window titles be read (in memory only); with none, no title is ever read.
+   */
   setExclusions(processes: readonly string[], titlePatterns: readonly string[]): void;
   /**
    * Fresh (uncached) privacy check of any root window, app window or not.
    * null when it cannot be determined; callers must then fail closed.
    */
   isWindowExcluded(id: string): boolean | null;
+  /**
+   * Fresh privacy check of the real foreground window (GetForegroundWindow), whatever kind
+   * of window it is. false when this app is in front; null when it cannot be determined.
+   */
+  isForegroundExcluded(): boolean | null;
+  /**
+   * On-screen rects of every shown top-level window that is private or cannot be cleared.
+   * null when the windows cannot be enumerated; callers must then fail closed.
+   */
+  listExcludedRects(): Rect[] | null;
+  /**
+   * Every shown top-level window that hides what is below it, in z-order (top first):
+   * app windows, owned dialogs, tool windows and this app's Settings window, but not
+   * click-through windows, the desktop or this app's overlays. null when enumeration fails.
+   */
+  listOccluders(): Occluder[] | null;
 }
 
 export type ExtendedWin32Api = Win32Api & Win32ApiExtensions;
 
+const EXTENSION_METHODS: ReadonlyArray<keyof Win32ApiExtensions> = ['setExclusions', 'isWindowExcluded', 'isForegroundExcluded', 'listExcludedRects', 'listOccluders'];
+
 export function hasWin32Extensions(api: Win32Api): api is ExtendedWin32Api {
   const a = api as Partial<ExtendedWin32Api>;
-  return typeof a.setExclusions === 'function' && typeof a.isWindowExcluded === 'function';
+  return EXTENSION_METHODS.every((m) => typeof a[m] === 'function');
 }
 
 const EVENT_KINDS: ReadonlyMap<number, RawWinEvent['kind']> = new Map<number, RawWinEvent['kind']>([

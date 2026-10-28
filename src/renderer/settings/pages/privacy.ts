@@ -23,7 +23,7 @@ import { openDialog } from '../dialog';
 import { GLYPH, h, icon, type GlyphName } from '../dom';
 import { NUMERIC_FIELDS, intervalStops } from '../fields';
 import { formatPercent, formatRelativeTime } from '../format';
-import { bannerModel, consentModel } from '../privacyView';
+import { bannerModel, consentModel, pauseModel } from '../privacyView';
 import { errorText } from '../store';
 import { S } from '../strings';
 import { validateProcessName, validateTitlePattern } from '../validate';
@@ -41,7 +41,7 @@ function banner(ctx: PageContext): HTMLElement {
   const details = h('ul', { class: 'banner-details' });
   const el = h('div', { class: 'banner', role: 'status', 'aria-live': 'polite' }, [glyph, h('div', { class: 'banner-body' }, [title, text, details])]);
   ctx.store.subscribe((view) => {
-    const m = bannerModel(view.status.perception, ctx.now());
+    const m = bannerModel(view, ctx.now());
     el.className = `banner mode-${m.mode}${m.paused ? ' is-paused' : ''}`;
     glyph.textContent = GLYPH[m.paused ? 'pause' : BANNER_ICON[m.mode]];
     title.textContent = m.title;
@@ -154,8 +154,11 @@ function modeChooser(ctx: PageContext): HTMLElement[] {
     })();
   });
   const syncPause = (view: SettingsViewState): void => {
+    // The switch is the user's privacy pause only; a hidden cat or a locked PC is reported beside it.
+    const m = pauseModel(view);
+    setNote(pause.note, m.suspended ? P.suspended[m.suspended] : null, 'info');
     if (pauseBusy) return;
-    sw.input.checked = view.settings.perception.paused || view.status.perception.paused;
+    sw.input.checked = m.userPaused;
     sw.refresh();
   };
 

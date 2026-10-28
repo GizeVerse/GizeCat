@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RENDER_STYLES, SKINS } from './cat';
+import { DEFAULT_TOGGLE_SHORTCUT, MAX_SHORTCUT_LENGTH, parseShortcut } from './shortcut';
 
 /**
  * User settings. Every field has a default and falls back to it when the stored
@@ -71,12 +72,26 @@ function field<T extends z.ZodType>(schema: T, def: z.output<T>) {
   return schema.default(def as never).catch(def as never);
 }
 
+/**
+ * A global shortcut must not swallow ordinary typing in other apps (see shortcut.ts).
+ * Stored values are normalised; patches must already be in canonical form.
+ */
+const ShortcutSchema = z
+  .string()
+  .max(MAX_SHORTCUT_LENGTH)
+  .transform((text, ctx) => {
+    const r = parseShortcut(text);
+    if (r.ok) return r.accelerator;
+    ctx.addIssue({ code: 'custom', message: `unsafe global shortcut (${r.error.code})` });
+    return z.NEVER;
+  });
+
 const GeneralSchema = z.object({
   catName: field(z.string().trim().min(1).max(24), 'Miso'),
   launchAtLogin: field(z.boolean(), false),
   shortcutsEnabled: field(z.boolean(), true),
   /** Electron accelerator that shows/hides the cat. */
-  toggleShortcut: field(z.string().min(1).max(64), 'Control+Alt+Shift+C'),
+  toggleShortcut: field(ShortcutSchema, DEFAULT_TOGGLE_SHORTCUT),
   firstRunCompleted: field(z.boolean(), false),
 });
 

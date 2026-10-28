@@ -23,28 +23,52 @@ export function subtractSpan(spans: readonly Span[], cut0: number, cut1: number)
   return out;
 }
 
+/** A shown top-level window that hides what is below it (app window or not). */
+export interface Occluder {
+  id: string;
+  rect: Rect;
+}
+
+function pushEdge(out: Platform[], id: string, r: Rect, above: readonly Rect[], minWidth: number): void {
+  const y = r.y;
+  let spans: Span[] = [[r.x, r.x + r.width]];
+  for (const a of above) {
+    if (y < a.y || y >= a.y + a.height) continue;
+    spans = subtractSpan(spans, a.x, a.x + a.width);
+    if (spans.length === 0) break;
+  }
+  for (const [x0, x1] of spans) if (x1 - x0 >= minWidth) out.push({ windowId: id, y, x0, x1 });
+}
+
 /**
  * Visible top edges of app windows. A window's edge is cut wherever a window above it
  * in z-order covers the edge row. Minimized windows are ignored entirely; maximized and
  * fullscreen windows produce no platform but still occlude the windows below them.
+ *
+ * `occluders`, when known, is every shown window in z-order (top first), including
+ * owned dialogs, tool windows and small windows that are not app windows: they cut the
+ * edges below them too. App windows missing from it are not shown and get no platform.
  */
-export function computePlatforms(windows: readonly WindowInfo[], minWidth = MIN_PLATFORM_WIDTH): Platform[] {
+export function computePlatforms(windows: readonly WindowInfo[], minWidth = MIN_PLATFORM_WIDTH, occluders: readonly Occluder[] | null = null): Platform[] {
   const out: Platform[] = [];
   const above: Rect[] = [];
+  const offersEdge = (w: WindowInfo): boolean => !w.minimized && !w.maximized && !w.fullscreen;
+  if (occluders) {
+    const apps = new Map(windows.map((w) => [w.id, w]));
+    for (const o of occluders) {
+      const r = o.rect;
+      if (!(r.width > 0 && r.height > 0)) continue;
+      const w = apps.get(o.id);
+      if (w && offersEdge(w)) pushEdge(out, w.id, r, above, minWidth);
+      above.push(r);
+    }
+    return out;
+  }
   for (const w of windows) {
     if (w.minimized) continue;
     const r = w.rect;
     if (!(r.width > 0 && r.height > 0)) continue;
-    if (!w.maximized && !w.fullscreen) {
-      const y = r.y;
-      let spans: Span[] = [[r.x, r.x + r.width]];
-      for (const a of above) {
-        if (y < a.y || y >= a.y + a.height) continue;
-        spans = subtractSpan(spans, a.x, a.x + a.width);
-        if (spans.length === 0) break;
-      }
-      for (const [x0, x1] of spans) if (x1 - x0 >= minWidth) out.push({ windowId: w.id, y, x0, x1 });
-    }
+    if (offersEdge(w)) pushEdge(out, w.id, r, above, minWidth);
     above.push(r);
   }
   return out;

@@ -96,8 +96,10 @@ export function mountApp(root: HTMLElement, api: SettingsApi, initial: SettingsV
 
   function show(id: PageId, fromUser: boolean): void {
     if (current === id) return;
+    const previous = current === null ? undefined : pages.get(current);
     current = id;
     for (const [pid, view] of pages) view.element.hidden = pid !== id;
+    previous?.onHide?.();
     for (const [pid, btn] of navButtons) {
       if (pid === id) btn.setAttribute('aria-current', 'page');
       else btn.removeAttribute('aria-current');
@@ -133,6 +135,7 @@ export function mountApp(root: HTMLElement, api: SettingsApi, initial: SettingsV
   show(fromHash() ?? (initial.settings.general.firstRunCompleted ? 'general' : 'welcome'), false);
 
   return () => {
+    if (current !== null) pages.get(current)?.onHide?.();
     unsubscribe();
     window.removeEventListener('hashchange', onHash);
     document.removeEventListener('visibilitychange', flushOnHide);

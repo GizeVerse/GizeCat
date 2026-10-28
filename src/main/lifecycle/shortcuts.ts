@@ -1,5 +1,6 @@
 // Global show/hide shortcut. Registration can fail silently when another app owns
 // the accelerator, so the result is reported in the app status.
+import { isSafeShortcut } from '../../shared/shortcut';
 import type { Logger } from '../contracts';
 
 export interface GlobalShortcutApi {
@@ -39,6 +40,12 @@ export function createShortcutManager(api: GlobalShortcutApi, logger: Logger, on
       }
       if (active === accelerator) return true;
       release();
+      // Settings already enforce this; a bare key registered globally would be taken from every app.
+      if (!isSafeShortcut(accelerator)) {
+        lastError = `"${accelerator}" is not a safe global shortcut`;
+        logger.warn('shortcut refused: needs Control, Alt or Super and one non-reserved key', { accelerator });
+        return false;
+      }
       let ok: boolean;
       try {
         ok = api.register(accelerator, () => {

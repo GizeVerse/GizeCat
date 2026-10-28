@@ -1,25 +1,52 @@
 // Pure view models for the privacy banner and the screen-analysis consent dialog.
-import type { PerceptionMode, PerceptionStatus } from '../../shared/perception';
+import { isOllamaCloudModel } from '../../core/perception/endpoint';
+import { resolveAiEgress } from '../../core/perception/privacy';
+import type { SettingsViewState } from '../../shared/ipc';
+import type { PerceptionMode } from '../../shared/perception';
 import type { Settings } from '../../shared/settings';
 import { formatDuration, formatRelativeTime } from './format';
 import { S } from './strings';
-import { validateBaseUrl } from './validate';
 
 const P = S.privacy;
+
+/** The parts of the view that decide what the privacy surfaces show. */
+export type PrivacyViewInput = Pick<SettingsViewState, 'settings' | 'status'>;
+
+export interface PauseModel {
+  /** The user's privacy pause (settings.perception.paused). This alone drives the pause switch. */
+  userPaused: boolean;
+  /**
+   * Capture is suspended although the user did not pause it. Main suspends capture
+   * while the cat is hidden or the session is locked; null while analysis is off.
+   */
+  suspended: 'hidden' | 'locked' | null;
+}
+
+export function pauseModel(view: PrivacyViewInput): PauseModel {
+  const userPaused = view.settings.perception.paused;
+  const p = view.status.perception;
+  const suspended = !userPaused && p.paused && p.mode !== 'off' ? (view.status.visible ? 'locked' : 'hidden') : null;
+  return { userPaused, suspended };
+}
 
 export interface BannerModel {
   mode: PerceptionMode;
   title: string;
   text: string;
   details: string[];
+  /** The user's privacy pause is on while analysis is configured. */
   paused: boolean;
 }
 
-export function bannerModel(status: PerceptionStatus, now: number): BannerModel {
+export function bannerModel(view: PrivacyViewInput, now: number): BannerModel {
+  const status = view.status.perception;
   const base = P.banner[status.mode];
+  const pause = pauseModel(view);
+  const paused = status.mode !== 'off' && pause.userPaused;
   const details: string[] = [];
   if (status.aiProviderLabel && (status.mode === 'ai-local' || status.mode === 'ai-cloud')) details.push(P.bannerProvider(status.aiProviderLabel));
-  if (status.paused) details.push(P.bannerPaused);
+  if (paused) details.push(P.bannerPaused);
+  else if (pause.suspended) details.push(P.suspended[pause.suspended]);
   else if (status.blockedReason) details.push(P.bannerBlocked(status.blockedReason));
   if (status.mode !== 'off') {
     details.push(
@@ -27,34 +54,62 @@ export function bannerModel(status: PerceptionStatus, now: number): BannerModel 
     );
   }
   if (status.lastError) details.push(P.bannerError(status.lastError));
-  return { mode: status.mode, title: base.title, text: base.text, details, paused: status.paused };
+  return { mode: status.mode, title: base.title, text: base.text, details, paused };
 }
 
-export type Destination = 'none' | 'local' | 'remote' | 'cloud';
+/**
+ * - local: a server on this PC with a model main does not treat as cloud.
+ * - remote: a server on another computer.
+ * - cloud: a cloud provider's API.
+ * - cloud-model: a server (usually on this PC) that forwards to a cloud model (Ollama "-cloud").
+ * - invalid: the server address cannot be used, so nothing is sent.
+ */
+export type Destination = 'none' | 'local' | 'remote' | 'cloud' | 'cloud-model' | 'invalid';
 
 export interface ProviderTarget {
   destination: Destination;
   label: string;
+  /** host[:port] that receives the requests ('' when there is none). */
+  host: string;
+  /** Main's classification (resolveAiEgress): images would leave this PC, so "Allow cloud" is required. */
+  leavesDevice: boolean;
 }
 
-/** Where AI images would go with the current settings. */
-export function providerTarget(ai: Settings['ai']): ProviderTarget {
-  switch (ai.provider) {
-    case 'none':
-      return { destination: 'none', label: S.ai.providers.none.title };
-    case 'anthropic':
-      return { destination: 'cloud', label: `${S.ai.providers.anthropic.title} (${ai.anthropicModel})` };
-    case 'ollama':
-      return hostTarget(S.ai.providers.ollama.title, ai.ollamaBaseUrl);
-    case 'openai-compatible':
-      return hostTarget(S.ai.providers['openai-compatible'].title, ai.openaiBaseUrl);
+/** Where AI images would go with the current settings, classified by the same code main uses. */
+export function providerTarget(settings: Settings): ProviderTarget {
+  const ai = settings.ai;
+  if (ai.provider === 'none') return { destination: 'none', label: S.ai.providers.none.title, host: '', leavesDevice: false };
+  const title = S.ai.providers[ai.provider].title;
+  const resolved = resolveAiEgress(settings);
+  if (ai.provider === 'anthropic') {
+    const host = resolved.ok ? resolved.egress.url.host : '';
+    return { destination: 'cloud', label: `${title} (${ai.anthropicModel})`, host, leavesDevice: true };
   }
+  const raw = (ai.provider === 'ollama' ? ai.ollamaBaseUrl : ai.openaiBaseUrl).trim();
+  if (!resolved.ok) return { destination: 'invalid', label: `${title} (${raw || '?'})`, host: '', leavesDevice: false };
+  const { egress } = resolved;
+  const host = egress.url.host;
+  if (ai.provider === 'ollama' && isOllamaCloudModel(ai.ollamaModel)) {
+    return { destination: 'cloud-model', label: P.cloudModelLabel(title, ai.ollamaModel.trim()), host, leavesDevice: egress.cloud };
+  }
+  return { destination: egress.cloud ? 'remote' : 'local', label: `${title} (${raw})`, host, leavesDevice: egress.cloud };
 }
 
-function hostTarget(title: string, baseUrl: string): ProviderTarget {
-  const parsed = validateBaseUrl(baseUrl);
-  if (!parsed.ok) return { destination: 'remote', label: `${title} (${baseUrl || '?'})` };
-  return { destination: parsed.value.loopback ? 'local' : 'remote', label: `${title} (${parsed.value.url})` };
+function destinationText(t: ProviderTarget): string {
+  switch (t.destination) {
+    case 'none':
+      return P.consent.destNone;
+    case 'invalid':
+      return P.consent.destInvalid(t.label);
+    case 'local':
+      return P.consent.destLocal(t.label, t.host);
+    case 'remote':
+      return P.consent.destRemote(t.label);
+    case 'cloud':
+      return P.consent.destCloud(t.label);
+    case 'cloud-model':
+      return P.consent.destCloudModel(t.label, t.host);
+  }
 }
 
 export interface ConsentModel {
@@ -84,24 +139,15 @@ export function consentModel(kind: 'local-stats' | 'ai', settings: Settings): Co
     };
   }
   const aiInterval = formatDuration(Math.max(settings.perception.minIntervalSec, settings.ai.minIntervalSec));
-  const target = providerTarget(settings.ai);
-  const destination =
-    target.destination === 'none'
-      ? P.consent.destNone
-      : target.destination === 'local'
-        ? P.consent.destLocal(target.label)
-        : target.destination === 'cloud'
-          ? P.consent.destCloud(target.label)
-          : P.consent.destRemote(target.label);
-  const leavesDevice = target.destination === 'cloud' || target.destination === 'remote';
+  const target = providerTarget(settings);
   return {
     title: P.consent.aiTitle,
     intro: P.consent.intro,
     points: [...P.consent.aiPoints(region, aiInterval, settings.ai.maxPerHour)],
     destinationTitle: P.consent.destination,
-    destination,
-    warning: leavesDevice && !settings.ai.allowCloud ? P.consent.cloudNotAllowed : null,
+    destination: destinationText(target),
+    warning: target.leavesDevice && !settings.ai.allowCloud ? P.consent.cloudNotAllowed : null,
     confirmLabel: P.consent.confirm,
-    tone: leavesDevice ? 'caution' : 'default',
+    tone: target.leavesDevice ? 'caution' : 'default',
   };
 }

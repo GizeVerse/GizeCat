@@ -22,7 +22,8 @@ export async function exportDiagnosticsToFile(opts: {
     properties: ['createDirectory', 'showOverwriteConfirmation'] as Array<'createDirectory' | 'showOverwriteConfirmation'>,
   };
   const choice = opts.parent ? await dialog.showSaveDialog(opts.parent, dialogOptions) : await dialog.showSaveDialog(dialogOptions);
-  if (choice.canceled || !choice.filePath) return { ok: false, message: 'Export cancelled.' };
+  // Changing one's mind is not a failure: report it neutrally, not as an error.
+  if (choice.canceled || !choice.filePath) return { ok: true, message: 'Export cancelled. Nothing was saved.' };
   try {
     const report = opts.build();
     await fs.promises.writeFile(choice.filePath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');

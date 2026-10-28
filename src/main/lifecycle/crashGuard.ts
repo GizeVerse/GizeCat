@@ -36,12 +36,14 @@ export function readRelaunchHistory(file: string): number[] {
   }
 }
 
-function writeRelaunchHistory(file: string, history: number[]): void {
+/** The relaunch budget lives only in this file: if it cannot be written, every new process would see an empty history. */
+function writeRelaunchHistory(file: string, history: number[]): boolean {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(history));
+    return true;
   } catch {
-    /* best effort: worst case we relaunch one time too many */
+    return false;
   }
 }
 
@@ -87,18 +89,24 @@ export function createCrashGuard(opts: CrashGuardOptions): CrashGuard {
     escalated = true;
     const t = now();
     const history = readRelaunchHistory(opts.historyFile).filter((at) => t - at < relaunchWindowMs);
-    if (history.length < maxRelaunches) {
-      history.push(t);
-      writeRelaunchHistory(opts.historyFile, history);
-      log('error', 'crash guard: repeated errors, relaunching', { relaunchesInWindow: history.length });
-      tryFlush();
-      opts.relaunch();
-      opts.exit(0);
-    } else {
+    if (history.length >= maxRelaunches) {
       log('error', 'crash guard: repeated errors and relaunch budget exhausted; exiting', { relaunchesInWindow: history.length });
       tryFlush();
       opts.exit(1);
+      return;
     }
+    history.push(t);
+    if (!writeRelaunchHistory(opts.historyFile, history)) {
+      // Without a recorded relaunch the budget would never run out: fail safe instead of looping.
+      log('error', 'crash guard: repeated errors and the relaunch history cannot be saved; exiting');
+      tryFlush();
+      opts.exit(1);
+      return;
+    }
+    log('error', 'crash guard: repeated errors, relaunching', { relaunchesInWindow: history.length });
+    tryFlush();
+    opts.relaunch();
+    opts.exit(0);
   }
 
   return {

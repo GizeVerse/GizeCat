@@ -94,6 +94,14 @@ export function createCatStore(opts: CatStoreOptions): CatStore {
         dirty = true;
         return { cat: migrate(null).cat, recovered: true, source: 'new' };
       }
+      if (r.status === 'unreadable') {
+        // The stored cat may be fine and only locked by another program: the store refuses
+        // to overwrite it, so this session runs on the backup (or a stand-in) without saving.
+        log.warn('cat state could not be read; this session will not save the cat');
+        const fromBak = r.value === null ? null : migrate(r.value);
+        if (fromBak && !fromBak.recovered) return { cat: fromBak.cat, recovered: true, source: 'backup' };
+        return { cat: migrate(null).cat, recovered: true, source: 'new' };
+      }
       const fromFile = migrate(r.value);
       if (r.status === 'recovered-backup') {
         dirty = true;

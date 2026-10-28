@@ -143,6 +143,15 @@ export function behaviorStateLabel(state: string): string {
   return known ?? humanizeId(state);
 }
 
+/** Own keys only: kinds come from the persisted cat file, so "constructor" must not hit the prototype. */
+function ownLabel(labels: Readonly<Record<string, string>>, id: string): string | undefined {
+  return Object.hasOwn(labels, id) ? labels[id] : undefined;
+}
+
 export function memoryKindLabel(kind: string): string {
-  return S.personality.memoryKinds[kind] ?? humanizeId(kind);
+  return ownLabel(S.personality.memoryKinds, kind) ?? humanizeId(kind);
+}
+
+export function memoryDetailLabel(detail: string): string {
+  return ownLabel(S.personality.memoryDetails, detail) ?? humanizeId(detail).toLowerCase();
 }

@@ -3,6 +3,8 @@ import type { PageContext, PageView } from '../context';
 import { button, group, keyValues, page, row, runAction, segmentedRow, toggleRow } from '../controls';
 import { h, svg, uid } from '../dom';
 import { behaviorStateLabel, formatCount, formatDuration, formatElapsed, formatMegabytes, formatPercentValue, formatRelativeTime, formatSampleAge } from '../format';
+import { livePoll } from '../livePoll';
+import { pauseModel } from '../privacyView';
 import { niceCeil, sparkline } from '../sparkline';
 import { S } from '../strings';
 
@@ -71,12 +73,18 @@ function sampleTable(samples: readonly ResourceSample[]): HTMLElement | null {
   ]);
 }
 
-function statusEntries(view: SettingsViewState, now: number): Array<readonly [string, string]> {
+export function statusEntries(view: SettingsViewState, now: number): Array<readonly [string, string]> {
   const { status, settings } = view;
   const p = status.perception;
+  const pause = pauseModel(view);
   let perception: string = D.modes[p.mode];
-  if (p.paused) perception = S.format.parenthetical(perception, D.perceptionPaused);
-  if (p.blockedReason) perception = S.format.list(perception, p.blockedReason);
+  if (pause.suspended) {
+    // Main's blocked reason is the generic "paused" text here; the suspension reason replaces it.
+    perception = S.format.parenthetical(perception, D.perceptionSuspended[pause.suspended]);
+  } else {
+    if (pause.userPaused) perception = S.format.parenthetical(perception, D.perceptionPaused);
+    if (p.blockedReason) perception = S.format.list(perception, p.blockedReason);
+  }
   const entries: Array<readonly [string, string]> = [
     [D.catState, behaviorStateLabel(status.catState)],
     [D.windowAwareness, D.awareness[status.windowAwareness]],
@@ -150,5 +158,20 @@ export function diagnosticsPage(ctx: PageContext): PageView {
     );
   };
   ctx.store.subscribe(render);
-  return { id: 'diagnostics', title: D.title, element, onShow: () => render(ctx.store.view) };
+  // Main broadcasts only on state changes, so uptime and resource samples are re-read while this page is open.
+  const poll = livePoll({
+    timers: ctx.timers,
+    refresh: () => ctx.refresh(),
+    isVisible: () => !element.hidden && document.visibilityState !== 'hidden',
+  });
+  return {
+    id: 'diagnostics',
+    title: D.title,
+    element,
+    onShow() {
+      render(ctx.store.view);
+      poll.start();
+    },
+    onHide: () => poll.stop(),
+  };
 }

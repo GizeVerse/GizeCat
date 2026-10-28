@@ -1,5 +1,6 @@
 // Pure client-side validation for free-text settings. Main re-validates every
 // patch; these checks exist to give immediate, specific feedback.
+import { isLoopbackUrl } from '../../core/perception/endpoint';
 import { API_KEY_LENGTH, MAX_CAT_NAME_LENGTH, MAX_LIST_ENTRY_LENGTH, MAX_SHORTCUT_LENGTH, MAX_URL_LENGTH } from './catalog';
 import { S } from './strings';
 
@@ -158,16 +159,9 @@ export function validateTitlePattern(text: string, existing: readonly string[], 
 // ---------------------------------------------------------------------------
 // AI connection
 
-export function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h.endsWith('.localhost')) return true;
-  if (h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
-  return v4 !== null && v4[1] === '127' && v4.slice(1).every((o) => Number(o) <= 255);
-}
-
 export interface BaseUrlInfo {
   url: string;
+  /** Main's own rule (isLoopbackUrl), so the "not on this PC" hints match what main enforces. */
   loopback: boolean;
 }
 
@@ -183,7 +177,7 @@ export function validateBaseUrl(text: string): Validation<BaseUrlInfo> {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return fail(V.urlInvalid);
   if (parsed.username !== '' || parsed.password !== '') return fail(V.urlCredentials);
-  return ok({ url: value, loopback: isLoopbackHost(parsed.hostname) });
+  return ok({ url: value, loopback: isLoopbackUrl(value) });
 }
 
 /** Model identifiers: optional (empty clears), no whitespace. */

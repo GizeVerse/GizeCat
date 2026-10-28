@@ -19,4 +19,6 @@ export interface PageView {
   element: HTMLElement;
   /** Called every time the page becomes visible. */
   onShow?(): void;
+  /** Called every time the page is replaced by another one. */
+  onHide?(): void;
 }

@@ -33,6 +33,9 @@ export const GW_OWNER = 4;
 
 export const WS_THICKFRAME = 0x0004_0000;
 export const WS_DLGFRAME = 0x0040_0000;
+/** WS_BORDER | WS_DLGFRAME: a title bar. */
+export const WS_CAPTION = 0x00c0_0000;
+export const WS_EX_TRANSPARENT = 0x0000_0020;
 export const WS_EX_TOOLWINDOW = 0x0000_0080;
 export const WS_EX_WINDOWEDGE = 0x0000_0100;
 export const WS_EX_APPWINDOW = 0x0004_0000;
@@ -67,6 +70,12 @@ export const SHELL_WINDOW_CLASSES: ReadonlySet<string> = new Set([
   'Shell_TrayWnd',
   'Shell_SecondaryTrayWnd',
 ]);
+
+/** The desktop itself (wallpaper and icons): below every window, it hides nothing. */
+export const DESKTOP_WINDOW_CLASSES: ReadonlySet<string> = new Set(['Progman', 'WorkerW']);
+
+/** Bound on owner-chain walks (real chains are a few windows long). */
+export const MAX_OWNER_DEPTH = 16;
 
 /** Shell processes whose CoreWindows (Start, search, flyouts, IME) are not app windows. */
 export const SHELL_SURFACE_PROCESSES: ReadonlySet<string> = new Set([

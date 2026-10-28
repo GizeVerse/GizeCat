@@ -1,9 +1,11 @@
 // API keys encrypted with Electron safeStorage (DPAPI on Windows). The file holds
 // base64 ciphertext only; plaintext exists in memory only for the duration of a
 // get() call. The cipher is injected so this module stays Electron-free.
+// No backup or quarantined copy of the file is kept or ever read (see
+// createSecretFile), so a removed key cannot come back from a copy.
 import { z } from 'zod';
 import type { Logger, SecretStore } from '../contracts';
-import type { JsonStore } from './jsonStore';
+import { createJsonStore, type JsonStore } from './jsonStore';
 
 export type SecretName = 'anthropic' | 'openai-compatible';
 
@@ -29,15 +31,23 @@ type SecretFile = z.infer<typeof FileSchema>;
 export const ENCRYPTION_UNAVAILABLE_MESSAGE =
   'Secure storage (Windows DPAPI) is not available, so API keys cannot be saved. Local AI providers still work without a key.';
 
+/** The JSON file behind the secret store: no .bak, never restored from a copy. */
+export function createSecretFile(filePath: string, logger?: Logger): JsonStore {
+  return createJsonStore({ filePath, logger, keepCopies: false });
+}
+
 export function createSecretStore(opts: { store: JsonStore; cipher: SecretCipher; logger: Logger }): ManagedSecretStore {
   const log = opts.logger;
   let entries: Partial<Record<SecretName, string>> = {};
 
   const r = opts.store.read();
-  if (r.status === 'ok' || r.status === 'recovered-backup') {
+  // Only the file itself counts: a copy could hold a key the user has since removed.
+  if (r.status === 'ok') {
     const parsed = FileSchema.safeParse(r.value);
     if (parsed.success) entries = { ...parsed.data.entries };
     else log.warn('secrets file has an unexpected shape; ignoring it');
+  } else if (r.status !== 'missing') {
+    log.warn('secrets file could not be used; no API keys are loaded', { status: r.status });
   }
 
   function available(): boolean {

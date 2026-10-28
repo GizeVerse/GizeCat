@@ -31,6 +31,15 @@ export interface SettingsStoreOptions {
   clearTimer?: (handle: unknown) => void;
 }
 
+/**
+ * Settings restored from a .bak copy may predate a consent revocation or a switch
+ * to "Allow cloud processing" off, and the newer file that would say so is unreadable.
+ * Screen analysis therefore needs a fresh opt-in after any such restore.
+ */
+function withoutPerceptionConsent(s: Settings): Settings {
+  return { ...s, perception: { ...s.perception, visualMode: 'off', consentAt: null }, ai: { ...s.ai, allowCloud: false } };
+}
+
 export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
   const debounceMs = opts.debounceMs ?? 500;
   const setTimer = opts.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
@@ -39,6 +48,8 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
 
   let current: Settings = migrateSettings({});
   let dirty = false;
+  /** Async writes started but not finished: their data is not on disk yet. */
+  let writing = 0;
   let timer: unknown = null;
   let disposed = false;
   let chain: Promise<void> = Promise.resolve();
@@ -66,10 +77,15 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
     chain = chain.then(async () => {
       if (!dirty) return;
       dirty = false;
-      const ok = await opts.store.write(current);
-      if (!ok) {
-        dirty = true;
-        log.warn('settings save failed; will retry on next change or shutdown');
+      writing++;
+      try {
+        const ok = await opts.store.write(current);
+        if (!ok) {
+          dirty = true;
+          log.warn('settings save failed; will retry on next change or shutdown');
+        }
+      } finally {
+        writing--;
       }
     });
     return chain;
@@ -77,7 +93,9 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
 
   function flushSync(): void {
     cancelTimer();
-    if (!dirty) return;
+    // An async write still in flight may never commit when the session ends now, so
+    // write synchronously; the store's generation check turns its late commit into a no-op.
+    if (!dirty && writing === 0) return;
     if (opts.store.writeSync(current)) dirty = false;
   }
 
@@ -103,10 +121,18 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
     load() {
       const r = opts.store.read();
       current = migrateSettings(r.value);
+      if (r.status === 'recovered-backup' || r.status === 'unreadable') {
+        const restricted = withoutPerceptionConsent(current);
+        if (JSON.stringify(restricted) !== JSON.stringify(current)) log.warn('screen analysis consent reset after restoring settings from a copy');
+        current = restricted;
+      }
       if (r.status === 'corrupt' || r.status === 'recovered-backup') {
         log.warn('settings file was unreadable', { status: r.status });
         // Persist the recovered/default settings so the next start reads a valid file.
         dirty = true;
+      } else if (r.status === 'unreadable') {
+        // The file may be fine and only locked; it is left untouched for this session.
+        log.warn('settings file could not be read; changes this session will not be saved', { status: r.status });
       }
       return { settings: current, status: r.status };
     },
@@ -120,7 +146,7 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
     flushSync,
     flush,
     get dirty() {
-      return dirty;
+      return dirty || writing > 0;
     },
     dispose() {
       cancelTimer();
