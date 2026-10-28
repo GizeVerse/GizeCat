@@ -83,11 +83,14 @@ process.on('exit', () => {
 process.on('SIGINT', () => process.exit(130));
 process.on('SIGTERM', () => process.exit(143));
 
-const child = spawn(cmd, args, {
-  stdio: 'inherit',
-  shell: process.platform === 'win32',
-  env: { ...process.env, CLAUDE_STANDARD_VERIFY_LOCK: '1' },
-});
+// On Windows npm/npx are .cmd shims and need a shell; pass one pre-quoted command line
+// instead of an args array (args + shell:true is deprecated and unescaped).
+const quote = (s) => (/^[\w@%+=:,./\\-]+$/.test(s) ? s : `"${s.replace(/"/g, '\\"')}"`);
+const env = { ...process.env, CLAUDE_STANDARD_VERIFY_LOCK: '1' };
+const child =
+  process.platform === 'win32'
+    ? spawn([cmd, ...args].map(quote).join(' '), { stdio: 'inherit', shell: true, env })
+    : spawn(cmd, args, { stdio: 'inherit', env });
 child.on('close', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 child.on('error', (e) => {
   console.error(`with-lock: failed to start ${cmd}: ${e.message}`);

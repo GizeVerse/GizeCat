@@ -1,0 +1,398 @@
+// One cat on one overlay: maps a render snapshot to the puppet, owns the view
+// transform (anchor, scale, facing turn), computes bounds and hit rects, and draws
+// in smooth or pixel style. Uses only the Canvas 2D context it is given (no DOM).
+import type { CatRenderState, Emote, RenderStyle } from '../../shared/cat';
+import type { Rect } from '../../shared/geometry';
+import { drawCat, drawShadow, type Ctx2D } from './cat/draw';
+import { drawEmote, EMOTE_SIZE, emoteFrame, type EmoteFrame } from './cat/emotes';
+import { clamp, smooth } from './cat/math';
+import { LEG_COUNT } from './cat/pose';
+import { CatPuppet } from './cat/puppet';
+import { applyMatX, applyMatY, HEAD_RX, HEAD_RY, OUTLINE_W, PAW_RX, TORSO_POINTS } from './cat/rig';
+import { getSkin, type Skin } from './cat/skins';
+
+const TURN_MS = 170;
+/** Extra margin around the drawn cat for outline, halo and anti-aliasing (cat-local DIP). */
+const DRAW_MARGIN = 5;
+/** Pixel style: device pixels per low-res pixel at scale 1 and DPR 1. */
+const PIXEL_BLOCK = 3;
+
+export interface SceneInput {
+  /** Interpolated ground anchor, overlay-local DIP. */
+  x: number;
+  y: number;
+  state: CatRenderState;
+  /** Render-time simulation clock (ms). */
+  simTime: number;
+  dtMs: number;
+  /** Position jumped (teleport/display change): no tail lag, no turn animation. */
+  snapped: boolean;
+}
+
+/** A scratch 2D surface used for pixel style and translucent rendering. */
+export interface Layer {
+  readonly canvas: CanvasImageSource;
+  readonly ctx: Ctx2D;
+}
+
+/** Supplies a layer of at least the requested size (device pixels), or null if unavailable. */
+export type LayerProvider = (width: number, height: number) => Layer | null;
+
+export interface DeviceRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export class CatScene {
+  readonly puppet: CatPuppet;
+  /** Overlay-local DIP bounds of everything drawn this frame. */
+  readonly bounds: Rect = { x: 0, y: 0, width: 0, height: 0 };
+  /** Hit rects (overlay-local DIP): head, body, legs, tail base. */
+  readonly hitRects: Rect[] = [];
+  hitCount = 0;
+
+  private x = 0;
+  private y = 0;
+  private hasPos = false;
+  private scale = 1;
+  private facingFrom = 1;
+  private facingTo = 1;
+  private facingNow = 1;
+  private turnElapsed = Infinity;
+  private skin: Skin = getSkin('ginger');
+  private style: RenderStyle = 'smooth';
+  private shadow = true;
+  private opacity = 1;
+  private visible = false;
+  private emote: Emote | null = null;
+  private emoteVisible = false;
+  private readonly emoteF: EmoteFrame = { scale: 0, alpha: 0, rise: 0, wobble: 0, age: 0 };
+  private emoteX = 0;
+  private emoteY = 0;
+  private moved = false;
+  private sleeping = false;
+  private stateName = '';
+  private clipName = '';
+
+  constructor(random: () => number) {
+    this.puppet = new CatPuppet(random);
+    for (let i = 0; i < 4; i++) this.hitRects.push({ x: 0, y: 0, width: 0, height: 0 });
+  }
+
+  /** Behaviour state and clip of the last update (debug overlay). */
+  get stateLabel(): string {
+    return `${this.stateName} / ${this.clipName}`;
+  }
+
+  get isVisible(): boolean {
+    return this.visible && this.opacity > 0.001;
+  }
+
+  /** True when the cat is asleep and nothing visibly moves except breathing (frame-rate can drop). */
+  get isQuiet(): boolean {
+    return this.sleeping && !this.moved && !this.emoteVisible && !this.puppet.animator.blending && this.turnElapsed >= TURN_MS;
+  }
+
+  update(input: SceneInput): void {
+    const s = input.state;
+    this.visible = s.visible;
+    this.opacity = clamp(Number.isFinite(s.opacity) ? s.opacity : 1, 0, 1);
+    this.skin = getSkin(s.skin);
+    this.style = s.style === 'pixel' ? 'pixel' : 'smooth';
+    this.shadow = s.shadow;
+    this.sleeping = s.state === 'sleeping';
+    this.stateName = s.state;
+    this.clipName = s.clip;
+    const scale = clamp(Number.isFinite(s.scale) && s.scale > 0 ? s.scale : 1, 0.2, 4);
+    const dt = Number.isFinite(input.dtMs) ? Math.max(0, input.dtMs) : 0;
+
+    // Facing: a quick squash-turn instead of an instant mirror.
+    const facing = s.facing === -1 ? -1 : 1;
+    if (input.snapped || !this.hasPos) {
+      this.facingFrom = facing;
+      this.facingTo = facing;
+      this.turnElapsed = Infinity;
+    } else if (facing !== this.facingTo) {
+      this.facingFrom = this.facingNow;
+      this.facingTo = facing;
+      this.turnElapsed = 0;
+    }
+    if (this.turnElapsed < TURN_MS) this.turnElapsed += dt;
+    this.facingNow =
+      this.turnElapsed >= TURN_MS ? this.facingTo : this.facingFrom + (this.facingTo - this.facingFrom) * smooth(this.turnElapsed / TURN_MS);
+
+    const sign = this.facingNow >= 0 ? 1 : -1;
+    let mx = 0;
+    let my = 0;
+    if (this.hasPos && !input.snapped) {
+      mx = ((input.x - this.x) / scale) * sign;
+      my = (input.y - this.y) / scale;
+    }
+    this.moved = Math.abs(input.x - this.x) > 0.01 || Math.abs(input.y - this.y) > 0.01;
+    if (input.snapped) this.puppet.resetTail();
+    this.x = input.x;
+    this.y = input.y;
+    this.scale = scale;
+    this.hasPos = true;
+
+    const look = s.look;
+    const hasLook = look !== null && Number.isFinite(look.x) && Number.isFinite(look.y);
+    this.puppet.advance(
+      {
+        clip: s.clip,
+        clipStartedAt: s.clipStartedAt,
+        sleeping: this.sleeping,
+        speed: s.speed,
+        vy: s.vy / scale,
+        lookX: hasLook ? ((look.x - this.x) / scale) * sign : 0,
+        lookY: hasLook ? (look.y - this.y) / scale : 0,
+        hasLook,
+        arousal: s.arousal,
+        contentment: s.contentment,
+        animSpeed: s.animSpeed,
+      },
+      input.simTime,
+      dt,
+      mx,
+      my,
+    );
+
+    this.emote = s.emote;
+    this.emoteVisible = s.emote !== null && emoteFrame(input.simTime - s.emoteStartedAt, this.emoteF);
+    this.computeGeometry();
+  }
+
+  private get sx(): number {
+    return this.facingNow * this.scale;
+  }
+  private get sy(): number {
+    return this.scale * (1 + 0.06 * (1 - Math.abs(this.facingNow)));
+  }
+
+  // Scratch state for computeGeometry/acc (fields, so the per-frame pass allocates nothing).
+  private gsx = 1;
+  private gsy = 1;
+  private bx0 = 0;
+  private by0 = 0;
+  private bx1 = 0;
+  private by1 = 0;
+
+  /** Adds a posed cat-local point with radius r (cat units) to the bounds and to hit rect `hit` (or none if < 0). */
+  private acc(px: number, py: number, r: number, hit: number): void {
+    const m = this.puppet.rig.m;
+    const X = this.x + this.gsx * applyMatX(m, px, py);
+    const Y = this.y + this.gsy * applyMatY(m, px, py);
+    this.accView(X, Y, r * this.scale, hit);
+  }
+
+  /** Adds an overlay-DIP point with radius R. Hit rects hold min/max until finalised. */
+  private accView(X: number, Y: number, R: number, hit: number): void {
+    if (X - R < this.bx0) this.bx0 = X - R;
+    if (Y - R < this.by0) this.by0 = Y - R;
+    if (X + R > this.bx1) this.bx1 = X + R;
+    if (Y + R > this.by1) this.by1 = Y + R;
+    if (hit >= 0) {
+      const h = this.hitRects[hit]!;
+      if (X - R < h.x) h.x = X - R;
+      if (Y - R < h.y) h.y = Y - R;
+      if (X + R > h.width) h.width = X + R;
+      if (Y + R > h.height) h.height = Y + R;
+    }
+  }
+
+  private computeGeometry(): void {
+    const rig = this.puppet.rig;
+    const tail = this.puppet.tail;
+    const m = rig.m;
+    const s = this.scale;
+    this.gsx = this.sx;
+    this.gsy = this.sy;
+    this.bx0 = Infinity;
+    this.by0 = Infinity;
+    this.bx1 = -Infinity;
+    this.by1 = -Infinity;
+    const hits = this.hitRects;
+    for (const r of hits) {
+      r.x = Infinity;
+      r.y = Infinity;
+      r.width = -Infinity;
+      r.height = -Infinity;
+    }
+
+    for (let i = 0; i < TORSO_POINTS; i++) this.acc(rig.torso[i * 2]!, rig.torso[i * 2 + 1]!, 0.5, 1);
+    this.acc(rig.hx - rig.hrx, rig.hy, 0, 1);
+    this.acc(rig.hx + rig.hrx, rig.hy, 0, 1);
+    this.acc(rig.hx, rig.hy + rig.hry, 0, 1);
+    // Head including ears: corners of a rotated box.
+    const hc = Math.cos(rig.headRot);
+    const hs = Math.sin(rig.headRot);
+    const hf = rig.headFlip < 0 ? -1 : 1;
+    for (let i = 0; i < 4; i++) {
+      const lx = i & 1 ? HEAD_RX + 1 : -HEAD_RX - 1;
+      const ly = (i & 2 ? HEAD_RY + 1 : -HEAD_RY - 9) * hf;
+      this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 0, 0);
+    }
+    // Ear tips are only drawn bounds, not interactive.
+    for (let i = 0; i < 2; i++) {
+      const lx = i ? 10 : -14;
+      const ly = -25 * hf;
+      this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 1, -1);
+    }
+    for (let i = 0; i < LEG_COUNT; i++) {
+      const g = rig.legs[i]!;
+      this.acc(g.kx, g.ky, 4.5, 2);
+      this.acc(g.fx, g.fy, PAW_RX, 2);
+    }
+    const n = tail.count;
+    for (let i = 0; i < n; i++) this.acc(tail.x[i]!, tail.y[i]!, tail.radius(i) + 1, i <= n * 0.5 ? 3 : -1);
+    // Shadow: drawn on the ground line of the view (outside the pose matrix).
+    if (this.shadow) {
+      // Same extent as drawShadow (upper bound: no airborne shrink).
+      const k = clamp(this.puppet.pose.shadow, 0, 1.5);
+      const gx = this.x + this.gsx * (m[0]! * rig.bodyX + m[4]!);
+      const half = (27 * k * Math.abs(m[0]!) + 4) * Math.abs(this.gsx);
+      const rh = (4.2 * k + 0.8) * this.gsy;
+      this.accView(gx - half, this.y - 0.6 * this.gsy, rh, -1);
+      this.accView(gx + half, this.y - 0.6 * this.gsy, rh, -1);
+    }
+
+    const margin = DRAW_MARGIN * s;
+    let x0 = this.bx0 - margin;
+    let y0 = this.by0 - margin;
+    let x1 = this.bx1 + margin;
+    let y1 = this.by1 + margin;
+
+    // Emote above the head (not mirrored).
+    if (this.emoteVisible) {
+      const hx = this.x + this.gsx * applyMatX(m, rig.headX, rig.headY);
+      const hy = this.y + this.gsy * applyMatY(m, rig.headX, rig.headY);
+      const size = EMOTE_SIZE * clamp(s, 0.85, 2.2);
+      this.emoteX = hx + 5 * s * Math.sign(this.facingNow || 1);
+      this.emoteY = Math.min(hy, this.y) - (HEAD_RY + 17 + this.emoteF.rise) * s;
+      const half = size * 0.8;
+      x0 = Math.min(x0, this.emoteX - half);
+      y0 = Math.min(y0, this.emoteY - half);
+      x1 = Math.max(x1, this.emoteX + half);
+      y1 = Math.max(y1, this.emoteY + half);
+    }
+    this.bounds.x = x0;
+    this.bounds.y = y0;
+    this.bounds.width = x1 - x0;
+    this.bounds.height = y1 - y0;
+
+    // Finalise hit rects (stored as min/max above) and drop empty ones.
+    let k = 0;
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i]!;
+      if (!Number.isFinite(h.x) || !Number.isFinite(h.width) || h.width <= h.x || h.height <= h.y) continue;
+      const r = hits[k]!;
+      const x0 = h.x;
+      const y0 = h.y;
+      const w = h.width - h.x;
+      const hh = h.height - h.y;
+      r.x = x0;
+      r.y = y0;
+      r.width = w;
+      r.height = hh;
+      k++;
+    }
+    this.hitCount = k;
+  }
+
+  /** Device-pixel rectangle covering the drawn cat (for dirty-rect clearing). */
+  deviceRect(dpr: number, out: DeviceRect): DeviceRect {
+    const b = this.bounds;
+    const x0 = Math.floor(b.x * dpr) - 2;
+    const y0 = Math.floor(b.y * dpr) - 2;
+    out.x = x0;
+    out.y = y0;
+    out.w = Math.ceil((b.x + b.width) * dpr) + 2 - x0;
+    out.h = Math.ceil((b.y + b.height) * dpr) + 2 - y0;
+    return out;
+  }
+
+  /** Draws the cat into `ctx` (whose canvas pixels are overlay DIP * dpr). */
+  draw(ctx: Ctx2D, dpr: number, layers: LayerProvider | null): void {
+    if (!this.isVisible) return;
+    const pixel = this.style === 'pixel';
+    const needLayer = pixel || this.opacity < 0.999;
+    if (needLayer && layers) {
+      this.drawLayered(ctx, dpr, layers, pixel);
+      return;
+    }
+    ctx.save();
+    ctx.globalAlpha = this.opacity;
+    this.paint(ctx, dpr, 0, 0, OUTLINE_W, true);
+    ctx.restore();
+  }
+
+  private drawLayered(ctx: Ctx2D, dpr: number, layers: LayerProvider, pixel: boolean): void {
+    const block = pixel ? Math.max(2, Math.round(PIXEL_BLOCK * this.scale * dpr)) : 1;
+    const b = this.bounds;
+    // Align the layer to the block grid so pixels do not crawl while moving.
+    const ox = Math.floor((b.x * dpr) / block) * block - block;
+    const oy = Math.floor((b.y * dpr) / block) * block - block;
+    const lw = Math.ceil(((b.x + b.width) * dpr - ox) / block) + 2;
+    const lh = Math.ceil(((b.y + b.height) * dpr - oy) / block) + 2;
+    if (lw <= 0 || lh <= 0 || lw > 4096 || lh > 4096) return;
+    const layer = layers(lw, lh);
+    if (!layer) return;
+    const lc = layer.ctx;
+    lc.setTransform(1, 0, 0, 1, 0, 0);
+    lc.globalAlpha = 1;
+    lc.globalCompositeOperation = 'source-over';
+    lc.clearRect(0, 0, lw, lh);
+    // Pixel art wants an outline of at least one low-res pixel.
+    const outline = pixel ? Math.max(OUTLINE_W, (block / (dpr * this.scale)) * 1.05) : OUTLINE_W;
+    this.paint(lc, dpr / block, -ox / block, -oy / block, outline, !pixel);
+    if (pixel) {
+      hardenAlpha(lc, lw, lh);
+      if (this.shadow) {
+        lc.globalCompositeOperation = 'destination-over';
+        this.setCatTransform(lc, dpr / block, -ox / block, -oy / block);
+        drawShadow(lc, this.puppet.rig, this.puppet.pose);
+        lc.globalCompositeOperation = 'source-over';
+      }
+      this.paintEmote(lc, dpr / block, -ox / block, -oy / block);
+    }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = this.opacity;
+    ctx.imageSmoothingEnabled = !pixel;
+    ctx.drawImage(layer.canvas, 0, 0, lw, lh, ox, oy, lw * block, lh * block);
+    ctx.restore();
+  }
+
+  private setCatTransform(ctx: Ctx2D, k: number, tx: number, ty: number): void {
+    ctx.setTransform(k * this.sx, 0, 0, k * this.sy, k * this.x + tx, k * this.y + ty);
+  }
+
+  /** Paints cat (+shadow, +emote unless pixel) with device scale k and device offset (tx, ty). */
+  private paint(ctx: Ctx2D, k: number, tx: number, ty: number, outline: number, withExtras: boolean): void {
+    this.setCatTransform(ctx, k, tx, ty);
+    drawCat(ctx, this.puppet, this.skin, { outline, shadow: this.shadow && withExtras, pixelsPerUnit: k * this.scale });
+    if (withExtras) this.paintEmote(ctx, k, tx, ty);
+  }
+
+  private paintEmote(ctx: Ctx2D, k: number, tx: number, ty: number): void {
+    if (!this.emoteVisible || this.emote === null) return;
+    const s = clamp(this.scale, 0.85, 2.2);
+    ctx.setTransform(k, 0, 0, k, k * this.emoteX + tx, k * this.emoteY + ty);
+    drawEmote(ctx, this.emote, EMOTE_SIZE * s, this.emoteF);
+  }
+}
+
+/** Pixel style: make every low-res pixel either opaque or transparent for crisp edges. */
+function hardenAlpha(ctx: Ctx2D, w: number, h: number): void {
+  let img: ImageData;
+  try {
+    img = ctx.getImageData(0, 0, w, h);
+  } catch {
+    return;
+  }
+  const d = img.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i]! >= 100 ? 255 : 0;
+  ctx.putImageData(img, 0, 0);
+}

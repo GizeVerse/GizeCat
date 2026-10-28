@@ -1,0 +1,112 @@
+import { spawn } from 'node:child_process';
+import { electronBinary, expect, hook, launchApp, MAIN_ENTRY, quitApp, readLogLines, ROOT, testEnv, test, waitForCat } from './fixtures';
+
+test.describe('lifecycle', () => {
+  test('first run opens the welcome page; pause, hide, show, resume and quit work', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      await expect.poll(() => app.windows().some((p) => p.url().includes('/renderer/settings/') && p.url().endsWith('#welcome'))).toBe(true);
+
+      await hook(app, 'runAction', 'pause');
+      await expect.poll(async () => (await hook(app, 'getStatus')).paused).toBe(true);
+      await expect.poll(async () => (await hook(app, 'getOverlays')).every((o) => o.ignoreMouse)).toBe(true);
+
+      await hook(app, 'runAction', 'hide');
+      await expect.poll(async () => (await hook(app, 'getStatus')).visible).toBe(false);
+      // Windows are never hidden; the renderer just stops drawing the cat.
+      await expect.poll(async () => (await hook(app, 'getOverlays')).every((o) => o.visible && !o.active)).toBe(true);
+
+      await hook(app, 'runAction', 'show');
+      await hook(app, 'runAction', 'resume');
+      await expect.poll(async () => {
+        const s = await hook(app, 'getStatus');
+        return s.visible && !s.paused;
+      }).toBe(true);
+      await expect.poll(async () => (await hook(app, 'getOverlays')).some((o) => o.active), { timeout: 20_000 }).toBe(true);
+    } finally {
+      expect(await quitApp(app)).toBe(0);
+    }
+    const lines = readLogLines(userData);
+    expect(lines.some((l) => l.m === 'shutdown complete')).toBe(true);
+    expect(lines.filter((l) => l.l === 'error')).toEqual([]);
+  });
+
+  test('perception is off by default and never captures', async ({ userData }) => {
+    const app = await launchApp(userData, { DESKTOP_CAT_TIME_SCALE: '10' });
+    try {
+      await waitForCat(app);
+      const s = await hook(app, 'getSettings');
+      expect(s.perception.visualMode).toBe('off');
+      expect(s.perception.consentAt).toBeNull();
+      expect(s.ai.provider).toBe('none');
+      // Let the (sped-up) cat live for a while; nothing may be captured.
+      await new Promise((r) => setTimeout(r, 4000));
+      const p = await hook(app, 'getPerceptionStatus');
+      expect(p).not.toBeNull();
+      expect(p!.mode).toBe('off');
+      expect(p!.lastCaptureAt).toBeNull();
+      expect(p!.capturesThisHour).toBe(0);
+      expect((await hook(app, 'getHostDebug')).timeScale).toBe(10);
+    } finally {
+      await quitApp(app);
+    }
+  });
+
+  test('a second launch exits with code 0 and surfaces the running cat', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      await hook(app, 'runAction', 'completeFirstRun');
+      for (const p of app.windows()) if (p.url().includes('/renderer/settings/')) await p.close();
+      await hook(app, 'runAction', 'hide');
+      await expect.poll(async () => (await hook(app, 'getStatus')).visible).toBe(false);
+
+      const second = spawn(electronBinary(), [MAIN_ENTRY], { cwd: ROOT, env: testEnv(userData), stdio: 'ignore', windowsHide: true });
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          second.kill();
+          reject(new Error('second instance did not exit'));
+        }, 20_000);
+        second.once('exit', (c) => {
+          clearTimeout(timer);
+          resolve(c);
+        });
+      });
+      expect(code).toBe(0);
+
+      // First instance: still alive, cat shown again, settings window opened.
+      await expect.poll(async () => (await hook(app, 'getStatus')).visible).toBe(true);
+      await expect.poll(() => app.windows().some((p) => p.url().includes('/renderer/settings/'))).toBe(true);
+      expect(app.process().exitCode).toBeNull();
+    } finally {
+      await quitApp(app);
+    }
+  });
+
+  test('injected sim events and time scale are accepted by the test surface only', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      await hook(app, 'injectEvent', { type: 'command.wake' });
+      await hook(app, 'setTimeScale', 5);
+      expect((await hook(app, 'getHostDebug')).timeScale).toBe(5);
+      await expect(hook(app, 'injectEvent', 'nonsense' as never)).rejects.toThrow();
+    } finally {
+      await quitApp(app);
+    }
+  });
+
+  test('without DESKTOP_CAT_TEST the test surface does not exist', async ({ userData }) => {
+    const app = await launchApp(userData, { DESKTOP_CAT_TEST: '0' });
+    try {
+      await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBeGreaterThan(0);
+      expect(await app.evaluate(() => '__desktopCatTest' in globalThis)).toBe(false);
+    } finally {
+      const proc = app.process();
+      const exited = new Promise<number | null>((r) => proc.once('exit', (c) => r(c)));
+      await app.evaluate(({ app: electronApp }) => electronApp.quit());
+      expect(await Promise.race([exited, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 15_000))])).toBe(0);
+    }
+  });
+});

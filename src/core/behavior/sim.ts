@@ -1,0 +1,2198 @@
+// The cat simulation: state machine, activities, stimuli, needs, memory and output.
+// Pure TypeScript; time, randomness and the environment are injected.
+import type { AnimClip, BehaviorState } from '../../shared/cat';
+import type { PersistedCat } from '../../shared/catState';
+import { PersistedCatSchema } from '../../shared/catState';
+import type { Point, Rect } from '../../shared/geometry';
+import { clamp, isFiniteRect, rectCenter } from '../../shared/geometry';
+import type { Settings, ToggleableBehavior } from '../../shared/settings';
+import type { CatSim, CatSimOptions, SimEnv, SimEvent, SimOutput, SimRequest } from '../../shared/sim';
+import type { WindowInfo, WorldGeometry } from '../../shared/world';
+import type { LandingInfo, MoverConfig, MoverStep, Pace } from '../movement';
+import { Mover } from '../movement';
+import type { Activity, ActivityInit, FollowUp } from './activity';
+import { makeActivity } from './activity';
+import type { Phase } from './clips';
+import { clipFor } from './clips';
+import type { Candidate, DecisionView, Variant } from './decide';
+import { chooseActivity, sleepiness, userIdleForSleep } from './decide';
+import { EmoteController } from './emotes';
+import type { MemoryDetail } from './memory';
+import { addRateEvent, bumpCounter, clearMemory, decayRate, ema01, learnSpot, rankedSpots, remember } from './memory';
+import { migrateCatState } from './migrate';
+import { newPersistedCat } from './personality';
+import type { Random } from './random';
+import { chance, range, safeRandom } from './random';
+import type { TransitionCause } from './states';
+import {
+  ACTIVE_STATES,
+  ASLEEP_STATES,
+  CALM_STATES,
+  canTransition,
+  findPath,
+  guardsFor,
+  isCountedTransition,
+  MAX_STATE_CHANGES_PER_WINDOW,
+  mayInterrupt,
+  PHYSICAL_STATES,
+  STATE_CHANGE_WINDOW_MS,
+  STATE_SPECS,
+} from './states';
+import { addStat, applyPet, baseContentment, stepStats } from './stats';
+import { Cooldowns, flickRelevance, Habituation, RecentIds, windowRelevance } from './stimuli';
+
+export type SimMode = 'normal' | 'paused' | 'quiet' | 'locked' | 'away' | 'quit';
+type RequestStatus = 'ok' | 'blocked' | 'invalid';
+type FallReason = 'drop' | 'throw' | 'perch' | 'step' | 'jump';
+
+export interface TransitionRecord {
+  at: number;
+  from: BehaviorState;
+  to: BehaviorState;
+  cause: TransitionCause;
+  /** Time since the activity being left started, ms. */
+  dwellMs: number;
+  /** The activity being left had finished its job. */
+  fromDone: boolean;
+  counted: boolean;
+}
+
+export interface SimHooks {
+  onTransition?: (r: TransitionRecord) => void;
+}
+
+const PERCEPTION_MIN_INTERVAL_MS = 30_000;
+const SAVE_MIN_INTERVAL_MS = 60_000;
+const QUIT_DEADLINE_MS = 900;
+const FADE_MS = 400;
+const PET_RATE_TAU_MS = 2 * 3600_000;
+const PET_SESSION_GAP_MS = 10_000;
+const TAP_WINDOW_MS = 8000;
+const SPOT_LEARN_MIN_MS = 60_000;
+const SPOT_FLUSH_MS = 5 * 60_000;
+const DRAG_LOST_MS = 1500;
+const LANDING_MS = 250;
+/** Longest a walk/run toward a destination may take before the cat gives up. */
+const TRAVEL_TIMEOUT_MS = 40_000;
+
+/** States whose handler decides when they end (the generic dwell rule does not apply). */
+const SELF_TIMED: ReadonlySet<BehaviorState> = new Set<BehaviorState>([
+  'walking',
+  'running',
+  'sleeping',
+  'wakingUp',
+  'fallingAsleep',
+  'startled',
+  'annoyed',
+  'beingPetted',
+  'held',
+  'jumping',
+  'falling',
+  'landing',
+  'away',
+]);
+
+const AROUSAL: Readonly<Record<BehaviorState, number>> = {
+  sleeping: 0.05,
+  wakingUp: 0.3,
+  fallingAsleep: 0.12,
+  idle: 0.3,
+  walking: 0.4,
+  running: 0.85,
+  chasingCursor: 0.95,
+  watchingCursor: 0.6,
+  curious: 0.6,
+  inspectingWindow: 0.55,
+  watchingUser: 0.35,
+  playing: 0.9,
+  beingPetted: 0.35,
+  startled: 1,
+  annoyed: 0.75,
+  seekingAttention: 0.55,
+  resting: 0.15,
+  grooming: 0.25,
+  hiding: 0.7,
+  held: 0.7,
+  jumping: 0.8,
+  falling: 0.85,
+  landing: 0.6,
+  away: 0.1,
+};
+
+const CONTENTMENT_BIAS: Partial<Record<BehaviorState, number>> = {
+  beingPetted: 0.4,
+  sleeping: 0.2,
+  resting: 0.15,
+  grooming: 0.1,
+  playing: 0.1,
+  annoyed: -0.35,
+  startled: -0.3,
+  hiding: -0.2,
+  held: -0.15,
+};
+
+const ZERO: Point = { x: 0, y: 0 };
+const isFinitePoint = (p: Point | null | undefined): p is Point => !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
+
+export class CatSimImpl implements CatSim {
+  private cat: PersistedCat;
+  private settings: Settings;
+  private disabled: ReadonlySet<ToggleableBehavior>;
+  private readonly random: Random;
+  private readonly wallClock: () => number;
+  private readonly mover: Mover;
+  private readonly emotes = new EmoteController();
+  private readonly habit = new Habituation();
+  private readonly reactions = new Cooldowns();
+  private readonly seenWindows = new RecentIds(128);
+  private readonly movingWindows = new Set<string>();
+  private readonly cooldownUntil = new Map<BehaviorState, number>();
+  private readonly changeTimes: number[] = [];
+  private readonly recentStates: BehaviorState[] = [];
+  private readonly log: TransitionRecord[] = [];
+  private readonly hooks: SimHooks;
+
+  private act: Activity;
+  private suspended: Activity | null = null;
+  private pending: { state: BehaviorState; init: ActivityInit; expiresAt: number } | null = null;
+  private now: number;
+  private dt = 0;
+  private env: SimEnv | null = null;
+  private requests: SimRequest[] = [];
+  private mode: SimMode = 'normal';
+  private quitting = false;
+  private quitAt = 0;
+  private quitReadySent = false;
+  private systemAsleep = false;
+  private awayWasAsleep = false;
+  private awaySince = 0;
+  private fade = 0;
+  private snapNext = true;
+  private clip: AnimClip = 'sit';
+  private clipStartedAt: number;
+  private restartClip = false;
+  private arousal = 0.3;
+  private contentment = 0.5;
+  private glance: { target: Point; until: number } | null = null;
+  private oneShot: { clip: AnimClip; until: number } | null = null;
+  private lastPerceptionAt = -Infinity;
+  private lastSaveAt = -Infinity;
+  private dirty = false;
+  private tapTimes: number[] = [];
+  private petTimes: number[] = [];
+  private lastPetCountedAt = -Infinity;
+  private lastPetMemoryAt = -Infinity;
+  private lastPetEventAt = -Infinity;
+  private lastInteractionAt: number;
+  private lastDragCursorAt = 0;
+  private lastCursorSeenAt = -Infinity;
+  private busyUntil = -Infinity;
+  private darkUntil = -Infinity;
+  private typing = false;
+  private restAccumMs = 0;
+  private awakeSince: number;
+  private fallReason: FallReason | null = null;
+  private nextDecisionAt = -Infinity;
+  private nextAdvanceAt = -Infinity;
+  private nextDriveAt = -Infinity;
+  private invalidRequests = 0;
+  private readonly invalidSamples: string[] = [];
+  private eventErrors = 0;
+  private transitionsTotal = 0;
+
+  constructor(opts: CatSimOptions, hooks: SimHooks = {}) {
+    this.hooks = hooks;
+    this.random = safeRandom(opts.random ?? Math.random);
+    this.wallClock = opts.wallClock ?? Date.now;
+    this.settings = opts.settings;
+    this.disabled = new Set(opts.settings.behavior.disabledBehaviors);
+    this.now = Number.isFinite(opts.now) ? opts.now : 0;
+    this.clipStartedAt = this.now;
+    this.lastInteractionAt = this.now;
+    this.awakeSince = this.now;
+    const wall = this.wall();
+    let restoring = false;
+    if (opts.persisted) {
+      const m = migrateCatState(opts.persisted, this.random, wall);
+      this.cat = m.cat;
+      restoring = !m.recovered;
+    } else {
+      this.cat = newPersistedCat(this.random, wall);
+    }
+    bumpCounter(this.cat.memory, 'sessions');
+    const lp = restoring ? this.cat.lastPosition : null;
+    this.mover = new Mover(opts.world, this.moverConfig(), { displayId: lp?.displayKey ?? null, xFrac: lp?.xFrac ?? range(this.random, 0.3, 0.7) });
+    this.emotes.enabled = opts.settings.appearance.emotes;
+    if (lp) {
+      this.act = makeActivity('sleeping', 'lifecycle', this.now, range(this.random, 700, 1300), { variant: 'intro' });
+    } else {
+      this.act = makeActivity('idle', 'lifecycle', this.now, this.dwellFor('idle'), {});
+      this.act.phase = 'sit';
+    }
+  }
+
+  // ---- CatSim API -------------------------------------------------------------
+
+  get state(): BehaviorState {
+    return this.act.state;
+  }
+
+  tick(env: SimEnv, events: readonly SimEvent[]): SimOutput {
+    const dt = Number.isFinite(env.dt) ? clamp(env.dt, 0, 250) : 0;
+    this.now = Number.isFinite(env.now) && env.now >= this.now ? env.now : this.now + dt;
+    this.dt = dt;
+    this.env = env;
+    this.requests = [];
+    let snap = this.snapNext;
+    this.snapNext = false;
+
+    this.mover.sense(this.disabled.has('perchOnWindows') ? [] : env.platforms);
+    this.typing = env.typing || env.typingIntensity > 0.35;
+    if (env.cursor) this.lastCursorSeenAt = this.now;
+    this.updateMode();
+    for (const ev of events) {
+      try {
+        this.handleEvent(ev);
+      } catch {
+        this.eventErrors++;
+      }
+    }
+    this.updateMode();
+
+    if (this.mode !== 'quit') {
+      stepStats(this.cat.stats, { state: this.act.state, traits: this.cat.traits, patience: this.settings.interaction.patience }, dt);
+    }
+    this.updateActivity();
+    if (this.mode !== 'away') {
+      const step = this.mover.step({
+        now: this.now,
+        dtMs: dt,
+        dragCursor: env.dragCursor,
+        getWindowRect: (id) => this.safeWindowRect(id),
+        movingWindowIds: this.movingWindows,
+      });
+      this.onMoverStep(step);
+      if (step.snapped) snap = true;
+    }
+    this.reconcilePhysical();
+    this.drives();
+    if (this.act.done) this.advance();
+    else if (!SELF_TIMED.has(this.act.state) && this.now - this.act.startedAt >= this.act.dwellMs) this.reconsider();
+    this.learn(dt);
+    this.checkQuit();
+    if (this.snapNext) {
+      snap = true;
+      this.snapNext = false;
+    }
+    return this.compose(snap);
+  }
+
+  updateSettings(settings: Settings): void {
+    this.settings = settings;
+    this.disabled = new Set(settings.behavior.disabledBehaviors);
+    this.emotes.enabled = settings.appearance.emotes;
+    if (this.mover.setConfig(this.moverConfig())) this.snapNext = true;
+    if (!this.allowedByToggles(this.act.state, this.act.variant)) {
+      this.mover.setGoal(null);
+      this.act.done = true;
+      this.act.then = null;
+    }
+    if (this.suspended && !this.allowedByToggles(this.suspended.state, this.suspended.variant)) this.discardSuspended();
+    if (this.pending && !this.allowedByToggles(this.pending.state, this.pending.init.variant ?? null)) this.pending = null;
+  }
+
+  setWorld(world: WorldGeometry): void {
+    if (this.mover.setWorld(world)) this.snapNext = true;
+    this.glance = null;
+  }
+
+  serialize(): PersistedCat {
+    const wall = this.wall();
+    this.cat.memory.lastSeenAt = wall;
+    this.cat.savedAt = wall;
+    this.cat.lastPosition = this.lastPosition();
+    return PersistedCatSchema.parse(this.cat);
+  }
+
+  resetPersonality(): void {
+    const fresh = newPersistedCat(this.random, this.wall());
+    fresh.memory.counters.sessions = 1;
+    fresh.lastPosition = this.cat.lastPosition;
+    this.cat = fresh;
+    this.habit.clear();
+    this.markDirty(true);
+  }
+
+  clearHistory(): void {
+    clearMemory(this.cat.memory, this.wall());
+    this.cat.memory.counters.sessions = 1;
+    this.restAccumMs = 0;
+    this.markDirty(true);
+  }
+
+  debugInfo(): Record<string, unknown> {
+    const recent = this.changeTimes.filter((t) => t > this.now - STATE_CHANGE_WINDOW_MS).length;
+    return {
+      state: this.act.state,
+      phase: this.act.phase,
+      variant: this.act.variant,
+      mode: this.mode,
+      activityAgeMs: Math.round(this.now - this.act.startedAt),
+      dwellMs: Math.round(this.act.dwellMs),
+      done: this.act.done,
+      pending: this.pending?.state ?? null,
+      suspended: this.suspended?.state ?? null,
+      support: this.mover.support.kind,
+      moverMode: this.mover.mode,
+      displayId: this.mover.displayId,
+      worldVersion: this.mover.fullWorldModel.version,
+      fallbackWorld: this.mover.fullWorldModel.usedFallback,
+      stats: { ...this.cat.stats },
+      changesLast10s: recent,
+      transitionsTotal: this.transitionsTotal,
+      invalidRequests: this.invalidRequests,
+      invalidSamples: [...this.invalidSamples],
+      eventErrors: this.eventErrors,
+      lastTransitions: this.log.slice(-16).map((r) => ({ at: Math.round(r.at), from: r.from, to: r.to, cause: r.cause })),
+    };
+  }
+
+  // ---- helpers ------------------------------------------------------------------
+
+  private wall(): number {
+    try {
+      const w = this.wallClock();
+      return Number.isFinite(w) && w > 0 ? w : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private moverConfig(): MoverConfig {
+    const b = this.settings.behavior;
+    return {
+      size: this.settings.appearance.size,
+      movementSpeed: b.movementSpeed,
+      allowMultiMonitor: b.allowMultiMonitor,
+      perchOnWindows: !b.disabledBehaviors.includes('perchOnWindows'),
+    };
+  }
+
+  private safeWindowRect(id: string): Rect | null {
+    const env = this.env;
+    if (!env) return null;
+    try {
+      const r = env.getWindowRect(id);
+      return r && isFiniteRect(r) ? r : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private get bl(): number {
+    return this.mover.bodyWidth;
+  }
+
+  private perSecond(rate: number): boolean {
+    return chance(this.random, 1 - Math.exp((-rate * this.dt) / 1000));
+  }
+
+  private markDirty(urgent = false): void {
+    this.dirty = true;
+    if (urgent) this.lastSaveAt = -Infinity;
+  }
+
+  private dwellFor(state: BehaviorState): number {
+    const [lo, hi] = STATE_SPECS[state].dwellMs;
+    if (hi <= 0) return 0;
+    const autonomy = clamp(this.settings.behavior.autonomy, 0, 1);
+    const mul = CALM_STATES.has(state) || state === 'resting' ? 1.4 - 0.8 * autonomy : 1;
+    return clamp(range(this.random, lo, hi) * mul, lo, hi * 1.4);
+  }
+
+  private phase(a: Activity, p: Phase, ms = 0): void {
+    a.phase = p;
+    a.phaseAt = this.now;
+    a.phaseMs = ms;
+  }
+
+  private phaseElapsed(a: Activity): boolean {
+    return a.phaseMs > 0 && this.now - a.phaseAt >= a.phaseMs;
+  }
+
+  private finish(next: FollowUp | null = null): void {
+    this.act.done = true;
+    if (next) this.act.then = next;
+    this.mover.setGoal(null);
+  }
+
+  private goTo(p: Point, pace: Pace, allowJump: boolean, arriveRadiusPx?: number): void {
+    this.mover.setGoal(arriveRadiusPx !== undefined ? { x: p.x, y: p.y, pace, allowJump, arriveRadiusPx } : { x: p.x, y: p.y, pace, allowJump });
+  }
+
+  private stop(): void {
+    this.mover.setGoal(null);
+  }
+
+  private setGlance(p: Point, ms = 1500): void {
+    if (isFinitePoint(p)) this.glance = { target: { x: p.x, y: p.y }, until: this.now + ms };
+  }
+
+  private playOneShot(clip: AnimClip, ms: number): void {
+    this.oneShot = { clip, until: this.now + ms };
+    this.restartClip = true;
+  }
+
+  private budgetAvailable(): boolean {
+    const cutoff = this.now - STATE_CHANGE_WINDOW_MS;
+    while (this.changeTimes.length > 0 && (this.changeTimes[0] as number) <= cutoff) this.changeTimes.shift();
+    return this.changeTimes.length < MAX_STATE_CHANGES_PER_WINDOW;
+  }
+
+  private coolingDown(s: BehaviorState): boolean {
+    return this.now < (this.cooldownUntil.get(s) ?? -Infinity);
+  }
+
+  private allowedByToggles(state: BehaviorState, variant: Variant | null): boolean {
+    const d = this.disabled;
+    switch (state) {
+      case 'chasingCursor':
+        return !d.has('chaseCursor');
+      case 'seekingAttention':
+        return !d.has('seekAttention');
+      case 'inspectingWindow':
+        return !d.has('inspectWindows');
+      case 'grooming':
+        return !d.has('grooming');
+      case 'playing':
+        return variant !== 'zoomies' || !d.has('zoomies');
+      default:
+        return true;
+    }
+  }
+
+  private allowedInMode(state: BehaviorState): boolean {
+    if (PHYSICAL_STATES.has(state)) return true;
+    switch (this.mode) {
+      case 'normal':
+        return true;
+      case 'paused':
+        return state === 'resting' || state === 'fallingAsleep' || state === 'sleeping' || state === 'beingPetted' || state === 'wakingUp';
+      case 'quiet':
+      case 'locked':
+      case 'quit':
+        return state === 'fallingAsleep' || state === 'sleeping';
+      case 'away':
+        return state === 'away';
+    }
+  }
+
+  // ---- transitions --------------------------------------------------------------
+
+  private request(to: BehaviorState, cause: TransitionCause, init: ActivityInit = {}): RequestStatus {
+    const from = this.act.state;
+    const free = cause === 'physical' || cause === 'lifecycle';
+    // While held, airborne or away the cat cannot act on anything else; the request simply waits.
+    if (!free && ((PHYSICAL_STATES.has(from) && from !== 'landing') || from === 'away')) return 'blocked';
+    if (!free && (!this.allowedInMode(to) || !this.allowedByToggles(to, init.variant ?? null))) return 'invalid';
+    if (from === to) return this.refresh(to, cause, init);
+    // Physical changes are immediate consequences of the body: never routed through other states.
+    if (cause === 'physical') return canTransition(from, to) ? this.go(to, cause, init) : 'invalid';
+    const path = findPath(from, to);
+    if (!path || path.length === 0) return this.invalid(from, to, cause);
+    if (path.length === 1) return this.go(to, cause, init);
+    const r = this.go(path[0] as BehaviorState, cause, {});
+    if (r !== 'ok') return r;
+    this.pending = { state: to, init, expiresAt: this.now + 20_000 };
+    if (cause === 'lifecycle') this.flushPending();
+    return 'ok';
+  }
+
+  private flushPending(): void {
+    for (let guard = 0; this.pending && guard < 6; guard++) {
+      const p = this.pending;
+      const path = findPath(this.act.state, p.state);
+      if (!path || path.length === 0) {
+        this.pending = null;
+        return;
+      }
+      const last = path.length === 1;
+      if (this.go(path[0] as BehaviorState, 'lifecycle', last ? p.init : {}) !== 'ok') return;
+      if (last) this.pending = null;
+    }
+  }
+
+  /** The same state was requested again: extend or restart without a state change. */
+  private refresh(state: BehaviorState, cause: TransitionCause, init: ActivityInit): RequestStatus {
+    const a = this.act;
+    if (cause === 'physical' || cause === 'lifecycle') return 'ok';
+    if (state === 'beingPetted') {
+      a.lastPetAt = this.now;
+      return 'ok';
+    }
+    // Timed sequences (sleep, wake-up, reactions, physics) are not restarted; travel gets the new destination.
+    if (SELF_TIMED.has(state) && state !== 'walking' && state !== 'running') {
+      if (state === 'sleeping' && cause === 'command') a.dwellMs = Math.max(a.dwellMs, this.now - a.startedAt + 180_000);
+      return 'ok';
+    }
+    this.exitActivity(a);
+    this.act = makeActivity(state, cause, this.now, init.dwellMs ?? this.dwellFor(state), init);
+    this.enterActivity(this.act);
+    return 'ok';
+  }
+
+  private go(to: BehaviorState, cause: TransitionCause, init: ActivityInit, resume: Activity | null = null): RequestStatus {
+    const prev = this.act;
+    const from = prev.state;
+    if (!canTransition(from, to)) return this.invalid(from, to, cause);
+    const free = cause === 'physical' || cause === 'lifecycle';
+    if (!free && (!this.allowedInMode(to) || !this.allowedByToggles(to, resume?.variant ?? init.variant ?? null))) return 'invalid';
+    const g = guardsFor(cause);
+    const counted = isCountedTransition(from, to, cause);
+    if (g.budget && counted && !this.budgetAvailable()) return 'blocked';
+    if (g.cooldown && this.coolingDown(to)) return 'blocked';
+    const dwell = this.now - prev.startedAt;
+    if (g.interrupt && !prev.done && !mayInterrupt(from, to, dwell)) return 'blocked';
+
+    const enteringPhysical = PHYSICAL_STATES.has(to) && !PHYSICAL_STATES.has(from);
+    if (enteringPhysical && init.suspend && from !== 'away') {
+      this.discardSuspended();
+      this.suspended = prev;
+    } else {
+      if (to === 'held' || to === 'away' || (to === 'falling' && !init.suspend && from !== 'jumping')) this.discardSuspended();
+      if (to === 'held' || to === 'away') this.pending = null;
+      this.exitActivity(prev);
+    }
+    if (counted) this.changeTimes.push(this.now);
+    if (!PHYSICAL_STATES.has(from) && from !== 'away') this.cooldownUntil.set(from, this.now + STATE_SPECS[from].cooldownMs);
+    const rec: TransitionRecord = { at: this.now, from, to, cause, dwellMs: dwell, fromDone: prev.done, counted };
+    this.transitionsTotal++;
+    this.log.push(rec);
+    if (this.log.length > 64) this.log.shift();
+    this.hooks.onTransition?.(rec);
+
+    if (resume) {
+      resume.done = false;
+      resume.goalStatus = 'none';
+      this.act = resume;
+      return 'ok';
+    }
+    this.act = makeActivity(to, cause, this.now, init.dwellMs ?? this.dwellFor(to), init);
+    if (!PHYSICAL_STATES.has(to) && to !== 'away') {
+      this.recentStates.unshift(to);
+      if (this.recentStates.length > 8) this.recentStates.pop();
+    }
+    this.enterActivity(this.act);
+    return 'ok';
+  }
+
+  /** A request no path can satisfy: a logic error worth surfacing in diagnostics. */
+  private invalid(from: BehaviorState, to: BehaviorState, cause: TransitionCause): 'invalid' {
+    this.invalidRequests++;
+    this.invalidSamples.push(`${from}->${to}:${cause}`);
+    if (this.invalidSamples.length > 8) this.invalidSamples.shift();
+    return 'invalid';
+  }
+
+  private discardSuspended(): void {
+    const s = this.suspended;
+    this.suspended = null;
+    if (s) this.exitActivity(s);
+  }
+
+  /** Next step once the current activity is done: queued path, resume after landing, follow-up, or a new decision. */
+  private advance(): void {
+    if (this.now < this.nextAdvanceAt) return;
+    const a = this.act;
+    if (this.mode !== 'normal' && this.mode !== 'quit') {
+      if (this.pending && !this.allowedInMode(this.pending.state)) this.pending = null;
+      if (a.then && !this.allowedInMode(a.then.state)) a.then = null;
+    }
+    if (this.pending) {
+      const p = this.pending;
+      const path = this.now <= p.expiresAt ? findPath(a.state, p.state) : null;
+      if (!path || path.length === 0) {
+        this.pending = null;
+      } else {
+        const last = path.length === 1;
+        const r = this.go(path[0] as BehaviorState, 'completion', last ? p.init : {});
+        if (r === 'ok') {
+          if (last) this.pending = null;
+          return;
+        }
+        if (r === 'blocked') {
+          this.nextAdvanceAt = this.now + 250;
+          return;
+        }
+        this.pending = null;
+      }
+    }
+    if (a.state === 'landing' && this.suspended && !a.then) {
+      const s = this.suspended;
+      if (this.mode === 'normal' && canTransition('landing', s.state) && this.allowedByToggles(s.state, s.variant) && this.now - s.startedAt < 60_000) {
+        const r = this.go(s.state, 'completion', {}, s);
+        if (r === 'ok') {
+          this.suspended = null;
+          return;
+        }
+        if (r === 'blocked') {
+          this.nextAdvanceAt = this.now + 250;
+          return;
+        }
+      }
+      this.discardSuspended();
+    }
+    if (a.then) {
+      const t = a.then;
+      const r = this.request(t.state, 'completion', t.init);
+      if (r === 'ok') return;
+      if (r === 'blocked') {
+        this.nextAdvanceAt = this.now + 250;
+        return;
+      }
+      a.then = null;
+    }
+    this.reconsider();
+  }
+
+  /** Autonomous re-decision (dwell elapsed or activity done). */
+  private reconsider(): void {
+    if (this.now < this.nextDecisionAt) return;
+    this.nextDecisionAt = this.now + 400;
+    switch (this.mode) {
+      case 'away':
+        return;
+      case 'quit':
+      case 'quiet':
+      case 'locked':
+        this.settleAsleep('lifecycle');
+        return;
+      case 'paused':
+        this.settlePaused();
+        return;
+      case 'normal':
+        break;
+    }
+    if (!this.budgetAvailable()) return;
+    const choice = chooseActivity(this.decisionView(), this.random);
+    if (!choice) {
+      this.act.dwellMs += 2000;
+      return;
+    }
+    const r = this.requestCandidate(choice, 'autonomous');
+    if (r !== 'ok') this.act.dwellMs = Math.max(this.act.dwellMs, this.now - this.act.startedAt + range(this.random, 1000, 3000));
+  }
+
+  private requestCandidate(c: Candidate, cause: TransitionCause): RequestStatus {
+    const then: FollowUp | null = c.then ? { state: c.then, init: {} } : null;
+    return this.request(c.state, cause, { variant: c.variant, target: c.target, windowId: c.windowId, then });
+  }
+
+  // ---- modes ----------------------------------------------------------------------
+
+  private computeMode(): SimMode {
+    if (this.quitting) return 'quit';
+    const env = this.env;
+    if (!env) return this.mode;
+    const fsHere = env.fullscreenDisplayIds.includes(this.mover.displayId);
+    const fsb = this.settings.behavior.fullscreenBehavior;
+    if (env.hidden || (fsHere && fsb === 'hide')) return 'away';
+    if (this.systemAsleep) return 'locked';
+    if (fsHere && fsb === 'quiet') return 'quiet';
+    if (env.paused) return 'paused';
+    return 'normal';
+  }
+
+  private updateMode(): void {
+    const next = this.computeMode();
+    if (next === this.mode) return;
+    const prev = this.mode;
+    this.mode = next;
+    if (prev === 'away' && next !== 'quit') this.leaveAway(next);
+    switch (next) {
+      case 'quit':
+        return;
+      case 'away':
+        this.enterAway();
+        return;
+      case 'quiet':
+      case 'locked':
+        this.releaseIfHeld();
+        this.settleAsleep('lifecycle');
+        return;
+      case 'paused':
+        this.settlePaused();
+        return;
+      case 'normal':
+        if (prev === 'paused' || prev === 'quiet' || prev === 'locked') {
+          const s = this.act.state;
+          if (s === 'sleeping' || s === 'fallingAsleep' || s === 'resting') this.request('wakingUp', 'lifecycle');
+        }
+        return;
+    }
+  }
+
+  private releaseIfHeld(): void {
+    if (this.mover.held) {
+      this.mover.endDrag(null, ZERO, this.now, false);
+      this.fallReason = 'drop';
+      this.request('falling', 'physical');
+    }
+  }
+
+  private enterAway(): void {
+    if (this.mover.held) this.mover.endDrag(null, ZERO, this.now, false);
+    if (this.mover.settleNow()) this.snapNext = true;
+    this.stop();
+    this.awayWasAsleep = ASLEEP_STATES.has(this.act.state);
+    this.awaySince = this.now;
+    this.request('away', 'lifecycle');
+  }
+
+  private leaveAway(next: SimMode): void {
+    if (this.act.state !== 'away') return;
+    if (next === 'quiet' || next === 'locked') this.request('sleeping', 'lifecycle');
+    else if (next === 'paused') this.request(this.awayWasAsleep ? 'sleeping' : 'resting', 'lifecycle');
+    else if (this.awayWasAsleep) this.request('sleeping', 'lifecycle');
+    else this.request(this.now - this.awaySince > 60_000 ? 'wakingUp' : 'idle', 'lifecycle');
+  }
+
+  private settleAsleep(cause: TransitionCause): void {
+    const s = this.act.state;
+    if ((PHYSICAL_STATES.has(s) && !(s === 'landing' && this.act.done)) || s === 'away') return;
+    if (s === 'sleeping') return;
+    if (s === 'fallingAsleep') {
+      if (this.act.done) this.request('sleeping', cause);
+      return;
+    }
+    this.request('fallingAsleep', cause, { variant: 'forced', quick: this.mode === 'quit' });
+  }
+
+  private settlePaused(): void {
+    const s = this.act.state;
+    const settledPhysical = PHYSICAL_STATES.has(s) && !(s === 'landing' && this.act.done);
+    if (settledPhysical || s === 'away' || s === 'sleeping' || s === 'beingPetted') {
+      if (s === 'beingPetted' && this.act.done) this.request('resting', 'lifecycle');
+      return;
+    }
+    if (s === 'fallingAsleep') {
+      if (this.act.done) this.request('sleeping', 'lifecycle');
+      return;
+    }
+    if (s === 'resting') {
+      if (this.act.done || this.now - this.act.startedAt >= this.act.dwellMs) this.request('fallingAsleep', 'lifecycle', { variant: 'forced' });
+      return;
+    }
+    this.stop();
+    this.request('resting', 'lifecycle');
+  }
+
+  private startQuit(): void {
+    if (this.quitting) return;
+    this.quitting = true;
+    this.quitAt = this.now;
+    this.mode = 'quit';
+    if (this.mover.held) this.mover.endDrag(null, ZERO, this.now, false);
+    if (this.mover.settleNow()) this.snapNext = true;
+    this.stop();
+    this.pending = null;
+    this.discardSuspended();
+    const s = this.act.state;
+    if (s === 'sleeping') return;
+    if (s === 'away' || s === 'fallingAsleep') {
+      this.request('sleeping', 'lifecycle');
+      return;
+    }
+    if (s === 'held' || s === 'jumping' || s === 'falling') this.go('landing', 'lifecycle', { landing: null });
+    this.request('fallingAsleep', 'lifecycle', { variant: 'forced', quick: true });
+  }
+
+  private checkQuit(): void {
+    if (!this.quitting || this.quitReadySent) return;
+    if (this.act.state === 'sleeping' || this.now - this.quitAt >= QUIT_DEADLINE_MS) {
+      this.requests.push({ type: 'quitReady' });
+      this.quitReadySent = true;
+    }
+  }
+
+  // ---- physics coupling -----------------------------------------------------------
+
+  private onMoverStep(step: MoverStep): void {
+    if (step.crouchStarted) {
+      if (this.request('jumping', 'physical', { suspend: true }) === 'ok') this.fallReason = 'jump';
+      else this.mover.cancelCrouch();
+    }
+    if (step.steppedOff) {
+      this.fallReason = 'step';
+      this.request('falling', 'physical', { suspend: true });
+    }
+    if (step.perchLost) {
+      this.fallReason = 'perch';
+      this.request('falling', 'physical');
+      if (this.act.state === 'falling') this.discardSuspended();
+    }
+    if (step.landed) {
+      this.request('landing', 'physical', { landing: step.landed });
+      return;
+    }
+    if (!PHYSICAL_STATES.has(this.act.state)) this.act.goalStatus = step.goal;
+  }
+
+  private reconcilePhysical(): void {
+    const s = this.act.state;
+    const m = this.mover;
+    if (s === 'away') return;
+    if (m.held && s !== 'held') {
+      if (this.request('held', 'physical') !== 'ok') m.endDrag(null, ZERO, this.now, false);
+    } else if (!m.held && s === 'held') {
+      this.fallReason ??= 'drop';
+      this.request(m.airborne ? 'falling' : 'landing', 'physical', { landing: null });
+    } else if (m.airborne && !PHYSICAL_STATES.has(s)) {
+      this.fallReason ??= 'perch';
+      this.request('falling', 'physical');
+    } else if (m.grounded && (s === 'jumping' || s === 'falling')) {
+      this.request('landing', 'physical', { landing: null });
+    }
+  }
+
+  // ---- per-tick drives --------------------------------------------------------------
+
+  private drives(): void {
+    const env = this.env;
+    if (!env || this.mode !== 'normal' || this.now < this.nextDriveAt) return;
+    this.nextDriveAt = this.now + 1000;
+    const s = this.act.state;
+    const a = this.act;
+    if (userIdleForSleep({ userIdleMs: env.userIdleMs, behavior: this.settings.behavior }) && !ASLEEP_STATES.has(s) && !PHYSICAL_STATES.has(s)) {
+      const interruptible = CALM_STATES.has(s) || s === 'walking' || a.done;
+      if (interruptible && !(s === 'walking' && a.variant === 'favorite')) {
+        const spot = this.favoriteSpotTarget();
+        const status =
+          spot && spot.distBodyLengths > 1.5 && spot.distBodyLengths < 25 && s !== 'walking'
+            ? this.request('walking', 'stimulus', { variant: 'favorite', target: spot.point, then: { state: 'fallingAsleep', init: { variant: 'idleSleep' } } })
+            : 'blocked';
+        if (status !== 'ok') this.request('fallingAsleep', 'stimulus', { variant: 'idleSleep' });
+      }
+      return;
+    }
+    // While the user types the cat settles down instead of running around.
+    if (this.typing && ACTIVE_STATES.has(s) && a.cause !== 'command' && a.cause !== 'interaction' && this.now - a.startedAt > 1500 && !a.done) {
+      this.finish();
+    }
+  }
+
+  // ---- activities -----------------------------------------------------------------
+
+  private enterActivity(a: Activity): void {
+    const s = a.state;
+    if (!PHYSICAL_STATES.has(s)) this.stop();
+    switch (s) {
+      case 'sleeping':
+        this.oneShot = null;
+        break;
+      case 'wakingUp':
+        this.phase(a, 'stretch', a.quick ? 600 : 1600);
+        break;
+      case 'fallingAsleep':
+        this.phase(a, 'yawn', a.quick ? 350 : 1200);
+        break;
+      case 'idle':
+        this.phase(a, a.target || chance(this.random, 0.6) ? 'sit' : 'stand');
+        break;
+      case 'walking':
+      case 'running':
+        this.phase(a, 'approach');
+        break;
+      case 'chasingCursor': {
+        const stalk = chance(this.random, 0.35);
+        this.phase(a, stalk ? 'stalk' : 'approach', stalk ? range(this.random, 400, 900) : 0);
+        bumpCounter(this.cat.memory, 'chasesStarted');
+        break;
+      }
+      case 'watchingCursor':
+        this.phase(a, 'main');
+        break;
+      case 'curious': {
+        this.emotes.show('question', this.now);
+        const near = !a.target || Math.abs(a.target.x - this.mover.x) < 2.5 * this.bl;
+        if (a.variant === 'look' || near) this.phase(a, 'look', range(this.random, 3000, 7000));
+        else this.phase(a, 'approach');
+        break;
+      }
+      case 'inspectingWindow':
+        this.phase(a, 'approach');
+        break;
+      case 'watchingUser':
+        if (a.variant === 'nearby') this.phase(a, 'approach');
+        else this.phase(a, 'sit', range(this.random, 15_000, 25_000));
+        break;
+      case 'playing':
+        this.enterPlaying(a);
+        break;
+      case 'beingPetted':
+        a.lastPetAt = this.now;
+        this.emotes.show('heart', this.now, true);
+        break;
+      case 'startled':
+        addStat(this.cat.stats, 'fear', 0.35);
+        this.emotes.show('exclaim', this.now, true);
+        this.rememberEvent('startle');
+        break;
+      case 'annoyed':
+        this.emotes.show('anger', this.now, true);
+        this.rememberEvent('annoyed');
+        break;
+      case 'seekingAttention':
+        if (a.variant !== 'greet') bumpCounter(this.cat.memory, 'attentionRequests');
+        this.phase(a, 'approach');
+        break;
+      case 'resting':
+        this.phase(a, chance(this.random, 0.7) ? 'loaf' : 'sit');
+        break;
+      case 'hiding':
+        this.enterHiding(a);
+        break;
+      case 'held':
+        this.lastDragCursorAt = this.now;
+        break;
+      case 'jumping':
+        this.phase(a, 'crouch');
+        break;
+      case 'landing':
+        this.enterLanding(a);
+        break;
+      case 'away':
+        this.phase(a, this.awayWasAsleep ? 'sleep' : 'main');
+        break;
+      case 'grooming':
+      case 'falling':
+        break;
+    }
+  }
+
+  private exitActivity(a: Activity): void {
+    switch (a.state) {
+      case 'chasingCursor':
+        if (a.observedMs >= 1200) {
+          const engaged = a.engagedMs / a.observedMs >= 0.35;
+          const p = this.cat.memory.preferences;
+          p.cursorPlayAcceptance = ema01(p.cursorPlayAcceptance, engaged ? 1 : 0, 0.2);
+          bumpCounter(this.cat.memory, engaged ? 'chasesEngaged' : 'chasesIgnored');
+          if (engaged) addStat(this.cat.stats, 'bond', 0.003);
+          this.rememberEvent('chase', engaged ? 'engaged' : 'ignored');
+        }
+        break;
+      case 'seekingAttention':
+        if (a.variant !== 'greet') {
+          const p = this.cat.memory.preferences;
+          p.attentionAcceptance = ema01(p.attentionAcceptance, a.answered ? 1 : 0, 0.25);
+          if (a.answered) {
+            bumpCounter(this.cat.memory, 'attentionAnswered');
+            addStat(this.cat.stats, 'bond', 0.01);
+          }
+          this.rememberEvent('attention', a.answered ? 'answered' : 'unanswered');
+        }
+        break;
+      case 'inspectingWindow':
+        if (a.phase !== 'approach') {
+          bumpCounter(this.cat.memory, 'windowsInspected');
+          this.rememberEvent('inspect', this.mover.perchWindowId ? 'window' : 'floor');
+        }
+        break;
+      case 'sleeping':
+        if (this.now - a.startedAt >= 30_000) {
+          bumpCounter(this.cat.memory, 'naps');
+          this.rememberEvent('nap');
+          this.awakeSince = this.now;
+        }
+        this.flushRestSpot();
+        break;
+      case 'resting':
+        this.flushRestSpot();
+        break;
+      case 'playing':
+        if (a.variant === 'zoomies' || a.variant === 'rollOver' || a.variant === 'pawAt' || a.variant === 'hop') this.rememberEvent('play', a.variant);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private rememberEvent(kind: Parameters<typeof remember>[1], detail?: MemoryDetail): void {
+    remember(this.cat.memory, kind, this.wall(), detail);
+    this.markDirty();
+  }
+
+  private updateActivity(): void {
+    const a = this.act;
+    switch (a.state) {
+      case 'sleeping':
+        return this.updSleeping(a);
+      case 'wakingUp':
+        this.stop();
+        if (a.phase === 'stretch' && this.phaseElapsed(a)) this.phase(a, 'settle', range(this.random, 500, 1200));
+        else if (a.phase === 'settle' && this.phaseElapsed(a)) this.finish();
+        return;
+      case 'fallingAsleep':
+        this.stop();
+        if (a.phase === 'yawn' && this.phaseElapsed(a)) this.phase(a, 'loaf', a.quick ? 350 : range(this.random, 1500, 3000));
+        else if (a.phase === 'loaf' && this.phaseElapsed(a)) this.finish({ state: 'sleeping', init: { variant: a.variant } });
+        return;
+      case 'idle':
+        if (this.pending) this.finish();
+        else if (a.phase === 'stand' && this.now - a.phaseAt > 2500) this.phase(a, 'sit');
+        return;
+      case 'walking':
+      case 'running':
+        return this.updMove(a);
+      case 'chasingCursor':
+        return this.updChase(a);
+      case 'watchingCursor':
+        return this.updWatchCursor(a);
+      case 'curious':
+        return this.updCurious(a);
+      case 'inspectingWindow':
+        return this.updInspect(a);
+      case 'watchingUser':
+        return this.updWatchUser(a);
+      case 'playing':
+        return this.updPlaying(a);
+      case 'beingPetted':
+        return this.updPetted(a);
+      case 'startled':
+        this.stop();
+        if (this.now - a.startedAt >= a.dwellMs) this.finish(this.afterStartle(a));
+        return;
+      case 'annoyed':
+        this.stop();
+        if (this.now - a.startedAt >= a.dwellMs) this.finish(this.afterAnnoyed());
+        return;
+      case 'seekingAttention':
+        return this.updSeekAttention(a);
+      case 'resting':
+      case 'grooming':
+        this.stop();
+        return;
+      case 'hiding':
+        return this.updHiding(a);
+      case 'held':
+        return this.updHeld(a);
+      case 'jumping':
+        a.phase = this.mover.mode === 'crouch' ? 'crouch' : 'air';
+        return;
+      case 'falling':
+        return;
+      case 'landing':
+        if (this.now - a.startedAt >= LANDING_MS) this.finish();
+        return;
+      case 'away':
+        this.stop();
+        return;
+    }
+  }
+
+  private updSleeping(a: Activity): void {
+    this.stop();
+    const env = this.env;
+    if (this.now - a.startedAt > 4000) this.emotes.show('zzz', this.now);
+    if (!env || this.mode !== 'normal') return;
+    const elapsed = this.now - a.startedAt;
+    if (a.variant === 'intro') {
+      if (elapsed >= a.dwellMs) this.finish({ state: 'wakingUp', init: {} });
+      return;
+    }
+    const idleSleep = userIdleForSleep({ userIdleMs: env.userIdleMs, behavior: this.settings.behavior });
+    if (a.variant === 'idleSleep') {
+      if (!idleSleep && env.userIdleMs < 5000 && elapsed > 3000) this.finish({ state: 'wakingUp', init: { then: this.greetFollowUp() } });
+      return;
+    }
+    if (idleSleep) return;
+    if (elapsed >= a.dwellMs) {
+      if (this.cat.stats.energy >= 0.55 || elapsed >= 2 * STATE_SPECS.sleeping.dwellMs[1]) this.finish({ state: 'wakingUp', init: {} });
+      else a.dwellMs += 60_000;
+    }
+  }
+
+  private greetFollowUp(): FollowUp | null {
+    if (this.disabled.has('seekAttention') || !this.reactions.ready('greet', this.now)) return null;
+    this.reactions.set('greet', this.now, 10 * 60_000);
+    return { state: 'seekingAttention', init: { variant: 'greet' } };
+  }
+
+  private updMove(a: Activity): void {
+    const env = this.env;
+    if (a.variant === 'follow') {
+      const rect = a.windowId ? this.safeWindowRect(a.windowId) : null;
+      if (!rect || this.now - a.startedAt > 6000) {
+        this.finish();
+        return;
+      }
+      this.goTo({ x: rect.x + rect.width / 2, y: this.mover.y }, 'walk', false, this.bl * 1.5);
+      return;
+    }
+    if (!a.target || !env) {
+      this.finish();
+      return;
+    }
+    if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.startedAt > TRAVEL_TIMEOUT_MS) {
+      this.finish(a.then);
+      if (a.variant === 'called') this.emotes.show('heart', this.now);
+      return;
+    }
+    const pace: Pace = a.state === 'running' ? 'run' : a.variant === 'favorite' || a.variant === 'nearby' ? 'slow' : 'walk';
+    this.goTo(a.target, pace, a.variant !== 'retreat');
+  }
+
+  private updChase(a: Activity): void {
+    const cur = this.cursorInfo();
+    if (!cur) {
+      this.finish({ state: 'idle', init: {} });
+      return;
+    }
+    a.observedMs += this.dt;
+    if (cur.speedDip > 120) a.engagedMs += this.dt;
+    if (!cur.reachable) {
+      this.finish({ state: 'watchingCursor', init: {} });
+      return;
+    }
+    const dx = cur.point.x - this.mover.x;
+    switch (a.phase) {
+      case 'stalk':
+        this.stop();
+        this.mover.faceToward(cur.point.x, this.now);
+        if (this.phaseElapsed(a)) this.phase(a, 'approach');
+        return;
+      case 'pawAt':
+        this.stop();
+        this.mover.faceToward(cur.point.x, this.now);
+        if (Math.abs(dx) > 1.6 * this.bl) this.phase(a, 'approach');
+        return;
+      default:
+        if (Math.abs(dx) < 0.8 * this.bl && cur.point.y > this.mover.y - 1.6 * this.mover.bodyHeight) {
+          this.stop();
+          this.phase(a, 'pawAt');
+          return;
+        }
+        this.goTo({ x: cur.point.x, y: this.mover.y }, 'chase', false, 0.5 * this.bl);
+    }
+  }
+
+  private updWatchCursor(a: Activity): void {
+    this.stop();
+    const cur = this.cursorInfo();
+    if (!cur) {
+      if (this.now - this.lastCursorSeenAt > 2000) this.finish();
+      return;
+    }
+    this.mover.faceToward(cur.point.x, this.now);
+    if (a.phase === 'main' && cur.distBodyLengths < 3 && cur.speedDip > 200 && this.perSecond(0.3 * this.cat.traits.playfulness)) this.phase(a, 'crouch', 900);
+    else if (a.phase === 'crouch' && this.phaseElapsed(a)) this.phase(a, 'main');
+  }
+
+  private updCurious(a: Activity): void {
+    const t = a.target;
+    if (!t) {
+      this.finish();
+      return;
+    }
+    if (a.phase === 'approach') {
+      if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 12_000) {
+        this.stop();
+        this.phase(a, 'look', range(this.random, 3000, 7000));
+        return;
+      }
+      const side = Math.sign(t.x - this.mover.x) || 1;
+      this.goTo({ x: t.x - side * 1.2 * this.bl, y: t.y }, 'walk', true);
+      return;
+    }
+    this.stop();
+    this.mover.faceToward(t.x, this.now);
+    if (this.phaseElapsed(a)) this.finish();
+  }
+
+  private updInspect(a: Activity): void {
+    const rect = a.windowId ? this.safeWindowRect(a.windowId) : null;
+    if (!rect) {
+      this.finish();
+      return;
+    }
+    const center = rectCenter(rect);
+    if (a.phase === 'approach') {
+      if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 15_000) {
+        this.stop();
+        this.phase(a, 'look', range(this.random, 4000, 9000));
+        return;
+      }
+      const top = this.mover.windowSurfaces.find((w) => w.windowId === a.windowId);
+      if (top) {
+        this.goTo({ x: clamp(this.mover.x, top.x0, top.x1), y: top.y }, 'walk', true);
+      } else {
+        const side = Math.sign(center.x - this.mover.x) || 1;
+        this.goTo({ x: center.x - side * this.bl, y: rect.y + rect.height }, 'walk', true);
+      }
+      return;
+    }
+    this.stop();
+    this.mover.faceToward(center.x, this.now);
+    if (!this.phaseElapsed(a)) return;
+    if (a.phase === 'look' && this.mover.perchWindowId === a.windowId && chance(this.random, 0.5)) this.phase(a, 'loaf', range(this.random, 4000, 9000));
+    else this.finish();
+  }
+
+  private updWatchUser(a: Activity): void {
+    const fg = this.env?.foreground ?? null;
+    if (a.phase === 'approach') {
+      if (!fg || a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 10_000) {
+        this.stop();
+        this.phase(a, 'sit', range(this.random, 15_000, 25_000));
+        return;
+      }
+      const c = rectCenter(fg.rect);
+      const side = Math.sign(c.x - this.mover.x) || 1;
+      this.goTo({ x: c.x - side * this.bl, y: fg.rect.y + fg.rect.height }, 'slow', true);
+      return;
+    }
+    this.stop();
+    const look = this.lookForState();
+    if (look) this.mover.faceToward(look.x, this.now);
+    if (a.phase === 'sit' && this.phaseElapsed(a)) this.phase(a, 'loaf');
+  }
+
+  private enterPlaying(a: Activity): void {
+    switch (a.variant) {
+      case 'rollOver':
+        this.phase(a, 'rollOver', range(this.random, 2500, 5000));
+        return;
+      case 'hop':
+        this.phase(a, 'hop');
+        return;
+      case 'zoomies':
+        a.counter = 0;
+        this.phase(a, 'crouch', range(this.random, 300, 700));
+        return;
+      default:
+        a.variant = 'pawAt';
+        this.phase(a, 'crouch', range(this.random, 400, 900));
+    }
+  }
+
+  private updPlaying(a: Activity): void {
+    switch (a.variant) {
+      case 'hop':
+        this.stop();
+        if (a.phase === 'hop') {
+          if (a.counter === 0) {
+            a.counter = 1;
+            if (this.mover.hop(this.now) && this.request('jumping', 'physical', { suspend: true }) === 'ok') {
+              this.fallReason = 'jump';
+              this.emotes.show('sparkle', this.now);
+            } else {
+              this.mover.cancelCrouch();
+              this.finish();
+            }
+          } else {
+            this.phase(a, 'sit', 700);
+          }
+        } else if (this.phaseElapsed(a)) {
+          this.finish();
+        }
+        return;
+      case 'zoomies':
+        if (a.phase === 'crouch') {
+          this.stop();
+          if (this.phaseElapsed(a)) {
+            this.phase(a, 'zoomies');
+            a.counter = 2 + Math.floor(range(this.random, 0, 3));
+            a.target = this.zoomieTarget();
+          }
+          return;
+        }
+        if (!a.target || a.goalStatus === 'arrived' || a.goalStatus === 'unreachable') {
+          a.counter--;
+          a.goalStatus = 'none';
+          if (a.counter <= 0) {
+            this.finish({ state: this.cat.stats.energy < 0.5 ? 'resting' : 'idle', init: {} });
+            return;
+          }
+          a.target = this.zoomieTarget();
+          this.stop();
+        }
+        if (a.target) this.goTo(a.target, 'run', false);
+        return;
+      case 'rollOver':
+        this.stop();
+        if (this.phaseElapsed(a)) this.finish();
+        return;
+      default:
+        this.stop();
+        if (a.phase === 'crouch' && this.phaseElapsed(a)) this.phase(a, 'pawAt', range(this.random, 2000, 5000));
+        else if (a.phase === 'pawAt' && this.phaseElapsed(a)) this.finish();
+    }
+  }
+
+  private zoomieTarget(): Point | null {
+    const s = this.mover.currentSurface;
+    if (!s) return null;
+    const x = this.mover.x;
+    const room = Math.max(x - s.x0, s.x1 - x);
+    if (room < 2 * this.bl) return null;
+    const dir = x - s.x0 > s.x1 - x ? -1 : 1;
+    const dist = range(this.random, 0.5, 1) * Math.min(room, 14 * this.bl);
+    return { x: clamp(x + dir * Math.max(dist, 2 * this.bl), s.x0, s.x1), y: this.mover.y };
+  }
+
+  private updPetted(a: Activity): void {
+    this.stop();
+    const sinceLast = this.now - a.lastPetAt;
+    if (sinceLast > 1800) {
+      this.finish(this.afterPetting());
+      return;
+    }
+    if (this.now - a.startedAt > 45_000) this.finish({ state: chance(this.random, 0.5) ? 'walking' : 'idle', init: { variant: 'wander', target: this.wanderTarget() } });
+    else if (this.now - a.startedAt > 3000) this.emotes.show('note', this.now);
+  }
+
+  private afterPetting(): FollowUp {
+    const sleepy = sleepiness({ stats: this.cat.stats, traits: this.cat.traits, localHour: this.env?.localHour ?? 12, darkBias: this.darkBias(), awakeMs: this.now - this.awakeSince });
+    if (this.mode === 'paused') return { state: 'resting', init: {} };
+    if (sleepy > 0.5 && !this.coolingDown('fallingAsleep')) return { state: 'fallingAsleep', init: {} };
+    const r = this.random();
+    if (r < 0.4) return { state: 'resting', init: {} };
+    if (r < 0.65 && !this.disabled.has('grooming')) return { state: 'grooming', init: {} };
+    return { state: 'idle', init: {} };
+  }
+
+  private afterStartle(a: Activity): FollowUp {
+    const fear = this.cat.stats.fear;
+    if (fear > 0.45 && this.cat.traits.confidence < 0.6) return { state: 'hiding', init: { variant: 'flee' } };
+    if (a.target && chance(this.random, this.cat.traits.curiosity)) return { state: 'curious', init: { target: a.target } };
+    if (this.cursorInfo()) return { state: 'watchingCursor', init: {} };
+    return { state: 'idle', init: {} };
+  }
+
+  private afterAnnoyed(): FollowUp {
+    if (this.cat.stats.annoyance > 0.6) return { state: 'hiding', init: { variant: 'flee' } };
+    const r = this.random();
+    if (r < 0.4 && !this.disabled.has('grooming')) return { state: 'grooming', init: {} };
+    if (r < 0.7) {
+      const target = this.retreatTarget();
+      if (target) return { state: 'walking', init: { variant: 'retreat', target } };
+    }
+    return { state: 'idle', init: {} };
+  }
+
+  private updSeekAttention(a: Activity): void {
+    const cur = this.cursorInfo();
+    const fg = this.env?.foreground ?? null;
+    if (a.phase === 'approach') {
+      const goal = cur?.point ?? (fg ? { x: fg.rect.x + fg.rect.width / 2, y: fg.rect.y + fg.rect.height } : null);
+      const close = goal ? Math.abs(goal.x - this.mover.x) < 1.5 * this.bl : true;
+      if (!goal || close || a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 12_000 || a.variant === 'greet') {
+        this.stop();
+        this.phase(a, 'meow', 900);
+        this.restartClip = true;
+        this.emotes.show(a.variant === 'greet' || this.cat.stats.bond > 0.5 ? 'heart' : 'question', this.now, true);
+        return;
+      }
+      const side = Math.sign(goal.x - this.mover.x) || 1;
+      this.goTo({ x: goal.x - side * 1.2 * this.bl, y: goal.y }, 'walk', true);
+      return;
+    }
+    this.stop();
+    if (cur) this.mover.faceToward(cur.point.x, this.now);
+    if (a.phase === 'meow' && this.phaseElapsed(a)) this.phase(a, 'wait', a.variant === 'greet' ? 2500 : range(this.random, 6000, 12_000));
+    else if (a.phase === 'wait' && this.phaseElapsed(a)) this.finish(a.answered ? null : { state: chance(this.random, 0.5) ? 'resting' : 'idle', init: {} });
+  }
+
+  private enterHiding(a: Activity): void {
+    const s = this.mover.currentSurface;
+    this.rememberEvent('hide');
+    if (!s) {
+      this.phase(a, 'hide');
+      return;
+    }
+    const threatX = this.env?.cursor?.x ?? this.mover.x + this.mover.facing * this.bl;
+    const edge = threatX < this.mover.x ? s.x1 : s.x0;
+    if (Math.abs(edge - this.mover.x) < this.bl) {
+      this.phase(a, 'hide');
+      return;
+    }
+    a.target = { x: edge, y: this.mover.y };
+    this.phase(a, 'flee');
+  }
+
+  private updHiding(a: Activity): void {
+    if (a.phase === 'flee') {
+      if (!a.target || a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 8000) {
+        this.stop();
+        this.phase(a, 'hide');
+        return;
+      }
+      this.goTo(a.target, this.cat.stats.fear > 0.35 ? 'run' : 'walk', false);
+      return;
+    }
+    this.stop();
+    if (this.now - a.startedAt >= a.dwellMs) this.finish({ state: chance(this.random, 0.5) && !this.disabled.has('grooming') ? 'grooming' : 'idle', init: {} });
+  }
+
+  private updHeld(a: Activity): void {
+    const env = this.env;
+    if (!this.mover.held) return;
+    if (env?.dragCursor) this.lastDragCursorAt = this.now;
+    else if (this.now - this.lastDragCursorAt > DRAG_LOST_MS) {
+      this.mover.endDrag(null, ZERO, this.now, false);
+      this.fallReason = 'drop';
+      this.request('falling', 'physical');
+      return;
+    }
+    if (this.now - a.startedAt > 15_000) {
+      addStat(this.cat.stats, 'annoyance', (0.01 * this.dt * (1.2 - this.settings.interaction.patience)) / 1000);
+      this.emotes.show('anger', this.now);
+    }
+  }
+
+  private enterLanding(a: Activity): void {
+    a.dwellMs = LANDING_MS;
+    const info: LandingInfo | null = a.landing;
+    const reason = this.fallReason;
+    this.fallReason = null;
+    if (this.mode !== 'normal' || !info) return;
+    if (reason === 'jump' || reason === 'step') return;
+    this.discardSuspended();
+    if (info.forced) return;
+    // Cats land on their feet after a plain drop; only a hard throw upsets them.
+    if (reason === 'throw' && info.thrown) {
+      addStat(this.cat.stats, 'fear', 0.25);
+      addStat(this.cat.stats, 'annoyance', 0.1);
+      const annoyed = this.cat.stats.annoyance > 0.35 || this.cat.traits.confidence > 0.65;
+      a.then = { state: annoyed ? 'annoyed' : 'startled', init: {} };
+      return;
+    }
+    if (reason === 'perch') {
+      addStat(this.cat.stats, 'fear', 0.2);
+      a.then = { state: 'startled', init: {} };
+      return;
+    }
+    if (reason === 'drop' || reason === 'throw') {
+      a.then = { state: chance(this.random, 0.35) && !this.disabled.has('grooming') ? 'grooming' : 'idle', init: {} };
+    }
+  }
+
+  // ---- events ---------------------------------------------------------------------
+
+  private handleEvent(ev: SimEvent): void {
+    switch (ev.type) {
+      case 'lifecycle.quitRequested':
+        this.startQuit();
+        return;
+      case 'system.lock':
+      case 'system.suspend':
+        this.systemAsleep = true;
+        return;
+      case 'system.unlock':
+      case 'system.resume':
+        this.systemAsleep = false;
+        return;
+      case 'display.changed':
+        return;
+      default:
+        break;
+    }
+    if (this.mode === 'quit' || this.mode === 'away') return;
+    switch (ev.type) {
+      case 'pointer.dragStart':
+        return this.onDragStart(ev.at);
+      case 'pointer.dragEnd':
+        return this.onDragEnd(ev.at, ev.velocity);
+      case 'pointer.pet':
+        return this.onPet(ev.strength);
+      case 'pointer.tap':
+        return this.onTap(ev.at);
+      case 'pointer.doubleTap':
+        return this.onDoubleTap(ev.at);
+      case 'pointer.hoverStart':
+        if (this.settings.interaction.enabled && isFinitePoint(ev.at)) {
+          this.lastInteractionAt = this.now;
+          if (!ASLEEP_STATES.has(this.act.state)) this.setGlance(ev.at, 2000);
+        }
+        return;
+      case 'pointer.hoverEnd':
+        return;
+      case 'command.sleep':
+        if (this.mode === 'normal' || this.mode === 'paused') this.request('fallingAsleep', 'command', { variant: 'forced' });
+        return;
+      default:
+        break;
+    }
+    if (this.mode !== 'normal') return;
+    switch (ev.type) {
+      case 'window.shown':
+      case 'window.restored':
+        return this.onWindowAppeared(ev.window, ev.type === 'window.shown');
+      case 'window.closed':
+        this.movingWindows.delete(ev.id);
+        if (ev.rect && isFiniteRect(ev.rect)) this.onWindowClosed(ev.rect, ev.category);
+        return;
+      case 'window.foreground':
+        return this.onForeground(ev.window, ev.switchesPerMinute);
+      case 'window.moveStart':
+        return this.onMoveStart(ev.id);
+      case 'window.moveEnd':
+        this.movingWindows.delete(ev.id);
+        if (ev.rect && isFiniteRect(ev.rect)) this.onMoveEnd(ev.id, ev.rect);
+        return;
+      case 'window.minimized':
+        this.movingWindows.delete(ev.id);
+        return;
+      case 'activity.typingStart':
+        return this.onTypingStart();
+      case 'activity.typingEnd':
+        return;
+      case 'activity.userIdle':
+        this.nextDriveAt = this.now;
+        return;
+      case 'activity.userReturned':
+        return this.onUserReturned(ev.idleMs);
+      case 'cursor.flick':
+        return this.onFlick(ev.speed, ev.at);
+      case 'perception.visual':
+        return this.onVisual(ev.summary.events, ev.summary.changeCenterPx, ev.summary.regionPx);
+      case 'perception.ai':
+        return this.onAi(ev.report.reaction, ev.report.interest, ev.regionPx);
+      case 'command.callCat':
+        return this.onCallCat(ev.at);
+      case 'command.wake':
+        if (ASLEEP_STATES.has(this.act.state) || this.act.state === 'resting') this.request('wakingUp', 'command');
+        else this.playOneShot('meow', 900);
+        return;
+      case 'command.play':
+        return this.onPlayCommand();
+      default:
+        return;
+    }
+  }
+
+  private noteInteraction(): void {
+    this.lastInteractionAt = this.now;
+    if (this.act.state === 'seekingAttention') this.act.answered = true;
+  }
+
+  private onDragStart(at: Point): void {
+    const i = this.settings.interaction;
+    if (!i.enabled || !i.dragging || !isFinitePoint(at) || this.mover.held) return;
+    this.noteInteraction();
+    this.mover.startDrag(at);
+    if (this.request('held', 'physical') !== 'ok') {
+      this.mover.endDrag(null, ZERO, this.now, false);
+      return;
+    }
+    bumpCounter(this.cat.memory, 'drags');
+    addStat(this.cat.stats, 'annoyance', 0.03 * (1.2 - i.patience));
+    this.markDirty();
+  }
+
+  private onDragEnd(at: Point, velocity: Point): void {
+    if (!this.mover.held) return;
+    const r = this.mover.endDrag(isFinitePoint(at) ? at : null, isFinitePoint(velocity) ? velocity : ZERO, this.now, this.settings.interaction.throwing);
+    this.fallReason = r.thrown ? 'throw' : 'drop';
+    if (r.thrown) {
+      bumpCounter(this.cat.memory, 'throws');
+      addStat(this.cat.stats, 'annoyance', 0.08);
+      this.rememberEvent('throw', 'hard');
+    }
+    this.request('falling', 'physical');
+  }
+
+  private onPet(strength: number): void {
+    const i = this.settings.interaction;
+    if (!i.enabled || !i.petting) return;
+    const s = this.act.state;
+    if (PHYSICAL_STATES.has(s)) return;
+    this.noteInteraction();
+    const st = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5;
+    applyPet(this.cat.stats, this.cat.traits, st);
+    // The rate counts petting sessions: one stroke gesture produces many pet events.
+    if (this.now - this.lastPetEventAt > PET_SESSION_GAP_MS) {
+      const prefs = this.cat.memory.preferences;
+      prefs.petRatePerHour = addRateEvent(prefs.petRatePerHour, PET_RATE_TAU_MS);
+    }
+    this.lastPetEventAt = this.now;
+    if (this.now - this.lastPetCountedAt >= 1000) {
+      bumpCounter(this.cat.memory, 'pets');
+      this.lastPetCountedAt = this.now;
+      this.markDirty();
+    }
+    if (this.now - this.lastPetMemoryAt >= 30_000) {
+      this.lastPetMemoryAt = this.now;
+      this.rememberEvent('pet');
+    }
+    this.petTimes = this.petTimes.filter((t) => t > this.now - 60_000);
+    this.petTimes.push(this.now);
+    this.emotes.show('heart', this.now);
+    if (s === 'sleeping') {
+      if (this.petTimes.filter((t) => t > this.now - 6000).length >= 3) this.request('beingPetted', 'interaction');
+      return;
+    }
+    const limit = 30 * (0.5 + this.cat.traits.affection);
+    if (this.petTimes.length > limit) {
+      addStat(this.cat.stats, 'annoyance', 0.15);
+      this.petTimes = [];
+      if (this.request('annoyed', 'interaction') === 'ok') return;
+    }
+    this.request('beingPetted', 'interaction');
+  }
+
+  private onTap(at: Point): void {
+    const i = this.settings.interaction;
+    if (!i.enabled || !isFinitePoint(at) || PHYSICAL_STATES.has(this.act.state)) return;
+    this.noteInteraction();
+    bumpCounter(this.cat.memory, 'clicks');
+    this.tapTimes = this.tapTimes.filter((t) => t > this.now - TAP_WINDOW_MS);
+    this.tapTimes.push(this.now);
+    const n = this.tapTimes.length;
+    const s = this.act.state;
+    if (ASLEEP_STATES.has(s)) {
+      if (n >= 2 || chance(this.random, 0.5)) this.request('wakingUp', 'interaction');
+      return;
+    }
+    if (n >= 3) addStat(this.cat.stats, 'annoyance', 0.1 * (1.3 - i.patience) * (n - 2));
+    const annoyance = this.cat.stats.annoyance;
+    if (this.mode === 'normal' && annoyance >= 0.75 && (s === 'annoyed' || this.recentStates.slice(0, 3).includes('annoyed'))) {
+      if (this.request('hiding', 'interaction', { variant: 'flee' }) === 'ok') return;
+    }
+    if (this.mode === 'normal' && annoyance >= 0.45 + 0.3 * i.patience && s !== 'annoyed') {
+      if (this.request('annoyed', 'interaction') === 'ok') return;
+    }
+    this.setGlance(at, 1800);
+    this.mover.faceToward(at.x, this.now);
+    if (CALM_STATES.has(s) && chance(this.random, 0.6)) this.playOneShot('meow', 900);
+    else this.emotes.show('question', this.now);
+  }
+
+  private onDoubleTap(at: Point): void {
+    const i = this.settings.interaction;
+    if (!i.enabled || !isFinitePoint(at) || PHYSICAL_STATES.has(this.act.state)) return;
+    this.noteInteraction();
+    bumpCounter(this.cat.memory, 'doubleClicks');
+    const s = this.act.state;
+    if (this.cat.stats.annoyance > 0.5) {
+      addStat(this.cat.stats, 'annoyance', 0.1);
+      if (this.mode === 'normal' && s !== 'annoyed') this.request('annoyed', 'interaction');
+      return;
+    }
+    if (ASLEEP_STATES.has(s)) {
+      this.request('wakingUp', 'interaction');
+      return;
+    }
+    const playful = this.cat.stats.energy > 0.3 && !this.typing && chance(this.random, 0.4 + 0.5 * this.cat.traits.playfulness);
+    if (this.mode === 'normal' && playful && this.mover.grounded && this.request('playing', 'interaction', { variant: 'hop' }) === 'ok') return;
+    this.setGlance(at, 1500);
+    this.emotes.show(chance(this.random, 0.5) ? 'sparkle' : 'note', this.now, true);
+  }
+
+  private onWindowAppeared(w: WindowInfo, isNew: boolean): void {
+    const b = this.settings.behavior;
+    if (!b.reactToWindows || !w || !isFiniteRect(w.rect) || w.minimized) return;
+    if (ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state)) return;
+    const novel = isNew && !this.seenWindows.has(w.id);
+    this.seenWindows.add(w.id);
+    const r = this.windowRelevanceFor(w.rect, w.category, w.excluded, novel, 'window');
+    const center = rectCenter(w.rect);
+    const calm = CALM_STATES.has(this.act.state) || this.act.state === 'walking';
+    if (r >= 0.5 && calm && !this.typing && !this.disabled.has('inspectWindows') && this.reactions.ready('approach', this.now)) {
+      if (this.request('inspectingWindow', 'stimulus', { windowId: w.id, target: center }) === 'ok') {
+        this.reactions.set('approach', this.now, 25_000);
+        return;
+      }
+    }
+    if (r >= 0.25 && calm && this.reactions.take('look', this.now, 8000)) {
+      if (this.request('curious', 'stimulus', { target: center, variant: 'look' }) === 'ok') return;
+    }
+    if (r >= 0.1) this.setGlance(center, 1500);
+  }
+
+  private onWindowClosed(rect: Rect, category: WindowInfo['category']): void {
+    if (!this.settings.behavior.reactToWindows || ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state)) return;
+    const r = this.windowRelevanceFor(rect, category, false, true, 'closed');
+    const target = { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+    const calm = CALM_STATES.has(this.act.state) || this.act.state === 'walking';
+    if (r >= 0.3 && calm && !this.typing && this.reactions.take('exposed', this.now, 20_000)) {
+      if (this.request('curious', 'stimulus', { target }) === 'ok') return;
+    }
+    if (r >= 0.1) this.setGlance(rectCenter(rect), 1200);
+  }
+
+  private onForeground(w: WindowInfo | null, switchesPerMinute: number): void {
+    if (Number.isFinite(switchesPerMinute) && switchesPerMinute >= 8) {
+      this.busyUntil = this.now + 20_000;
+      const s = this.act.state;
+      const moving = s === 'walking' || ACTIVE_STATES.has(s) || s === 'curious' || s === 'inspectingWindow';
+      if (moving && this.act.cause !== 'command' && this.act.cause !== 'interaction' && this.reactions.take('busy', this.now, 15_000)) {
+        this.request('watchingUser', 'stimulus');
+      }
+      return;
+    }
+    if (!w || !this.settings.behavior.reactToWindows || !isFiniteRect(w.rect) || ASLEEP_STATES.has(this.act.state)) return;
+    const r = this.windowRelevanceFor(w.rect, w.category, w.excluded, false, 'foreground');
+    if (r >= 0.15) this.setGlance(rectCenter(w.rect), 1200);
+  }
+
+  private onMoveStart(id: string): void {
+    this.movingWindows.add(id);
+    if (!this.settings.behavior.reactToWindows || this.mover.perchWindowId === id) return;
+    const rect = this.safeWindowRect(id);
+    if (!rect || ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state)) return;
+    const r = this.windowRelevanceFor(rect, 'unknown', false, false, 'move');
+    const calm = CALM_STATES.has(this.act.state);
+    if (r >= 0.2 && calm && !this.typing && chance(this.random, 0.5 * this.cat.traits.curiosity) && this.reactions.take('follow', this.now, 30_000)) {
+      if (this.request('walking', 'stimulus', { variant: 'follow', windowId: id, target: rectCenter(rect) }) === 'ok') return;
+    }
+    if (r >= 0.08) this.setGlance(rectCenter(rect), 2000);
+  }
+
+  private onMoveEnd(id: string, rect: Rect): void {
+    if (!this.settings.behavior.reactToWindows || this.mover.perchWindowId === id) return;
+    if (ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state) || this.typing) return;
+    const r = this.windowRelevanceFor(rect, 'unknown', false, false, 'moved');
+    if (r >= 0.45 && !this.disabled.has('inspectWindows') && !this.disabled.has('perchOnWindows') && chance(this.random, 0.35) && this.reactions.take('approach', this.now, 25_000)) {
+      this.request('inspectingWindow', 'stimulus', { windowId: id, target: rectCenter(rect) });
+    }
+  }
+
+  private onTypingStart(): void {
+    const b = this.settings.behavior;
+    if (!b.reactToTyping || ASLEEP_STATES.has(this.act.state) || !CALM_STATES.has(this.act.state)) return;
+    if (!chance(this.random, 0.35 * b.activitySensitivity) || !this.reactions.take('typing', this.now, 60_000)) return;
+    const fg = this.env?.foreground;
+    const far = fg ? Math.abs(rectCenter(fg.rect).x - this.mover.x) > 6 * this.bl : false;
+    this.request('watchingUser', 'stimulus', { variant: far ? 'nearby' : null });
+  }
+
+  private onUserReturned(idleMs: number): void {
+    if (!Number.isFinite(idleMs) || idleMs < 60_000) return;
+    const s = this.act.state;
+    if (ASLEEP_STATES.has(s)) {
+      this.request('wakingUp', 'stimulus', { then: this.greetFollowUp() });
+      return;
+    }
+    if (idleMs >= 120_000 && !PHYSICAL_STATES.has(s)) {
+      const greet = this.greetFollowUp();
+      if (greet && this.request(greet.state, 'stimulus', greet.init) === 'ok') return;
+      this.emotes.show('heart', this.now);
+    }
+  }
+
+  private onFlick(speed: number, at: Point): void {
+    if (!isFinitePoint(at) || !Number.isFinite(speed) || this.typing) return;
+    const s = this.act.state;
+    if (ASLEEP_STATES.has(s) || PHYSICAL_STATES.has(s) || s === 'chasingCursor') return;
+    const cur = this.cursorInfo();
+    const speedDip = speed / this.mover.scale;
+    const dist = Math.hypot(at.x - this.mover.x, at.y - (this.mover.y - this.mover.bodyHeight / 2)) / this.bl;
+    const r = flickRelevance({
+      speedDip,
+      distBodyLengths: dist,
+      cursorPlay: this.settings.behavior.cursorPlay,
+      playfulness: this.cat.traits.playfulness,
+      energy: this.cat.stats.energy,
+      acceptance: this.cat.memory.preferences.cursorPlayAcceptance,
+      habituation: this.habit.register('flick', this.now),
+    });
+    if (r >= 0.4 && cur?.reachable && !this.disabled.has('chaseCursor') && this.reactions.take('flick', this.now, 8000)) {
+      if (this.request('chasingCursor', 'stimulus') === 'ok') return;
+    }
+    if (r >= 0.2 && s !== 'watchingCursor' && this.reactions.take('flickWatch', this.now, 5000)) {
+      if (this.request('watchingCursor', 'stimulus') === 'ok') return;
+    }
+    if (r >= 0.05) this.setGlance(at, 1200);
+  }
+
+  private onVisual(events: readonly string[], changeCenter: Point | null, region: Rect): void {
+    const sens = this.settings.behavior.activitySensitivity;
+    if (events.includes('dark')) this.darkUntil = this.now + 10 * 60_000;
+    if (events.includes('bright')) this.darkUntil = -Infinity;
+    const s = this.act.state;
+    if (ASLEEP_STATES.has(s) || PHYSICAL_STATES.has(s)) return;
+    if (events.includes('bigChange')) {
+      if (this.reactions.ready('bigChange', this.now) && chance(this.random, (1 - this.cat.traits.confidence) * 0.6 * sens)) {
+        this.reactions.set('bigChange', this.now, 10 * 60_000);
+        if (this.request('startled', 'stimulus', { target: isFinitePoint(changeCenter) ? changeCenter : null }) === 'ok') return;
+      }
+      if (isFinitePoint(changeCenter) && CALM_STATES.has(s) && this.reactions.take('visualApproach', this.now, 30_000)) {
+        if (this.request('curious', 'stimulus', { target: changeCenter }) === 'ok') return;
+      }
+    }
+    if (events.includes('motion') && CALM_STATES.has(s) && isFiniteRect(region) && chance(this.random, 0.4 * sens) && this.reactions.take('motion', this.now, 60_000)) {
+      const target = isFinitePoint(changeCenter) ? changeCenter : rectCenter(region);
+      if (chance(this.random, 0.3 * this.cat.traits.curiosity) && !this.typing) this.request('curious', 'stimulus', { target });
+      else if (s !== 'watchingUser') this.request('watchingUser', 'stimulus');
+      else this.setGlance(target, 2000);
+    }
+  }
+
+  private onAi(reaction: string, interest: number, region: Rect): void {
+    if (!isFiniteRect(region) || !Number.isFinite(interest)) return;
+    if (!this.reactions.take('ai', this.now, 20_000)) return;
+    const s = this.act.state;
+    if (PHYSICAL_STATES.has(s)) return;
+    const center = rectCenter(region);
+    const asleep = ASLEEP_STATES.has(s);
+    if (reaction !== 'sleep' && (interest < 0.25 || asleep)) return;
+    switch (reaction) {
+      case 'watch':
+        if (s !== 'watchingUser') this.request('watchingUser', 'stimulus');
+        this.setGlance(center, 3000);
+        return;
+      case 'approach':
+        if (!this.typing) this.request('curious', 'stimulus', { target: center });
+        return;
+      case 'sit_nearby':
+        this.request('curious', 'stimulus', { target: { x: center.x, y: region.y + region.height } });
+        return;
+      case 'play':
+        if (this.cat.stats.energy > 0.3 && !this.typing) {
+          const variant: Variant = !this.disabled.has('zoomies') && chance(this.random, 0.2) ? 'zoomies' : chance(this.random, 0.5) ? 'rollOver' : 'pawAt';
+          this.request('playing', 'stimulus', { variant });
+        }
+        return;
+      case 'startle':
+        if (this.reactions.take('bigChange', this.now, 10 * 60_000)) this.request('startled', 'stimulus', { target: center });
+        return;
+      case 'sleep':
+        if (!asleep && this.cat.stats.energy < 0.85) this.request('fallingAsleep', 'stimulus');
+        return;
+      case 'groom':
+        if (!this.disabled.has('grooming')) this.request('grooming', 'stimulus');
+        return;
+      default:
+        return; // 'ignore' and anything unexpected
+    }
+  }
+
+  private onCallCat(at: Point): void {
+    if (!isFinitePoint(at) || PHYSICAL_STATES.has(this.act.state)) return;
+    this.noteInteraction();
+    const dest = this.mover.surfacePointFor(at);
+    const far = Math.abs(dest.x - this.mover.x) > 6 * this.bl || Math.abs(dest.y - this.mover.y) > 2 * this.mover.bodyHeight;
+    const target = { x: dest.x, y: dest.y };
+    this.rememberEvent('called');
+    this.request(far ? 'running' : 'walking', 'command', { variant: 'called', target, then: { state: 'idle', init: { target: { x: at.x, y: at.y } } } });
+  }
+
+  private onPlayCommand(): void {
+    if (PHYSICAL_STATES.has(this.act.state)) return;
+    this.noteInteraction();
+    const zoom = !this.disabled.has('zoomies') && !this.typing && this.cat.stats.energy > 0.35 && chance(this.random, 0.4);
+    const variant: Variant = zoom ? 'zoomies' : chance(this.random, 0.5) ? 'pawAt' : 'rollOver';
+    this.request('playing', 'command', { variant });
+  }
+
+  private windowRelevanceFor(rect: Rect, category: WindowInfo['category'], excluded: boolean, novel: boolean, kind: string): number {
+    const d = this.mover.fullWorldModel.display(this.mover.displayId) ?? this.mover.fullWorldModel.primary;
+    return windowRelevance({
+      cat: { x: this.mover.x, y: this.mover.y },
+      rect,
+      displayRect: d.workAreaPx,
+      category,
+      excluded,
+      novel,
+      curiosity: this.cat.traits.curiosity,
+      sensitivity: this.settings.behavior.activitySensitivity,
+      habituation: this.habit.register(kind, this.now),
+      typing: this.typing,
+    });
+  }
+
+  // ---- context for decisions ----------------------------------------------------------
+
+  private darkBias(): number {
+    return this.now < this.darkUntil ? 1 : 0;
+  }
+
+  private cursorInfo(): { point: Point; speedDip: number; distBodyLengths: number; reachable: boolean } | null {
+    const c = this.env?.cursor;
+    if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y)) return null;
+    const m = this.mover;
+    const bl = m.bodyWidth;
+    const bh = m.bodyHeight;
+    const dist = Math.hypot(c.x - m.x, c.y - (m.y - bh / 2)) / bl;
+    const s = m.currentSurface;
+    const reachable = s !== null && c.y >= m.y - 3.5 * bh && c.y <= m.y + bh * 0.5 && c.x >= s.x0 - 2 * bl && c.x <= s.x1 + 2 * bl;
+    return { point: { x: c.x, y: c.y }, speedDip: (Number.isFinite(c.speed) ? Math.max(0, c.speed) : 0) / m.scale, distBodyLengths: dist, reachable };
+  }
+
+  private decisionView(): DecisionView {
+    const env = this.env as SimEnv;
+    const cur = this.cursorInfo();
+    const fg = env.foreground && !env.foreground.minimized && isFiniteRect(env.foreground.rect) ? env.foreground : null;
+    return {
+      traits: this.cat.traits,
+      stats: this.cat.stats,
+      prefs: this.cat.memory.preferences,
+      behavior: this.settings.behavior,
+      disabled: this.disabled,
+      localHour: Number.isFinite(env.localHour) ? env.localHour : 12,
+      typing: this.typing,
+      userIdleMs: Number.isFinite(env.userIdleMs) ? env.userIdleMs : 0,
+      busySwitching: this.now < this.busyUntil,
+      darkBias: this.darkBias(),
+      quietMs: this.now - this.lastInteractionAt,
+      awakeMs: this.now - this.awakeSince,
+      cursor: cur,
+      foreground: fg ? { center: rectCenter(fg.rect), distBodyLengths: Math.abs(rectCenter(fg.rect).x - this.mover.x) / this.bl } : null,
+      favoriteSpot: this.favoriteSpotTarget(),
+      perchTarget: this.perchTarget(),
+      wanderTarget: this.wanderTarget(),
+      recentStates: this.recentStates,
+      current: this.act.state,
+      isCoolingDown: (s) => this.coolingDown(s),
+    };
+  }
+
+  private wanderTarget(): Point | null {
+    const m = this.mover;
+    const s = m.currentSurface;
+    if (!s) return null;
+    if (s.kind === 'window' && chance(this.random, 0.5)) {
+      const fp = m.world.nearestFloorPoint({ x: m.x, y: m.y + 1 });
+      return { x: fp.x, y: fp.y };
+    }
+    const dir = chance(this.random, 0.5) ? 1 : -1;
+    for (const d of [dir, -dir]) {
+      const x = clamp(m.x + d * range(this.random, 2, 8) * this.bl, s.x0, s.x1);
+      if (Math.abs(x - m.x) >= 1.5 * this.bl) return { x, y: m.y };
+    }
+    return null;
+  }
+
+  private retreatTarget(): Point | null {
+    const m = this.mover;
+    const s = m.currentSurface;
+    if (!s) return null;
+    const threat = this.env?.cursor?.x ?? m.x - m.facing * this.bl;
+    const dir = threat < m.x ? 1 : -1;
+    const x = clamp(m.x + dir * range(this.random, 3, 6) * this.bl, s.x0, s.x1);
+    return Math.abs(x - m.x) >= this.bl ? { x, y: m.y } : null;
+  }
+
+  private perchTarget(): { windowId: string; point: Point } | null {
+    const m = this.mover;
+    if (!m.grounded) return null;
+    const options = m.windowSurfaces
+      .filter((w) => w.windowId !== null && w.windowId !== m.perchWindowId)
+      .map((w) => ({ w, x: clamp(m.x, w.x0, w.x1) }))
+      .sort((a, b) => Math.hypot(a.x - m.x, a.w.y - m.y) - Math.hypot(b.x - m.x, b.w.y - m.y))
+      .slice(0, 3);
+    for (const o of options) {
+      const point = { x: o.x, y: o.w.y };
+      if (m.canReach(point)) return { windowId: o.w.windowId as string, point };
+    }
+    return null;
+  }
+
+  private favoriteSpotTarget(): { point: Point; distBodyLengths: number } | null {
+    const m = this.mover;
+    const world = m.world;
+    for (const spot of rankedSpots(this.cat.memory, this.wall())) {
+      const d = world.display(spot.displayKey);
+      if (!d) continue;
+      const x = d.workAreaPx.x + spot.xFrac * d.workAreaPx.width;
+      let point: Point | null = null;
+      if (spot.kind === 'floor') {
+        const floor = world.floorFor(d.id);
+        if (floor) {
+          const fp = world.floorPoint(floor, x);
+          point = { x: fp.x, y: fp.y };
+        }
+      } else {
+        const w = m.windowSurfaces.find((s) => s.displayIds.includes(d.id) && x >= s.x0 && x <= s.x1);
+        if (w) point = { x, y: w.y };
+      }
+      if (point) return { point, distBodyLengths: Math.hypot(point.x - m.x, point.y - m.y) / this.bl };
+    }
+    return null;
+  }
+
+  // ---- memory ---------------------------------------------------------------------------
+
+  private learn(dt: number): void {
+    const s = this.act.state;
+    const mem = this.cat.memory;
+    if (this.mode !== 'away' && !ASLEEP_STATES.has(s)) mem.totalAwakeMs = Math.min(Number.MAX_SAFE_INTEGER, mem.totalAwakeMs + dt);
+    if (this.mode !== 'away' && (this.env?.userIdleMs ?? Infinity) < 60_000) {
+      mem.preferences.petRatePerHour = decayRate(mem.preferences.petRatePerHour, dt, PET_RATE_TAU_MS);
+    }
+    if ((s === 'resting' || s === 'sleeping') && this.mover.grounded) {
+      this.restAccumMs += dt;
+      if (this.restAccumMs >= SPOT_FLUSH_MS) this.flushRestSpot();
+    }
+  }
+
+  private flushRestSpot(): void {
+    const ms = this.restAccumMs;
+    this.restAccumMs = 0;
+    if (ms < SPOT_LEARN_MIN_MS || !this.mover.grounded) return;
+    const m = this.mover;
+    const d = m.fullWorldModel.display(m.displayId);
+    if (!d) return;
+    const xFrac = clamp((m.x - d.workAreaPx.x) / d.workAreaPx.width, 0, 1);
+    learnSpot(this.cat.memory, { displayKey: d.id, xFrac, kind: m.perchWindowId ? 'window' : 'floor' }, ms / 60_000, this.wall());
+    this.markDirty();
+  }
+
+  private lastPosition(): PersistedCat['lastPosition'] {
+    const m = this.mover;
+    const d = m.fullWorldModel.display(m.displayId);
+    if (!d) return null;
+    const xFrac = clamp((m.x - d.workAreaPx.x) / d.workAreaPx.width, 0, 1);
+    const support = m.support.kind === 'window' ? 'window' : m.support.kind === 'floor' ? 'floor' : 'air';
+    return { displayKey: d.id.slice(0, 64), xFrac: Number.isFinite(xFrac) ? xFrac : 0.5, support };
+  }
+
+  // ---- output ---------------------------------------------------------------------------
+
+  private lookForState(): Point | null {
+    const a = this.act;
+    const env = this.env;
+    if (!env) return null;
+    const cursor = env.cursor && Number.isFinite(env.cursor.x) && Number.isFinite(env.cursor.y) ? { x: env.cursor.x, y: env.cursor.y } : null;
+    const fg = env.foreground && isFiniteRect(env.foreground.rect) && !env.foreground.minimized ? rectCenter(env.foreground.rect) : null;
+    switch (a.state) {
+      case 'watchingCursor':
+      case 'chasingCursor':
+        return cursor;
+      case 'seekingAttention':
+        return a.phase === 'approach' ? null : cursor;
+      case 'watchingUser':
+        return fg ?? cursor;
+      case 'curious':
+        return a.phase === 'look' ? a.target : null;
+      case 'inspectingWindow': {
+        if (a.phase === 'approach') return null;
+        const r = a.windowId ? this.safeWindowRect(a.windowId) : null;
+        return r ? rectCenter(r) : a.target;
+      }
+      case 'playing':
+        if (a.variant === 'pawAt' && cursor && !this.disabled.has('pawAtCursor')) {
+          const d = Math.hypot(cursor.x - this.mover.x, cursor.y - this.mover.y) / this.bl;
+          if (d < 2.5) return cursor;
+        }
+        return a.variant === 'pawAt' ? { x: this.mover.x + this.mover.facing * 0.8 * this.bl, y: this.mover.y - 0.2 * this.mover.bodyHeight } : null;
+      case 'idle': {
+        if (a.target) return a.target;
+        const c = this.cursorInfo();
+        return c && c.distBodyLengths < 6 && c.speedDip > 60 ? c.point : null;
+      }
+      case 'hiding':
+        return a.phase === 'hide' ? cursor : null;
+      default:
+        return null;
+    }
+  }
+
+  private computeLook(): Point | null {
+    const s = this.act.state;
+    if (ASLEEP_STATES.has(s) || s === 'away' || s === 'held' || s === 'beingPetted' || PHYSICAL_STATES.has(s)) return null;
+    if (this.glance && this.now < this.glance.until && !ACTIVE_STATES.has(s)) return this.glance.target;
+    const p = this.lookForState();
+    return isFinitePoint(p) ? p : null;
+  }
+
+  private computeClip(): AnimClip {
+    const a = this.act;
+    const m = this.mover;
+    if (this.oneShot && this.now >= this.oneShot.until) this.oneShot = null;
+    if (this.oneShot && CALM_STATES.has(a.state)) return this.oneShot.clip;
+    const scale = m.scale;
+    return clipFor(a.state, a.phase, {
+      groundSpeed: m.groundSpeed,
+      runThreshold: 140 * this.settings.behavior.movementSpeed * scale,
+      moveThreshold: 6 * scale,
+      vy: m.vy,
+    });
+  }
+
+  private fadeTarget(): number {
+    if (this.mode === 'away') return 0;
+    return this.mode === 'quiet' ? 0.5 : 1;
+  }
+
+  private nextTickMs(): number {
+    if (Math.abs(this.fade - this.fadeTarget()) > 0.005) return 33;
+    if (this.mode === 'away') return 500;
+    if (this.quitting) return 33;
+    const s = this.act.state;
+    const env = this.env;
+    if (s === 'sleeping') return this.mode === 'normal' ? 150 : 500;
+    const m = this.mover;
+    if (!m.grounded || m.groundSpeed > 1 || env?.cursorOverCat || env?.dragCursor) return 33;
+    return STATE_SPECS[s].tickMs;
+  }
+
+  private compose(snap: boolean): SimOutput {
+    const m = this.mover;
+    const now = this.now;
+    this.emotes.update(now);
+    const clip = this.computeClip();
+    if (clip !== this.clip || this.restartClip) {
+      this.clip = clip;
+      this.clipStartedAt = now;
+      this.restartClip = false;
+    }
+    const bw = m.bodyWidth;
+    const bh = m.bodyHeight;
+    const speedBl = m.grounded ? m.groundSpeed / bw : 0;
+    const k = 1 - Math.exp(-this.dt / 600);
+    const st = this.cat.stats;
+    this.arousal += (clamp(AROUSAL[this.act.state] + 0.3 * st.fear, 0, 1) - this.arousal) * k;
+    const contentTarget = clamp(baseContentment(st) + (CONTENTMENT_BIAS[this.act.state] ?? 0), 0, 1);
+    this.contentment += (contentTarget - this.contentment) * (1 - Math.exp(-this.dt / 1000));
+    const ft = this.fadeTarget();
+    const fstep = this.dt / FADE_MS;
+    this.fade = this.fade < ft ? Math.min(ft, this.fade + fstep) : Math.max(ft, this.fade - fstep);
+    const visible = this.fade > 0.01;
+    const look = this.computeLook();
+
+    const requests = this.requests;
+    const s = this.act.state;
+    if ((s === 'curious' || s === 'watchingUser') && this.mode === 'normal' && now - this.lastPerceptionAt >= PERCEPTION_MIN_INTERVAL_MS) {
+      requests.push({ type: 'perception', reason: s === 'curious' ? 'curious' : 'watching', focus: look ?? { x: m.x, y: m.y - bh / 2 } });
+      this.lastPerceptionAt = now;
+    }
+    if (this.dirty && now - this.lastSaveAt >= SAVE_MIN_INTERVAL_MS) {
+      requests.push({ type: 'save' });
+      this.dirty = false;
+      this.lastSaveAt = now;
+    }
+
+    return {
+      x: m.x,
+      y: m.y,
+      facing: m.facing,
+      state: s,
+      clip: this.clip,
+      clipStartedAt: this.clipStartedAt,
+      speed: speedBl < 0.02 ? 0 : speedBl,
+      vy: m.airborne ? m.vy : 0,
+      look,
+      arousal: clamp(this.arousal, 0, 1),
+      contentment: clamp(this.contentment, 0, 1),
+      emote: visible ? this.emotes.emote : null,
+      emoteStartedAt: this.emotes.emoteStartedAt,
+      opacity: clamp(this.settings.appearance.opacity, 0, 1) * this.fade,
+      visible,
+      snap,
+      displayId: m.displayId,
+      support: m.support,
+      boundsPx: { x: m.x - bw / 2, y: m.y - bh, width: bw, height: bh },
+      nextTickMs: this.nextTickMs(),
+      requests,
+    };
+  }
+}
+
+/** Factory with test/diagnostic hooks (transition observer). */
+export function createInstrumentedCatSim(opts: CatSimOptions, hooks: SimHooks): CatSimImpl {
+  return new CatSimImpl(opts, hooks);
+}
+
