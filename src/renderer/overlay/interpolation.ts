@@ -1,7 +1,10 @@
 // Snapshot interpolation for CatRenderState: renders about one snapshot interval in
 // the past so positions can be interpolated between the two snapshots around the
 // render time. Honours `snap`, rejects stale/out-of-order snapshots and keeps the
-// render clock monotonic and running even when snapshots pause.
+// render clock monotonic and running even when snapshots pause. When the simulation
+// clock falls behind local time (a stalled or slowed host) the render clock slows
+// down until it is back behind the data instead of jumping back: clip phases and
+// emote ages derive from it and must never replay.
 import type { CatRenderState } from '../../shared/cat';
 
 const CAPACITY = 6;
@@ -9,6 +12,11 @@ const MIN_DELAY_MS = 16;
 const MAX_DELAY_MS = 150;
 /** A clock disagreement larger than this resets the sim<->local offset. */
 const OFFSET_RESET_MS = 1000;
+/** While ahead of its target the render clock runs slower: down to this rate at SLEW_FULL_MS ahead. */
+const SLEW_MIN_RATE = 0.25;
+const SLEW_FULL_MS = 500;
+/** Longest local gap between two samples the render clock advances by. */
+const MAX_SAMPLE_GAP_MS = 250;
 /** Implied speeds above this (DIP/s) are treated as teleports even without `snap`. */
 const MAX_INTERP_SPEED = 20000;
 /** A sequence number this far below the last one means the sender restarted. */
@@ -37,6 +45,7 @@ export class SnapshotInterpolator {
   private offset = Number.NaN;
   private interval = 33;
   private renderSim = Number.NEGATIVE_INFINITY;
+  private lastSampleAt = Number.NaN;
   private usedSeq = Number.NaN;
 
   get size(): number {
@@ -54,7 +63,13 @@ export class SnapshotInterpolator {
     this.lastSeq = Number.NEGATIVE_INFINITY;
     this.offset = Number.NaN;
     this.renderSim = Number.NEGATIVE_INFINITY;
+    this.lastSampleAt = Number.NaN;
     this.usedSeq = Number.NaN;
+  }
+
+  /** How far behind the newest data the render time runs. */
+  private get delay(): number {
+    return Math.min(MAX_DELAY_MS, Math.max(MIN_DELAY_MS, this.interval * 1.1));
   }
 
   /** Adds a snapshot received at local time `now` (ms). Returns false if it was rejected. */
@@ -78,7 +93,10 @@ export class SnapshotInterpolator {
     if (this.count < CAPACITY) this.count++;
 
     const sample = s.t - now;
-    if (!Number.isFinite(this.offset) || s.snap || Math.abs(sample - this.offset) > OFFSET_RESET_MS) {
+    // Re-anchor at once when the render time would already be past this newest snapshot
+    // (the sim clock fell behind local time): averaging would keep it ahead of the data.
+    const ahead = sample < this.offset - this.delay;
+    if (!Number.isFinite(this.offset) || s.snap || ahead || Math.abs(sample - this.offset) > OFFSET_RESET_MS) {
       this.offset = sample;
     } else {
       this.offset += (sample - this.offset) * 0.15;
@@ -89,9 +107,16 @@ export class SnapshotInterpolator {
   /** Interpolated state at local time `now`; false when nothing has been received. */
   sample(now: number, out: InterpSample): boolean {
     if (this.count === 0 || !Number.isFinite(now)) return false;
-    const delay = Math.min(MAX_DELAY_MS, Math.max(MIN_DELAY_MS, this.interval * 1.1));
-    const target = now + this.offset - delay;
-    if (!Number.isFinite(this.renderSim) || target > this.renderSim || this.renderSim - target > 250) this.renderSim = target;
+    const target = now + this.offset - this.delay;
+    if (!Number.isFinite(this.renderSim) || target >= this.renderSim) {
+      this.renderSim = target;
+    } else if (Number.isFinite(this.lastSampleAt)) {
+      // Ahead of the target: never run backwards, run slower until the target catches up.
+      const lead = this.renderSim - target;
+      const rate = Math.max(SLEW_MIN_RATE, 1 - lead / SLEW_FULL_MS);
+      this.renderSim += Math.min(MAX_SAMPLE_GAP_MS, Math.max(0, now - this.lastSampleAt)) * rate;
+    }
+    this.lastSampleAt = now;
     const tr = this.renderSim;
 
     // Walk from the oldest to the newest to find a <= tr < b.

@@ -26,6 +26,8 @@ export interface AdapterFailure {
 
 export type DescribeResult = { ok: true; report: SceneReport; latencyMs: number } | AdapterFailure;
 export type ListModelsResult = { ok: true; models: string[]; latencyMs: number } | AdapterFailure;
+/** Where the server runs the configured model: 'remote' when it forwards requests to another service. */
+export type LocalityResult = { ok: true; locality: 'local' | 'remote'; latencyMs: number } | AdapterFailure;
 
 export interface VisionImage {
   /** Base64 without a data: prefix. */
@@ -41,6 +43,12 @@ export interface VisionAdapter {
   readonly label: string;
   describe(image: VisionImage, signal?: AbortSignal): Promise<DescribeResult>;
   listModels(signal?: AbortSignal): Promise<ListModelsResult>;
+  /**
+   * Servers on this PC only: asks the server whether it runs the configured
+   * model itself (no image is sent). The first answer is kept for the adapter's
+   * lifetime; failures are not kept.
+   */
+  checkLocality?(signal?: AbortSignal): Promise<LocalityResult>;
 }
 
 export interface AdapterCommonOptions {

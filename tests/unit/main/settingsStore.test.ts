@@ -2,9 +2,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { defaultSettings } from '../../../src/shared/settings';
-import { createJsonStore } from '../../../src/main/store/jsonStore';
+import { createJsonStore, type JsonStore } from '../../../src/main/store/jsonStore';
 import { createSettingsStore } from '../../../src/main/store/settingsStore';
-import { manualTimers, memoryLogger, removeDir, tempDir } from './helpers';
+import { failFor, manualTimers, memoryLogger, removeDir, tempDir } from './helpers';
+
+/** A store whose async writes stay in flight until released (the open/write/fsync window). */
+function slowStore() {
+  const syncWrites: unknown[] = [];
+  const releases: Array<(ok: boolean) => void> = [];
+  const store: JsonStore = {
+    filePath: 'settings.json',
+    backupPath: 'settings.json.bak',
+    read: () => ({ status: 'missing', value: null, quarantinedTo: null }),
+    readBackup: () => ({ ok: false }),
+    quarantine: () => null,
+    writeSync: (value) => {
+      syncWrites.push(value);
+      return true;
+    },
+    write: () => new Promise<boolean>((resolve) => releases.push(resolve)),
+  };
+  return { store, syncWrites, releases };
+}
 
 describe('settingsStore', () => {
   let dir: string;
@@ -102,6 +121,71 @@ describe('settingsStore', () => {
     expect(store.dirty).toBe(true);
     store.flushSync();
     expect(onDisk().schemaVersion).toBe(1);
+  });
+
+  it('flushSync still writes while the debounced async write is in flight (session end)', async () => {
+    const timers = manualTimers();
+    const slow = slowStore();
+    const store = createSettingsStore({ store: slow.store, logger: memoryLogger(), setTimer: timers.setTimeout, clearTimer: timers.clearTimeout });
+    store.load();
+    store.patch({ general: { launchAtLogin: true } });
+    timers.advance(500);
+    await Promise.resolve();
+    expect(slow.releases).toHaveLength(1);
+    expect(store.dirty).toBe(true);
+    store.flushSync();
+    expect(slow.syncWrites).toHaveLength(1);
+    expect((slow.syncWrites[0] as { general: { launchAtLogin: boolean } }).general.launchAtLogin).toBe(true);
+    expect(store.dirty).toBe(false);
+    // The late async result changes nothing, and there is nothing left to write.
+    slow.releases[0]!(false);
+    await store.flush();
+    store.flushSync();
+    expect(slow.syncWrites).toHaveLength(1);
+    expect(store.dirty).toBe(false);
+  });
+
+  it('settings restored from the backup never bring back screen-analysis consent', () => {
+    const first = make().store;
+    first.load();
+    first.patch({ general: { catName: 'Pixel' }, ai: { allowCloud: true }, perception: { visualMode: 'ai', consentAt: '2026-10-28T10:00:00.000Z' } });
+    first.flushSync();
+    // The user revokes consent; the file holding that is later damaged.
+    first.patch({ ai: { allowCloud: false }, perception: { visualMode: 'off', consentAt: null } });
+    first.flushSync();
+    fs.writeFileSync(file, '{"schemaVersion":1,"perc');
+
+    const { store } = make();
+    const r = store.load();
+    expect(r.status).toBe('recovered-backup');
+    expect(r.settings.general.catName).toBe('Pixel');
+    expect(r.settings.perception.visualMode).toBe('off');
+    expect(r.settings.perception.consentAt).toBeNull();
+    expect(r.settings.ai.allowCloud).toBe(false);
+    store.flushSync();
+    expect(onDisk().perception).toMatchObject({ visualMode: 'off', consentAt: null });
+  });
+
+  it('a settings file that cannot be read is not overwritten, and its backup grants no consent', () => {
+    const first = make().store;
+    first.load();
+    first.patch({ perception: { visualMode: 'local-stats', consentAt: '2026-10-28T10:00:00.000Z' } });
+    first.flushSync();
+    first.patch({ general: { catName: 'Pixel' } });
+    first.flushSync();
+    const before = fs.readFileSync(file, 'utf8');
+    const locked = failFor('readFileSync', file);
+
+    const { store } = make();
+    const r = store.load();
+    expect(r.status).toBe('unreadable');
+    expect(r.settings.perception.visualMode).toBe('off');
+    expect(r.settings.perception.consentAt).toBeNull();
+    expect(store.dirty).toBe(false);
+    store.patch({ general: { catName: 'Other' } });
+    store.flushSync();
+    locked.mockRestore();
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
   });
 
   it('a listener that throws does not break the store', () => {

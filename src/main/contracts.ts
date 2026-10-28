@@ -58,10 +58,24 @@ export interface WindowTracker {
   getWindowRect(id: string): Rect | null;
   /** Ids of displays where a fullscreen app is in front. */
   getFullscreenDisplayIds(world: WorldGeometry): string[];
-  /** True when the root window at p is excluded (or cannot be cleared). Privacy check. */
+  /**
+   * True when the window shown at p is excluded (or cannot be cleared). This app's windows
+   * are never private: under its overlay the window below is judged. Privacy check.
+   */
   isExcludedAt(p: Point): boolean;
-  /** Rects (px) of visible windows matching privacy exclusions; masked out of every frame. */
+  /**
+   * True when the real foreground window (any kind: owned dialog, tool window, popup) or a
+   * window in its owner chain is excluded, or when that cannot be determined; false while
+   * this app is in front. Privacy check for the capture gate.
+   */
+  isForegroundExcluded(): boolean;
+  /**
+   * Rects (px) of every shown top-level window (dialogs, tool windows and popups included)
+   * matching privacy exclusions; masked out of every frame. When they cannot be located,
+   * one rect covering everything.
+   */
   getExcludedRects(): Rect[];
+  /** Title patterns make window titles be read (in memory only); pass none to read no titles. */
   setExclusions(processes: readonly string[], titlePatterns: readonly string[]): void;
 }
 
@@ -111,6 +125,12 @@ export interface PerceptionService {
   request(reason: 'curious' | 'watching' | 'periodic' | 'event', focus: Point | null): void;
   drainEvents(): SimEvent[];
   setPaused(paused: boolean): void;
+  /** An API key was stored or removed: earlier provider failures (circuit breaker, last error) are forgotten. */
+  onCredentialsChanged(): void;
+  /**
+   * One capture now, not stored. The image is the masked analysis frame (PNG) or,
+   * while AI vision runs, the masked JPEG exactly as it would be sent (it is not sent).
+   */
   preview(): Promise<{ ok: boolean; imageDataUrl?: string; summary?: VisualSummary; blockedReason?: string }>;
   testAi(): Promise<{ ok: boolean; message: string; latencyMs?: number; report?: SceneReport }>;
   listModels(): Promise<{ ok: boolean; models: string[]; error?: string }>;

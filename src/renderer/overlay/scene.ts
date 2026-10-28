@@ -4,7 +4,7 @@
 import type { CatRenderState, Emote, RenderStyle } from '../../shared/cat';
 import type { Rect } from '../../shared/geometry';
 import { drawCat, drawShadow, type Ctx2D } from './cat/draw';
-import { drawEmote, EMOTE_SIZE, emoteFrame, type EmoteFrame } from './cat/emotes';
+import { drawEmote, EMOTE_RADIUS, EMOTE_SIZE, emoteFrame, type EmoteFrame } from './cat/emotes';
 import { clamp, smooth } from './cat/math';
 import { LEG_COUNT } from './cat/pose';
 import { CatPuppet } from './cat/puppet';
@@ -43,6 +43,14 @@ export interface DeviceRect {
   y: number;
   w: number;
   h: number;
+}
+
+interface LayerGeometry {
+  block: number;
+  ox: number;
+  oy: number;
+  lw: number;
+  lh: number;
 }
 
 export class CatScene {
@@ -234,11 +242,21 @@ export class CatScene {
       const ly = (i & 2 ? HEAD_RY + 1 : -HEAD_RY - 9) * hf;
       this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 0, 0);
     }
-    // Ear tips are only drawn bounds, not interactive.
+    // Ear tips and whiskers are only drawn bounds, not interactive. Whiskers (drawCat's
+    // drawWhiskers) fan out from the face, which shifts with the face turn, and tilt
+    // with pose.whisker by up to ~0.6 rad.
     for (let i = 0; i < 2; i++) {
       const lx = i ? 10 : -14;
       const ly = -25 * hf;
       this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 1, -1);
+    }
+    const turn = clamp(this.puppet.pose.faceTurn, -2, 1);
+    const fx = 3.6 + turn * 4.2;
+    const back = 1 - 0.4 * clamp(turn + 1, 0, 1);
+    for (let i = 0; i < 4; i++) {
+      const lx = i & 1 ? fx + 22 : fx - 9 - 11.5 * back;
+      const ly = (i & 2 ? 18.7 : -5.3) * hf;
+      this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 0.5, -1);
     }
     for (let i = 0; i < LEG_COUNT; i++) {
       const g = rig.legs[i]!;
@@ -271,7 +289,7 @@ export class CatScene {
       const size = EMOTE_SIZE * clamp(s, 0.85, 2.2);
       this.emoteX = hx + 5 * s * Math.sign(this.facingNow || 1);
       this.emoteY = Math.min(hy, this.y) - (HEAD_RY + 17 + this.emoteF.rise) * s;
-      const half = size * 0.8;
+      const half = (size * EMOTE_RADIUS) / EMOTE_SIZE;
       x0 = Math.min(x0, this.emoteX - half);
       y0 = Math.min(y0, this.emoteY - half);
       x1 = Math.max(x1, this.emoteX + half);
@@ -301,25 +319,60 @@ export class CatScene {
     this.hitCount = k;
   }
 
-  /** Device-pixel rectangle covering the drawn cat (for dirty-rect clearing). */
+  /**
+   * Device-pixel rectangle covering everything draw() can touch (for dirty-rect
+   * clearing): the bounds plus anti-aliasing, and in the layered paths the whole blit
+   * destination, because pixel style turns every touched low-res pixel into a full
+   * block that can reach past the bounds.
+   */
   deviceRect(dpr: number, out: DeviceRect): DeviceRect {
     const b = this.bounds;
-    const x0 = Math.floor(b.x * dpr) - 2;
-    const y0 = Math.floor(b.y * dpr) - 2;
+    let x0 = Math.floor(b.x * dpr) - 2;
+    let y0 = Math.floor(b.y * dpr) - 2;
+    let x1 = Math.ceil((b.x + b.width) * dpr) + 2;
+    let y1 = Math.ceil((b.y + b.height) * dpr) + 2;
+    if (this.needsLayer) {
+      const g = this.layerGeometry(dpr, this.layerG);
+      x0 = Math.min(x0, g.ox);
+      y0 = Math.min(y0, g.oy);
+      x1 = Math.max(x1, g.ox + g.lw * g.block);
+      y1 = Math.max(y1, g.oy + g.lh * g.block);
+    }
     out.x = x0;
     out.y = y0;
-    out.w = Math.ceil((b.x + b.width) * dpr) + 2 - x0;
-    out.h = Math.ceil((b.y + b.height) * dpr) + 2 - y0;
+    out.w = x1 - x0;
+    out.h = y1 - y0;
+    return out;
+  }
+
+  private get needsLayer(): boolean {
+    return this.style === 'pixel' || this.opacity < 0.999;
+  }
+
+  // Scratch result of layerGeometry (a field, so the per-frame pass allocates nothing).
+  private readonly layerG: LayerGeometry = { block: 1, ox: 0, oy: 0, lw: 0, lh: 0 };
+
+  /**
+   * Placement of the scratch layer in device pixels: `block` device px per layer px, the
+   * layer's top-left at (ox, oy), lw x lh layer px. Aligned to the block grid so pixels
+   * do not crawl while moving. drawLayered blits exactly this rectangle.
+   */
+  private layerGeometry(dpr: number, out: LayerGeometry): LayerGeometry {
+    const block = this.style === 'pixel' ? Math.max(2, Math.round(PIXEL_BLOCK * this.scale * dpr)) : 1;
+    const b = this.bounds;
+    out.block = block;
+    out.ox = Math.floor((b.x * dpr) / block) * block - block;
+    out.oy = Math.floor((b.y * dpr) / block) * block - block;
+    out.lw = Math.ceil(((b.x + b.width) * dpr - out.ox) / block) + 2;
+    out.lh = Math.ceil(((b.y + b.height) * dpr - out.oy) / block) + 2;
     return out;
   }
 
   /** Draws the cat into `ctx` (whose canvas pixels are overlay DIP * dpr). */
   draw(ctx: Ctx2D, dpr: number, layers: LayerProvider | null): void {
     if (!this.isVisible) return;
-    const pixel = this.style === 'pixel';
-    const needLayer = pixel || this.opacity < 0.999;
-    if (needLayer && layers) {
-      this.drawLayered(ctx, dpr, layers, pixel);
+    if (this.needsLayer && layers) {
+      this.drawLayered(ctx, dpr, layers, this.style === 'pixel');
       return;
     }
     ctx.save();
@@ -329,13 +382,7 @@ export class CatScene {
   }
 
   private drawLayered(ctx: Ctx2D, dpr: number, layers: LayerProvider, pixel: boolean): void {
-    const block = pixel ? Math.max(2, Math.round(PIXEL_BLOCK * this.scale * dpr)) : 1;
-    const b = this.bounds;
-    // Align the layer to the block grid so pixels do not crawl while moving.
-    const ox = Math.floor((b.x * dpr) / block) * block - block;
-    const oy = Math.floor((b.y * dpr) / block) * block - block;
-    const lw = Math.ceil(((b.x + b.width) * dpr - ox) / block) + 2;
-    const lh = Math.ceil(((b.y + b.height) * dpr - oy) / block) + 2;
+    const { block, ox, oy, lw, lh } = this.layerGeometry(dpr, this.layerG);
     if (lw <= 0 || lh <= 0 || lw > 4096 || lh > 4096) return;
     const layer = layers(lw, lh);
     if (!layer) return;

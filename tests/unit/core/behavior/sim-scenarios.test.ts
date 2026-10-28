@@ -3,6 +3,7 @@ import type { BehaviorState } from '../../../../src/shared/cat';
 import type { SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
 import { TOGGLEABLE_BEHAVIORS } from '../../../../src/shared/settings';
+import { SLOWEST_TICK_MS } from '../../../../src/core/behavior/sim';
 import { DUAL_MIXED, Harness, settingsWith, SINGLE } from './fixtures';
 
 const MIN = 60_000;
@@ -115,7 +116,7 @@ describe('pause, hide and fullscreen', () => {
     expect(h.last!.x).toBeCloseTo(x0, 6);
     for (const s of seen) expect(['resting', 'fallingAsleep', 'sleeping', 'landing', 'held', 'falling', 'idle', 'walking', 'grooming', 'watchingUser', 'curious', 'wakingUp']).toContain(s);
     expect(h.last!.state).toBe('sleeping');
-    expect(h.last!.nextTickMs).toBe(500);
+    expect(h.last!.nextTickMs).toBe(SLOWEST_TICK_MS);
     // A sleeping cat needs a few strokes to wake up; continued petting then turns into beingPetted.
     h.step([{ type: 'pointer.pet', at: catPoint(h.last), strength: 1 }]);
     expect(h.last!.state).toBe('sleeping');
@@ -147,7 +148,7 @@ describe('pause, hide and fullscreen', () => {
     h.run(600);
     expect(h.last!.visible).toBe(false);
     expect(h.last!.opacity).toBe(0);
-    expect(h.last!.nextTickMs).toBe(500);
+    expect(h.last!.nextTickMs).toBe(SLOWEST_TICK_MS);
     h.run(5000, 500, () => [{ type: 'pointer.dragStart', at: { x: 900, y: 1000 } }, { type: 'command.play' }]);
     expect(h.last!.state).toBe('away');
     h.env.hidden = false;

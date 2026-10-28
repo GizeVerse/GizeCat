@@ -5,7 +5,7 @@ import type { PersistedCat } from '../../../src/shared/catState';
 import { PersistedCatSchema } from '../../../src/shared/catState';
 import { createCatStore, type MigrateCatState } from '../../../src/main/store/catStore';
 import { createJsonStore } from '../../../src/main/store/jsonStore';
-import { memoryLogger, removeDir, tempDir } from './helpers';
+import { failFor, memoryLogger, removeDir, tempDir } from './helpers';
 
 function cat(id: string, savedAt = 1): PersistedCat {
   return PersistedCatSchema.parse({ schemaVersion: 1, catId: id, bornAt: 1000, savedAt });
@@ -82,6 +82,39 @@ describe('catStore', () => {
     const r = store.load();
     expect(r).toMatchObject({ recovered: true, source: 'new' });
     expect(store.dirty).toBe(true);
+  });
+
+  it('a cat file that exists but cannot be read (locked) is never replaced', async () => {
+    const s = make();
+    s.attach(() => cat('months-old-cat'));
+    s.saveSync();
+    s.saveSync();
+    const before = fs.readFileSync(file, 'utf8');
+    const locked = failFor('readFileSync', file);
+    fs.rmSync(`${file}.bak`);
+
+    const store = make();
+    const r = store.load();
+    expect(r).toMatchObject({ recovered: true, source: 'new' });
+    store.attach(() => r.cat);
+    store.markDirty();
+    expect(store.saveSync()).toBe(false);
+    expect(await store.save()).toBe(false);
+    locked.mockRestore();
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    expect(fs.readdirSync(dir).some((n) => n.includes('.corrupt-'))).toBe(false);
+  });
+
+  it('runs on the backup copy, without saving, while the cat file cannot be read', () => {
+    const s = make();
+    s.attach(() => cat('backup-cat-1'));
+    s.saveSync();
+    s.attach(() => cat('current-cat-2'));
+    s.saveSync();
+    failFor('readFileSync', file, 'EACCES');
+    const store = make();
+    expect(store.load()).toMatchObject({ recovered: true, source: 'backup', cat: { catId: 'backup-cat-1' } });
+    expect(store.dirty).toBe(false);
   });
 
   it('autosaves only while dirty and saves synchronously on demand', async () => {

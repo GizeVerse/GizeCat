@@ -31,10 +31,22 @@ afterEach(async () => {
 });
 
 const common = { fetchImpl: guardedFetch, timeoutMs: 2000 };
-const ollama = (s: MockServer, over: { model?: string; timeoutMs?: number; maxResponseBytes?: number } = {}) =>
-  createOllamaAdapter({ ...common, label: 'Ollama (this PC)', baseUrl: new URL(s.url), model: 'qwen3-vl:4b-instruct', ...over });
-const openai = (s: MockServer, key: string | null = null) =>
-  createOpenAiCompatibleAdapter({ ...common, label: 'OpenAI-compatible (this PC)', baseUrl: new URL(`${s.url}/v1`), model: 'local-vlm', getApiKey: () => key, cloud: false });
+// These helpers test the exchange itself ("Allow cloud" on, so no locality check);
+// the send-time locality guard has its own tests below.
+const ollama = (s: MockServer, over: { model?: string; timeoutMs?: number; maxResponseBytes?: number; allowRemoteModel?: boolean } = {}) =>
+  createOllamaAdapter({ ...common, label: 'Ollama (this PC)', baseUrl: new URL(s.url), model: 'qwen3-vl:4b-instruct', allowRemoteModel: true, ...over });
+const openai = (s: MockServer, key: string | null = null, over: { model?: string; allowRemoteModel?: boolean } = {}) =>
+  createOpenAiCompatibleAdapter({
+    ...common,
+    label: 'OpenAI-compatible (this PC)',
+    baseUrl: new URL(`${s.url}/v1`),
+    model: 'local-vlm',
+    getApiKey: () => key,
+    cloud: false,
+    localServer: true,
+    allowRemoteModel: true,
+    ...over,
+  });
 const anthropic = (s: MockServer, key: string | null = API_KEY, model = 'claude-haiku-5-5') =>
   createAnthropicAdapter({ ...common, label: 'Anthropic (cloud)', baseUrl: new URL(s.url), model, getApiKey: () => key });
 
@@ -246,6 +258,124 @@ describe('OpenAI-compatible adapter', () => {
     expect(await openai(s).listModels()).toMatchObject({ ok: true, models: ['a-model', 'b-model'] });
     expect(s.requests[0]!.url).toBe('/v1/models');
   });
+
+  it('listModels on a local server hides Ollama cloud models', async () => {
+    const s = await server((_r, res) => sendJson(res, 200, { object: 'list', data: [{ id: 'qwen3-vl:235b-cloud' }, { id: 'gemma3:4b' }, { id: 'gpt-oss:120b-cloud' }] }));
+    expect(await openai(s).listModels()).toMatchObject({ ok: true, models: ['gemma3:4b'] });
+  });
+});
+
+describe('send-time locality guard (a local server may forward a model to the cloud)', () => {
+  const SHOW_LOCAL = { modelfile: 'FROM qwen3-vl:4b-instruct', details: { family: 'qwen3vl' }, capabilities: ['completion', 'vision'] };
+  const SHOW_REMOTE = { details: { family: 'qwen3vl' }, remote_host: 'https://ollama.com:443', remote_model: 'qwen3-vl:235b' };
+  const chatOk = { message: { role: 'assistant', content: JSON.stringify(REPORT) }, done: true };
+  const completionOk = { choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(REPORT) }, finish_reason: 'stop' }] };
+  const urls = (s: MockServer) => s.requests.map((r) => `${r.method} ${r.url}`);
+  const imageNeverSent = (s: MockServer) => expect(s.requests.map((r) => r.body).join('\n')).not.toContain(IMAGE.base64);
+
+  it('Ollama: asks /api/show once, then sends to a model the server runs itself', async () => {
+    const s = await server((r, res) => (r.url === '/api/show' ? sendJson(res, 200, SHOW_LOCAL) : sendJson(res, 200, chatOk)));
+    const a = ollama(s, { allowRemoteModel: false });
+    expect(await a.describe(IMAGE)).toMatchObject({ ok: true, report: REPORT });
+    expect(await a.describe(IMAGE)).toMatchObject({ ok: true });
+    expect(urls(s)).toEqual(['POST /api/show', 'POST /api/chat', 'POST /api/chat']);
+    expect(s.requests[0]!.json).toEqual({ model: 'qwen3-vl:4b-instruct' });
+    expect(await a.checkLocality!()).toMatchObject({ ok: true, locality: 'local' });
+    expect(s.requests).toHaveLength(3);
+  });
+
+  it('Ollama: an alias of a cloud model (remote_host / remote_model) never receives the image', async () => {
+    for (const show of [SHOW_REMOTE, { details: {}, remote_host: 'https://ollama.com:443' }, { details: {}, remote_model: 'gpt-oss:120b' }]) {
+      const s = await server((r, res) => (r.url === '/api/show' ? sendJson(res, 200, show) : sendJson(res, 200, chatOk)));
+      const r = await ollama(s, { model: 'myvision', allowRemoteModel: false }).describe(IMAGE);
+      expect(r).toMatchObject({ ok: false, kind: 'config', message: expect.stringMatching(/cloud/i) });
+      expect(urls(s)).toEqual(['POST /api/show']);
+      imageNeverSent(s);
+    }
+  });
+
+  it('Ollama: a "-cloud" model is refused without any request; with Allow cloud it is not checked', async () => {
+    const s = await server((_r, res) => sendJson(res, 200, chatOk));
+    expect(await ollama(s, { model: 'gpt-oss:120b-cloud', allowRemoteModel: false }).describe(IMAGE)).toMatchObject({ ok: false, kind: 'config' });
+    expect(s.requests).toHaveLength(0);
+    expect(await ollama(s, { model: 'gpt-oss:120b-cloud', allowRemoteModel: true }).describe(IMAGE)).toMatchObject({ ok: true });
+    expect(urls(s)).toEqual(['POST /api/chat']);
+  });
+
+  it('Ollama: when the server cannot confirm the model, nothing is sent (fail closed, never pulls)', async () => {
+    const cases: Array<[number, unknown, string]> = [
+      [404, { error: "model 'myvision' not found" }, 'not-found'],
+      [500, { error: 'boom' }, 'http'],
+      [200, {}, 'bad-response'],
+      [200, [1, 2], 'bad-response'],
+    ];
+    for (const [status, body, kind] of cases) {
+      const s = await server((r, res) => (r.url === '/api/show' ? sendJson(res, status, body) : sendJson(res, 200, chatOk)));
+      const r = await ollama(s, { model: 'myvision', allowRemoteModel: false }).describe(IMAGE);
+      expect(r).toMatchObject({ ok: false, kind });
+      if (kind === 'not-found') expect(r.ok ? '' : r.message).toContain('ollama pull myvision');
+      expect(urls(s)).toEqual(['POST /api/show']);
+      imageNeverSent(s);
+    }
+  });
+
+  it('OpenAI-compatible on a local Ollama (/v1): a cloud-backed model never receives the image', async () => {
+    const s = await server((r, res) => {
+      if (r.url === '/api/version') sendJson(res, 200, { version: '0.12.6' });
+      else if (r.url === '/api/show') sendJson(res, 200, SHOW_REMOTE);
+      else sendJson(res, 200, completionOk);
+    });
+    const a = openai(s, null, { model: 'myvision', allowRemoteModel: false });
+    expect(await a.describe(IMAGE)).toMatchObject({ ok: false, kind: 'config', message: expect.stringMatching(/cloud/i) });
+    expect(urls(s)).toEqual(['GET /api/version', 'POST /api/show']);
+    expect(s.requests[1]!.json).toEqual({ model: 'myvision' });
+    imageNeverSent(s);
+  });
+
+  it('OpenAI-compatible: a "-cloud" model on a local server is refused without any request', async () => {
+    const s = await server((_r, res) => sendJson(res, 200, completionOk));
+    expect(await openai(s, null, { model: 'qwen3-vl:235b-cloud', allowRemoteModel: false }).describe(IMAGE)).toMatchObject({ ok: false, kind: 'config' });
+    expect(s.requests).toHaveLength(0);
+  });
+
+  it('OpenAI-compatible on a local Ollama: a local model is confirmed and used', async () => {
+    const s = await server((r, res) => {
+      if (r.url === '/api/version') sendJson(res, 200, { version: '0.12.6' });
+      else if (r.url === '/api/show') sendJson(res, 200, SHOW_LOCAL);
+      else sendJson(res, 200, completionOk);
+    });
+    const a = openai(s, 'lm-key-123456', { model: 'qwen3-vl:4b-instruct', allowRemoteModel: false });
+    expect(await a.describe(IMAGE)).toMatchObject({ ok: true, report: REPORT });
+    expect(urls(s)).toEqual(['GET /api/version', 'POST /api/show', 'POST /v1/chat/completions']);
+  });
+
+  it('OpenAI-compatible on a server that is not Ollama: treated as local', async () => {
+    const notOllama: Array<(res: Parameters<typeof sendJson>[0]) => void> = [
+      (res) => sendJson(res, 404, { error: 'not found' }),
+      (res) => sendJson(res, 405, {}),
+      // LM Studio answers unknown routes with 200 and an error object.
+      (res) => sendJson(res, 200, { error: 'Unexpected endpoint or method. (GET /api/version)' }),
+      (res) => {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<html></html>');
+      },
+    ];
+    for (const answer of notOllama) {
+      const s = await server((r, res) => (r.url === '/api/version' ? answer(res) : sendJson(res, 200, completionOk)));
+      expect(await openai(s, null, { allowRemoteModel: false }).describe(IMAGE)).toMatchObject({ ok: true });
+      expect(urls(s)).toEqual(['GET /api/version', 'POST /v1/chat/completions']);
+    }
+  });
+
+  it('OpenAI-compatible: an unclear answer to the probe sends nothing (fail closed)', async () => {
+    for (const status of [401, 500, 503]) {
+      const s = await server((r, res) => (r.url === '/api/version' ? sendJson(res, status, { error: 'x' }) : sendJson(res, 200, completionOk)));
+      const r = await openai(s, null, { allowRemoteModel: false }).describe(IMAGE);
+      expect(r.ok).toBe(false);
+      expect(urls(s)).toEqual(['GET /api/version']);
+      imageNeverSent(s);
+    }
+  });
 });
 
 describe('Anthropic adapter', () => {
@@ -356,5 +486,29 @@ describe('createVisionAdapter (egress re-check)', () => {
     expect(a.ok && a.cloud && a.adapter.provider).toBe('anthropic');
     const o = createVisionAdapter({ settings: withAi({ provider: 'ollama' }), secrets, fetchImpl: guardedFetch });
     expect(o.ok && !o.cloud && o.adapter.label).toBe('Ollama (this PC)');
+  });
+
+  it('a cloud model name on a local server still gets an adapter (to list models), which refuses to send it images', async () => {
+    for (const ai of [
+      { provider: 'ollama' as const, ollamaModel: 'gpt-oss:120b-cloud' },
+      { provider: 'openai-compatible' as const, openaiBaseUrl: 'http://127.0.0.1:11434/v1', openaiModel: 'qwen3-vl:235b-cloud' },
+    ]) {
+      const made = createVisionAdapter({ settings: withAi(ai), secrets, fetchImpl: guardedFetch });
+      expect(made.ok).toBe(true);
+      // kind 'config' (not 'network'): refused before any request, guardedFetch never ran.
+      if (made.ok) expect(await made.adapter.describe(IMAGE)).toMatchObject({ ok: false, kind: 'config', message: expect.stringMatching(/Allow cloud/) });
+    }
+  });
+
+  it('the server check is skipped only with allowCloud', async () => {
+    const s = await server((r, res) =>
+      r.url === '/api/show' ? sendJson(res, 200, { details: {}, remote_host: 'https://ollama.com:443' }) : sendJson(res, 200, { message: { content: JSON.stringify(REPORT) } }),
+    );
+    const local = createVisionAdapter({ settings: withAi({ provider: 'ollama', ollamaBaseUrl: s.url, ollamaModel: 'myvision' }), secrets, fetchImpl: guardedFetch });
+    const allowed = createVisionAdapter({ settings: withAi({ provider: 'ollama', ollamaBaseUrl: s.url, ollamaModel: 'myvision', allowCloud: true }), secrets, fetchImpl: guardedFetch });
+    expect(local.ok && allowed.ok).toBe(true);
+    if (local.ok) expect(await local.adapter.describe(IMAGE)).toMatchObject({ ok: false, kind: 'config' });
+    if (allowed.ok) expect(await allowed.adapter.describe(IMAGE)).toMatchObject({ ok: true });
+    expect(s.requests.map((r) => r.url)).toEqual(['/api/show', '/api/chat']);
   });
 });

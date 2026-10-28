@@ -61,6 +61,22 @@ describe('computePlatforms', () => {
     expect(computePlatforms([top, target], 60)).toHaveLength(2);
     expect(computePlatforms([win('narrow', rect(0, 0, 79, 300))])).toEqual([]);
   });
+
+  it('lets windows that are not app windows occlude when the full z-order is known', () => {
+    const browser = win('browser', rect(100, 400, 1200, 600));
+    const max = win('max', rect(0, 0, 1920, 1152), { maximized: true });
+    const occluders = [
+      { id: 'dialog', rect: rect(300, 250, 500, 400) }, // owned dialog: not an app window
+      { id: 'browser', rect: browser.rect },
+      { id: 'max', rect: max.rect },
+    ];
+    expect(computePlatforms([browser, max], 80, occluders)).toEqual([
+      { windowId: 'browser', y: 400, x0: 100, x1: 300 },
+      { windowId: 'browser', y: 400, x0: 800, x1: 1300 },
+    ]);
+    // An app window missing from the z-order is not shown, so it offers no edge.
+    expect(computePlatforms([browser], 80, [])).toEqual([]);
+  });
 });
 
 function display(id: string, x: number, y: number, w: number, h: number, primary = false): DisplayGeometry {

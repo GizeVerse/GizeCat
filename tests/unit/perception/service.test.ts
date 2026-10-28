@@ -30,11 +30,13 @@ afterEach(() => {
   for (const s of live.splice(0)) s.dispose();
 });
 
-function setup(settings: Settings) {
+/** `prepare` runs before the service exists (it asks the server about the model right away). */
+function setup(settings: Settings, prepare?: (adapter: MockAdapter) => void) {
   const clock = new FakeClock();
   const host = new FakeHost();
   const cap = new FakeCapturer();
   const adapter = new MockAdapter();
+  prepare?.(adapter);
   const factory = mockFactory(adapter);
   const logger = recordingLogger();
   const svc = createPerceptionServiceWith({ logger, host, secrets: memorySecrets('sk-test-SECRET-KEY-123'), settings, now: clock.now, capture: cap, adapterFactory: factory, fetchImpl: noFetch });
@@ -177,6 +179,8 @@ describe('privacy: nothing is captured unless allowed', () => {
       { provider: 'anthropic' as const },
       { provider: 'openai-compatible' as const, openaiBaseUrl: 'https://api.example.com/v1', openaiModel: 'gpt-x' },
       { provider: 'ollama' as const, ollamaModel: 'gpt-oss:120b-cloud' },
+      // Ollama's OpenAI-compatible API on this PC forwards "-cloud" models to ollama.com as well.
+      { provider: 'openai-compatible' as const, openaiBaseUrl: 'http://127.0.0.1:11434/v1', openaiModel: 'qwen3-vl:235b-cloud' },
     ]) {
       const t = setup(aiLocal({ ai }));
       await requestAndSettle(t, 'curious');
@@ -187,8 +191,24 @@ describe('privacy: nothing is captured unless allowed', () => {
       expect(t.svc.status).toMatchObject({ mode: 'local-stats', aiProviderLabel: null, blockedReason: expect.stringMatching(/Allow cloud/) });
       const test = await t.svc.testAi();
       expect(test).toMatchObject({ ok: false, message: expect.stringMatching(/Allow cloud/) });
-      expect((await t.svc.listModels()).ok).toBe(false);
       expect(t.factory.calls).toBe(0);
+      expect(t.adapter.calls).toHaveLength(0);
+    }
+  });
+
+  it('listing models is refused only for endpoints off this PC, never because of the typed model', async () => {
+    for (const ai of [{ provider: 'anthropic' as const }, { provider: 'openai-compatible' as const, openaiBaseUrl: 'https://api.example.com/v1', openaiModel: 'gpt-x' }]) {
+      const t = setup(aiLocal({ ai }));
+      expect(await t.svc.listModels()).toMatchObject({ ok: false, error: expect.stringMatching(/not on this PC/) });
+      expect(t.factory.calls).toBe(0);
+    }
+    for (const ai of [
+      { provider: 'ollama' as const, ollamaBaseUrl: 'http://127.0.0.1:11434', ollamaModel: 'gpt-oss:120b-cloud' },
+      { provider: 'openai-compatible' as const, openaiBaseUrl: 'http://127.0.0.1:11434/v1', openaiModel: 'qwen3-vl:235b-cloud' },
+    ]) {
+      const t = setup(aiLocal({ ai }));
+      expect(await t.svc.listModels()).toEqual({ ok: true, models: ['qwen3-vl:4b-instruct'] });
+      expect(t.adapter.calls).toHaveLength(0);
     }
   });
 
@@ -202,6 +222,52 @@ describe('privacy: nothing is captured unless allowed', () => {
     expect(t.svc.drainEvents()).toEqual([]);
     expect(t.adapter.calls).toHaveLength(0);
     expect(t.svc.status.blockedReason).toMatch(/private app/i);
+  });
+
+  it('a private window that appears inside the region during the grab drops the frame (masks re-checked)', async () => {
+    const t = setup(aiLocal());
+    // Between the 5x5 sample points, so only the refreshed mask list can see it.
+    t.cap.during = () => {
+      t.host.excludedRects = [{ x: 805, y: 505, width: 60, height: 40 }];
+    };
+    await requestAndSettle(t, 'curious');
+    expect(t.cap.requests).toHaveLength(1);
+    expect(t.cap.requests[0]!.maskRectsPx).not.toContainEqual({ x: 805, y: 505, width: 60, height: 40 });
+    expect(t.svc.drainEvents()).toEqual([]);
+    expect(t.adapter.calls).toHaveLength(0);
+
+    // Next time it is part of the masks the frame is taken with, and the frame is used.
+    t.cap.during = null;
+    t.clock.advance(31_000);
+    await requestAndSettle(t, 'curious');
+    expect(t.cap.requests[1]!.maskRectsPx).toContainEqual({ x: 805, y: 505, width: 60, height: 40 });
+    expect(t.adapter.calls).toHaveLength(1);
+  });
+
+  it('a private window that moves during the grab drops the frame; one that stays put does not', async () => {
+    const t = setup(aiLocal());
+    t.host.excludedRects = [{ x: 0, y: 0, width: 900, height: 600 }];
+    await requestAndSettle(t, 'curious');
+    expect(t.adapter.calls).toHaveLength(1);
+    t.cap.during = () => {
+      t.host.excludedRects = [{ x: 0, y: 0, width: 1000, height: 600 }];
+    };
+    t.clock.advance(31_000);
+    await requestAndSettle(t, 'curious');
+    expect(t.adapter.calls).toHaveLength(1);
+    expect(t.svc.drainEvents().filter((e) => e.type === 'perception.visual')).toHaveLength(1);
+  });
+
+  it('the exclusion list failing after the grab drops the frame (fail closed)', async () => {
+    const t = setup(localStats());
+    t.cap.during = () => {
+      t.host.getExcludedRects = () => {
+        throw new Error('win32 gone');
+      };
+    };
+    await requestAndSettle(t);
+    expect(t.cap.requests).toHaveLength(1);
+    expect(t.svc.drainEvents()).toEqual([]);
   });
 
   it('revoking consent mid-capture drops the frame', async () => {
@@ -293,9 +359,82 @@ describe('local statistics (Tier B)', () => {
   });
 });
 
+describe('where the model runs (a server on this PC may forward it to the cloud)', () => {
+  const remote = () => Promise.resolve({ ok: true as const, locality: 'remote' as const, latencyMs: 1 });
+
+  it('until the server confirms the model, AI is not running and nothing is sent (fail closed)', async () => {
+    let answer!: () => void;
+    const t = setup(aiLocal(), (a) => {
+      a.localityImpl = () => new Promise((resolve) => (answer = () => resolve({ ok: true, locality: 'local', latencyMs: 1 })));
+    });
+    t.svc.request('curious', null);
+    await flush();
+    // A capture waiting for the answer has not started yet, and no image exists.
+    expect(t.cap.requests).toHaveLength(0);
+    expect(t.adapter.calls).toHaveLength(0);
+    expect(t.svc.status).toMatchObject({ mode: 'local-stats', aiProviderLabel: null, blockedReason: expect.stringMatching(/not yet confirmed/) });
+    answer();
+    await flush();
+    expect(t.adapter.localityCalls).toBe(1);
+    expect(t.svc.status).toMatchObject({ mode: 'ai-local', aiProviderLabel: 'Ollama (this PC)', blockedReason: null });
+    expect(t.cap.requests[0]!.jpeg).not.toBeNull();
+    expect(t.adapter.calls).toHaveLength(1);
+  });
+
+  it('an Ollama alias of a cloud model (server reports remote) needs "Allow cloud" and is labelled cloud', async () => {
+    const t = setup(aiLocal({ ai: { ollamaModel: 'myvision' } }), (a) => (a.localityImpl = remote));
+    await requestAndSettle(t, 'curious');
+    expect(t.cap.requests[0]!.jpeg).toBeNull();
+    expect(t.adapter.calls).toHaveLength(0);
+    expect(t.svc.status).toMatchObject({ mode: 'local-stats', aiProviderLabel: null, blockedReason: expect.stringMatching(/runs in the cloud.*Allow cloud/) });
+    expect(await t.svc.testAi()).toMatchObject({ ok: false, message: expect.stringMatching(/runs in the cloud/) });
+    expect(t.adapter.calls).toHaveLength(0);
+
+    t.svc.updateSettings(aiLocal({ ai: { ollamaModel: 'myvision', allowCloud: true } }));
+    await flush();
+    expect(t.svc.status).toMatchObject({ mode: 'ai-cloud', aiProviderLabel: 'Ollama (cloud model)' });
+  });
+
+  it('the same holds for an OpenAI-compatible server on this PC (Ollama /v1)', async () => {
+    const t = setup(aiLocal({ ai: { provider: 'openai-compatible', openaiBaseUrl: 'http://127.0.0.1:11434/v1', openaiModel: 'myvision' } }), (a) => (a.localityImpl = remote));
+    await requestAndSettle(t, 'curious');
+    expect(t.adapter.calls).toHaveLength(0);
+    expect(t.svc.status).toMatchObject({ mode: 'local-stats', blockedReason: expect.stringMatching(/runs in the cloud/) });
+  });
+
+  it('a failed check keeps AI closed, reports why, and is retried', async () => {
+    const t = setup(aiLocal(), (a) => {
+      a.localityImpl = () => Promise.resolve({ ok: false, kind: 'network', message: 'Could not connect to Ollama (this PC). Is it running?', latencyMs: 1 });
+    });
+    await requestAndSettle(t, 'curious');
+    expect(t.cap.requests[0]!.jpeg).toBeNull();
+    expect(t.adapter.calls).toHaveLength(0);
+    expect(t.svc.status).toMatchObject({ mode: 'local-stats', lastError: expect.stringMatching(/Is it running/), blockedReason: expect.stringMatching(/not yet confirmed/) });
+
+    t.adapter.localityImpl = () => Promise.resolve({ ok: true, locality: 'local', latencyMs: 1 });
+    t.clock.advance(31_000);
+    await requestAndSettle(t, 'curious');
+    expect(t.svc.status).toMatchObject({ mode: 'ai-local', lastError: null });
+    expect(t.adapter.calls).toHaveLength(1);
+  });
+
+  it('the answer is kept per adapter configuration and asked again when the model changes', async () => {
+    const t = setup(aiLocal());
+    for (let i = 0; i < 3; i++) {
+      await requestAndSettle(t, 'curious');
+      t.clock.advance(31_000);
+    }
+    expect(t.adapter.localityCalls).toBe(1);
+    t.svc.updateSettings(aiLocal({ ai: { ollamaModel: 'gemma3:4b' } }));
+    await requestAndSettle(t, 'curious');
+    expect(t.adapter.localityCalls).toBe(2);
+  });
+});
+
 describe('AI vision (Tier C)', () => {
   it('sends the masked JPEG to the adapter and emits a validated scene report', async () => {
     const t = setup(aiLocal());
+    await flush(); // the server confirms that it runs the model itself
     expect(t.svc.status).toMatchObject({ mode: 'ai-local', aiProviderLabel: 'Ollama (this PC)' });
     await requestAndSettle(t, 'curious');
     expect(t.cap.requests[0]!.jpeg).toEqual({ maxWidth: 512, quality: 60 });
@@ -364,6 +503,36 @@ describe('AI vision (Tier C)', () => {
     expect(t.adapter.calls).toHaveLength(4);
     expect(t.svc.status.lastError).toBeNull();
     expect(ofType(t.svc.drainEvents(), 'perception.ai')).toHaveLength(1);
+  });
+
+  it('saving or removing an API key clears the circuit breaker and the stale error', async () => {
+    const t = setup(aiLocal({ ai: { provider: 'anthropic', allowCloud: true } }));
+    t.adapter.impl = () => Promise.resolve({ ok: false, kind: 'auth', message: 'The Anthropic API key was rejected.', status: 401, latencyMs: 2 });
+    for (let i = 0; i < 3; i++) {
+      await requestAndSettle(t, 'curious');
+      t.clock.advance(31_000);
+    }
+    expect(t.adapter.calls).toHaveLength(3);
+    expect(t.svc.status.lastError).toMatch(/rejected.*paused for 1 min/);
+
+    t.adapter.impl = () => Promise.resolve({ ok: true, report: REPORT, latencyMs: 3 });
+    t.svc.onCredentialsChanged();
+    expect(t.svc.status.lastError).toBeNull();
+    // 31 s after the trip the breaker would still be open; the new key is tried at once.
+    await requestAndSettle(t, 'curious');
+    expect(t.adapter.calls).toHaveLength(4);
+    expect(ofType(t.svc.drainEvents(), 'perception.ai')).toHaveLength(1);
+  });
+
+  it('a key change aborts a request still running with the old key', async () => {
+    const t = setup(aiLocal({ ai: { provider: 'anthropic', allowCloud: true } }));
+    t.adapter.impl = (_img, signal) =>
+      new Promise((resolve) => signal?.addEventListener('abort', () => resolve({ ok: false, kind: 'aborted', message: 'The request was cancelled.', latencyMs: 0 })));
+    await requestAndSettle(t, 'curious');
+    t.svc.onCredentialsChanged();
+    expect(t.adapter.calls[0]!.signal!.aborted).toBe(true);
+    await flush();
+    expect(t.svc.status.lastError).toBeNull();
   });
 
   it('setPaused(true) aborts an in-flight AI request immediately', async () => {
@@ -463,6 +632,34 @@ describe('preview, test, models, status, dispose', () => {
     const [ev] = ofType(t.svc.drainEvents(), 'perception.visual');
     expect(ev!.summary.features.changeFraction).toBeNull();
     expect(t.svc.status.capturesThisHour).toBe(2);
+  });
+
+  it('while AI vision runs, the preview is the JPEG exactly as it would be sent (and it is not sent)', async () => {
+    const t = setup(aiLocal());
+    const p = await t.svc.preview();
+    expect(p.ok).toBe(true);
+    expect(t.cap.requests[0]!.jpeg).toEqual({ maxWidth: 512, quality: 60 });
+    expect(p.imageDataUrl).toBe(`data:image/jpeg;base64,${JPEG_B64}`);
+    expect(t.cap.pngCalls).toBe(0);
+    expect(t.adapter.calls).toHaveLength(0);
+  });
+
+  it('AI configured but not allowed to run: the preview stays the analysis frame', async () => {
+    const t = setup(aiLocal({ ai: { provider: 'anthropic' } }));
+    const p = await t.svc.preview();
+    expect(t.cap.requests[0]!.jpeg).toBeNull();
+    expect(p.imageDataUrl).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('a private window that appears during the preview grab: no image is returned', async () => {
+    const t = setup(localStats());
+    t.cap.during = () => {
+      t.host.excludedRects = [{ x: 805, y: 505, width: 60, height: 40 }];
+    };
+    const p = await t.svc.preview();
+    expect(p).toMatchObject({ ok: false, blockedReason: expect.stringMatching(/private window moved/) });
+    expect(p.imageDataUrl).toBeUndefined();
+    expect(t.cap.pngCalls).toBe(0);
   });
 
   it('testAi uses a synthetic image, never the screen', async () => {

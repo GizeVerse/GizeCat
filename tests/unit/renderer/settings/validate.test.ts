@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { isLoopbackUrl } from '../../../../src/core/perception/endpoint';
 import { S } from '../../../../src/renderer/settings/strings';
 import {
-  isLoopbackHost,
   validateApiKey,
   validateBaseUrl,
   validateCatName,
@@ -89,9 +89,24 @@ describe('exclusion entries', () => {
 });
 
 describe('AI connection fields', () => {
-  it('recognises loopback hosts', () => {
-    for (const h of ['localhost', 'app.localhost', '127.0.0.1', '127.255.0.9', '[::1]', '::1']) expect(isLoopbackHost(h)).toBe(true);
-    for (const h of ['192.168.1.10', '10.0.0.1', 'example.com', '127.0.0.1.example.com', '0.0.0.0', '128.0.0.1']) expect(isLoopbackHost(h)).toBe(false);
+  it('decides "on this PC" exactly as main does', () => {
+    const loopback = ['http://localhost:1', 'http://127.0.0.1:11434', 'http://127.255.0.9', 'http://[::1]:8080', 'http://[::ffff:7f00:1]:11434', 'http://0x7f.1:11434'];
+    const remote = [
+      'http://app.localhost:1234',
+      'http://ollama.localhost:11434',
+      'http://localhost.:11434',
+      'http://192.168.1.10',
+      'http://10.0.0.1',
+      'http://example.com',
+      'http://127.0.0.1.example.com',
+      'http://0.0.0.0:11434',
+      'http://128.0.0.1',
+    ];
+    for (const url of [...loopback, ...remote]) {
+      const info = value(validateBaseUrl(url));
+      expect(info.loopback, url).toBe(isLoopbackUrl(url));
+      expect(info.loopback, url).toBe(loopback.includes(url));
+    }
   });
 
   it('accepts http(s) URLs and reports whether they stay on this PC', () => {

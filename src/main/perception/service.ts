@@ -7,10 +7,12 @@ import {
   BLOCK_REASONS,
   decideAiEgress,
   decideCapture,
+  decideEndpointEgress,
   effectiveMode,
   hasConsent,
   resolveAiEgress,
   type GateDecision,
+  type ModelLocality,
 } from '../../core/perception/privacy';
 import { chooseRegion, projectRect, regionKey, stickyRegion, type RegionChoice } from '../../core/perception/region';
 import { makeTestPattern } from '../../core/perception/testPattern';
@@ -20,7 +22,15 @@ import type { Settings } from '../../shared/settings';
 import type { SimEvent } from '../../shared/sim';
 import type { WindowInfo } from '../../shared/world';
 import type { Logger, PerceptionHost, PerceptionService, SecretStore, Unsubscribe } from '../contracts';
-import { adapterConfigKey, createVisionAdapter, isProviderFault, type AdapterFactory, type DescribeResult, type VisionAdapter } from './adapters';
+import {
+  adapterConfigKey,
+  createVisionAdapter,
+  isProviderFault,
+  type AdapterFactory,
+  type DescribeResult,
+  type LocalityResult,
+  type VisionAdapter,
+} from './adapters';
 import type { CapturedFrame, FrameCapturer } from './capture';
 
 export const PERCEPTION_LIMITS = Object.freeze({
@@ -71,6 +81,11 @@ export interface PerceptionServiceDeps {
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 200);
 
+const covers = (outer: Rect, inner: Rect): boolean =>
+  outer.x <= inner.x && outer.y <= inner.y && outer.x + outer.width >= inner.x + inner.width && outer.y + outer.height >= inner.y + inner.height;
+
+const EXCLUSIONS_MOVED = 'A private window moved while the screen was captured, so the image was discarded. Try again.';
+
 interface Plan {
   choice: RegionChoice;
   masksPx: Rect[];
@@ -103,6 +118,11 @@ class PerceptionServiceImpl implements PerceptionService {
   private lastChoice: RegionChoice | null = null;
   private sceneUnknown = true;
   private adapterCache: { key: string; adapter: VisionAdapter } | null = null;
+  /** Where the server runs the configured model, for one adapterConfigKey (answers only, never failures). */
+  private locality: { key: string; value: 'local' | 'remote' } | null = null;
+  private localityRun: { key: string; ctl: AbortController; promise: Promise<void> } | null = null;
+  /** The lastError text set by a failed locality check (cleared once the server answers). */
+  private localityError: string | null = null;
 
   private queue: SimEvent[] = [];
   private blockedReason: string | null = null;
@@ -129,6 +149,7 @@ class PerceptionServiceImpl implements PerceptionService {
     this.lastStatusJson = JSON.stringify(this.computeStatus());
     this.statusTimer = setInterval(() => this.refresh(), PERCEPTION_LIMITS.statusRefreshMs);
     this.statusTimer.unref?.();
+    void this.ensureLocality();
   }
 
   get status(): PerceptionStatus {
@@ -138,12 +159,12 @@ class PerceptionServiceImpl implements PerceptionService {
   updateSettings(next: Settings): void {
     if (this.disposed) return;
     const prev = this.settings;
+    const prevMode = this.modeFor(prev);
     this.settings = next;
     this.captureLimiter.configure(this.captureLimits(next));
     this.aiLimiter.configure(this.aiLimits(next));
     this.gateRetryAt = 0;
-    const prevMode = effectiveMode(prev);
-    const nextMode = effectiveMode(next);
+    const nextMode = this.modeFor(next);
     if (nextMode === 'off' || this.isPaused()) this.abortAll();
     if (nextMode !== prevMode || prev.perception.region !== next.perception.region) {
       this.analyzer.reset();
@@ -158,9 +179,34 @@ class PerceptionServiceImpl implements PerceptionService {
       this.breaker.reset();
       this.adapterCache = null;
       this.lastError = null;
+      this.localityError = null;
+    }
+    if (adapterConfigKey(prev) !== adapterConfigKey(next)) {
+      // The server's answer was about another endpoint or model.
+      this.localityRun?.ctl.abort();
+      this.localityRun = null;
+      this.locality = null;
     }
     if (nextMode !== prevMode) this.log.info('perception mode', { mode: nextMode });
     this.refresh();
+    void this.ensureLocality();
+  }
+
+  onCredentialsChanged(): void {
+    if (this.disposed) return;
+    // Failures with the previous key say nothing about the new one: AI may retry at once.
+    this.aiCtl?.abort();
+    this.testCtl?.abort();
+    this.localityRun?.ctl.abort();
+    this.localityRun = null;
+    this.breaker.reset();
+    this.adapterCache = null;
+    this.lastError = null;
+    this.localityError = null;
+    this.gateRetryAt = 0;
+    this.sceneUnknown = true;
+    this.refresh();
+    void this.ensureLocality();
   }
 
   request(reason: PerceptionRequestReason, focus: Point | null): void {
@@ -182,6 +228,8 @@ class PerceptionServiceImpl implements PerceptionService {
 
   async preview(): Promise<{ ok: boolean; imageDataUrl?: string; summary?: VisualSummary; blockedReason?: string }> {
     if (this.disposed) return { ok: false, blockedReason: 'Perception has stopped.' };
+    await this.ensureLocality();
+    if (this.disposed) return { ok: false, blockedReason: 'Perception has stopped.' };
     const plan = this.plan(null);
     const gate = this.gate(plan);
     if (!gate.allowed) return { ok: false, blockedReason: gate.reason };
@@ -191,18 +239,23 @@ class PerceptionServiceImpl implements PerceptionService {
     const lim = this.previewLimiter.check(now);
     if (!lim.ok) return { ok: false, blockedReason: `Please wait ${Math.ceil(lim.retryInMs / 1000)} s before the next preview.` };
     this.previewLimiter.record(now);
+    // While AI vision runs, the preview is the JPEG exactly as it would be sent
+    // (same size, quality and masks); otherwise it is the analysis frame.
+    const mode = this.mode();
+    const aiImage = (mode === 'ai-local' || mode === 'ai-cloud') && this.aiConfigProblem() === null;
     const ctl = new AbortController();
     this.previewCtl = ctl;
     let frame: CapturedFrame | null = null;
     try {
-      frame = await this.capturer.capture(this.captureRequest(plan, false), ctl.signal);
+      frame = await this.capturer.capture(this.captureRequest(plan, aiImage), ctl.signal);
       if (ctl.signal.aborted || this.disposed) return { ok: false, blockedReason: BLOCK_REASONS.paused };
       const recheck = this.gate(plan);
       if (!recheck.allowed) return { ok: false, blockedReason: recheck.reason };
+      if (this.exclusionsMoved(plan)) return { ok: false, blockedReason: EXCLUSIONS_MOVED };
       const at = this.now();
       const analysis = new FrameAnalyzer().analyze(frame.analysis, { masks: this.frameMasks(plan, frame.analysis), at });
       const events = new VisualEventDeriver().derive(analysis.features);
-      const imageDataUrl = this.capturer.encodePng(frame.analysis);
+      const imageDataUrl = aiImage && frame.jpeg ? `data:image/jpeg;base64,${Buffer.from(frame.jpeg).toString('base64')}` : this.capturer.encodePng(frame.analysis);
       return { ok: true, imageDataUrl, summary: this.summary(plan, analysis.features, events, at) };
     } catch (e) {
       if (ctl.signal.aborted) return { ok: false, blockedReason: BLOCK_REASONS.paused };
@@ -218,8 +271,9 @@ class PerceptionServiceImpl implements PerceptionService {
   async testAi(): Promise<{ ok: boolean; message: string; latencyMs?: number; report?: SceneReport }> {
     if (this.disposed) return { ok: false, message: 'Perception has stopped.' };
     if (this.isPaused()) return { ok: false, message: BLOCK_REASONS.paused };
-    const egress = decideAiEgress(this.settings);
-    if (!egress.allowed) return { ok: false, message: egress.reason };
+    const egress = this.egressDecision();
+    // An unconfirmed model is asked about below, before anything is sent.
+    if (!egress.allowed && egress.code !== 'model-unconfirmed') return { ok: false, message: egress.reason };
     if (this.testCtl) return { ok: false, message: 'A test is already running.' };
     const now = this.now();
     const lim = this.testLimiter.check(now);
@@ -230,6 +284,15 @@ class PerceptionServiceImpl implements PerceptionService {
     const ctl = new AbortController();
     this.testCtl = ctl;
     try {
+      if (!egress.allowed) {
+        const key = adapterConfigKey(this.settings);
+        const where = await this.queryLocality(made.adapter, ctl.signal);
+        if (ctl.signal.aborted) return { ok: false, message: 'The test was cancelled.' };
+        if (!where.ok) return { ok: false, message: where.message, latencyMs: where.latencyMs };
+        this.recordLocality(key, where.locality);
+        const confirmed = this.egressDecision();
+        if (!confirmed.allowed) return { ok: false, message: confirmed.reason };
+      }
       // A synthetic picture: testing a provider never sends real screen content.
       const pattern = makeTestPattern(320, 200);
       const jpeg = this.capturer.encodeJpeg(pattern, 70);
@@ -239,7 +302,9 @@ class PerceptionServiceImpl implements PerceptionService {
       if (!result.ok) return { ok: false, message: result.message, latencyMs: result.latencyMs };
       this.breaker.recordSuccess();
       this.lastError = null;
-      return { ok: true, message: `${made.adapter.label} answered in ${result.latencyMs} ms.`, latencyMs: result.latencyMs, report: result.report };
+      const target = resolveAiEgress(this.settings, this.localityFor(this.settings));
+      const label = target.ok ? target.egress.label : made.adapter.label;
+      return { ok: true, message: `${label} answered in ${result.latencyMs} ms.`, latencyMs: result.latencyMs, report: result.report };
     } catch (e) {
       this.log.warn('ai test failed', { error: errorText(e) });
       return { ok: false, message: 'The AI test failed unexpectedly.' };
@@ -251,8 +316,8 @@ class PerceptionServiceImpl implements PerceptionService {
 
   async listModels(): Promise<{ ok: boolean; models: string[]; error?: string }> {
     if (this.disposed) return { ok: false, models: [], error: 'Perception has stopped.' };
-    // No screen data is sent, but the same egress rule applies to every network call.
-    const egress = decideAiEgress(this.settings);
+    // No screen data is sent: only the endpoint rule applies, whatever model is typed.
+    const egress = decideEndpointEgress(this.settings);
     if (!egress.allowed) return { ok: false, models: [], error: egress.reason };
     const made = this.adapter();
     if (!made.ok) return { ok: false, models: [], error: made.message };
@@ -296,6 +361,7 @@ class PerceptionServiceImpl implements PerceptionService {
 
   private async runCapture(reason: PerceptionRequestReason, focus: Point | null): Promise<void> {
     try {
+      await this.ensureLocality();
       await this.captureOnce(reason, focus);
     } catch (e) {
       this.log.warn('perception capture failed', { error: errorText(e) });
@@ -305,7 +371,7 @@ class PerceptionServiceImpl implements PerceptionService {
   }
 
   private async captureOnce(reason: PerceptionRequestReason, focus: Point | null): Promise<void> {
-    const mode = effectiveMode(this.settings);
+    const mode = this.mode();
     if (mode === 'off' || this.isPaused() || this.captureCtl) return;
     const now = this.now();
     if (now < this.gateRetryAt) {
@@ -351,6 +417,12 @@ class PerceptionServiceImpl implements PerceptionService {
         this.setBlocked(recheck.reason);
         return;
       }
+      // The frame was masked with the windows known before the grab: a private
+      // window that appeared or moved meanwhile may be in it unmasked.
+      if (this.exclusionsMoved(plan)) {
+        this.log.debug('frame dropped: excluded windows changed during capture');
+        return;
+      }
       const at = this.now();
       const t0 = performance.now();
       const key = regionKey(plan.choice);
@@ -382,7 +454,7 @@ class PerceptionServiceImpl implements PerceptionService {
     let ctl: AbortController | null = null;
     try {
       if (this.disposed || this.isPaused() || this.settings.perception.visualMode !== 'ai') return;
-      const egress = decideAiEgress(this.settings);
+      const egress = this.egressDecision();
       if (!egress.allowed || this.aiConfigProblem() !== null) return;
       const made = this.adapter();
       if (!made.ok) {
@@ -432,6 +504,104 @@ class PerceptionServiceImpl implements PerceptionService {
 
   private async describe(adapter: VisionAdapter, base64: string, signal: AbortSignal): Promise<DescribeResult> {
     return adapter.describe({ base64, mediaType: 'image/jpeg' }, signal);
+  }
+
+  // ---- where the model runs ------------------------------------------------
+
+  /** The server's answer for these settings, 'unknown' until it gave one. */
+  private localityFor(s: Settings): ModelLocality {
+    return this.locality !== null && this.locality.key === adapterConfigKey(s) ? this.locality.value : 'unknown';
+  }
+
+  private modeFor(s: Settings) {
+    return effectiveMode(s, this.localityFor(s));
+  }
+
+  private mode() {
+    return this.modeFor(this.settings);
+  }
+
+  private egressDecision(): GateDecision {
+    return decideAiEgress(this.settings, this.localityFor(this.settings));
+  }
+
+  /**
+   * Starts (or joins) asking the server where it runs the configured model,
+   * while AI vision is on and no answer is known yet. Never rejects.
+   */
+  private ensureLocality(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    const key = adapterConfigKey(this.settings);
+    if (this.localityRun?.key === key) return this.localityRun.promise;
+    if (!this.localityCheckDue()) return Promise.resolve();
+    const ctl = new AbortController();
+    const promise = this.runLocalityCheck(key, ctl.signal).finally(() => {
+      if (this.localityRun?.ctl === ctl) this.localityRun = null;
+    });
+    this.localityRun = { key, ctl, promise };
+    return promise;
+  }
+
+  private localityCheckDue(): boolean {
+    const s = this.settings;
+    if (this.isPaused() || s.perception.visualMode !== 'ai' || !hasConsent(s)) return false;
+    const r = resolveAiEgress(s, this.localityFor(s));
+    return r.ok && r.egress.unconfirmed && this.aiConfigProblem() === null && this.breaker.canRequest(this.now());
+  }
+
+  private async runLocalityCheck(key: string, signal: AbortSignal): Promise<void> {
+    try {
+      const made = this.adapter();
+      if (!made.ok) {
+        this.setLocalityError(made.message);
+        return;
+      }
+      // The first request of an AI exchange: it shares the circuit breaker.
+      if (!this.breaker.tryAcquire(this.now())) return;
+      const res = await this.queryLocality(made.adapter, signal);
+      if (signal.aborted || this.disposed || adapterConfigKey(this.settings) !== key) {
+        this.breaker.releaseProbe();
+        return;
+      }
+      if (res.ok) {
+        this.breaker.releaseProbe();
+        this.recordLocality(key, res.locality);
+        return;
+      }
+      if (isProviderFault(res.kind)) {
+        const at = this.now();
+        this.breaker.recordFailure(at);
+        const wait = this.breaker.retryInMs(at);
+        this.setLocalityError(wait > 0 ? `${res.message} AI requests are paused for ${Math.ceil(wait / 60_000)} min.` : res.message);
+      } else {
+        this.breaker.releaseProbe();
+        this.setLocalityError(res.message);
+      }
+      this.log.info('ai model check failed', { kind: res.kind, status: res.status ?? null, provider: made.adapter.provider });
+    } catch (e) {
+      this.breaker.releaseProbe();
+      this.log.warn('ai model check crashed', { error: errorText(e) });
+      this.setLocalityError('Could not check where the AI model runs.');
+    } finally {
+      this.refresh();
+    }
+  }
+
+  private queryLocality(adapter: VisionAdapter, signal: AbortSignal): Promise<LocalityResult> {
+    if (!adapter.checkLocality) return Promise.resolve({ ok: false, kind: 'config', message: `${adapter.label} cannot tell where it runs the model.`, latencyMs: 0 });
+    return adapter.checkLocality(signal);
+  }
+
+  private recordLocality(key: string, value: 'local' | 'remote'): void {
+    this.locality = { key, value };
+    if (this.localityError !== null && this.lastError === this.localityError) this.lastError = null;
+    this.localityError = null;
+    this.log.info('ai model locality', { locality: value });
+  }
+
+  private setLocalityError(message: string): void {
+    this.localityError = message;
+    this.lastError = message;
   }
 
   // ---- helpers ------------------------------------------------------------
@@ -487,6 +657,8 @@ class PerceptionServiceImpl implements PerceptionService {
     this.aiCtl?.abort();
     this.previewCtl?.abort();
     this.testCtl?.abort();
+    this.localityRun?.ctl.abort();
+    this.localityRun = null;
   }
 
   private safe<T>(fn: () => T, fallback: T): T {
@@ -543,6 +715,26 @@ class PerceptionServiceImpl implements PerceptionService {
     });
   }
 
+  /**
+   * True when an excluded window in the region is not covered by the masks the
+   * frame was captured with (it appeared or moved during the grab). Fails closed.
+   */
+  private exclusionsMoved(plan: Plan): boolean {
+    if (!hasExcludedRects(this.host)) return false;
+    let rects: readonly Rect[];
+    try {
+      rects = this.host.getExcludedRects();
+    } catch (e) {
+      this.log.warn('perception host call failed', { error: errorText(e) });
+      return true;
+    }
+    const region = plan.choice.regionPx;
+    return rects.some((r) => {
+      const inside = rectIntersection(r, region);
+      return inside !== null && !plan.masksPx.some((m) => covers(m, inside));
+    });
+  }
+
   private captureRequest(plan: Plan, withJpeg: boolean) {
     return {
       display: plan.choice.display,
@@ -585,7 +777,8 @@ class PerceptionServiceImpl implements PerceptionService {
   private computeStatus(): PerceptionStatus {
     const s = this.settings;
     const now = this.now();
-    const mode = effectiveMode(s);
+    const locality = this.localityFor(s);
+    const mode = effectiveMode(s, locality);
     const paused = this.isPaused();
     let blockedReason: string | null = null;
     if (s.perception.visualMode !== 'off' && !hasConsent(s)) blockedReason = BLOCK_REASONS['no-consent'];
@@ -593,14 +786,15 @@ class PerceptionServiceImpl implements PerceptionService {
       if (paused) blockedReason = BLOCK_REASONS.paused;
       else if (this.blockedReason) blockedReason = this.blockedReason;
       else if (s.perception.visualMode === 'ai' && mode === 'local-stats') {
-        const d = decideAiEgress(s);
-        if (!d.allowed) blockedReason = `AI vision is not running: ${d.reason}`;
+        const d = decideAiEgress(s, locality);
+        // Without a model the server cannot be asked about it: name what is missing.
+        if (!d.allowed) blockedReason = `AI vision is not running: ${(d.code === 'model-unconfirmed' ? this.aiConfigProblem() : null) ?? d.reason}`;
       } else if (mode === 'ai-local' || mode === 'ai-cloud') {
         const problem = this.aiConfigProblem();
         if (problem) blockedReason = `AI vision is not running: ${problem}`;
       }
     }
-    const egress = mode === 'ai-local' || mode === 'ai-cloud' ? resolveAiEgress(s) : null;
+    const egress = mode === 'ai-local' || mode === 'ai-cloud' ? resolveAiEgress(s, locality) : null;
     return {
       mode,
       paused,

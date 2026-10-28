@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createJsonStore } from '../../../src/main/store/jsonStore';
-import { createSecretStore, ENCRYPTION_UNAVAILABLE_MESSAGE, type SecretCipher } from '../../../src/main/store/secretStore';
+import { createSecretFile, createSecretStore, ENCRYPTION_UNAVAILABLE_MESSAGE, type SecretCipher } from '../../../src/main/store/secretStore';
 import { memoryLogger, removeDir, tempDir } from './helpers';
 
 /** Reversible stand-in for DPAPI: XOR with a fixed byte, so plaintext never appears in the file. */
@@ -25,7 +24,14 @@ describe('secretStore', () => {
   });
   afterEach(() => removeDir(dir));
 
-  const make = (cipher = fakeCipher()) => createSecretStore({ store: createJsonStore({ filePath: file }), cipher, logger: memoryLogger() });
+  // The same wiring as app.ts.
+  const make = (cipher = fakeCipher()) => createSecretStore({ store: createSecretFile(file), cipher, logger: memoryLogger() });
+  /** Every file in the folder, as text. */
+  const everything = () =>
+    fs
+      .readdirSync(dir)
+      .map((n) => fs.readFileSync(path.join(dir, n), 'utf8'))
+      .join('\n');
 
   it('stores only base64 ciphertext and round-trips', () => {
     const key = 'sk-ant-test-1234567890abcdef';
@@ -58,6 +64,32 @@ describe('secretStore', () => {
     expect(s.has('anthropic')).toBe(false);
     expect(make().get('openai-compatible')).toBe('key-two-123456');
     expect(s.set('anthropic', null)).toBe(true);
+  });
+
+  it('a removed key leaves no copy on disk and does not come back when secrets.json is damaged', () => {
+    const s = make();
+    s.set('anthropic', 'sk-ant-REMOVE-ME-123456');
+    s.set('openai-compatible', 'key-two-123456');
+    const removedCiphertext = (JSON.parse(fs.readFileSync(file, 'utf8')) as { entries: Record<string, string> }).entries.anthropic!;
+    expect(s.set('anthropic', null)).toBe(true);
+    expect(fs.readdirSync(dir)).toEqual(['secrets.json']);
+    expect(everything()).not.toContain(removedCiphertext);
+
+    fs.writeFileSync(file, '{"version":1,"entries":{"openai-compat');
+    const after = make();
+    expect(after.get('anthropic')).toBeNull();
+    expect(after.has('anthropic')).toBe(false);
+    expect(everything()).not.toContain(removedCiphertext);
+  });
+
+  it('never loads keys from a backup copy left by an older version, and deletes it', () => {
+    const old = make();
+    old.set('anthropic', 'sk-ant-OLD-KEY-123456');
+    fs.copyFileSync(file, `${file}.bak`);
+    fs.writeFileSync(file, '');
+    const s = make();
+    expect(s.has('anthropic')).toBe(false);
+    expect(fs.existsSync(`${file}.bak`)).toBe(false);
   });
 
   it('returns null when decryption fails instead of throwing', () => {

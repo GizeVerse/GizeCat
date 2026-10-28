@@ -27,6 +27,8 @@ export const CALM_STATES: ReadonlySet<BehaviorState> = new Set<BehaviorState>([
 ]);
 /** States that look like "running around". */
 export const ACTIVE_STATES: ReadonlySet<BehaviorState> = new Set<BehaviorState>(['running', 'chasingCursor', 'playing']);
+/** Emotional reactions: they play out instead of being cut short by the next click or stroke. */
+export const REACTION_STATES: ReadonlySet<BehaviorState> = new Set<BehaviorState>(['startled', 'annoyed', 'hiding']);
 
 const AWAKE: readonly BehaviorState[] = [
   'idle',

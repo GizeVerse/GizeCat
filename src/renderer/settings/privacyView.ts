@@ -1,5 +1,5 @@
 // Pure view models for the privacy banner and the screen-analysis consent dialog.
-import { isOllamaCloudModel } from '../../core/perception/endpoint';
+import { isLoopbackUrl } from '../../core/perception/endpoint';
 import { resolveAiEgress } from '../../core/perception/privacy';
 import type { SettingsViewState } from '../../shared/ipc';
 import type { PerceptionMode } from '../../shared/perception';
@@ -25,6 +25,8 @@ export interface PauseModel {
 export function pauseModel(view: PrivacyViewInput): PauseModel {
   const userPaused = view.settings.perception.paused;
   const p = view.status.perception;
+  // status.perception.paused is the user's pause OR main's runtime pause (app.ts:
+  // hidden || locked). With the user's pause off, a visible cat means the PC is locked.
   const suspended = !userPaused && p.paused && p.mode !== 'off' ? (view.status.visible ? 'locked' : 'hidden') : null;
   return { userPaused, suspended };
 }
@@ -58,10 +60,11 @@ export function bannerModel(view: PrivacyViewInput, now: number): BannerModel {
 }
 
 /**
- * - local: a server on this PC with a model main does not treat as cloud.
+ * - local: a server on this PC with a model main does not treat as cloud. The
+ *   server itself may still forward to a cloud model main cannot recognise.
  * - remote: a server on another computer.
  * - cloud: a cloud provider's API.
- * - cloud-model: a server (usually on this PC) that forwards to a cloud model (Ollama "-cloud").
+ * - cloud-model: a server on this PC that forwards to a cloud model (Ollama "-cloud").
  * - invalid: the server address cannot be used, so nothing is sent.
  */
 export type Destination = 'none' | 'local' | 'remote' | 'cloud' | 'cloud-model' | 'invalid';
@@ -75,24 +78,26 @@ export interface ProviderTarget {
   leavesDevice: boolean;
 }
 
-/** Where AI images would go with the current settings, classified by the same code main uses. */
+/**
+ * Where AI images would go with the current settings. The classification is main's
+ * own (resolveAiEgress, isLoopbackUrl), never re-derived here, so the UI cannot
+ * call "on this PC" what main sends to the cloud.
+ */
 export function providerTarget(settings: Settings): ProviderTarget {
   const ai = settings.ai;
   if (ai.provider === 'none') return { destination: 'none', label: S.ai.providers.none.title, host: '', leavesDevice: false };
   const title = S.ai.providers[ai.provider].title;
+  const raw = ai.provider === 'anthropic' ? '' : (ai.provider === 'ollama' ? ai.ollamaBaseUrl : ai.openaiBaseUrl).trim();
   const resolved = resolveAiEgress(settings);
-  if (ai.provider === 'anthropic') {
-    const host = resolved.ok ? resolved.egress.url.host : '';
-    return { destination: 'cloud', label: `${title} (${ai.anthropicModel})`, host, leavesDevice: true };
-  }
-  const raw = (ai.provider === 'ollama' ? ai.ollamaBaseUrl : ai.openaiBaseUrl).trim();
   if (!resolved.ok) return { destination: 'invalid', label: `${title} (${raw || '?'})`, host: '', leavesDevice: false };
   const { egress } = resolved;
-  const host = egress.url.host;
-  if (ai.provider === 'ollama' && isOllamaCloudModel(ai.ollamaModel)) {
-    return { destination: 'cloud-model', label: P.cloudModelLabel(title, ai.ollamaModel.trim()), host, leavesDevice: egress.cloud };
-  }
-  return { destination: egress.cloud ? 'remote' : 'local', label: `${title} (${raw})`, host, leavesDevice: egress.cloud };
+  const common = { host: egress.url.host, leavesDevice: egress.cloud };
+  if (ai.provider === 'anthropic') return { destination: 'cloud', label: `${title} (${ai.anthropicModel})`, ...common };
+  if (!egress.cloud) return { destination: 'local', label: `${title} (${raw})`, ...common };
+  if (!isLoopbackUrl(raw)) return { destination: 'remote', label: `${title} (${raw})`, ...common };
+  // Main counts a server on this PC as cloud only for a model that it forwards to the cloud.
+  const model = (ai.provider === 'ollama' ? ai.ollamaModel : ai.openaiModel).trim();
+  return { destination: 'cloud-model', label: P.cloudModelLabel(title, model), ...common };
 }
 
 function destinationText(t: ProviderTarget): string {

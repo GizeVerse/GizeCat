@@ -116,6 +116,9 @@ export class MockAdapter implements VisionAdapter {
   calls: Array<{ base64: string; signal?: AbortSignal }> = [];
   impl: VisionAdapter['describe'] = () => Promise.resolve({ ok: true, report: REPORT, latencyMs: 12 });
   models: string[] = ['qwen3-vl:4b-instruct'];
+  /** What the "server" says about where it runs the model. */
+  localityImpl: NonNullable<VisionAdapter['checkLocality']> = () => Promise.resolve({ ok: true, locality: 'local', latencyMs: 1 });
+  localityCalls = 0;
 
   describe: VisionAdapter['describe'] = (image, signal) => {
     this.calls.push({ base64: image.base64, signal });
@@ -123,6 +126,11 @@ export class MockAdapter implements VisionAdapter {
   };
 
   listModels: VisionAdapter['listModels'] = () => Promise.resolve({ ok: true, models: this.models, latencyMs: 1 });
+
+  checkLocality: NonNullable<VisionAdapter['checkLocality']> = (signal) => {
+    this.localityCalls++;
+    return this.localityImpl(signal);
+  };
 }
 
 export function mockFactory(adapter: MockAdapter): AdapterFactory & { calls: number } {

@@ -24,6 +24,7 @@ describe('PerceptionService with a mock Ollama server', () => {
     const s = await startMockServer((req, res) => {
       if (req.url === '/api/chat') sendJson(res, 200, { message: { role: 'assistant', content: `Here you go: ${JSON.stringify(REPORT)}` }, done: true });
       else if (req.url === '/api/tags') sendJson(res, 200, { models: [{ name: 'qwen3-vl:4b-instruct', capabilities: ['vision'] }] });
+      else if (req.url === '/api/show') sendJson(res, 200, { details: { family: 'qwen3vl' }, capabilities: ['completion', 'vision'] });
       else sendJson(res, 404, { error: 'nope' });
     });
     servers.push(s);
@@ -38,7 +39,10 @@ describe('PerceptionService with a mock Ollama server', () => {
       capture: cap,
       fetchImpl: guardedFetch,
     });
-    expect(svc.status).toMatchObject({ mode: 'ai-local', aiProviderLabel: 'Ollama (this PC)' });
+    // Until the server confirms the model runs on this PC, AI is not running (fail closed).
+    expect(svc.status).toMatchObject({ mode: 'local-stats', blockedReason: expect.stringMatching(/not yet confirmed/) });
+    await waitFor(() => svc.status.mode === 'ai-local');
+    expect(svc.status).toMatchObject({ mode: 'ai-local', aiProviderLabel: 'Ollama (this PC)', blockedReason: null });
 
     const events: SimEvent[] = [];
     svc.request('curious', { x: 1200, y: 750 });
@@ -76,7 +80,65 @@ describe('PerceptionService with a mock Ollama server', () => {
     svc.request('curious', null);
     await waitFor(() => svc.status.lastError !== null);
     expect(svc.status.lastError).toContain('ollama pull qwen3-vl:2b-instruct');
-    expect(s.requests.map((r) => r.url)).toEqual(['/api/chat']);
+    // The server check found no such model, so no image was sent and nothing was pulled.
+    const urls = s.requests.map((r) => r.url);
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.every((u) => u === '/api/show')).toBe(true);
+    svc.dispose();
+  });
+
+  it('an alias of a cloud model on the local Ollama: status says cloud, no image reaches the server', async () => {
+    const s = await startMockServer((req, res) => {
+      if (req.url === '/api/show') sendJson(res, 200, { details: { family: 'qwen3vl' }, remote_host: 'https://ollama.com:443', remote_model: 'qwen3-vl:235b' });
+      else sendJson(res, 200, { message: { role: 'assistant', content: JSON.stringify(REPORT) }, done: true });
+    });
+    servers.push(s);
+    const cap = new FakeCapturer();
+    const svc = createPerceptionService({
+      logger: recordingLogger(),
+      host: new FakeHost(),
+      secrets: memorySecrets(),
+      settings: aiLocal({ ai: { ollamaBaseUrl: s.url, ollamaModel: 'myvision' } }),
+      now: new FakeClock().now,
+      capture: cap,
+      fetchImpl: guardedFetch,
+    });
+    svc.request('curious', null);
+    await waitFor(() => cap.requests.length === 1);
+    await flush();
+    expect(svc.status).toMatchObject({ mode: 'local-stats', aiProviderLabel: null, blockedReason: expect.stringMatching(/runs in the cloud.*Allow cloud/) });
+    expect(cap.requests[0]!.jpeg).toBeNull();
+    expect(s.requests.map((r) => r.url)).toEqual(['/api/show']);
+    expect((await svc.testAi()).ok).toBe(false);
+    expect(s.requests.map((r) => r.url)).toEqual(['/api/show']);
+    svc.dispose();
+  });
+
+  it('OpenAI-compatible at a local Ollama /v1 with a cloud model: refused without "Allow cloud", reported as cloud with it', async () => {
+    const s = await startMockServer((req, res) => {
+      if (req.url === '/api/version') sendJson(res, 200, { version: '0.12.6' });
+      else if (req.url === '/api/show') sendJson(res, 200, { details: {}, remote_host: 'https://ollama.com:443' });
+      else sendJson(res, 200, { choices: [{ message: { role: 'assistant', content: JSON.stringify(REPORT) }, finish_reason: 'stop' }] });
+    });
+    servers.push(s);
+    const ai = { provider: 'openai-compatible' as const, openaiBaseUrl: `${s.url}/v1`, openaiModel: 'vision-alias' };
+    const svc = createPerceptionService({
+      logger: recordingLogger(),
+      host: new FakeHost(),
+      secrets: memorySecrets(),
+      settings: aiLocal({ ai }),
+      now: new FakeClock().now,
+      capture: new FakeCapturer(),
+      fetchImpl: guardedFetch,
+    });
+    await waitFor(() => s.requests.some((r) => r.url === '/api/show'));
+    await flush();
+    expect(svc.status).toMatchObject({ mode: 'local-stats', blockedReason: expect.stringMatching(/runs in the cloud/) });
+    svc.updateSettings(aiLocal({ ai: { ...ai, allowCloud: true } }));
+    await waitFor(() => s.requests.filter((r) => r.url === '/api/show').length === 2);
+    await flush();
+    expect(svc.status).toMatchObject({ mode: 'ai-cloud', aiProviderLabel: 'OpenAI-compatible (cloud model)' });
+    expect(s.requests.some((r) => r.url === '/v1/chat/completions')).toBe(false);
     svc.dispose();
   });
 

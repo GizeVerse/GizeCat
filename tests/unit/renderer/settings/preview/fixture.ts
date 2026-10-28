@@ -49,14 +49,15 @@ function cat(now: number, name: string): CatSummary {
     },
     preferences: { petRatePerHour: 3.4, cursorPlayAcceptance: 0.53, attentionAcceptance: 0.76 },
     favoriteSpotCount: 3,
+    // The simulation's own kinds and detail tokens (src/core/behavior/memory.ts).
     recent: [
-      { at: now - 40_000, kind: 'petted' },
+      { at: now - 40_000, kind: 'pet' },
       { at: now - 6 * MIN, kind: 'nap' },
-      { at: now - 23 * MIN, kind: 'chaseEngaged' },
-      { at: now - 2 * HOUR, kind: 'windowInspected', detail: 'code' },
-      { at: now - 5 * HOUR, kind: 'attentionAnswered' },
-      { at: now - 26 * HOUR, kind: 'startled' },
-      { at: now - 3 * 24 * HOUR, kind: 'session' },
+      { at: now - 23 * MIN, kind: 'chase', detail: 'engaged' },
+      { at: now - 2 * HOUR, kind: 'inspect', detail: 'window' },
+      { at: now - 5 * HOUR, kind: 'attention', detail: 'answered' },
+      { at: now - 26 * HOUR, kind: 'startle' },
+      { at: now - 3 * 24 * HOUR, kind: 'play', detail: 'pawAt' },
     ],
   };
 }

@@ -64,39 +64,53 @@ export interface Win32ApiOptions {
  * Privacy checks here see every shown top-level window (owned dialogs, tool windows,
  * popups, small windows), not only Alt-Tab app windows. A window is private when it or
  * a window in its owner chain matches the exclusions; this app's own windows never are.
+ * Every privacy answer is fresh (no cached process names) and null means "cannot be
+ * determined": callers must then fail closed.
  */
 export interface Win32ApiExtensions {
   /**
    * Privacy exclusions used for WindowInfo.excluded and the checks below. Title patterns
    * make window titles be read (in memory only); with none, no title is ever read.
+   * Process rules start as the defaults, title patterns start empty.
    */
   setExclusions(processes: readonly string[], titlePatterns: readonly string[]): void;
-  /**
-   * Fresh (uncached) privacy check of any root window, app window or not.
-   * null when it cannot be determined; callers must then fail closed.
-   */
+  /** Privacy check of any root window (and its owner chain), app window or not. */
   isWindowExcluded(id: string): boolean | null;
   /**
-   * Fresh privacy check of the real foreground window (GetForegroundWindow), whatever kind
-   * of window it is. false when this app is in front; null when it cannot be determined.
+   * Privacy check of the real foreground window (GetForegroundWindow) and its owner chain,
+   * whatever kind of window it is. false when this app is in front.
    */
   isForegroundExcluded(): boolean | null;
   /**
-   * On-screen rects of every shown top-level window that is private or cannot be cleared.
-   * null when the windows cannot be enumerated; callers must then fail closed.
+   * Privacy check of the window shown at a physical point. Where this app's overlay is
+   * hit-tested (while it is interactive) the window under it is judged; where its Settings
+   * window is on top the point is not private.
+   */
+  isPointExcluded(p: Point): boolean | null;
+  /**
+   * Rects (GetWindowRect, px) of every shown top-level window that is private or cannot be
+   * cleared. null when the windows cannot be enumerated or a private one cannot be located.
    */
   listExcludedRects(): Rect[] | null;
   /**
    * Every shown top-level window that hides what is below it, in z-order (top first):
-   * app windows, owned dialogs, tool windows and this app's Settings window, but not
-   * click-through windows, the desktop or this app's overlays. null when enumeration fails.
+   * app windows, owned dialogs, tool windows, the taskbar and this app's Settings window,
+   * but not click-through windows, the desktop or this app's overlays. null when
+   * enumeration fails.
    */
   listOccluders(): Occluder[] | null;
 }
 
 export type ExtendedWin32Api = Win32Api & Win32ApiExtensions;
 
-const EXTENSION_METHODS: ReadonlyArray<keyof Win32ApiExtensions> = ['setExclusions', 'isWindowExcluded', 'isForegroundExcluded', 'listExcludedRects', 'listOccluders'];
+const EXTENSION_METHODS: ReadonlyArray<keyof Win32ApiExtensions> = [
+  'setExclusions',
+  'isWindowExcluded',
+  'isForegroundExcluded',
+  'isPointExcluded',
+  'listExcludedRects',
+  'listOccluders',
+];
 
 export function hasWin32Extensions(api: Win32Api): api is ExtendedWin32Api {
   const a = api as Partial<ExtendedWin32Api>;
@@ -145,7 +159,9 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
   const nameTtlMs = opts.processCacheTtlMs ?? 15_000;
   const ownPid = native.ownPid;
 
-  const exclusions = new ExclusionRules(DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS);
+  // No title patterns until the host installs them (only while screen analysis is on), so
+  // no window title is read before that.
+  const exclusions = new ExclusionRules(DEFAULT_EXCLUDED_PROCESSES);
   const processNames = new LruCache<number, CachedName>(256);
   /** Ids recently described as app windows: lets the hook keep DESTROY events of interest only. */
   const appWindowIds = new LruCache<string, true>(1024);
@@ -184,15 +200,30 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
     return name;
   }
 
+  type NameLookup = (pid: number) => string;
+  const cachedNames: NameLookup = (pid) => lookupProcessName(pid, false);
+  /** Fresh lookups for one privacy check or enumeration, memoised only for its duration. */
+  function freshNames(): NameLookup {
+    const seen = new Map<number, string>();
+    return (pid) => {
+      let name = seen.get(pid);
+      if (name === undefined) {
+        name = lookupProcessName(pid, true);
+        seen.set(pid, name);
+      }
+      return name;
+    };
+  }
+
   /** UWP apps live in a CoreWindow child of ApplicationFrameHost; attribute the window to the app. */
-  function resolveProcessName(h: Hwnd, pid: number, fresh: boolean): string {
-    const name = lookupProcessName(pid, fresh);
+  function resolveProcessName(h: Hwnd, pid: number, names: NameLookup): string {
+    const name = names(pid);
     if (name !== UWP_FRAME_HOST) return name;
     const core = native.findChildWindow(h, UWP_CORE_WINDOW_CLASS);
     if (core === null) return name;
     const corePid = native.getWindowProcessId(core);
     if (corePid === 0 || corePid === pid) return name;
-    return lookupProcessName(corePid, fresh) || name;
+    return names(corePid) || name;
   }
 
   function computeExcluded(h: Hwnd, pid: number, processName: string): boolean {
@@ -200,6 +231,58 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
     // GetWindowTextW on our own windows sends WM_GETTEXT and can hang: never read them.
     if (pid === ownPid || !exclusions.hasTitlePatterns) return false;
     return exclusions.matchesTitle(native.getWindowText(h));
+  }
+
+  /**
+   * Privacy status of a root window: true when it or a window in its owner chain (a dialog's
+   * app window) matches the exclusions, null when one of them cannot be identified. Windows
+   * of this process are never private, and their titles are never read.
+   */
+  function privacyOf(h: Hwnd, names: NameLookup): boolean | null {
+    let cur: Hwnd | null = h;
+    for (let depth = 0; cur !== null; depth++) {
+      if (depth > MAX_OWNER_DEPTH) return null;
+      const pid = native.getWindowProcessId(cur);
+      if (pid === 0) return null;
+      if (pid !== ownPid) {
+        const name = resolveProcessName(cur, pid, names);
+        if (name === '') return null;
+        if (computeExcluded(cur, pid, name)) return true;
+      }
+      cur = native.getWindow(cur, GW_OWNER);
+    }
+    return false;
+  }
+
+  /** Visible, not minimized and not cloaked (on this virtual desktop). A failed cloak query counts as shown. */
+  function isShown(h: Hwnd): boolean {
+    if (!native.isWindowVisible(h) || native.isIconic(h)) return false;
+    const cloaked = native.getCloaked(h);
+    return cloaked === null || cloaked === 0;
+  }
+
+  /** Visible frame (DWM bounds, else GetWindowRect); null when unknown or empty. */
+  function frameRect(h: Hwnd): Rect | null {
+    const r = native.getExtendedFrameBounds(h) ?? native.getWindowRect(h);
+    if (r === null) return null;
+    const rect = toRect(r);
+    return rect.width > 0 && rect.height > 0 ? rect : null;
+  }
+
+  /**
+   * The window shown at p, found by walking the z-order: the first shown window whose frame
+   * contains p, skipping click-through windows (as hit-testing does) and this app's overlays.
+   */
+  function shownWindowAt(p: Point): Hwnd | null {
+    for (const h of native.enumTopLevelWindows()) {
+      if (!isShown(h)) continue;
+      const exStyle = native.getWindowLong(h, GWL_EXSTYLE);
+      if (isClickThrough(exStyle)) continue;
+      if (native.getWindowProcessId(h) === ownPid && isOverlayStyle(exStyle)) continue;
+      const r = frameRect(h);
+      if (r && rectContains(r, p)) return h;
+    }
+    return null;
   }
 
   function describeHwnd(h: Hwnd): WindowInfo | null {
@@ -232,7 +315,7 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
       lastRects.set(id, rect);
     }
 
-    const processName = resolveProcessName(h, pid, false);
+    const processName = resolveProcessName(h, pid, cachedNames);
     if (SHELL_SURFACE_PROCESSES.has(processName)) return null;
 
     const maximized = !minimized && native.isZoomed(h);
@@ -245,6 +328,7 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
           windowRect,
           frameRect: frame,
           monitorRect: mon.monitor,
+          workRect: mon.work,
           style: native.getWindowLong(h, GWL_STYLE),
           exStyle,
           maximized,
@@ -384,14 +468,64 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
     },
 
     isWindowExcluded: (id) =>
-      guard('isWindowExcluded', null, () => {
+      guard<boolean | null>('isWindowExcluded', null, () => {
         const h = parseWindowId(id);
         if (h === null || !native.isWindow(h)) return null;
-        const pid = native.getWindowProcessId(h);
-        if (pid === 0) return null;
-        const name = resolveProcessName(h, pid, true);
-        if (name === '' && pid !== ownPid) return null;
-        return computeExcluded(h, pid, name);
+        return privacyOf(native.getAncestor(h, GA_ROOT) ?? h, freshNames());
+      }),
+
+    isForegroundExcluded: () =>
+      guard<boolean | null>('isForegroundExcluded', null, () => {
+        const h = native.getForegroundWindow();
+        if (h === null) return null;
+        return privacyOf(native.getAncestor(h, GA_ROOT) ?? h, freshNames());
+      }),
+
+    isPointExcluded: (p) =>
+      guard<boolean | null>('isPointExcluded', null, () => {
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+        const hit = native.windowFromPoint(p.x, p.y);
+        if (hit === null) return null;
+        const root = native.getAncestor(hit, GA_ROOT) ?? hit;
+        // Hit-testing reaches our overlay only while it is interactive; it is transparent, so
+        // what the frame shows there is the window below it.
+        const shown = native.getWindowProcessId(root) === ownPid ? shownWindowAt(p) : root;
+        return shown === null ? null : privacyOf(shown, freshNames());
+      }),
+
+    listExcludedRects: () =>
+      guard<Rect[] | null>('listExcludedRects', null, () => {
+        const names = freshNames();
+        const out: Rect[] = [];
+        for (const h of native.enumTopLevelWindows()) {
+          if (!isShown(h) || privacyOf(h, names) === false) continue;
+          // GetWindowRect contains the visible frame: the safer mask.
+          const r = native.getWindowRect(h) ?? native.getExtendedFrameBounds(h);
+          if (r === null) {
+            // A private window that is still there but cannot be located cannot be masked.
+            if (native.isWindow(h)) return null;
+            continue;
+          }
+          const rect = toRect(r);
+          if (rect.width > 0 && rect.height > 0) out.push(rect);
+        }
+        return out;
+      }),
+
+    listOccluders: () =>
+      guard<Occluder[] | null>('listOccluders', null, () => {
+        const out: Occluder[] = [];
+        for (const h of native.enumTopLevelWindows()) {
+          if (!isShown(h)) continue;
+          const exStyle = native.getWindowLong(h, GWL_EXSTYLE);
+          if (isClickThrough(exStyle)) continue;
+          const pid = native.getWindowProcessId(h);
+          if (pid === 0 || (pid === ownPid && isOverlayStyle(exStyle))) continue;
+          if (DESKTOP_WINDOW_CLASSES.has(native.getClassName(h))) continue;
+          const rect = frameRect(h);
+          if (rect) out.push({ id: h.toString(), rect });
+        }
+        return out;
       }),
 
     dispose() {
@@ -420,6 +554,10 @@ export function createUnavailableWin32Api(): ExtendedWin32Api {
     subscribeWinEvents: () => null,
     setExclusions: () => undefined,
     isWindowExcluded: () => null,
+    isForegroundExcluded: () => null,
+    isPointExcluded: () => null,
+    listExcludedRects: () => null,
+    listOccluders: () => null,
     dispose: () => undefined,
   };
 }

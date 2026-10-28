@@ -408,6 +408,43 @@ describe('privacy exclusions', () => {
     expect(tracker.isExcludedAt({ x: 2010, y: 10 })).toBe(true);
   });
 
+  it('checks the raw foreground through the extension and fails closed on null', () => {
+    const api = new FakeExtendedWin32Api();
+    const { tracker } = setup(api);
+    expect(tracker.isForegroundExcluded()).toBe(false);
+    api.foregroundExcluded = true;
+    expect(tracker.isForegroundExcluded()).toBe(true);
+    api.foregroundExcluded = null;
+    expect(tracker.isForegroundExcluded()).toBe(true);
+    expect(createWindowTracker(createUnavailableWin32Api(), createTestLogger()).isForegroundExcluded()).toBe(true);
+  });
+
+  it('masks the extension’s private-window rects, or everything when they are unknown', () => {
+    const api = new FakeExtendedWin32Api().add(win('1', rect(0, 0, 500, 500)));
+    api.excludedRects = [rect(10, 20, 30, 40)];
+    const { tracker } = setup(api);
+    expect(tracker.getExcludedRects()).toEqual([rect(10, 20, 30, 40)]);
+    api.excludedRects = null;
+    const [all] = tracker.getExcludedRects();
+    expect(all!.x <= -1e9 && all!.y <= -1e9 && all!.x + all!.width >= 1e9 && all!.y + all!.height >= 1e9).toBe(true);
+  });
+
+  it('cuts platforms with the full z-order when the extension provides it', () => {
+    const api = new FakeExtendedWin32Api().add(win('b', rect(100, 300, 500, 400)));
+    const { tracker, advance } = setup(api);
+    tracker.start();
+    expect(tracker.getPlatforms(0)).toEqual([{ windowId: 'b', y: 300, x0: 100, x1: 600 }]);
+    advance(1);
+    api.occluders = [
+      { id: 'dialog', rect: rect(250, 200, 100, 300) },
+      { id: 'b', rect: rect(100, 300, 500, 400) },
+    ];
+    expect(tracker.getPlatforms(0)).toEqual([
+      { windowId: 'b', y: 300, x0: 100, x1: 250 },
+      { windowId: 'b', y: 300, x0: 350, x1: 600 },
+    ]);
+  });
+
   it('forwards exclusion lists to the API extension', () => {
     const api = new FakeExtendedWin32Api();
     const { tracker } = setup(api);

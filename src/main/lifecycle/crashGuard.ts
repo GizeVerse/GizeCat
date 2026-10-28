@@ -1,5 +1,7 @@
 // Last line of defence for main-process errors: log, try to save, and if errors
-// keep coming, relaunch a bounded number of times before giving up cleanly.
+// keep coming, relaunch a bounded number of times before giving up cleanly. It
+// fails safe (exit, no relaunch) before startup has finished and whenever the
+// relaunch budget cannot be recorded.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Logger } from '../contracts';
@@ -23,6 +25,12 @@ export interface CrashGuard {
   setSaver(save: () => void): void;
   /** Flushes logs before exit/relaunch. */
   setFlusher(flush: () => void): void;
+  /**
+   * The app has finished starting (tray, overlays). Before this, any uncaught error is
+   * fatal: a process that never finished starting has no window or tray, yet it holds
+   * the single-instance lock, so every later launch would exit silently.
+   */
+  setStarted(): void;
   handle(kind: 'uncaughtException' | 'unhandledRejection', error: unknown): void;
   readonly escalated: boolean;
 }
@@ -36,15 +44,18 @@ export function readRelaunchHistory(file: string): number[] {
   }
 }
 
-/** The relaunch budget lives only in this file: if it cannot be written, every new process would see an empty history. */
+/**
+ * The relaunch budget lives only in this file, so it counts as saved only when the next
+ * process will read it back: otherwise every new process would see an empty history.
+ */
 function writeRelaunchHistory(file: string, history: number[]): boolean {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(history));
-    return true;
   } catch {
     return false;
   }
+  return JSON.stringify(readRelaunchHistory(file)) === JSON.stringify(history);
 }
 
 export function createCrashGuard(opts: CrashGuardOptions): CrashGuard {
@@ -59,6 +70,7 @@ export function createCrashGuard(opts: CrashGuardOptions): CrashGuard {
   let flusher: (() => void) | null = null;
   let recent: number[] = [];
   let escalated = false;
+  let started = false;
 
   function log(level: 'error' | 'warn', msg: string, data?: Record<string, unknown>): void {
     try {
@@ -119,9 +131,19 @@ export function createCrashGuard(opts: CrashGuardOptions): CrashGuard {
     setFlusher(fn) {
       flusher = fn;
     },
+    setStarted() {
+      started = true;
+    },
     handle(kind, error) {
       log('error', `main process ${kind}`, { error });
       if (escalated) return;
+      if (!started) {
+        escalated = true;
+        log('error', 'crash guard: error before startup finished; exiting');
+        tryFlush();
+        opts.exit(1);
+        return;
+      }
       trySave();
       const t = now();
       recent = recent.filter((at) => t - at < errorWindowMs);

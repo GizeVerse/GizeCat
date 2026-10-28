@@ -7,9 +7,19 @@ import type { Settings } from '../../shared/settings';
 import type { SimOutput } from '../../shared/sim';
 import type { DisplayGeometry } from '../../shared/world';
 
-/** Extra room above the head for emotes and around the body for tail/ears, DIP at size 1. */
-export const EMOTE_MARGIN_TOP_DIP = 56;
-export const BODY_MARGIN_DIP = 16;
+/**
+ * Room around the nominal footprint (CAT_BASE_* DIP, `boundsPx`) that the renderer may
+ * draw into, DIP at size 1: tail and paws reach past the sides (crouch, run), the held
+ * cat hangs its head and ears above the footprint and its legs below it, and pixel
+ * style rounds every edge out to whole blocks. An overlay draws the cat whenever this
+ * rect touches its display, so nothing is clipped at a monitor seam
+ * (tests/unit/renderer/presence.test.ts measures the drawn extent of every clip).
+ */
+export const BODY_MARGIN_SIDE_DIP = 32;
+export const BODY_MARGIN_TOP_DIP = 36;
+export const BODY_MARGIN_BOTTOM_DIP = 28;
+/** Top margin while emotes are enabled (an emote floats above the held cat's head). */
+export const EMOTE_MARGIN_TOP_DIP = 64;
 
 export type Appearance = Settings['appearance'];
 
@@ -29,10 +39,11 @@ export interface RenderMapContext {
 /** Cat bounds plus emote/body margins, physical px. */
 export function presenceRectPx(out: SimOutput, appearance: Appearance, scaleFactor: number): Rect {
   const k = appearance.size * scaleFactor;
-  const top = (appearance.emotes ? EMOTE_MARGIN_TOP_DIP : BODY_MARGIN_DIP) * k;
-  const side = BODY_MARGIN_DIP * k;
+  const top = (appearance.emotes ? EMOTE_MARGIN_TOP_DIP : BODY_MARGIN_TOP_DIP) * k;
+  const side = BODY_MARGIN_SIDE_DIP * k;
+  const bottom = BODY_MARGIN_BOTTOM_DIP * k;
   const b = out.boundsPx;
-  return { x: b.x - side, y: b.y - top, width: b.width + side * 2, height: b.height + top + side };
+  return { x: b.x - side, y: b.y - top, width: b.width + side * 2, height: b.height + top + bottom };
 }
 
 /** Ids of displays whose overlay must draw the cat this tick. */
@@ -70,7 +81,8 @@ export function mapRenderState(out: SimOutput, appearance: Appearance, ctx: Rend
     contentment: clamp01(out.contentment),
     emote: appearance.emotes ? out.emote : null,
     emoteStartedAt: out.emoteStartedAt,
-    opacity: clamp01(out.opacity * appearance.opacity),
+    // The simulation's opacity already includes appearance.opacity (times its fade).
+    opacity: clamp01(out.opacity),
     visible: out.visible && !ctx.hidden,
     skin: appearance.skin,
     style: appearance.style,

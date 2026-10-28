@@ -144,7 +144,8 @@ export function scoreCandidates(v: DecisionView): Scored<Candidate>[] {
     const score = 1.2 * b.attentionSeeking * (0.3 + t.affection) * (0.3 + s.bond) * (0.3 + v.prefs.attentionAcceptance) * quiet * (v.typing ? 0.15 : 1);
     add(cand('seekingAttention'), score);
   }
-  if (v.perchTarget && !v.disabled.has('inspectWindows') && !v.disabled.has('perchOnWindows')) {
+  // Jumping up to explore a window top is 'Sit on windows', independent of 'Inspect windows'.
+  if (v.perchTarget && !v.disabled.has('perchOnWindows')) {
     const score = (0.04 + 0.32 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * (0.6 + 0.4 * t.confidence);
     add(cand('inspectingWindow', { variant: 'explore', windowId: v.perchTarget.windowId, target: v.perchTarget.point }), score);
   }

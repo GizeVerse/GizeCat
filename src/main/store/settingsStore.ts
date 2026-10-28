@@ -32,9 +32,11 @@ export interface SettingsStoreOptions {
 }
 
 /**
- * Settings restored from a .bak copy may predate a consent revocation or a switch
- * to "Allow cloud processing" off, and the newer file that would say so is unreadable.
- * Screen analysis therefore needs a fresh opt-in after any such restore.
+ * Settings taken from the .bak copy (the main file did not parse, or could not be read)
+ * are one save older than what the user last chose, and the newer file that would say
+ * otherwise is unusable, so they may predate a consent revocation or "Allow cloud
+ * processing" being switched off. Restoring consent from them would fail open, so screen
+ * analysis needs a fresh opt-in; everything else is restored as it was.
  */
 function withoutPerceptionConsent(s: Settings): Settings {
   return { ...s, perception: { ...s.perception, visualMode: 'off', consentAt: null }, ai: { ...s.ai, allowCloud: false } };
@@ -48,8 +50,13 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
 
   let current: Settings = migrateSettings({});
   let dirty = false;
-  /** Async writes started but not finished: their data is not on disk yet. */
-  let writing = 0;
+  /**
+   * An async write has taken the pending change (dirty is already false) but has not
+   * committed it yet. That change counts as unsaved: the session may end before it lands.
+   */
+  let unconfirmed = false;
+  /** Bumped by every successful synchronous write, which supersedes an async write in flight. */
+  let syncWrites = 0;
   let timer: unknown = null;
   let disposed = false;
   let chain: Promise<void> = Promise.resolve();
@@ -77,15 +84,15 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
     chain = chain.then(async () => {
       if (!dirty) return;
       dirty = false;
-      writing++;
-      try {
-        const ok = await opts.store.write(current);
-        if (!ok) {
-          dirty = true;
-          log.warn('settings save failed; will retry on next change or shutdown');
-        }
-      } finally {
-        writing--;
+      unconfirmed = true;
+      const syncBefore = syncWrites;
+      const ok = await opts.store.write(current).catch(() => false);
+      // A synchronous write in the meantime already saved everything this one carried.
+      if (syncWrites !== syncBefore) return;
+      unconfirmed = false;
+      if (!ok) {
+        dirty = true;
+        log.warn('settings save failed; will retry on next change or shutdown');
       }
     });
     return chain;
@@ -95,8 +102,11 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
     cancelTimer();
     // An async write still in flight may never commit when the session ends now, so
     // write synchronously; the store's generation check turns its late commit into a no-op.
-    if (!dirty && writing === 0) return;
-    if (opts.store.writeSync(current)) dirty = false;
+    if (!dirty && !unconfirmed) return;
+    if (!opts.store.writeSync(current)) return;
+    dirty = false;
+    unconfirmed = false;
+    syncWrites++;
   }
 
   function apply(patch: unknown): PatchResult {
@@ -146,7 +156,7 @@ export function createSettingsStore(opts: SettingsStoreOptions): SettingsStore {
     flushSync,
     flush,
     get dirty() {
-      return dirty || writing > 0;
+      return dirty || unconfirmed;
     },
     dispose() {
       cancelTimer();

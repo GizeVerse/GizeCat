@@ -1,5 +1,7 @@
 // Redacting, levelled logger with a ring buffer (for diagnostics export) and
-// batched asynchronous file output with size-based rotation. Electron-free.
+// batched asynchronous file output with size-based rotation. A failed write is
+// retried with backoff (lines are kept, bounded), and the size cap holds even
+// when another program keeps the file from being rotated. Electron-free.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Logger } from '../contracts';
@@ -47,6 +49,12 @@ export interface LoggerOptions {
 }
 
 const MAX_PENDING_LINES = 10_000;
+/** Waits before retrying the log file after consecutive write failures; the last one repeats. */
+const RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 300_000];
+
+function errCode(err: unknown): string | undefined {
+  return err !== null && typeof err === 'object' && 'code' in err && typeof err.code === 'string' ? err.code : undefined;
+}
 
 export function formatEntry(e: LogEntry): string {
   const rec: Record<string, unknown> = { t: new Date(e.at).toISOString(), l: e.level, s: e.scope, m: e.msg };
@@ -75,7 +83,9 @@ export function createLogger(opts: LoggerOptions): RootLogger {
   let logDir: string | null = null;
   let logFile: string | null = null;
   let fileSize = 0;
-  let fileBroken = false;
+  /** Consecutive failed writes; while > 0, timer flushes wait until retryAt. */
+  let failures = 0;
+  let retryAt = 0;
   if (opts.dir) {
     try {
       fs.mkdirSync(opts.dir, { recursive: true });
@@ -102,11 +112,10 @@ export function createLogger(opts: LoggerOptions): RootLogger {
     return path.join(logDir ?? '', `${path.basename(fileName, ext)}.${i}${ext}`);
   };
 
-  function rotateSync(): void {
-    if (!logFile) return;
+  function rotateSync(file: string): void {
     try {
       if (maxFiles === 1) {
-        fs.rmSync(logFile, { force: true });
+        fs.rmSync(file, { force: true });
       } else {
         fs.rmSync(rotatedName(maxFiles - 1), { force: true });
         for (let i = maxFiles - 2; i >= 1; i--) {
@@ -116,78 +125,182 @@ export function createLogger(opts: LoggerOptions): RootLogger {
             /* missing generation */
           }
         }
-        fs.renameSync(logFile, rotatedName(1));
+        fs.renameSync(file, rotatedName(1));
       }
+      fileSize = 0;
+      return;
     } catch (err) {
-      opts.mirror?.('warn', `logger: rotation failed: ${String(err)}`);
+      opts.mirror?.('warn', `logger: rotation failed, truncating in place: ${String(err)}`);
     }
-    fileSize = 0;
+    // Another program holds the file open without delete sharing (log viewers, tail
+    // tools): keep a copy as the first generation and empty the file in place instead.
+    let copied = false;
+    try {
+      if (maxFiles > 1) {
+        try {
+          fs.copyFileSync(file, rotatedName(1));
+          copied = true;
+        } catch (err) {
+          opts.mirror?.('warn', `logger: could not keep a copy before truncating: ${String(err)}`);
+        }
+      }
+      fs.truncateSync(file, 0);
+      fileSize = 0;
+    } catch (err) {
+      // The real size stays in force, so roomFor() keeps refusing to grow the file, and
+      // the copy (a duplicate of the file still in place) must not count against the cap.
+      opts.mirror?.('error', `logger: log file can be neither rotated nor truncated: ${String(err)}`);
+      if (copied) {
+        try {
+          fs.rmSync(rotatedName(1), { force: true });
+        } catch {
+          /* best effort */
+        }
+      }
+      try {
+        fileSize = fs.statSync(file).size;
+      } catch {
+        /* keep the counted size */
+      }
+    }
   }
 
-  function takePending(): string {
-    if (pending.length === 0 && dropped === 0) return '';
+  function takePending(): string[] {
+    if (pending.length === 0 && dropped === 0) return [];
     if (dropped > 0) {
-      pending.unshift(
-        `${formatEntry({ at: now(), level: 'warn', scope: 'logger', msg: 'log lines dropped (writer backlog)', data: { dropped } })}\n`,
-      );
+      pending.unshift(`${formatEntry({ at: now(), level: 'warn', scope: 'logger', msg: 'log lines dropped', data: { dropped } })}\n`);
       dropped = 0;
     }
-    const batch = pending.join('');
+    const lines = pending;
     pending = [];
-    return batch;
+    return lines;
   }
 
-  function prepareWrite(bytes: number): void {
-    if (fileSize > 0 && fileSize + bytes > maxFileBytes) rotateSync();
+  /** Puts lines that could not be written back in front of newer ones (bounded, oldest dropped first). */
+  function requeue(lines: string[]): void {
+    pending = lines.concat(pending);
+    const excess = pending.length - MAX_PENDING_LINES;
+    if (excess > 0) {
+      pending.splice(0, excess);
+      dropped += excess;
+    }
   }
 
-  async function writeBatch(batch: string): Promise<void> {
-    if (!logFile || fileBroken) return;
-    const bytes = Buffer.byteLength(batch);
-    prepareWrite(bytes);
+  /**
+   * Rotates at the size limit. If the file can be neither rotated nor truncated it may
+   * grow to at most twice the limit, then writes are refused, so the size cap always holds.
+   */
+  function roomFor(file: string, bytes: number): boolean {
+    if (fileSize > 0 && fileSize + bytes > maxFileBytes) rotateSync(file);
+    return fileSize === 0 || fileSize + bytes <= maxFileBytes * 2;
+  }
+
+  function wrote(bytes: number): void {
+    fileSize += bytes;
+    if (failures === 0) return;
+    const failedAttempts = failures;
+    failures = 0;
+    retryAt = 0;
+    record('warn', 'logger', 'log file writes failed and have resumed', { failedAttempts });
+  }
+
+  /** Never gives up for good: a transient lock (antivirus, indexer) must not end file logging for the session. */
+  function writeFailed(lines: string[], err: unknown): void {
+    failures++;
+    retryAt = now() + (RETRY_DELAYS_MS[Math.min(failures, RETRY_DELAYS_MS.length) - 1] ?? 0);
+    requeue(lines);
+    if (failures === 1) opts.mirror?.('error', `logger: log file write failed; will retry: ${String(err)}`);
+    scheduleFlush();
+  }
+
+  async function appendAsync(file: string, batch: string): Promise<void> {
     try {
-      await fs.promises.appendFile(logFile, batch, 'utf8');
-      fileSize += bytes;
+      await fs.promises.appendFile(file, batch, 'utf8');
     } catch (err) {
-      fileBroken = true;
-      opts.mirror?.('error', `logger: file logging disabled after write failure: ${String(err)}`);
+      if (errCode(err) !== 'ENOENT' || !logDir) throw err;
+      // The logs folder was deleted while running: recreate it.
+      await fs.promises.mkdir(logDir, { recursive: true });
+      fileSize = 0;
+      await fs.promises.appendFile(file, batch, 'utf8');
+    }
+  }
+
+  function appendSync(file: string, batch: string): void {
+    try {
+      fs.appendFileSync(file, batch, 'utf8');
+    } catch (err) {
+      if (errCode(err) !== 'ENOENT' || !logDir) throw err;
+      fs.mkdirSync(logDir, { recursive: true });
+      fileSize = 0;
+      fs.appendFileSync(file, batch, 'utf8');
+    }
+  }
+
+  async function writeBatch(lines: string[]): Promise<void> {
+    if (!logFile) return;
+    const batch = lines.join('');
+    const bytes = Buffer.byteLength(batch);
+    if (!roomFor(logFile, bytes)) {
+      writeFailed(lines, new Error('log file is full and cannot be rotated'));
+      return;
+    }
+    try {
+      await appendAsync(logFile, batch);
+      wrote(bytes);
+    } catch (err) {
+      writeFailed(lines, err);
     }
   }
 
   function scheduleFlush(): void {
     if (timer || disposed || !logFile) return;
+    const delay = failures > 0 ? Math.max(flushIntervalMs, retryAt - now()) : flushIntervalMs;
     timer = setTimeout(() => {
       timer = null;
-      void flush();
-    }, flushIntervalMs);
+      void flushAsync(false);
+    }, delay);
     timer.unref?.();
   }
 
-  function flush(): Promise<void> {
+  /** force: write now even while waiting to retry after a failure (explicit flush, dispose). */
+  function flushAsync(force: boolean): Promise<void> {
     chain = chain
       .then(async () => {
-        const batch = takePending();
-        if (batch) await writeBatch(batch);
+        if (!force && failures > 0 && now() < retryAt) {
+          scheduleFlush();
+          return;
+        }
+        const lines = takePending();
+        if (lines.length > 0) await writeBatch(lines);
       })
       .catch(() => undefined);
     return chain;
   }
 
+  function flush(): Promise<void> {
+    return flushAsync(true);
+  }
+
+  /** Shutdown, suspend and crash paths: always tries the file, even while waiting to retry. */
   function flushSync(): void {
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
-    const batch = takePending();
-    if (!batch || !logFile || fileBroken) return;
+    if (!logFile) return;
+    const lines = takePending();
+    if (lines.length === 0) return;
+    const batch = lines.join('');
     const bytes = Buffer.byteLength(batch);
-    prepareWrite(bytes);
+    if (!roomFor(logFile, bytes)) {
+      writeFailed(lines, new Error('log file is full and cannot be rotated'));
+      return;
+    }
     try {
-      fs.appendFileSync(logFile, batch, 'utf8');
-      fileSize += bytes;
+      appendSync(logFile, batch);
+      wrote(bytes);
     } catch (err) {
-      fileBroken = true;
-      opts.mirror?.('error', `logger: sync write failed: ${String(err)}`);
+      writeFailed(lines, err);
     }
   }
 
@@ -202,7 +315,7 @@ export function createLogger(opts: LoggerOptions): RootLogger {
     ringCount = Math.min(ringCount + 1, ringSize);
     const line = formatEntry(entry);
     opts.mirror?.(lvl, line);
-    if (!logFile || fileBroken || disposed) return;
+    if (!logFile || disposed) return;
     if (pending.length >= MAX_PENDING_LINES) {
       pending.shift();
       dropped++;
@@ -252,6 +365,11 @@ export function createLogger(opts: LoggerOptions): RootLogger {
       }
       await flush();
       disposed = true;
+      // A failed final write schedules a retry; nothing may run after dispose.
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
     },
     logDir,
     logFile,

@@ -1,7 +1,8 @@
 // The cat's body: grounded locomotion along surfaces, perch riding, anticipation
 // crouch, ballistic jumps, free fall with wall bounces, and being dragged/thrown.
 // Everything is in physical px; DIP constants are scaled by the display under the cat.
-import type { Facing } from '../../shared/cat';
+import { CAT_BASE_WIDTH_DIP, type Facing } from '../../shared/cat';
+import { heldScruffOffset, HELD_SETTLE_MS } from '../interaction/held';
 import type { Point, Rect } from '../../shared/geometry';
 import { clamp, isFiniteRect, rectBottom, rectRight } from '../../shared/geometry';
 import type { SimSupport } from '../../shared/sim';
@@ -9,7 +10,7 @@ import type { Platform, WorldGeometry } from '../../shared/world';
 import { ARRIVE_RADIUS_DIP, MOVEMENT } from './constants';
 import type { JumpPlan } from './jump';
 import { ballistic, clearanceFor, descendingCrossing, jumpAt, sampleArc, solveJump } from './jump';
-import type { Surface, SurfacePoint } from './world';
+import type { FloorPiece, Surface, SurfacePoint } from './world';
 import { sameSurface, WorldModel } from './world';
 
 export type Pace = 'slow' | 'walk' | 'run' | 'chase';
@@ -103,8 +104,14 @@ interface Crouch {
 }
 
 interface Drag {
+  /** Anchor minus cursor where the user grabbed the cat. */
+  grabX: number;
+  grabY: number;
+  /** Current anchor minus cursor: slides from the grab point to the scruff. */
   offX: number;
   offY: number;
+  /** Time of the first held step (null until then). */
+  t0: number | null;
 }
 
 const MAX_FLIGHT_MS = 6000;
@@ -130,6 +137,7 @@ export class Mover {
   private homeDisplayId: string;
   private cfg: MoverConfig;
   private geometry: WorldGeometry;
+  private offLimits: ReadonlySet<string> = new Set<string>();
 
   constructor(geometry: WorldGeometry, cfg: MoverConfig, start: { displayId: string | null; xFrac: number }) {
     this.cfg = { ...cfg };
@@ -213,6 +221,15 @@ export class Mover {
     const dip = pace === 'run' ? MOVEMENT.runDip : pace === 'chase' ? MOVEMENT.chaseDip : pace === 'slow' ? MOVEMENT.slowDip : MOVEMENT.walkDip;
     return dip * this.cfg.movementSpeed * this.scale;
   }
+  /** Where the cat may walk on its current surface (null while airborne or held). */
+  get walkRange(): { x0: number; x1: number } | null {
+    const s = this.currentSurface;
+    return s ? this.rangeOn(s, this.x) : null;
+  }
+  /** The cat may not walk, jump or be called onto this display (it may stay on the one it is on). */
+  isOffLimits(displayId: string): boolean {
+    return this.offLimits.has(displayId) && displayId !== this.displayId;
+  }
 
   // ---- configuration ---------------------------------------------------------
 
@@ -232,9 +249,26 @@ export class Mover {
     return this.revalidate();
   }
 
+  /**
+   * Displays with a fullscreen app in front. The cat treats them as off limits: a
+   * shared floor ends at their edge like a wall, their window tops are ignored and
+   * no walk or jump ends on them. The display the cat is already on stays usable.
+   */
+  setOffLimitsDisplays(ids: readonly string[]): void {
+    const next = new Set(ids);
+    if (next.size === this.offLimits.size && [...next].every((id) => this.offLimits.has(id))) return;
+    this.offLimits = next;
+    this.leg = null;
+  }
+
   /** Refreshes walkable window tops for this tick. */
   sense(platforms: readonly Platform[]): void {
-    this.windows = this.cfg.perchOnWindows ? this.navWorld.windowSurfaces(platforms) : [];
+    if (!this.cfg.perchOnWindows) {
+      this.windows = [];
+      return;
+    }
+    const surfaces = this.navWorld.windowSurfaces(platforms);
+    this.windows = this.offLimits.size === 0 ? surfaces : surfaces.filter((w) => !w.displayIds.some((id) => this.isOffLimits(id)));
   }
 
   // ---- goals -----------------------------------------------------------------
@@ -262,7 +296,10 @@ export class Mover {
   canReach(p: Point): boolean {
     if (this.modeValue !== 'ground' && this.modeValue !== 'crouch') return false;
     const dest = this.surfacePointFor(p);
-    if (sameSurface(this.surface, dest.surface)) return true;
+    if (sameSurface(this.surface, dest.surface)) {
+      const r = this.rangeOn(this.surface, this.x);
+      return dest.x >= r.x0 - 1 && dest.x <= r.x1 + 1;
+    }
     const leg = this.planLeg({ x: dest.x, y: dest.y, pace: 'walk', allowJump: true }, this.surface);
     return leg.kind !== 'walk' || leg.reachable;
   }
@@ -282,7 +319,8 @@ export class Mover {
     if (this.modeValue !== 'ground') return false;
     const s = this.surface;
     const dx = this.facing * this.bodyWidth * 0.35;
-    const landX = clamp(this.x + dx, s.x0, s.x1);
+    const r = this.rangeOn(s, this.x);
+    const landX = clamp(this.x + dx, r.x0, r.x1);
     this.goal = null;
     this.leg = null;
     this.vx = 0;
@@ -307,7 +345,7 @@ export class Mover {
     const bh = this.bodyHeight;
     const offX = Number.isFinite(at.x) ? clamp(this.x - at.x, -bw, bw) : 0;
     const offY = Number.isFinite(at.y) ? clamp(this.y - at.y, -bh * 0.25, bh * 1.25) : bh * 0.5;
-    this.drag = { offX, offY };
+    this.drag = { grabX: offX, grabY: offY, offX, offY, t0: null };
     this.modeValue = 'held';
     this.flight = null;
     this.crouch = null;
@@ -321,7 +359,7 @@ export class Mover {
   /** Releases the cat. Returns the release speed in DIP/s (after clamping). */
   endDrag(at: Point | null, velocity: Point, now: number, allowThrow: boolean): { speedDip: number; thrown: boolean } {
     if (this.modeValue !== 'held') return { speedDip: 0, thrown: false };
-    const d = this.drag ?? { offX: 0, offY: 0 };
+    const d = this.drag ?? { grabX: 0, grabY: 0, offX: 0, offY: 0, t0: null };
     if (at && Number.isFinite(at.x) && Number.isFinite(at.y)) {
       // The release point only corrects the last drag sample; a far-off point (stale
       // or out-of-order event) must not teleport the cat away from where it is shown.
@@ -372,6 +410,21 @@ export class Mover {
     return true;
   }
 
+  /**
+   * Puts the cat at once on the floor below `p`, used when it is called away from a
+   * display with a fullscreen app in front. Returns false (and leaves it where it is)
+   * when it is held or that floor point is on an off-limits display.
+   */
+  relocate(p: Point): boolean {
+    if (this.modeValue === 'held' || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return false;
+    const fp = this.navWorld.nearestFloorPoint(this.navWorld.clampInside(p));
+    if (this.offLimits.has(this.navWorld.displayIdOn(fp.surface, fp.x))) return false;
+    const r = this.openRunAt(fp.surface, fp.x, null);
+    this.goal = null;
+    this.setGrounded(fp.surface, clamp(fp.x, r.x0, r.x1), null);
+    return true;
+  }
+
   // ---- simulation step -------------------------------------------------------
 
   step(input: MoverInput): MoverStep {
@@ -398,6 +451,14 @@ export class Mover {
   private stepHeld(input: MoverInput): void {
     const d = this.drag;
     if (!d || !input.dragCursor || !Number.isFinite(input.dragCursor.x) || !Number.isFinite(input.dragCursor.y)) return;
+    // The renderer hangs the held cat from its scruff: slide the grab point there while
+    // the pose cross-fades into `held`, so the cursor ends up holding the scruff.
+    if (d.t0 === null) d.t0 = input.now;
+    const k = clamp((input.now - d.t0) / HELD_SETTLE_MS, 0, 1);
+    const e = k * k * (3 - 2 * k);
+    const scruff = heldScruffOffset(this.facing, this.bodyWidth / CAT_BASE_WIDTH_DIP);
+    d.offX = d.grabX + (scruff.x - d.grabX) * e;
+    d.offY = d.grabY + (scruff.y - d.grabY) * e;
     const p = this.fullWorld.clampInside({ x: input.dragCursor.x + d.offX, y: input.dragCursor.y + d.offY });
     this.x = p.x;
     this.y = p.y;
@@ -407,13 +468,14 @@ export class Mover {
     if (this.perch && !this.ride(input, out)) return;
     const dt = Math.max(0, input.dtMs) / 1000;
     const s = this.surface;
+    const range = this.rangeOn(s, this.x);
     let targetX = this.x;
     let pace: Pace = 'walk';
     let stepOffDir = 0;
     if (this.goal) {
       pace = this.goal.pace;
       if (!this.goal.allowJump) {
-        const x = clamp(this.goal.x, s.x0, s.x1);
+        const x = clamp(this.goal.x, range.x0, range.x1);
         this.leg = { kind: 'walk', x, reachable: Math.abs(x - this.goal.x) <= this.arriveRadius() };
       } else if (!this.leg) {
         this.leg = this.planLeg(this.goal, s);
@@ -439,8 +501,8 @@ export class Mover {
       nx = targetX;
       this.vx = 0;
     }
-    if (nx > s.x1 || nx < s.x0) {
-      const dir: 1 | -1 = nx > s.x1 ? 1 : -1;
+    if (nx > range.x1 || nx < range.x0) {
+      const dir: 1 | -1 = nx > range.x1 ? 1 : -1;
       if (stepOffDir === dir) {
         this.x = dir > 0 ? s.x1 : s.x0;
         const vx = dir * Math.max(Math.abs(this.vx), this.paceSpeedPx('walk') * 0.8);
@@ -449,7 +511,7 @@ export class Mover {
         out.goal = 'moving';
         return;
       }
-      nx = clamp(nx, s.x0, s.x1);
+      nx = clamp(nx, range.x0, range.x1);
       this.vx = 0;
     }
     this.x = nx;
@@ -489,7 +551,7 @@ export class Mover {
     if (input.now < c.until) return;
     this.crouch = null;
     const target = this.revalidateTarget(c.target, c.landX);
-    if (!target) {
+    if (!target || this.offLimitsAt(target, c.landX)) {
       this.modeValue = 'ground';
       this.leg = null;
       return;
@@ -790,10 +852,17 @@ export class Mover {
   }
 
   private planLeg(goal: MoveGoal, cur: Surface): Leg {
-    const dest = this.surfacePointFor({ x: goal.x, y: goal.y });
-    // Goals on displays the cat may not roam to are approached as closely as possible.
+    let dest = this.surfacePointFor({ x: goal.x, y: goal.y });
+    // Goals on displays the cat may not roam to, or that are off limits, are approached as closely as possible.
     const allowed = this.navWorld.contains(this.fullWorld.clampInside({ x: goal.x, y: goal.y }), 1);
-    if (sameSurface(cur, dest.surface)) return { kind: 'walk', x: clamp(dest.x, cur.x0, cur.x1), reachable: allowed };
+    const range = this.rangeOn(cur, this.x);
+    if (sameSurface(cur, dest.surface)) {
+      const x = clamp(dest.x, range.x0, range.x1);
+      return { kind: 'walk', x, reachable: allowed && Math.abs(x - dest.x) <= this.arriveRadius() };
+    }
+    const openX = this.openLandX(dest.surface, dest.x);
+    if (openX === null) return { kind: 'walk', x: clamp(dest.x, range.x0, range.x1), reachable: false };
+    if (openX !== dest.x) dest = { surface: dest.surface, x: openX, y: this.navWorld.yAt(dest.surface, openX) };
     const direct = this.planJumpLeg(cur, this.x, dest);
     if (direct) return direct;
     // One intermediate window top (e.g. floor -> low window -> high window).
@@ -806,7 +875,7 @@ export class Mover {
       const dir: 1 | -1 = dest.x > cur.x1 ? 1 : dest.x < cur.x0 ? -1 : this.x - cur.x0 < cur.x1 - this.x ? -1 : 1;
       return { kind: 'drop', dir };
     }
-    return { kind: 'walk', x: clamp(dest.x, cur.x0, cur.x1), reachable: false };
+    return { kind: 'walk', x: clamp(dest.x, range.x0, range.x1), reachable: false };
   }
 
   private planJumpLeg(cur: Surface, fromX: number, dest: SurfacePoint): Leg | null {
@@ -815,27 +884,28 @@ export class Mover {
     const maxUp = MOVEMENT.maxJumpUpDip * scale;
     const bw = this.navWorld.bodyWidth(scale);
     const t = dest.surface;
+    const range = this.rangeOn(cur, fromX);
     let landX = clamp(dest.x, t.x0, t.x1);
-    let takeoffX = clamp(landX, cur.x0, cur.x1);
+    let takeoffX = clamp(landX, range.x0, range.x1);
     if (Math.abs(landX - takeoffX) > maxAcross) {
       landX = clamp(takeoffX + Math.sign(landX - takeoffX) * maxAcross, t.x0, t.x1);
       if (Math.abs(landX - takeoffX) > maxAcross + 0.5) return null;
     }
     if (Math.abs(landX - takeoffX) < bw * 0.5) {
       const dir = fromX <= takeoffX ? -1 : 1;
-      const alt = clamp(takeoffX + dir * bw * 0.8, cur.x0, cur.x1);
+      const alt = clamp(takeoffX + dir * bw * 0.8, range.x0, range.x1);
       if (Math.abs(landX - alt) <= maxAcross) takeoffX = alt;
     }
     // Arcs that would clip a display edge get a longer run-up and/or a landing
     // further in (e.g. jumping up from a lower monitor onto a higher one).
     const away = landX >= takeoffX ? -1 : 1;
     for (const k of [0, 0.5, 1, 2, 3, 4]) {
-      const tx = clamp(takeoffX + away * k * bw, cur.x0, cur.x1);
+      const tx = clamp(takeoffX + away * k * bw, range.x0, range.x1);
       if (k > 0 && tx === takeoffX) continue;
       for (const j of [0, 1, 2]) {
         const lx = clamp(landX - away * j * bw, t.x0, t.x1);
         if (j > 0 && lx === landX) continue;
-        if (Math.abs(lx - tx) > maxAcross) continue;
+        if (Math.abs(lx - tx) > maxAcross || this.offLimitsAt(t, lx)) continue;
         const from = { x: tx, y: this.navWorld.yAt(cur, tx) };
         const to = { x: lx, y: this.navWorld.yAt(t, lx) };
         if (from.y - to.y > maxUp) continue;
@@ -854,6 +924,65 @@ export class Mover {
       if (sampleArc(plan, 16).every((p) => this.navWorld.contains(p, 2))) return plan;
     }
     return null;
+  }
+
+  // ---- off-limits displays ---------------------------------------------------
+
+  /**
+   * The stretch of `s` around `x` the cat may walk on. A floor shared with an
+   * off-limits display ends at that display's edge (inset by half a body, so the cat
+   * stays out of it entirely); a cat already past that point is not pulled back,
+   * only kept from going further.
+   */
+  private rangeOn(s: Surface, x: number): { x0: number; x1: number } {
+    const r = this.openRunAt(s, x, this.displayId);
+    return { x0: Math.min(r.x0, Math.max(x, s.x0)), x1: Math.max(r.x1, Math.min(x, s.x1)) };
+  }
+
+  /** Walkable range of the open floor pieces around `x`; `exempt` is a display that counts as open. */
+  private openRunAt(s: Surface, x: number, exempt: string | null): { x0: number; x1: number } {
+    if (this.offLimits.size === 0 || s.pieces.length < 2) return { x0: s.x0, x1: s.x1 };
+    const i = s.pieces.indexOf(this.navWorld.floorPieceAt(s, x) as FloorPiece);
+    if (i < 0) return { x0: s.x0, x1: s.x1 };
+    return this.openRun(s, i, exempt);
+  }
+
+  private openRun(s: Surface, i: number, exempt: string | null): { x0: number; x1: number } {
+    const pieces = s.pieces;
+    const blocked = (k: number): boolean => {
+      const id = (pieces[k] as FloorPiece).displayId;
+      return id !== exempt && this.offLimits.has(id);
+    };
+    if (blocked(i)) return { x0: s.x0, x1: s.x1 };
+    let a = i;
+    let b = i;
+    while (a > 0 && !blocked(a - 1)) a--;
+    while (b < pieces.length - 1 && !blocked(b + 1)) b++;
+    const first = pieces[a] as FloorPiece;
+    const last = pieces[b] as FloorPiece;
+    const x0 = a === 0 ? s.x0 : first.left + this.navWorld.bodyWidth(first.scale) / 2;
+    const x1 = b === pieces.length - 1 ? s.x1 : last.right - this.navWorld.bodyWidth(last.scale) / 2;
+    return x1 >= x0 ? { x0, x1 } : { x0: (x0 + x1) / 2, x1: (x0 + x1) / 2 };
+  }
+
+  /** `landX` moved onto the nearest open part of a target surface, or null when none of it is open. */
+  private openLandX(t: Surface, landX: number): number | null {
+    if (this.offLimits.size === 0 || t.kind !== 'floor') return landX;
+    const here = this.displayId;
+    let best: number | null = null;
+    for (let i = 0; i < t.pieces.length; i++) {
+      const id = (t.pieces[i] as FloorPiece).displayId;
+      if (id !== here && this.offLimits.has(id)) continue;
+      const r = this.openRun(t, i, here);
+      const x = clamp(landX, r.x0, r.x1);
+      if (best === null || Math.abs(x - landX) < Math.abs(best - landX)) best = x;
+    }
+    return best;
+  }
+
+  /** Whether `x` on `s` lies over an off-limits display. */
+  private offLimitsAt(s: Surface, x: number): boolean {
+    return this.offLimits.size > 0 && this.isOffLimits(this.navWorld.displayIdOn(s, x));
   }
 
   // ---- world changes ---------------------------------------------------------

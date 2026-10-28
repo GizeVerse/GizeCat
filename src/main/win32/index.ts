@@ -11,6 +11,8 @@ export { createActivityMonitor } from './activityMonitor';
 export type { ActivityMonitorExtras, ActivityMonitorOptions } from './activityMonitor';
 export { computePlatforms, computeFullscreenDisplayIds, MIN_PLATFORM_WIDTH } from './platforms';
 export { createUnavailableWin32Api, hasWin32Extensions } from './win32Api';
+export { sameWindowExclusions, titleChecksActive, windowExclusionsFor } from './exclusionPolicy';
+export type { WindowExclusions } from './exclusionPolicy';
 export type { ExtendedWin32Api, Win32ApiExtensions, Win32ApiOptions } from './win32Api';
 
 /**

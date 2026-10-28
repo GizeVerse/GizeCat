@@ -77,6 +77,18 @@ describe.runIf(process.platform === 'win32')('Win32Api (real koffi)', () => {
     expect(NOTIFICATION_STATES.includes(api.getNotificationState())).toBe(true);
   });
 
+  it('answers the privacy extensions over every shown window', () => {
+    const finite = (r: { width: number; height: number }) => isFiniteRect(r as never) && r.width > 0 && r.height > 0;
+    const occluders = api.listOccluders();
+    expect(occluders !== null && occluders.every((o) => ID.test(o.id) && finite(o.rect))).toBe(true);
+    expect(new Set(occluders?.map((o) => o.id)).size).toBe(occluders?.length);
+    const masks = api.listExcludedRects();
+    expect(masks === null || masks.every(finite)).toBe(true);
+    expect([true, false, null].includes(api.isForegroundExcluded())).toBe(true);
+    const c = api.getCursorPos() ?? { x: 0, y: 0 };
+    expect([true, false, null].includes(api.isPointExcluded(c))).toBe(true);
+  });
+
   it('rejects garbage ids without throwing', () => {
     for (const id of ['', '0', 'x', '-1', '18446744073709551616', '12345']) {
       expect(api.describeWindow(id)).toBeNull();

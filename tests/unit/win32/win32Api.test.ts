@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RawWinEvent } from '../../../src/main/contracts';
 import { createKoffiWin32Api, createUnavailableWin32Api, hasWin32Extensions, idleFromTicks, parseWindowId } from '../../../src/main/win32/win32Api';
+import { DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS } from '../../../src/shared/settings';
 import { createTestLogger, FakeNative, PRIMARY_MONITOR, raw } from './fakes';
 
 const OWN = 4242;
@@ -127,6 +128,7 @@ describe('exclusions', () => {
 
   it('matches title patterns case-insensitively, in memory only', () => {
     const { native, api, logger } = setup();
+    api.setExclusions(DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS);
     native.add(801n, { pid: 71, title: 'My BANK - Online Banking' }, 'C:\\Browser\\chrome.exe');
     native.add(802n, { pid: 72, title: 'Recipes' }, 'C:\\Browser\\firefox.exe');
     expect(api.describeWindow('801')?.excluded).toBe(true);
@@ -210,6 +212,25 @@ describe('queries', () => {
     native.pointWindow = 22n;
     expect(api.windowIdAtPoint({ x: 5, y: 5 })).toBeNull();
     expect(api.windowIdAtPoint({ x: NaN, y: 5 })).toBeNull();
+  });
+
+  it('lists occluders in z-order: shown windows of any kind except overlays, click-through windows and the desktop', () => {
+    const { native, api } = setup();
+    native.add(1n, { pid: OWN, exStyle: WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, frame: raw(0, 0, 1920, 1152) });
+    native.add(2n, { pid: 5, exStyle: 0x20 | 0x80000, frame: raw(0, 0, 1920, 1152) });
+    native.add(3n, { pid: 5, exStyle: WS_EX_TOOLWINDOW, frame: raw(10, 10, 100, 40) });
+    native.add(4n, { pid: OWN, frame: raw(500, 200, 900, 640) });
+    native.add(5n, { pid: 6, owner: 6n, frame: raw(300, 300, 400, 300) });
+    native.add(6n, { pid: 6, frame: raw(0, 0, 1200, 900) });
+    native.add(7n, { pid: 6, iconic: true });
+    native.add(8n, { pid: 6, cloaked: 2 });
+    native.add(9n, { pid: 6, frame: raw(0, 0, 0, 0) });
+    native.add(10n, { pid: 7, className: 'WorkerW', frame: raw(0, 0, 1920, 1200) });
+    native.add(11n, { pid: 8, className: 'Shell_TrayWnd', frame: raw(0, 1152, 1920, 48) });
+    expect(api.listOccluders()?.map((o) => o.id)).toEqual(['3', '4', '5', '6', '11']);
+    expect(api.listOccluders()?.[1]?.rect).toEqual({ x: 500, y: 200, width: 900, height: 640 });
+    native.throwOn.add('enumTopLevelWindows');
+    expect(api.listOccluders()).toBeNull();
   });
 
   it('foreground id excludes our own windows', () => {
@@ -425,6 +446,10 @@ describe('unavailable fallback', () => {
     expect(api.getNotificationState()).toBe('unknown');
     expect(api.subscribeWinEvents(() => undefined)).toBeNull();
     expect(api.isWindowExcluded('1')).toBeNull();
+    expect(api.isForegroundExcluded()).toBeNull();
+    expect(api.isPointExcluded({ x: 0, y: 0 })).toBeNull();
+    expect(api.listExcludedRects()).toBeNull();
+    expect(api.listOccluders()).toBeNull();
     expect(() => api.dispose()).not.toThrow();
   });
 });

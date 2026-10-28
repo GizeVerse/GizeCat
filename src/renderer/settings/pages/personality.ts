@@ -5,11 +5,11 @@ import { button, group, meter, page, row, runAction, type RowParts } from '../co
 import { confirmDanger } from '../dialog';
 import { h, icon } from '../dom';
 import { behaviorStateLabel, formatAge, formatCount, formatDecimal, formatPercent, formatRelativeTime, memoryDetailLabel, memoryKindLabel } from '../format';
+import { pagePoll } from '../livePoll';
 import { coatArt } from '../skins';
 import { S } from '../strings';
 
 const P = S.personality;
-const RELATIVE_REFRESH_MS = 30_000;
 
 const keysOf = <T extends object>(labels: Record<keyof T, string>): Array<keyof T> => Object.keys(labels) as Array<keyof T>;
 
@@ -120,18 +120,16 @@ export function personalityPage(ctx: PageContext): PageView {
     recent.replaceChildren(memories(cat, now));
   };
   ctx.store.subscribe(render);
-  let timer: number | null = null;
+  // Stats drift and relative times age without a broadcast from main, so the view is re-read while shown.
+  const poll = pagePoll(ctx, element);
   return {
     id: 'personality',
     title: P.title,
     element,
     onShow() {
       render();
-      if (timer === null) {
-        timer = window.setInterval(() => {
-          if (!element.hidden) render();
-        }, RELATIVE_REFRESH_MS);
-      }
+      poll.start();
     },
+    onHide: () => poll.stop(),
   };
 }

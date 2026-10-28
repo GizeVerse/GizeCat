@@ -4,6 +4,7 @@ import type { Point, Rect } from '../../../src/shared/geometry';
 import type { WindowInfo } from '../../../src/shared/world';
 import type { Logger, RawWinEvent, Unsubscribe, Win32Api } from '../../../src/main/contracts';
 import type { Hwnd, RawRect, Win32Native, WinEventProc } from '../../../src/main/win32/native';
+import type { Occluder } from '../../../src/main/win32/platforms';
 import type { ExtendedWin32Api } from '../../../src/main/win32/win32Api';
 
 export interface LogEntry {
@@ -60,6 +61,8 @@ export class FakeNative implements Win32Native {
   swapButtons = false;
   foreground: Hwnd | null = null;
   pointWindow: Hwnd | null = null;
+  /** When true, windowFromPoint hit-tests the z-order instead of returning `pointWindow`. */
+  hitTest = false;
   quns: number | null = 5;
   dpi: number | null = 2;
   failHooks = new Set<number>();
@@ -179,8 +182,16 @@ export class FakeNative implements Win32Native {
     if (!w) return null;
     return w.monitor !== undefined ? w.monitor : PRIMARY_MONITOR;
   }
-  windowFromPoint() {
-    return this.pointWindow;
+  windowFromPoint(x: number, y: number) {
+    if (!this.hitTest) return this.pointWindow;
+    // OS-like hit-testing: topmost visible window under the point, skipping click-through ones.
+    for (const h of this.zOrder) {
+      const w = this.w(h);
+      if (!w || w.visible !== true || w.iconic === true || ((w.exStyle ?? 0) & 0x20) !== 0) continue;
+      const r = this.getWindowRect(h);
+      if (r && x >= r.left && x < r.right && y >= r.top && y < r.bottom) return h;
+    }
+    return null;
   }
   queryUserNotificationState() {
     return this.quns;
@@ -299,10 +310,27 @@ export class FakeWin32Api implements Win32Api {
 export class FakeExtendedWin32Api extends FakeWin32Api implements ExtendedWin32Api {
   exclusionCalls: Array<[readonly string[], readonly string[]]> = [];
   excludedIds = new Map<string, boolean | null>();
+  foregroundExcluded: boolean | null = false;
+  excludedRects: Rect[] | null = [];
+  /** null: the full z-order is unavailable. */
+  occluders: Occluder[] | null = null;
   setExclusions(processes: readonly string[], titlePatterns: readonly string[]) {
     this.exclusionCalls.push([processes, titlePatterns]);
   }
   isWindowExcluded(id: string) {
     return this.excludedIds.has(id) ? (this.excludedIds.get(id) ?? null) : false;
+  }
+  isForegroundExcluded() {
+    return this.foregroundExcluded;
+  }
+  isPointExcluded(p: Point) {
+    const id = this.windowIdAtPoint(p);
+    return id === null ? null : this.isWindowExcluded(id);
+  }
+  listExcludedRects() {
+    return this.excludedRects;
+  }
+  listOccluders() {
+    return this.occluders;
   }
 }

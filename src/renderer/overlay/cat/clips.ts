@@ -1,6 +1,7 @@
 // Animation clips: pure functions (clip, phase, context) -> Pose. Procedural layers
 // (breathing, blinking, look-at, tail physics, mood) are added by the animator.
 import { CAT_BASE_WIDTH_DIP, ONE_SHOT_CLIPS, type AnimClip } from '../../../shared/cat';
+import { HELD_SCRUFF_DIP } from '../../../core/interaction/held';
 import { clamp, clamp01, easeInOut, lerp, pulse, seg, sseg, TAU, wrap01 } from './math';
 import { blendPose, copyPose, createPose, LEG_BF, LEG_BN, LEG_FF, LEG_FN, resetPose, setFoot, type Pose } from './pose';
 import { torsoPointX, torsoPointY } from './rig';
@@ -37,10 +38,10 @@ export function clipDurationS(clip: AnimClip): number | null {
 
 /**
  * Cat-local point the cat hangs from in the `held` clip (back of the neck), DIP at
- * scale 1, facing right. Main can keep the grabbing cursor at
- * anchor + (HELD_SCRUFF.x * facing, HELD_SCRUFF.y) * scale.
+ * scale 1, facing right. The mover keeps the grabbing cursor at
+ * anchor + (HELD_SCRUFF.x * facing, HELD_SCRUFF.y) * scale (src/core/interaction/held.ts).
  */
-export const HELD_SCRUFF = { x: -8, y: -58 } as const;
+export const HELD_SCRUFF = HELD_SCRUFF_DIP;
 
 const BODY_LENGTH_DIP = CAT_BASE_WIDTH_DIP;
 const WALK_DUTY = 0.64;

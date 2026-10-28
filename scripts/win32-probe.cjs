@@ -227,7 +227,13 @@ async function runProbe({ BrowserWindow, screen, w3, koffi }) {
   check('list.ownIncluded', apiOwn.listAppWindows().some((w) => w.id === ourId));
   check('list.ownExcludedByDefault', !apiDefault.listAppWindows().some((w) => w.id === ourId));
   const centre = desc ? { x: desc.rect.x + desc.rect.width / 2, y: desc.rect.y + desc.rect.height / 2 } : null;
-  notes.windowIdAtOwnCentre = centre ? (apiOwn.windowIdAtPoint(centre) === ourId ? 'ours (on top)' : 'other window on top') : 'n/a';
+  const ownOnTop = centre !== null && apiOwn.windowIdAtPoint(centre) === ourId;
+  notes.windowIdAtOwnCentre = centre ? (ownOnTop ? 'ours (on top)' : 'other window on top') : 'n/a';
+  // Our own (Settings-like) window hides what is below it but is never a private window.
+  check('occluders.ownWindowIncluded', (apiDefault.listOccluders() || []).some((o) => o.id === ourId));
+  check('privacy.ownWindowNotPrivate', apiDefault.isWindowExcluded(ourId) === false);
+  check('privacy.ownWindowNotMasked', Array.isArray(apiDefault.listExcludedRects()));
+  if (ownOnTop) check('privacy.pointOnOwnWindowNotPrivate', apiDefault.isPointExcluded(centre) === false);
 
   // 2. programmatic move (no move/size loop, so no moveStart/moveEnd hooks fire)
   const before = apiOwn.getWindowRect(ourId);
@@ -303,7 +309,41 @@ async function runProbe({ BrowserWindow, screen, w3, koffi }) {
   notes.fullscreenDisplayIdsWithOverlay = fullscreenIds;
   check('overlay.notListedAsAppWindow', !apiOwn.listAppWindows().some((w) => w.id === overlayId));
   notes.isExcludedAtThroughOverlay = typeof trackerDefault.isExcludedAt(probePoint) === 'boolean' ? (apiDefault.windowIdAtPoint(probePoint) === null ? 'fail-closed (unresolved)' : 'resolved underlying window') : 'error';
+  check('overlay.clickThroughNotAnOccluder', !(apiDefault.listOccluders() || []).some((o) => o.id === overlayId));
   overlay.destroy();
+
+  // 8b. a small overlay-style window that is hit-testable (like the cat overlay while the
+  // cursor is on the cat): it hides nothing and the window under it is judged instead.
+  const spot = { x: wa.x + wa.width - 160, y: wa.y + 40, width: 120, height: 120 };
+  const spotPx = screen.dipToScreenRect(null, spot);
+  const spotPoint = { x: spotPx.x + Math.floor(spotPx.width / 2), y: spotPx.y + Math.floor(spotPx.height / 2) };
+  const belowBefore = apiDefault.isPointExcluded(spotPoint);
+  const interactive = new BrowserWindow({
+    ...spot,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    focusable: false,
+    skipTaskbar: true,
+    type: 'toolbar',
+    alwaysOnTop: true,
+    webPreferences: { sandbox: true, contextIsolation: true },
+  });
+  interactive.setAlwaysOnTop(true, 'screen-saver');
+  const interactiveId = interactive.getNativeWindowHandle().readBigUInt64LE(0).toString();
+  await interactive.loadURL('data:text/html,<html style="background:transparent"><body></body></html>');
+  interactive.showInactive();
+  await sleep(250);
+  const hitInteractive = apiOwn.windowIdAtPoint(spotPoint) === interactiveId;
+  const belowWith = apiDefault.isPointExcluded(spotPoint);
+  const occludersWith = apiDefault.listOccluders() || [];
+  interactive.destroy();
+  check('overlay.interactiveIsHitTested', hitInteractive);
+  check('overlay.interactiveJudgesWindowBelow', belowWith === belowBefore, { before: belowBefore, with: belowWith });
+  check('overlay.interactiveNotAnOccluder', !occludersWith.some((o) => o.id === interactiveId));
   await sleep(300);
   pump();
   check('defaultTracker.neverSawOwnWindows', defaultOwnEvents.length === 0, defaultOwnEvents.length ? defaultOwnEvents : undefined);

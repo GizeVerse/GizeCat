@@ -105,6 +105,19 @@ export function joinEndpoint(base: URL, path: string): URL {
   return u;
 }
 
+/**
+ * The server root behind an OpenAI-compatible base URL: a trailing "/v1" path
+ * segment is dropped ("http://127.0.0.1:11434/v1" -> "http://127.0.0.1:11434/"),
+ * which is where Ollama serves its native API next to its /v1 API.
+ */
+export function openAiServerRoot(base: URL): URL {
+  const u = new URL(base.href);
+  u.pathname = base.pathname.replace(/\/+$/, '').replace(/\/v1$/i, '') || '/';
+  u.search = '';
+  u.hash = '';
+  return u;
+}
+
 /** Ollama "cloud" models (e.g. gpt-oss:120b-cloud) are proxied to ollama.com even via a local server. */
 export function isOllamaCloudModel(model: string): boolean {
   return /(^|[:-])cloud$/i.test(model.trim());

@@ -24,7 +24,23 @@ const HIT_REGION_FRESH_MS = 300;
 const HIT_REGION_MOVE_TOLERANCE_PX = 4;
 /** A press with no physical button held for this long is considered lost. */
 const LOST_PRESS_MS = 400;
+/**
+ * Without Win32 button state: while the button is held the pressing overlay has the
+ * mouse captured and reports every movement, so a cursor that moved this far (DIP)
+ * with no pointer event for LOST_PRESS_MS means the release was lost.
+ */
+const LOST_PRESS_MOVE_DIP = 12;
 const MAX_TOPMOST_REASSERTS_PER_MIN = 6;
+/**
+ * Hang watchdog. A ready overlay showing the cat re-reports its hit region every
+ * ~0.5 s (renderer heartbeat); this much silence means its renderer is hung: it is made
+ * click-through at once (ending any press) and recreated if it stays silent or
+ * unresponsive for HANG_RECREATE_MS more.
+ */
+const HANG_SILENCE_MS = 3000;
+const HANG_RECREATE_MS = 5000;
+/** Silence counted per watchdog check is capped, so main's own stalls never count against a renderer. */
+const WATCHDOG_MAX_STEP_MS = 250;
 
 export interface OverlayInfo {
   displayId: string;
@@ -101,12 +117,20 @@ interface Entry {
   crashed: boolean;
   boundsChecked: boolean;
   hitRectsPx: Rect[] | null;
+  /** Main time of the last hit-region report (renderer heartbeat while active). */
   hitAt: number;
   hitAnchor: Point | null;
   timeOffset: number | null;
   pressed: boolean;
   pressAt: number;
   buttonSeenAt: number;
+  /** Main time and px position of the last pointer event. */
+  pointerAt: number;
+  pointerPx: Point | null;
+  /** Watchdog: silence (ms) while a heartbeat was expected. */
+  silentMs: number;
+  /** Time spent hung (silent or 'unresponsive'), null while live. */
+  hungMs: number | null;
   disposing: boolean;
 }
 
@@ -126,6 +150,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
   let topmostTimer: ReturnType<typeof setInterval> | null = null;
   let offDisplay: Unsubscribe | null = null;
   let disposed = false;
+  let lastWatchdogAt: number | null = null;
   const topmostReasserts: number[] = [];
 
   function hwndOf(win: BrowserWindow): string {
@@ -222,6 +247,10 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       pressed: false,
       pressAt: 0,
       buttonSeenAt: 0,
+      pointerAt: 0,
+      pointerPx: null,
+      silentMs: 0,
+      hungMs: null,
       disposing: false,
     };
     entries.set(d.id, e);
@@ -253,16 +282,8 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
         scheduleRecreate(e.displayId, 'closed');
       }
     });
-    wc.on('unresponsive', () => {
-      log.warn('overlay renderer unresponsive', { displayId: e.displayId });
-      e.healthy = false;
-      e.pressed = false;
-      setIgnore(e, true);
-    });
-    wc.on('responsive', () => {
-      log.info('overlay renderer responsive again', { displayId: e.displayId });
-      e.healthy = true;
-    });
+    wc.on('unresponsive', () => markHung(e, 'unresponsive'));
+    wc.on('responsive', () => noteAlive(e));
     wc.on('render-process-gone', (_ev, details) => {
       log.error('overlay renderer gone', { displayId: e.displayId, reason: details.reason, exitCode: details.exitCode });
       e.crashed = true;
@@ -294,6 +315,52 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       } catch (err) {
         log.warn('destroying overlay failed', { displayId: e.displayId, error: err });
       }
+    }
+  }
+
+  /** Renderer is processing messages: clears a hang. */
+  function noteAlive(e: Entry): void {
+    e.silentMs = 0;
+    if (e.hungMs === null) return;
+    e.hungMs = null;
+    log.info('overlay renderer responsive again', { displayId: e.displayId });
+  }
+
+  /** Hung renderer: click-through at once and end its press (the drag with it); recreated after a grace period. */
+  function markHung(e: Entry, reason: string): void {
+    if (e.hungMs !== null || !alive(e)) return;
+    log.warn('overlay renderer hung; forcing click-through', { displayId: e.displayId, reason });
+    e.hungMs = 0;
+    if (e.pressed) endLostPress(e);
+    setIgnore(e, true);
+  }
+
+  function live(e: Entry): boolean {
+    return e.healthy && e.hungMs === null && !e.crashed && e.ready;
+  }
+
+  /** A ready overlay that main shows the cat on must send its heartbeat. */
+  function expectsHeartbeat(e: Entry): boolean {
+    return e.ready && e.active && !e.crashed && e.lastState !== null && e.lastState.visible;
+  }
+
+  function watchdog(now: number): void {
+    const step = lastWatchdogAt === null ? 0 : Math.min(WATCHDOG_MAX_STEP_MS, Math.max(0, now - lastWatchdogAt));
+    lastWatchdogAt = now;
+    for (const e of [...entries.values()]) {
+      if (!alive(e)) continue;
+      if (e.hungMs !== null) {
+        e.hungMs += step;
+        if (e.hungMs > HANG_RECREATE_MS) {
+          log.error('overlay renderer did not recover; recreating it', { displayId: e.displayId });
+          e.crashed = true;
+          destroyEntry(e);
+          scheduleRecreate(e.displayId, 'hung');
+        }
+        continue;
+      }
+      e.silentMs = expectsHeartbeat(e) ? e.silentMs + step : 0;
+      if (e.silentMs > HANG_SILENCE_MS) markHung(e, 'no heartbeat');
     }
   }
 
@@ -360,7 +427,11 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     const now = opts.clock();
     for (const e of entries.values()) {
       if (!alive(e)) continue;
-      if (showing.has(e.displayId)) {
+      // The overlay that took the press keeps the pointer captured for the whole drag,
+      // also after the cat crossed onto another display: it stays active (and
+      // interactive) so it still delivers the moves and the release.
+      const holdsPress = e.pressed && e.active && out.visible && !hidden;
+      if (showing.has(e.displayId) || holdsPress) {
         const geo = world.displays.find((d) => d.id === e.displayId) ?? e.geometry;
         const forceSnap = !e.active || e.needSnap;
         const state = mapRenderState(out, appearance, {
@@ -396,21 +467,24 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     }
   }
 
-/**
+  /**
    * The cat's hit area on this overlay: the renderer-reported region while it is
    * trustworthy, else the simulation's approximate bounds (which are always current).
+   * The age is the time since the renderer last reported (its heartbeat re-reports an
+   * unchanged region), or since activation before its first report, so a renderer that
+   * went silent ages out of interactivity in decideInteractive.
    */
   function effectiveRegions(e: Entry, now: number): { rects: Rect[]; ageMs: number } {
     const out = lastOutput;
     if (!e.active || !out || !out.visible || lastHidden) return { rects: [], ageMs: Infinity };
-    if (e.hitRectsPx && e.hitAt >= e.activatedAt) {
-      const ageMs = now - e.hitAt;
+    const reported = e.hitRectsPx !== null && e.hitAt >= e.activatedAt;
+    const ageMs = Math.max(0, now - (reported ? e.hitAt : e.activatedAt));
+    if (reported && e.hitRectsPx) {
       const moved = e.hitAnchor ? distance(e.hitAnchor, { x: out.x, y: out.y }) : Infinity;
-      // The renderer reports only on change, so an old region of a cat that has not moved is still current.
-      if (moved <= HIT_REGION_MOVE_TOLERANCE_PX) return { rects: e.hitRectsPx, ageMs: 0 };
-      if (ageMs <= HIT_REGION_FRESH_MS) return { rects: e.hitRectsPx, ageMs };
+      // The renderer reports changes at a limited rate, so the region of a cat that has not moved since is still current.
+      if (moved <= HIT_REGION_MOVE_TOLERANCE_PX || ageMs <= HIT_REGION_FRESH_MS) return { rects: e.hitRectsPx, ageMs };
     }
-    return { rects: [out.boundsPx], ageMs: 0 };
+    return { rects: [out.boundsPx], ageMs };
   }
 
   function endLostPress(e: Entry): void {
@@ -433,17 +507,27 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     opts.onSimEvents(events);
   }
 
+  /** True when the press on `e` is over although no release arrived. */
+  function pressLost(e: Entry, buttonDown: boolean | null, cursorPx: Point | null, now: number): boolean {
+    if (buttonDown === true) {
+      e.buttonSeenAt = now;
+      return false;
+    }
+    if (buttonDown === false) return now - Math.max(e.pressAt, e.buttonSeenAt) > LOST_PRESS_MS;
+    // Button state unknown (no Win32): a captured press reports every movement.
+    if (!cursorPx || !e.pointerPx || now - e.pointerAt <= LOST_PRESS_MS) return false;
+    return distance(cursorPx, e.pointerPx) > LOST_PRESS_MOVE_DIP * e.geometry.scaleFactor;
+  }
+
   function updateInteractivity(cursorPx: Point | null, blocked: boolean): void {
     const now = opts.clock();
+    watchdog(now);
     const buttonDown = opts.isLeftButtonDown();
     for (const e of entries.values()) {
       if (!alive(e)) continue;
-      if (e.pressed) {
-        if (buttonDown !== false) e.buttonSeenAt = now;
-        else if (now - Math.max(e.pressAt, e.buttonSeenAt) > LOST_PRESS_MS) {
-          log.debug('pointer press lost; ending it', { displayId: e.displayId });
-          endLostPress(e);
-        }
+      if (e.pressed && pressLost(e, buttonDown, cursorPx, now)) {
+        log.debug('pointer press lost; ending it', { displayId: e.displayId });
+        endLostPress(e);
       }
       let interactive: boolean;
       if (forced !== null) interactive = forced;
@@ -455,7 +539,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           interactive: !e.ignoreMouse,
           interactionsEnabled: !blocked,
           visible: e.active,
-          rendererHealthy: e.healthy && !e.crashed && e.ready,
+          rendererHealthy: live(e),
           dragging: e.pressed,
           hitRegionAgeMs: region.ageMs,
         });
@@ -520,6 +604,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       if (!e || !alive(e)) return;
       e.ready = true;
       e.healthy = true;
+      noteAlive(e);
       send(e, IPC.overlayConfig, configFor(e));
       if (e.active && e.lastState) {
         send(e, IPC.overlayRender, { ...e.lastState, seq: ++seq, snap: true });
@@ -529,14 +614,25 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     },
     handlePointer(wcId, ev) {
       const e = byWc.get(wcId);
-      if (!e || !alive(e) || !e.healthy) return;
+      if (!e || !alive(e)) return;
+      // Input queued while the renderer was hung is stale: it only proves the renderer is back.
+      const wasHung = e.hungMs !== null;
+      noteAlive(e);
+      if (wasHung || !e.healthy) return;
       const p = toPx(e, ev.x, ev.y);
       const t = mainTime(e, ev.t);
+      e.pointerAt = opts.clock();
+      e.pointerPx = p;
       if (ev.kind === 'down') {
-        e.pressed = true;
-        e.pressAt = t;
-        e.buttonSeenAt = t;
+        if (ev.button === 0) {
+          e.pressed = true;
+          e.pressAt = t;
+          e.buttonSeenAt = t;
+        }
       } else if (ev.kind === 'up' || ev.kind === 'cancel') {
+        e.pressed = false;
+      } else if (ev.kind === 'move' && (ev.buttons & 1) === 0) {
+        // The primary button is no longer held: the release itself was lost.
         e.pressed = false;
       }
       deliver(opts.gestures.feed({ kind: ev.kind, x: p.x, y: p.y, button: ev.button, buttons: ev.buttons, t }));
@@ -551,7 +647,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     },
     handleHitRegion(wcId, region) {
       const e = byWc.get(wcId);
-      if (!e || !alive(e) || !e.active) return;
+      if (!e || !alive(e)) return;
+      noteAlive(e);
+      if (!e.active) return;
       const rects: Rect[] = [];
       for (const r of region.rects) {
         if (r.width <= 0 || r.height <= 0) continue;
@@ -595,7 +693,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           backgroundColor: e.win.getBackgroundColor(),
           ready: e.ready,
           active: e.active,
-          healthy: e.healthy,
+          healthy: e.healthy && e.hungMs === null,
           crashes: crashHistory.get(e.displayId)?.length ?? 0,
         });
       }

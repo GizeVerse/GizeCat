@@ -35,6 +35,7 @@ import {
   MAX_STATE_CHANGES_PER_WINDOW,
   mayInterrupt,
   PHYSICAL_STATES,
+  REACTION_STATES,
   STATE_CHANGE_WINDOW_MS,
   STATE_SPECS,
 } from './states';
@@ -67,6 +68,10 @@ const QUIT_DEADLINE_MS = 900;
 const FADE_MS = 400;
 const PET_RATE_TAU_MS = 2 * 3600_000;
 const PET_SESSION_GAP_MS = 10_000;
+/** Annoyance one full-strength stroke adds to a reacting or irritated cat (scaled by 1.3 - patience). */
+const PET_IRRITATION = 0.15;
+/** At least this annoyed, the cat hides after a reaction and refuses to be stroked. */
+const IRRITATED_ANNOYANCE = 0.6;
 const TAP_WINDOW_MS = 8000;
 const SPOT_LEARN_MIN_MS = 60_000;
 const SPOT_FLUSH_MS = 5 * 60_000;
@@ -74,6 +79,14 @@ const DRAG_LOST_MS = 1500;
 const LANDING_MS = 250;
 /** Longest a walk/run toward a destination may take before the cat gives up. */
 const TRAVEL_TIMEOUT_MS = 40_000;
+/** Longest tick the simulation integrates; the host clamps dt to the same 250 ms. */
+export const MAX_SIM_DT_MS = 250;
+/**
+ * Slowest tick the sim asks for (hidden, or asleep outside normal mode). It stays clear
+ * of MAX_SIM_DT_MS so a timer that fires a little late still delivers its whole delay
+ * as dt: sim time keeps pace with real time instead of being clamped.
+ */
+export const SLOWEST_TICK_MS = 200;
 
 /** States whose handler decides when they end (the generic dwell rule does not apply). */
 const SELF_TIMED: ReadonlySet<BehaviorState> = new Set<BehaviorState>([
@@ -163,7 +176,8 @@ export class CatSimImpl implements CatSim {
   private quitting = false;
   private quitAt = 0;
   private quitReadySent = false;
-  private systemAsleep = false;
+  private systemLocked = false;
+  private systemSuspended = false;
   private awayWasAsleep = false;
   private awaySince = 0;
   private fade = 0;
@@ -222,7 +236,7 @@ export class CatSimImpl implements CatSim {
     bumpCounter(this.cat.memory, 'sessions');
     const lp = restoring ? this.cat.lastPosition : null;
     this.mover = new Mover(opts.world, this.moverConfig(), { displayId: lp?.displayKey ?? null, xFrac: lp?.xFrac ?? range(this.random, 0.3, 0.7) });
-    this.emotes.enabled = opts.settings.appearance.emotes;
+    this.syncEmotes();
     if (lp) {
       this.act = makeActivity('sleeping', 'lifecycle', this.now, range(this.random, 700, 1300), { variant: 'intro' });
     } else {
@@ -238,7 +252,7 @@ export class CatSimImpl implements CatSim {
   }
 
   tick(env: SimEnv, events: readonly SimEvent[]): SimOutput {
-    const dt = Number.isFinite(env.dt) ? clamp(env.dt, 0, 250) : 0;
+    const dt = Number.isFinite(env.dt) ? clamp(env.dt, 0, MAX_SIM_DT_MS) : 0;
     this.now = Number.isFinite(env.now) && env.now >= this.now ? env.now : this.now + dt;
     this.dt = dt;
     this.env = env;
@@ -246,6 +260,8 @@ export class CatSimImpl implements CatSim {
     let snap = this.snapNext;
     this.snapNext = false;
 
+    // Displays with a fullscreen app in front are off limits: the cat neither walks nor jumps onto them.
+    this.mover.setOffLimitsDisplays(this.settings.behavior.fullscreenBehavior === 'ignore' ? [] : env.fullscreenDisplayIds);
     this.mover.sense(this.disabled.has('perchOnWindows') ? [] : env.platforms);
     this.typing = env.typing || env.typingIntensity > 0.35;
     if (env.cursor) this.lastCursorSeenAt = this.now;
@@ -290,7 +306,7 @@ export class CatSimImpl implements CatSim {
   updateSettings(settings: Settings): void {
     this.settings = settings;
     this.disabled = new Set(settings.behavior.disabledBehaviors);
-    this.emotes.enabled = settings.appearance.emotes;
+    this.syncEmotes();
     if (this.mover.setConfig(this.moverConfig())) this.snapNext = true;
     if (!this.allowedByToggles(this.act.state, this.act.variant)) {
       this.mover.setGoal(null);
@@ -366,6 +382,11 @@ export class CatSimImpl implements CatSim {
     } catch {
       return 0;
     }
+  }
+
+  /** Emote bubbles follow the setting, and never show while the cat stays quiet over a fullscreen app. */
+  private syncEmotes(): void {
+    this.emotes.enabled = this.settings.appearance.emotes && this.mode !== 'quiet';
   }
 
   private moverConfig(): MoverConfig {
@@ -461,7 +482,8 @@ export class CatSimImpl implements CatSim {
       case 'seekingAttention':
         return !d.has('seekAttention');
       case 'inspectingWindow':
-        return !d.has('inspectWindows');
+        // 'explore' is the autonomous jump onto a window top ('Sit on windows'); the rest is 'Inspect windows'.
+        return variant === 'explore' ? !d.has('perchOnWindows') : !d.has('inspectWindows');
       case 'grooming':
         return !d.has('grooming');
       case 'playing':
@@ -501,6 +523,9 @@ export class CatSimImpl implements CatSim {
     const path = findPath(from, to);
     if (!path || path.length === 0) return this.invalid(from, to, cause);
     if (path.length === 1) return this.go(to, cause, init);
+    // Interaction skips the interrupt guard, but a reaction is not left through a stepping stone
+    // (annoyed -> idle -> playing) before its minimum dwell.
+    if (cause === 'interaction' && REACTION_STATES.has(from) && !this.act.done && this.now - this.act.startedAt < STATE_SPECS[from].dwellMs[0]) return 'blocked';
     const r = this.go(path[0] as BehaviorState, cause, {});
     if (r !== 'ok') return r;
     this.pending = { state: to, init, expiresAt: this.now + 20_000 };
@@ -697,10 +722,18 @@ export class CatSimImpl implements CatSim {
     const fsHere = env.fullscreenDisplayIds.includes(this.mover.displayId);
     const fsb = this.settings.behavior.fullscreenBehavior;
     if (env.hidden || (fsHere && fsb === 'hide')) return 'away';
-    if (this.systemAsleep) return 'locked';
+    if (this.systemLocked || this.systemSuspended) return 'locked';
     if (fsHere && fsb === 'quiet') return 'quiet';
     if (env.paused) return 'paused';
     return 'normal';
+  }
+
+  /** Hidden ('hide') or quiet only because a fullscreen app is in front on the cat's display. */
+  private onFullscreenDisplay(): boolean {
+    const env = this.env;
+    if (!env || env.hidden || this.systemLocked || this.systemSuspended) return false;
+    const fsb = this.settings.behavior.fullscreenBehavior;
+    return fsb !== 'ignore' && (this.mode === 'away' || this.mode === 'quiet') && env.fullscreenDisplayIds.includes(this.mover.displayId);
   }
 
   private updateMode(): void {
@@ -708,6 +741,7 @@ export class CatSimImpl implements CatSim {
     if (next === this.mode) return;
     const prev = this.mode;
     this.mode = next;
+    this.syncEmotes();
     if (prev === 'away' && next !== 'quit') this.leaveAway(next);
     switch (next) {
       case 'quit':
@@ -751,10 +785,15 @@ export class CatSimImpl implements CatSim {
 
   private leaveAway(next: SimMode): void {
     if (this.act.state !== 'away') return;
-    if (next === 'quiet' || next === 'locked') this.request('sleeping', 'lifecycle');
-    else if (next === 'paused') this.request(this.awayWasAsleep ? 'sleeping' : 'resting', 'lifecycle');
-    else if (this.awayWasAsleep) this.request('sleeping', 'lifecycle');
-    else this.request(this.now - this.awaySince > 60_000 ? 'wakingUp' : 'idle', 'lifecycle');
+    if (next === 'quiet' || next === 'locked') this.request('sleeping', 'lifecycle', { variant: 'forced' });
+    else if (next === 'paused') this.request(this.awayWasAsleep ? 'sleeping' : 'resting', 'lifecycle', this.awayWasAsleep ? { variant: 'forced' } : {});
+    else if (this.awayWasAsleep) {
+      // The interrupted sleep (the startup intro, a nap, an idle sleep) is not resumed as a fresh
+      // nap: shown again with the user around, the cat wakes up; with nobody around it sleeps on
+      // until the user returns.
+      if (this.env && userIdleForSleep({ userIdleMs: this.env.userIdleMs, behavior: this.settings.behavior })) this.request('sleeping', 'lifecycle', { variant: 'idleSleep' });
+      else this.request('wakingUp', 'lifecycle');
+    } else this.request(this.now - this.awaySince > 60_000 ? 'wakingUp' : 'idle', 'lifecycle');
   }
 
   private settleAsleep(cause: TransitionCause): void {
@@ -1331,7 +1370,7 @@ export class CatSimImpl implements CatSim {
   }
 
   private zoomieTarget(): Point | null {
-    const s = this.mover.currentSurface;
+    const s = this.mover.walkRange;
     if (!s) return null;
     const x = this.mover.x;
     const room = Math.max(x - s.x0, s.x1 - x);
@@ -1371,7 +1410,7 @@ export class CatSimImpl implements CatSim {
   }
 
   private afterAnnoyed(): FollowUp {
-    if (this.cat.stats.annoyance > 0.6) return { state: 'hiding', init: { variant: 'flee' } };
+    if (this.cat.stats.annoyance >= IRRITATED_ANNOYANCE) return { state: 'hiding', init: { variant: 'flee' } };
     const r = this.random();
     if (r < 0.4 && !this.disabled.has('grooming')) return { state: 'grooming', init: {} };
     if (r < 0.7) {
@@ -1405,7 +1444,7 @@ export class CatSimImpl implements CatSim {
   }
 
   private enterHiding(a: Activity): void {
-    const s = this.mover.currentSurface;
+    const s = this.mover.walkRange;
     this.rememberEvent('hide');
     if (!s) {
       this.phase(a, 'hide');
@@ -1485,16 +1524,28 @@ export class CatSimImpl implements CatSim {
       case 'lifecycle.quitRequested':
         this.startQuit();
         return;
+      // A locked session stays locked across suspend/resume: only unlock ends it.
       case 'system.lock':
-      case 'system.suspend':
-        this.systemAsleep = true;
+        this.systemLocked = true;
         return;
       case 'system.unlock':
+        this.systemLocked = false;
+        return;
+      case 'system.suspend':
+        this.systemSuspended = true;
+        return;
       case 'system.resume':
-        this.systemAsleep = false;
+        this.systemSuspended = false;
         return;
       case 'display.changed':
         return;
+      case 'command.callCat':
+        // Called while a fullscreen app keeps it hidden or quiet: it comes over to the caller's display.
+        if (this.onFullscreenDisplay() && isFinitePoint(ev.at) && this.mover.relocate(ev.at)) {
+          this.snapNext = true;
+          this.updateMode();
+        }
+        break;
       default:
         break;
     }
@@ -1610,7 +1661,10 @@ export class CatSimImpl implements CatSim {
     if (PHYSICAL_STATES.has(s)) return;
     this.noteInteraction();
     const st = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5;
-    applyPet(this.cat.stats, this.cat.traits, st);
+    const irritated = this.irritatedByPetting();
+    // Stroking a reacting or irritated cat does not soothe it, it irritates it further.
+    if (irritated) addStat(this.cat.stats, 'annoyance', PET_IRRITATION * st * (1.3 - i.patience));
+    else applyPet(this.cat.stats, this.cat.traits, st);
     // The rate counts petting sessions: one stroke gesture produces many pet events.
     if (this.now - this.lastPetEventAt > PET_SESSION_GAP_MS) {
       const prefs = this.cat.memory.preferences;
@@ -1626,6 +1680,11 @@ export class CatSimImpl implements CatSim {
       this.lastPetMemoryAt = this.now;
       this.rememberEvent('pet');
     }
+    if (irritated) {
+      // A reaction runs its course (afterAnnoyed may then hide); a calm but irritated cat objects.
+      if (!REACTION_STATES.has(s) && this.mode === 'normal') this.request('annoyed', 'interaction');
+      return;
+    }
     this.petTimes = this.petTimes.filter((t) => t > this.now - 60_000);
     this.petTimes.push(this.now);
     this.emotes.show('heart', this.now);
@@ -1640,6 +1699,14 @@ export class CatSimImpl implements CatSim {
       if (this.request('annoyed', 'interaction') === 'ok') return;
     }
     this.request('beingPetted', 'interaction');
+  }
+
+  /** In the middle of a startle or annoyed reaction, or awake and still irritated: not in the mood to be stroked. */
+  private irritatedByPetting(): boolean {
+    const a = this.act;
+    if (ASLEEP_STATES.has(a.state)) return false;
+    if (!a.done && (a.state === 'annoyed' || a.state === 'startled')) return true;
+    return this.cat.stats.annoyance >= IRRITATED_ANNOYANCE;
   }
 
   private onTap(at: Point): void {
@@ -1754,7 +1821,8 @@ export class CatSimImpl implements CatSim {
     if (!this.settings.behavior.reactToWindows || this.mover.perchWindowId === id) return;
     if (ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state) || this.typing) return;
     const r = this.windowRelevanceFor(rect, 'unknown', false, false, 'moved');
-    if (r >= 0.45 && !this.disabled.has('inspectWindows') && !this.disabled.has('perchOnWindows') && chance(this.random, 0.35) && this.reactions.take('approach', this.now, 25_000)) {
+    // Inspecting a moved window is 'Inspect windows'; it only climbs onto it when perching is on too.
+    if (r >= 0.45 && !this.disabled.has('inspectWindows') && chance(this.random, 0.35) && this.reactions.take('approach', this.now, 25_000)) {
       this.request('inspectingWindow', 'stimulus', { windowId: id, target: rectCenter(rect) });
     }
   }
@@ -1916,8 +1984,8 @@ export class CatSimImpl implements CatSim {
     const bl = m.bodyWidth;
     const bh = m.bodyHeight;
     const dist = Math.hypot(c.x - m.x, c.y - (m.y - bh / 2)) / bl;
-    const s = m.currentSurface;
-    const reachable = s !== null && c.y >= m.y - 3.5 * bh && c.y <= m.y + bh * 0.5 && c.x >= s.x0 - 2 * bl && c.x <= s.x1 + 2 * bl;
+    const r = m.walkRange;
+    const reachable = r !== null && c.y >= m.y - 3.5 * bh && c.y <= m.y + bh * 0.5 && c.x >= r.x0 - 2 * bl && c.x <= r.x1 + 2 * bl;
     return { point: { x: c.x, y: c.y }, speedDip: (Number.isFinite(c.speed) ? Math.max(0, c.speed) : 0) / m.scale, distBodyLengths: dist, reachable };
   }
 
@@ -1952,14 +2020,15 @@ export class CatSimImpl implements CatSim {
   private wanderTarget(): Point | null {
     const m = this.mover;
     const s = m.currentSurface;
-    if (!s) return null;
+    const r = m.walkRange;
+    if (!s || !r) return null;
     if (s.kind === 'window' && chance(this.random, 0.5)) {
       const fp = m.world.nearestFloorPoint({ x: m.x, y: m.y + 1 });
       return { x: fp.x, y: fp.y };
     }
     const dir = chance(this.random, 0.5) ? 1 : -1;
     for (const d of [dir, -dir]) {
-      const x = clamp(m.x + d * range(this.random, 2, 8) * this.bl, s.x0, s.x1);
+      const x = clamp(m.x + d * range(this.random, 2, 8) * this.bl, r.x0, r.x1);
       if (Math.abs(x - m.x) >= 1.5 * this.bl) return { x, y: m.y };
     }
     return null;
@@ -1967,11 +2036,11 @@ export class CatSimImpl implements CatSim {
 
   private retreatTarget(): Point | null {
     const m = this.mover;
-    const s = m.currentSurface;
-    if (!s) return null;
+    const r = m.walkRange;
+    if (!r) return null;
     const threat = this.env?.cursor?.x ?? m.x - m.facing * this.bl;
     const dir = threat < m.x ? 1 : -1;
-    const x = clamp(m.x + dir * range(this.random, 3, 6) * this.bl, s.x0, s.x1);
+    const x = clamp(m.x + dir * range(this.random, 3, 6) * this.bl, r.x0, r.x1);
     return Math.abs(x - m.x) >= this.bl ? { x, y: m.y } : null;
   }
 
@@ -1995,7 +2064,7 @@ export class CatSimImpl implements CatSim {
     const world = m.world;
     for (const spot of rankedSpots(this.cat.memory, this.wall())) {
       const d = world.display(spot.displayKey);
-      if (!d) continue;
+      if (!d || m.isOffLimits(d.id)) continue;
       const x = d.workAreaPx.x + spot.xFrac * d.workAreaPx.width;
       let point: Point | null = null;
       if (spot.kind === 'floor') {
@@ -2022,7 +2091,9 @@ export class CatSimImpl implements CatSim {
     if (this.mode !== 'away' && (this.env?.userIdleMs ?? Infinity) < 60_000) {
       mem.preferences.petRatePerHour = decayRate(mem.preferences.petRatePerHour, dt, PET_RATE_TAU_MS);
     }
-    if ((s === 'resting' || s === 'sleeping') && this.mover.grounded) {
+    // Favourite spots come from rests the cat takes in normal life, not from sleep imposed while the
+    // session is locked, a fullscreen app keeps it quiet, the user paused it or the app is quitting.
+    if (this.mode === 'normal' && (s === 'resting' || s === 'sleeping') && this.mover.grounded) {
       this.restAccumMs += dt;
       if (this.restAccumMs >= SPOT_FLUSH_MS) this.flushRestSpot();
     }
@@ -2119,14 +2190,14 @@ export class CatSimImpl implements CatSim {
 
   private nextTickMs(): number {
     if (Math.abs(this.fade - this.fadeTarget()) > 0.005) return 33;
-    if (this.mode === 'away') return 500;
+    if (this.mode === 'away') return SLOWEST_TICK_MS;
     if (this.quitting) return 33;
     const s = this.act.state;
     const env = this.env;
-    if (s === 'sleeping') return this.mode === 'normal' ? 150 : 500;
+    if (s === 'sleeping') return this.mode === 'normal' ? 150 : SLOWEST_TICK_MS;
     const m = this.mover;
     if (!m.grounded || m.groundSpeed > 1 || env?.cursorOverCat || env?.dragCursor) return 33;
-    return STATE_SPECS[s].tickMs;
+    return Math.min(STATE_SPECS[s].tickMs, SLOWEST_TICK_MS);
   }
 
   private compose(snap: boolean): SimOutput {

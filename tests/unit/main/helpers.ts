@@ -1,7 +1,24 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { vi } from 'vitest';
 import type { Logger } from '../../../src/main/contracts';
+
+export function fsError(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: simulated`), { code });
+}
+
+/**
+ * Makes one fs function fail with `code` for one path, as when another program holds
+ * the file open without sharing, and pass through for every other path.
+ */
+export function failFor(fn: 'readFileSync' | 'renameSync' | 'copyFileSync', target: string, code = 'EBUSY') {
+  const original = fs[fn] as (...args: unknown[]) => unknown;
+  return vi.spyOn(fs, fn).mockImplementation((...args: unknown[]) => {
+    if (path.resolve(String(args[0])) === path.resolve(target)) throw fsError(code);
+    return original.apply(fs, args);
+  });
+}
 
 export interface LoggedEntry {
   level: 'error' | 'warn' | 'info' | 'debug';

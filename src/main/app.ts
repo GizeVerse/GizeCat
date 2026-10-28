@@ -2,7 +2,7 @@
 // settings that index.ts prepared before ready.
 import os from 'node:os';
 import path from 'node:path';
-import { app, BrowserWindow, globalShortcut, ipcMain, Menu, powerMonitor, safeStorage, screen, session, shell } from 'electron';
+import { app, BaseWindow, BrowserWindow, globalShortcut, ipcMain, Menu, powerMonitor, safeStorage, screen, session, shell } from 'electron';
 import { createCatSim, migrateCatState, summarizeCat } from '../core/behavior';
 import { simWorld } from '../core/display/simWorld';
 import { createGestureRecognizer } from '../core/interaction/gestures';
@@ -25,6 +25,7 @@ import type { CrashGuard } from './lifecycle/crashGuard';
 import { createLoginItemController } from './lifecycle/loginItem';
 import { catContextMenuModel, type MenuContext } from './lifecycle/menuModel';
 import { createQuitSequence } from './lifecycle/quitSequence';
+import { createSessionEndSaver, type SessionEndWindow } from './lifecycle/sessionEnd';
 import { createShortcutManager } from './lifecycle/shortcuts';
 import { createOverlayManager } from './overlay/overlayManager';
 import { createPerceptionService } from './perception';
@@ -33,11 +34,11 @@ import { createWindowRegistry, installSecurity } from './security';
 import { createSettingsWindowController } from './settingsWindow';
 import { createCatStore } from './store/catStore';
 import { createJsonStore, type JsonReadStatus } from './store/jsonStore';
-import { createSecretStore } from './store/secretStore';
+import { createSecretFile, createSecretStore } from './store/secretStore';
 import type { SettingsStore } from './store/settingsStore';
 import { installTestHooks } from './testHooks';
 import { createTrayController, toMenuTemplate } from './tray';
-import { createActivityMonitor, createWin32Api, createWindowTracker } from './win32';
+import { createActivityMonitor, createWin32Api, createWindowTracker, sameWindowExclusions, windowExclusionsFor } from './win32';
 
 export interface AppBootstrap {
   logger: RootLogger;
@@ -101,7 +102,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const catLoad = catStore.load();
   if (catLoad.recovered) log.warn('cat state recovered', { source: catLoad.source });
   const secrets = createSecretStore({
-    store: createJsonStore({ filePath: path.join(boot.userData, 'secrets.json'), logger: logger.child('store') }),
+    // No .bak or quarantined copy: a removed key must not come back from a copy.
+    store: createSecretFile(path.join(boot.userData, 'secrets.json'), logger.child('store')),
     cipher: safeStorage,
     logger: logger.child('secrets'),
   });
@@ -112,7 +114,12 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const tracker = createWindowTracker(win32, logger);
   const activity = createActivityMonitor(win32, logger);
   const initial = settings.get();
-  attempt(log, 'window exclusions', () => tracker.setExclusions(initial.perception.excludedProcesses, initial.perception.excludedTitlePatterns));
+  // Title patterns only while screen analysis is enabled: otherwise no window title is read.
+  const applyWindowExclusions = (s: Settings): void => {
+    const ex = windowExclusionsFor(s);
+    tracker.setExclusions(ex.processes, ex.titlePatterns);
+  };
+  attempt(log, 'window exclusions', () => applyWindowExclusions(initial));
 
   const sim = createCatSim({ persisted: catLoad.cat, settings: initial, world: simWorld(display.world), now: 0, random: Math.random, wallClock: Date.now });
   const registry = createWindowRegistry();
@@ -222,6 +229,26 @@ export function startApp(boot: AppBootstrap): RunningApp {
   }
   boot.crashGuard.setSaver(saveAllSync);
 
+  // Windows reports logoff/shutdown only to top-level windows (see sessionEnd.ts). This one
+  // is never shown and has no web contents, so it costs no renderer process.
+  const sessionEnd = createSessionEndSaver({
+    save: saveAllSync,
+    logger: logger.child('session-end'),
+    clock: () => performance.now(),
+    createWindow: (): SessionEndWindow => {
+      const win = new BaseWindow({ show: false, width: 1, height: 1, frame: false, skipTaskbar: true, focusable: false, resizable: false });
+      return {
+        onSessionEnd: (listener) => {
+          win.on('query-session-end', () => listener('query-session-end'));
+          win.on('session-end', () => listener('session-end'));
+        },
+        destroy: () => {
+          if (!win.isDestroyed()) win.destroy();
+        },
+      };
+    },
+  });
+
   function buildReport(): Record<string, unknown> {
     const h = requireHost();
     return buildDiagnosticsReport({
@@ -298,7 +325,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       const menu = Menu.buildFromTemplate(toMenuTemplate(catContextMenuModel(menuContext()), runAction));
       menu.popup({ window: win });
     },
-    onSessionEnd: saveAllSync,
+    onSessionEnd: () => sessionEnd.notify('overlay'),
     isLeftButtonDown: () => (win32.available ? win32.isLeftButtonDown() : null),
     clock: () => performance.now(),
   });
@@ -362,6 +389,11 @@ export function startApp(boot: AppBootstrap): RunningApp {
   }
 
   const offSettings = settings.onChange((next, prev) => {
+    // First, so title patterns are in place before analysis can be requested; this also
+    // follows mode, consent and pause changes, not only edits of the lists.
+    if (!sameWindowExclusions(windowExclusionsFor(prev), windowExclusionsFor(next))) {
+      attempt(log, 'window exclusions', () => applyWindowExclusions(next));
+    }
     host?.updateSettings(next);
     attempt(log, 'perception settings', () => perception?.updateSettings(next));
     attempt(log, 'overlay settings', () => overlays.applySettings(next, prev));
@@ -372,12 +404,6 @@ export function startApp(boot: AppBootstrap): RunningApp {
     if (prev.general.launchAtLogin !== next.general.launchAtLogin) {
       loginItem.onSettingChanged(next.general.launchAtLogin);
       loginActive = loginItem.isActive();
-    }
-    if (
-      JSON.stringify(prev.perception.excludedProcesses) !== JSON.stringify(next.perception.excludedProcesses) ||
-      JSON.stringify(prev.perception.excludedTitlePatterns) !== JSON.stringify(next.perception.excludedTitlePatterns)
-    ) {
-      attempt(log, 'window exclusions', () => tracker.setExclusions(next.perception.excludedProcesses, next.perception.excludedTitlePatterns));
     }
     if (prev.diagnostics.hardwareAcceleration !== next.diagnostics.hardwareAcceleration) {
       log.info('hardware acceleration setting changes at next launch', { enabled: next.diagnostics.hardwareAcceleration });
@@ -396,14 +422,16 @@ export function startApp(boot: AppBootstrap): RunningApp {
     secrets,
     perception,
     onSecretsChanged: () => {
-      attempt(log, 'perception settings', () => perception?.updateSettings(settings.get()));
+      // A new or removed key: clear the AI circuit breaker and the stale error.
+      attempt(log, 'perception credentials', () => perception?.onCredentialsChanged());
       refreshUi();
     },
     clock: () => performance.now(),
   });
 
   // Power and session events. Windows does not emit before-quit on shutdown/logoff,
-  // so state is saved synchronously on every signal that the session may end.
+  // so state is saved synchronously on every signal that the session may end: suspend
+  // here, logoff/shutdown through sessionEnd (powerMonitor 'shutdown' is Linux/macOS only).
   const onSuspend = (): void => {
     host?.onSystem('suspend');
     saveAllSync();
@@ -421,7 +449,6 @@ export function startApp(boot: AppBootstrap): RunningApp {
   powerMonitor.on('resume', onResume);
   powerMonitor.on('lock-screen', onLock);
   powerMonitor.on('unlock-screen', onUnlock);
-  powerMonitor.on('shutdown', saveAllSync);
 
   async function disposeAll(): Promise<void> {
     const steps: Array<[string, () => void]> = [
@@ -440,9 +467,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
           powerMonitor.removeListener('resume', onResume);
           powerMonitor.removeListener('lock-screen', onLock);
           powerMonitor.removeListener('unlock-screen', onUnlock);
-          powerMonitor.removeListener('shutdown', saveAllSync);
         },
       ],
+      ['session-end window', () => sessionEnd.dispose()],
       ['window tracker', () => tracker.stop()],
       ['activity monitor', () => activity.stop()],
       ['perception', () => perception?.dispose()],

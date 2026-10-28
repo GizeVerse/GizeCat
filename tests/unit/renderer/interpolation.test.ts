@@ -134,6 +134,65 @@ describe('snapshot interpolation', () => {
     }
   });
 
+  it('never runs the render clock backwards when the sim clock runs slower than local time', () => {
+    // A host that advances sim time 250 ms per 500 ms tick (clamped dt): sleeping with zzz emotes.
+    const interp = new SnapshotInterpolator();
+    const s = out();
+    let simT = 50_000;
+    let seq = 0;
+    let emote = { at: simT + 2000, shownFor: 0, toggles: 0, visible: false };
+    let last = -Infinity;
+    let maxLead = 0;
+    for (let now = 0; now < 20_000; now += 1000 / 60) {
+      if (Math.floor(now / 500) !== Math.floor((now - 1000 / 60) / 500) || now === 0) {
+        simT += 250;
+        interp.push(snap(++seq, simT, 0, { state: 'sleeping', clip: 'sleep', emote: 'zzz', emoteStartedAt: emote.at }), now);
+      }
+      interp.sample(now, s);
+      expect(s.simTime, `now=${now}`).toBeGreaterThanOrEqual(last);
+      last = s.simTime;
+      maxLead = Math.max(maxLead, s.simTime - interp.newest()!.t);
+      // The zzz bubble (1.6 s) is visible for render ages in [0, 1600).
+      const age = s.simTime - s.state.emoteStartedAt;
+      const visible = age >= 0 && age < 1600;
+      if (visible !== emote.visible) emote.toggles++;
+      emote.visible = visible;
+      // A new emote every 4 s of sim time.
+      if (simT - emote.at > 4000) emote = { at: simT, shownFor: 0, toggles: 0, visible: false };
+      expect(emote.toggles, `emote at ${emote.at} replayed`).toBeLessThanOrEqual(2);
+    }
+    // The render time stays near the data instead of running ~1.1 s ahead of it.
+    expect(maxLead).toBeLessThan(600);
+  });
+
+  it('absorbs a step of the sim clock (main stall) without jumping back, then converges', () => {
+    const interp = new SnapshotInterpolator();
+    const s = out();
+    let simT = 10_000;
+    let seq = 0;
+    let last = -Infinity;
+    let nextPush = 0;
+    for (let now = 0; now < 9000; now += 1000 / 60) {
+      // Snapshots every 33 ms, except while main is stalled (2-4 s). The host clamps the
+      // stalled tick's dt, so sim time advances by only 250 ms across the stall.
+      if (now >= nextPush && (now < 2000 || now >= 4000)) {
+        simT += nextPush === 4000 ? 250 : 33;
+        interp.push(snap(++seq, simT, 0), now);
+        nextPush += 33;
+      } else if (now >= 2000 && now < 4000) {
+        nextPush = 4000;
+      }
+      // The renderer keeps drawing frames throughout.
+      interp.sample(now, s);
+      expect(s.simTime, `now=${now}`).toBeGreaterThanOrEqual(last);
+      last = s.simTime;
+    }
+    // Back behind the newest snapshot by about the normal delay.
+    const lag = interp.newest()!.t - s.simTime;
+    expect(lag).toBeGreaterThan(0);
+    expect(lag).toBeLessThan(150);
+  });
+
   it('uses discrete fields from the snapshot at the render time', () => {
     const interp = new SnapshotInterpolator();
     interp.push(snap(1, 1000, 0, { clip: 'walk' }), 0);

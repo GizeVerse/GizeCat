@@ -130,7 +130,7 @@ export const S = {
     privacyPoints: [
       'Screen analysis is OFF. The cat does not look at your screen unless you turn it on.',
       'It knows where windows are and whether you are active. It can tell that you are typing, but never what you type.',
-      'Nothing leaves this PC unless you choose an AI provider that runs in the cloud and allow it.',
+      'Nothing leaves this PC unless you turn on AI vision. Cloud providers and other computers also need your separate "Allow cloud" permission.',
     ],
     start: 'Start',
     openPrivacy: 'Open Privacy settings',
@@ -264,8 +264,8 @@ export const S = {
         text: 'The cat measures brightness and movement of a small, masked image. Everything stays on this PC.',
       },
       'ai-local': {
-        title: 'AI vision · on this PC',
-        text: 'A small, masked image is described by the AI server on this PC. Desktop Cat sends it nowhere else.',
+        title: 'AI vision · server on this PC',
+        text: 'A small, masked image is processed by the AI server on this PC. Cloud models of that server may still send it off this PC; turn on "Allow cloud" for those.',
       },
       'ai-cloud': {
         title: 'AI vision · CLOUD',
@@ -371,11 +371,11 @@ export const S = {
       destination: 'Where the image goes',
       destNone: 'No AI provider is selected yet. Nothing will be sent until you choose one on the AI page.',
       destLocal: (label: string, host: string) =>
-        `${label}. The image is processed by the server at ${host} on this PC. If that server hands it to a cloud model (such as an Ollama “-cloud” model), it leaves this PC; Desktop Cat asks for "Allow cloud" for the cloud models it recognises.`,
+        `${label}. The image is processed by the server at ${host} on this PC. Cloud models of that server (such as Ollama “-cloud” models) may send it off this PC; turn on "Allow cloud" for those.`,
       destRemote: (label: string) => `${label}. This is NOT on this PC: the image travels over the network to that computer.`,
       destCloud: (label: string) => `${label}. The image is sent over the internet to this company’s servers.`,
       destCloudModel: (label: string, host: string) =>
-        `${label}. This is a cloud model: the Ollama server at ${host} forwards the image over the internet to ollama.com.`,
+        `${label}. This is a cloud model: the server at ${host} on this PC forwards the image over the internet (Ollama cloud models run on ollama.com).`,
       destInvalid: (label: string) => `${label}. This server address is not valid, so nothing is sent until you correct it on the AI page.`,
       cloudNotAllowed: '"Allow cloud" is off on the AI page, so nothing will be sent to a remote provider until you allow it.',
       confirm: 'I understand, turn it on',
@@ -396,7 +396,7 @@ export const S = {
       ollama: {
         title: 'Ollama',
         desc: 'Runs vision models with the free Ollama app on this PC. Local models keep images on your device; Ollama “cloud” models send them to ollama.com.',
-        badge: 'Local',
+        badge: 'Local server',
       },
       'openai-compatible': {
         title: 'OpenAI-compatible server',
@@ -436,7 +436,7 @@ export const S = {
     keyClearConfirm: 'Remove key',
     groupCloud: 'Cloud',
     allowCloudTitle: 'Allow cloud',
-    allowCloudDesc: 'Lets images be sent to providers that are not on this PC.',
+    allowCloudDesc: 'Lets images be sent to servers that are not on this PC and to Ollama “-cloud” models.',
     allowCloudWarning: 'With this on, the screen images described on the Privacy page leave your device and are handled under the provider’s privacy policy.',
     groupLimits: 'Limits',
     aiIntervalTitle: 'Minimum time between AI requests',
@@ -457,6 +457,8 @@ export const S = {
     testReactionLabel: 'Suggested reaction',
     needsAllowCloud: (label: string) => `${label} is not on this PC. Nothing is sent until you turn on "Allow cloud" below.`,
     sendsOffDevice: (label: string) => `${label} is not on this PC: images leave your device while AI vision is on.`,
+    localServer: (host: string) =>
+      `Images are processed by the server at ${host} on this PC. Cloud models of that server may send them off this PC; turn on "Allow cloud" for those.`,
   },
   personality: {
     title: 'Personality',
@@ -542,7 +544,7 @@ export const S = {
       pawAt: 'pawed at the pointer',
       rollOver: 'rolled over',
       hop: 'hopped around',
-      window: 'from on top of it',
+      window: 'perched on top',
       floor: 'from the floor',
       hard: 'quite hard',
     } satisfies Record<MemoryDetail, string>,
@@ -598,7 +600,7 @@ export const S = {
     active: 'Active',
     inactive: 'Inactive',
     uptime: 'Running for',
-    modes: { off: 'Off', 'local-stats': 'Local statistics', 'ai-local': 'AI on this PC', 'ai-cloud': 'AI in the cloud' } satisfies Record<PerceptionMode, string>,
+    modes: { off: 'Off', 'local-stats': 'Local statistics', 'ai-local': 'AI via a server on this PC', 'ai-cloud': 'AI in the cloud' } satisfies Record<PerceptionMode, string>,
     groupResources: 'Resource use',
     resourcesDesc: 'Sampled by the app itself, all processes combined.',
     cpu: 'CPU',
@@ -635,7 +637,7 @@ export const S = {
       'No telemetry, no accounts, no ads.',
       'No keyboard hook: the cat never records keystrokes, text or the clipboard.',
       'Screen analysis is off unless you opt in, and you can pause or revoke it at any time.',
-      'Images are never saved, and leave this PC only for a cloud AI provider you choose and allow.',
+      'Images are never saved, and are only ever sent to the AI server or provider you set up for AI vision.',
       'API keys are encrypted by Windows and never shown or logged.',
     ],
     groupThirdParty: 'Third-party software',

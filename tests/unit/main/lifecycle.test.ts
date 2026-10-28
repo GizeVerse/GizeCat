@@ -3,8 +3,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCrashGuard, readRelaunchHistory } from '../../../src/main/lifecycle/crashGuard';
 import { hasFlag, parseTimeScale, parseUserDataOverride } from '../../../src/main/lifecycle/launchArgs';
-import { createLoginItemController } from '../../../src/main/lifecycle/loginItem';
+import { createLoginItemController, LOGIN_ITEM_NAME } from '../../../src/main/lifecycle/loginItem';
 import { createQuitSequence } from '../../../src/main/lifecycle/quitSequence';
+import { createSessionEndSaver, type SessionEndKind } from '../../../src/main/lifecycle/sessionEnd';
 import { createShortcutManager } from '../../../src/main/lifecycle/shortcuts';
 import { manualTimers, memoryLogger, removeDir, tempDir } from './helpers';
 
@@ -78,19 +79,43 @@ describe('crash guard', () => {
   });
   afterEach(() => removeDir(dir));
 
-  function setup(t0: number) {
+  function setup(t0: number, historyFile = path.join(dir, 'relaunch-history.json'), started = true) {
     let t = t0;
     const actions: string[] = [];
     const guard = createCrashGuard({
-      historyFile: path.join(dir, 'relaunch-history.json'),
+      historyFile,
       now: () => t,
       relaunch: () => actions.push('relaunch'),
       exit: (code) => actions.push(`exit:${code}`),
     });
     guard.setLogger(memoryLogger());
     guard.setSaver(() => actions.push('save'));
+    if (started) guard.setStarted();
     return { guard, actions, advance: (ms: number) => (t += ms) };
   }
+
+  it('an error before startup finished exits at once instead of leaving a windowless process', () => {
+    const { guard, actions } = setup(0, undefined, false);
+    guard.handle('uncaughtException', new Error('EPERM: stale temp'));
+    expect(actions).toEqual(['exit:1']);
+    expect(guard.escalated).toBe(true);
+    guard.handle('uncaughtException', new Error('again'));
+    expect(actions).toEqual(['exit:1']);
+  });
+
+  it('never relaunches when the relaunch history cannot be saved (no endless restart loop)', () => {
+    // The history file's parent is a regular file, so it can never be written.
+    fs.writeFileSync(path.join(dir, 'not-a-folder'), 'x');
+    const historyFile = path.join(dir, 'not-a-folder', 'relaunch-history.json');
+    const all: string[] = [];
+    for (let generation = 0; generation < 5; generation++) {
+      const { guard, actions } = setup(1_000_000 + generation * 60_000, historyFile);
+      for (let i = 0; i < 4; i++) guard.handle('uncaughtException', new Error('recurring'));
+      all.push(...actions.filter((a) => a !== 'save'));
+    }
+    expect(all).not.toContain('relaunch');
+    expect(all).toEqual(Array.from({ length: 5 }, () => 'exit:1'));
+  });
 
   it('saves on every error and relaunches only after more than 3 errors within 60 s', () => {
     const { guard, actions, advance } = setup(1_000_000);
@@ -150,10 +175,13 @@ describe('launch arguments', () => {
 describe('shortcut manager', () => {
   function fakeApi(taken: string[] = []) {
     const registered = new Map<string, () => void>();
+    const attempts: string[] = [];
     return {
       registered,
+      attempts,
       register: (acc: string, cb: () => void) => {
-        if (acc === 'Bogus+') throw new Error('invalid accelerator');
+        attempts.push(acc);
+        if (acc === 'Control+Alt+F24') throw new Error('invalid accelerator');
         if (taken.includes(acc)) return false;
         registered.set(acc, cb);
         return true;
@@ -174,12 +202,90 @@ describe('shortcut manager', () => {
     expect(m.registered).toBe(false);
     expect(m.lastError).toContain('already used');
     expect(api.registered.size).toBe(0);
-    expect(m.apply(true, 'Bogus+')).toBe(false);
+    expect(m.apply(true, 'Control+Alt+F24')).toBe(false);
     expect(m.lastError).toContain('Invalid');
     expect(m.apply(true, 'Control+Alt+Shift+C')).toBe(true);
     expect(m.apply(false, 'Control+Alt+Shift+C')).toBe(false);
     expect(api.registered.size).toBe(0);
     m.dispose();
+  });
+
+  it.each(['A', 'Space', 'Shift+A', 'Enter', 'Alt+F4', 'Control+Alt+Delete', 'Bogus+', 'control+alt+k'])(
+    'never hands "%s" to globalShortcut (bare, reserved, invalid or not canonical)',
+    (accelerator) => {
+      const api = fakeApi();
+      const m = createShortcutManager(api, memoryLogger(), () => undefined);
+      expect(m.apply(true, accelerator)).toBe(false);
+      expect(api.attempts).toEqual([]);
+      expect(m.registered).toBe(false);
+      expect(m.lastError).toContain('not a safe global shortcut');
+    },
+  );
+});
+
+describe('session-end saver', () => {
+  function fakeWindow() {
+    let listener: ((kind: SessionEndKind) => void) | null = null;
+    const w = {
+      destroyed: false,
+      onSessionEnd: (l: (kind: SessionEndKind) => void) => {
+        listener = l;
+      },
+      destroy: () => {
+        w.destroyed = true;
+      },
+      fire: (kind: SessionEndKind) => listener?.(kind),
+    };
+    return w;
+  }
+
+  it('saves at logoff through its own hidden window, even when no overlay exists', () => {
+    const win = fakeWindow();
+    let saves = 0;
+    const s = createSessionEndSaver({ save: () => saves++, logger: memoryLogger(), createWindow: () => win, clock: () => 0 });
+    expect(s.watching).toBe(true);
+    win.fire('query-session-end');
+    expect(saves).toBe(1);
+    s.dispose();
+    expect(win.destroyed).toBe(true);
+    expect(s.watching).toBe(false);
+  });
+
+  it('saves once per burst although every window reports each message', () => {
+    let t = 0;
+    let saves = 0;
+    const win = fakeWindow();
+    const s = createSessionEndSaver({ save: () => saves++, logger: memoryLogger(), createWindow: () => win, clock: () => t, coalesceMs: 1000 });
+    win.fire('query-session-end');
+    s.notify('overlay');
+    s.notify('overlay');
+    t += 300;
+    win.fire('session-end');
+    s.notify('overlay');
+    expect(saves).toBe(1);
+    t += 5000;
+    win.fire('session-end');
+    expect(saves).toBe(2);
+  });
+
+  it('a receiver window that cannot be created, or a failing save, is contained', () => {
+    const log = memoryLogger();
+    const s = createSessionEndSaver({
+      save: () => {
+        throw new Error('disk gone');
+      },
+      logger: log,
+      createWindow: () => {
+        throw new Error('no window');
+      },
+    });
+    expect(s.watching).toBe(false);
+    expect(() => s.notify('overlay')).not.toThrow();
+    expect(log.entries.filter((e) => e.level === 'error').map((e) => e.msg)).toEqual([
+      'session-end window unavailable; only overlay windows will report logoff and shutdown',
+      'session-end save failed',
+    ]);
+    s.dispose();
   });
 });
 
@@ -194,7 +300,8 @@ describe('login item', () => {
     expect(ctl.isActive()).toBe(false);
     expect(writes).toEqual([]);
     ctl.onSettingChanged(true);
-    expect(writes).toEqual([{ openAtLogin: true, path: 'C:\\app\\DesktopCat.exe', args: ['--launched-at-login'] }]);
+    // A fixed value name, so the uninstaller can remove the Run entry.
+    expect(writes).toEqual([{ openAtLogin: true, path: 'C:\\app\\DesktopCat.exe', args: ['--launched-at-login'], name: LOGIN_ITEM_NAME }]);
 
     const dev = createLoginItemController({ api, logger: memoryLogger(), execPath: 'electron.exe', appPathArg: 'C:\\src\\cat', writesEnabled: false });
     dev.onSettingChanged(true);

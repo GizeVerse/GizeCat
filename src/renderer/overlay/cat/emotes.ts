@@ -6,6 +6,11 @@ import { clamp01, easeOut, easeOutBack, sseg, TAU } from './math';
 export const EMOTE_DURATION_MS = 1600;
 /** Nominal icon size in DIP at scale 1. */
 export const EMOTE_SIZE = 14;
+/**
+ * Every emote stays within this distance of its origin (strokes, wobble and the pop-in
+ * overshoot included), in the same units as EMOTE_SIZE; the tallest is the zzz.
+ */
+export const EMOTE_RADIUS = 16;
 
 export interface EmoteFrame {
   scale: number;

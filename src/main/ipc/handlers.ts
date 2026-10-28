@@ -29,9 +29,22 @@ import type { ActionRunner } from './actions';
 import { createRateLimiter } from './rateLimit';
 import { toPerceptionPreview } from './viewState';
 
+/** Shared overlay budget: pointer moves (the renderer caps them per time), hit regions, errors. */
 export const OVERLAY_MESSAGES_PER_SECOND = 240;
+/**
+ * Separate budget for state-changing pointer events (press, release, cancel, context,
+ * enter, leave), so a burst of moves can never cost a release; far above human rates.
+ */
+export const OVERLAY_POINTER_EVENTS_PER_SECOND = 120;
+const DISCRETE_POINTER_KINDS: ReadonlySet<unknown> = new Set<OverlayPointerEvent['kind']>(['down', 'up', 'cancel', 'context', 'enter', 'leave']);
 const SETTINGS_CALLS_PER_SECOND = 60;
 const WARN_INTERVAL_MS = 5000;
+
+/** True for a pointer message whose kind changes press/hover state (judged before validation). */
+function isDiscretePointer(channel: string, payload: unknown): boolean {
+  if (channel !== IPC.overlayPointer || typeof payload !== 'object' || payload === null) return false;
+  return DISCRETE_POINTER_KINDS.has((payload as { kind?: unknown }).kind);
+}
 
 export interface OverlayIpcTarget {
   handleReady(webContentsId: number): void;
@@ -65,6 +78,7 @@ const errorText = (err: unknown): string => redactString(err instanceof Error ? 
 export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
   const log = deps.logger;
   const overlayLimiter = createRateLimiter(OVERLAY_MESSAGES_PER_SECOND, 1000);
+  const pointerEventLimiter = createRateLimiter(OVERLAY_POINTER_EVENTS_PER_SECOND, 1000);
   const settingsLimiter = createRateLimiter(SETTINGS_CALLS_PER_SECOND, 1000);
   const lastWarn = new Map<string, number>();
   const suppressed = new Map<string, number>();
@@ -91,7 +105,8 @@ export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
         return;
       }
       const id = event.sender.id;
-      if (!overlayLimiter.allow(id, deps.clock())) {
+      const limiter = isDiscretePointer(channel, payload) ? pointerEventLimiter : overlayLimiter;
+      if (!limiter.allow(id, deps.clock())) {
         warnThrottled(`rate:${id}`, 'overlay message rate limit exceeded; dropping', { channel });
         return;
       }

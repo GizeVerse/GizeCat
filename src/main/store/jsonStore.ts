@@ -32,7 +32,10 @@ export interface JsonStore {
   read(): JsonReadResult;
   /** Parses the .bak copy, if there is one. */
   readBackup(): { ok: true; value: unknown } | { ok: false };
-  /** Moves the current file aside as *.corrupt-<timestamp>.json; returns the new path. */
+  /**
+   * Moves the current file aside as *.corrupt-<timestamp>.json (or keeps a copy there
+   * when it cannot be moved); returns that path. Always null for keepCopies:false.
+   */
   quarantine(): string | null;
   /** Synchronous atomic write (shutdown/session-end paths). Never throws. */
   writeSync(value: unknown): boolean;
@@ -46,9 +49,10 @@ export interface JsonStoreOptions {
   maxQuarantined?: number;
   now?: () => number;
   /**
-   * false for sensitive files (API keys): no .bak copy is written or ever read, and
-   * every successful write deletes leftover .bak and quarantined copies, so data a
-   * write removed cannot come back from a copy. Default true.
+   * false for sensitive files (API keys): no copy of the file is ever made or read.
+   * There is no .bak, an unparseable file is not quarantined (it is reported as
+   * corrupt and replaced by the next write), and leftover copies are deleted on
+   * read and after every write, so data a write removed cannot come back. Default true.
    */
   keepCopies?: boolean;
 }
@@ -164,10 +168,9 @@ export function createJsonStore(opts: JsonStoreOptions): JsonStore {
     }
   }
 
-  /** keepCopies:false — deletes every copy besides the file itself. */
-  function discardCopies(includeQuarantined: boolean): void {
-    const victims = [backupPath, ...(includeQuarantined ? quarantinedNames().map((n) => path.join(dir, n)) : [])];
-    for (const p of victims) {
+  /** keepCopies:false: deletes every copy besides the file itself (left by older versions or an earlier failure). */
+  function discardCopies(): void {
+    for (const p of [backupPath, ...quarantinedNames().map((n) => path.join(dir, n))]) {
       try {
         withRetrySync(() => fs.rmSync(p, { force: true }));
       } catch (err) {
@@ -177,6 +180,7 @@ export function createJsonStore(opts: JsonStoreOptions): JsonStore {
   }
 
   function quarantine(): string | null {
+    if (!keepCopies) return null;
     let target = quarantineName(filePath, now());
     for (let i = 1; fs.existsSync(target) && i < 100; i++) target = target.replace(/\.json$/, `-${i}.json`);
     try {
@@ -226,8 +230,7 @@ export function createJsonStore(opts: JsonStoreOptions): JsonStore {
 
   function read(): JsonReadResult {
     removeStaleTemps();
-    // A .bak of a sensitive file can only be left over from an older version: it is never trusted.
-    if (!keepCopies) discardCopies(false);
+    if (!keepCopies) discardCopies();
     const main = parseFile(filePath);
     if (main.ok || main.reason === 'missing') {
       blockedReason = null;
@@ -242,6 +245,8 @@ export function createJsonStore(opts: JsonStoreOptions): JsonStore {
       return { status: 'unreadable', value: bak.ok ? bak.value : null, quarantinedTo: null };
     }
     log?.warn('stored file is unreadable', { file: path.basename(filePath), error: main.error });
+    // A sensitive file is never copied: it stays in place, unused, until the next write replaces it.
+    if (!keepCopies) return { status: 'corrupt', value: null, quarantinedTo: null };
     const quarantinedTo = quarantine();
     const bak = readBackup();
     if (bak.ok) {
@@ -258,7 +263,12 @@ export function createJsonStore(opts: JsonStoreOptions): JsonStore {
   /** The cheap, synchronous final step shared by both write paths. */
   function commit(tmp: string, gen: number): boolean {
     if (gen <= committedGen) {
-      fs.rmSync(tmp, { force: true });
+      // Superseded by a newer write: this data is not needed, and a temp left behind is removed by the next read().
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        /* see above */
+      }
       return true;
     }
     if (keepCopies && !mainKnownBad && fs.existsSync(filePath)) {
@@ -271,7 +281,7 @@ export function createJsonStore(opts: JsonStoreOptions): JsonStore {
     withRetrySync(() => fs.renameSync(tmp, filePath));
     committedGen = gen;
     mainKnownBad = false;
-    if (!keepCopies) discardCopies(true);
+    if (!keepCopies) discardCopies();
     return true;
   }
 

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { SetApiKeySchema } from '../../../../src/shared/ipc';
 import { AI_PROVIDERS, applySettingsPatch, defaultSettings, TOGGLEABLE_BEHAVIORS } from '../../../../src/shared/settings';
+import { MAX_SHORTCUT_LENGTH as SHARED_MAX_SHORTCUT_LENGTH } from '../../../../src/shared/shortcut';
 import {
   API_KEY_LENGTH,
   BEHAVIOR_IDS,
@@ -109,8 +110,10 @@ describe('catalog mirrors shared constants', () => {
     expect(accepts('perception', 'excludedProcesses', ['x'.repeat(MAX_LIST_ENTRY_LENGTH + 1)])).toBe(false);
     expect(accepts('general', 'catName', 'x'.repeat(MAX_CAT_NAME_LENGTH))).toBe(true);
     expect(accepts('general', 'catName', 'x'.repeat(MAX_CAT_NAME_LENGTH + 1))).toBe(false);
-    expect(accepts('general', 'toggleShortcut', 'x'.repeat(MAX_SHORTCUT_LENGTH))).toBe(true);
-    expect(accepts('general', 'toggleShortcut', 'x'.repeat(MAX_SHORTCUT_LENGTH + 1))).toBe(false);
+    // The schema also requires a safe, canonical accelerator (src/shared/shortcut.ts).
+    expect(MAX_SHORTCUT_LENGTH).toBe(SHARED_MAX_SHORTCUT_LENGTH);
+    expect(accepts('general', 'toggleShortcut', 'CommandOrControl+Alt+AltGr+Shift+Super+MediaPreviousTrack')).toBe(true);
+    expect(accepts('general', 'toggleShortcut', `Control+Alt+${'x'.repeat(MAX_SHORTCUT_LENGTH)}`)).toBe(false);
     expect(accepts('ai', 'ollamaBaseUrl', 'x'.repeat(MAX_URL_LENGTH))).toBe(true);
     expect(accepts('ai', 'ollamaBaseUrl', 'x'.repeat(MAX_URL_LENGTH + 1))).toBe(false);
     expect(accepts('ai', 'anthropicModel', 'x'.repeat(MAX_MODEL_LENGTH.anthropic))).toBe(true);

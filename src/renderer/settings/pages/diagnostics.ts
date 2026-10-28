@@ -3,7 +3,7 @@ import type { PageContext, PageView } from '../context';
 import { button, group, keyValues, page, row, runAction, segmentedRow, toggleRow } from '../controls';
 import { h, svg, uid } from '../dom';
 import { behaviorStateLabel, formatCount, formatDuration, formatElapsed, formatMegabytes, formatPercentValue, formatRelativeTime, formatSampleAge } from '../format';
-import { livePoll } from '../livePoll';
+import { pagePoll } from '../livePoll';
 import { pauseModel } from '../privacyView';
 import { niceCeil, sparkline } from '../sparkline';
 import { S } from '../strings';
@@ -159,11 +159,7 @@ export function diagnosticsPage(ctx: PageContext): PageView {
   };
   ctx.store.subscribe(render);
   // Main broadcasts only on state changes, so uptime and resource samples are re-read while this page is open.
-  const poll = livePoll({
-    timers: ctx.timers,
-    refresh: () => ctx.refresh(),
-    isVisible: () => !element.hidden && document.visibilityState !== 'hidden',
-  });
+  const poll = pagePoll(ctx, element);
   return {
     id: 'diagnostics',
     title: D.title,

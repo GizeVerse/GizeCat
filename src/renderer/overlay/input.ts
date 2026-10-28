@@ -1,8 +1,13 @@
 // Raw pointer forwarding: the overlay reports pointer events in overlay-local DIP and
-// main recognises gestures. Moves are coalesced to one per animation frame.
+// main recognises gestures. Moves are coalesced to the latest one per animation frame
+// and sent at most every MOVE_MIN_INTERVAL_MS, so a 240/360 Hz display does not send
+// a move per refresh; every other kind is sent at once (after the pending move).
 import type { OverlayPointerEvent } from '../../shared/ipc';
 
 type Kind = OverlayPointerEvent['kind'];
+
+/** At most ~166 moves per second, whatever the refresh rate (main budgets per time). */
+export const MOVE_MIN_INTERVAL_MS = 6;
 
 const clampInt = (v: number, lo: number, hi: number): number => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : lo);
 const clampCoord = (v: number): number => (Number.isFinite(v) ? Math.min(100000, Math.max(-100000, v)) : 0);
@@ -27,6 +32,7 @@ export function attachPointerInput(
 ): () => void {
   let pendingMove: OverlayPointerEvent | null = null;
   let rafId = 0;
+  let lastMoveFrame = Number.NEGATIVE_INFINITY;
 
   const emit = (e: OverlayPointerEvent): void => {
     try {
@@ -46,8 +52,15 @@ export function attachPointerInput(
       emit(m);
     }
   };
-  const onFrame = (): void => {
+  const onFrame = (frameTime: number): void => {
     rafId = 0;
+    if (!pendingMove) return;
+    // Frame timestamps are vsync-aligned, so the rate settles on a whole number of frames.
+    if (frameTime - lastMoveFrame < MOVE_MIN_INTERVAL_MS) {
+      rafId = raf(onFrame);
+      return;
+    }
+    lastMoveFrame = frameTime;
     flush();
   };
   const make = (kind: Kind, e: PointerEvent | MouseEvent): OverlayPointerEvent =>

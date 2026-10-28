@@ -4,6 +4,7 @@ import type { SimOutput } from '../../../src/shared/sim';
 import type { DisplayGeometry } from '../../../src/shared/world';
 import { crashBackoff, geometryChanged, planOverlaySync } from '../../../src/main/overlay/displayDiff';
 import { displaysShowingCat, hiddenRenderState, mapRenderState, presenceRectPx } from '../../../src/main/overlay/renderMapping';
+import { Harness, settingsWith } from '../core/behavior/fixtures';
 
 function display(id: string, x: number, scale: number, primary = false): DisplayGeometry {
   const wDip = 1600;
@@ -51,7 +52,8 @@ describe('render mapping', () => {
 
   it('maps world px into overlay-local DIP and applies appearance', () => {
     const d = display('B', 1600, 2);
-    const state = mapRenderState(output({ x: 3400, y: 600, look: { x: 3600, y: 400 }, vy: 100, opacity: 0.5 }), appearance, {
+    // Sim-shaped output: its opacity already is appearance.opacity (0.8) x fade (0.5).
+    const state = mapRenderState(output({ x: 3400, y: 600, look: { x: 3600, y: 400 }, vy: 100, opacity: 0.4 }), appearance, {
       seq: 7,
       toLocalDip: (p) => ({ x: (p.x - d.workAreaPx.x) / d.scaleFactor, y: (p.y - d.workAreaPx.y) / d.scaleFactor }),
       scaleFactor: d.scaleFactor,
@@ -74,6 +76,16 @@ describe('render mapping', () => {
       visible: true,
       snap: false,
     });
+  });
+
+  it('applies the opacity setting exactly once (the sim output already includes it)', () => {
+    for (const opacity of [0.3, 0.5, 1]) {
+      const settings = settingsWith({ appearance: { opacity } });
+      const h = new Harness({ settings });
+      const out = h.run(3000);
+      const state = mapRenderState(out, settings.appearance, { seq: 1, toLocalDip: (p) => p, scaleFactor: 1, forceSnap: false, hidden: false, simNow: h.now });
+      expect(state.opacity, `setting ${opacity}`).toBeCloseTo(opacity, 6);
+    }
   });
 
   it('snaps when forced, hides emotes when disabled, and never emits non-finite numbers', () => {

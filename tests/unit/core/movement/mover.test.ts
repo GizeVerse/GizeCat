@@ -311,6 +311,91 @@ describe('Mover: multiple monitors', () => {
   });
 });
 
+describe('Mover: off-limits (fullscreen) displays', () => {
+  const WALL_X = 1920 - 42; // display 1's right edge minus half a body
+
+  it('stops at the edge of an off-limits display on a shared floor, like at a wall', () => {
+    const d = make(DUAL_FLAT, {}, { displayId: '1', xFrac: 0.9 });
+    d.m.setOffLimitsDisplays(['2']);
+    d.goal({ x: 2300, y: 1040 });
+    expect(d.until((r) => r.goal === 'unreachable', 30_000)).toBe(true);
+    expect(d.m.x).toBeLessThanOrEqual(WALL_X + 1e-6);
+    expect(d.m.displayId).toBe('1');
+    expect(d.m.walkRange).toEqual({ x0: 42, x1: WALL_X });
+  });
+
+  it('stops a walk already under way when the display becomes off limits', () => {
+    const d = make(DUAL_FLAT, {}, { displayId: '1', xFrac: 0.8 });
+    d.goal({ x: 2600, y: 1040 });
+    expect(d.until(() => d.m.x > 1700, 30_000)).toBe(true);
+    d.m.setOffLimitsDisplays(['2']);
+    expect(d.until((r) => r.goal === 'unreachable', 30_000)).toBe(true);
+    expect(d.m.x).toBeLessThanOrEqual(WALL_X + 1e-6);
+    expect(d.m.displayId).toBe('1');
+  });
+
+  it('never jumps onto a window top or a floor of an off-limits display', () => {
+    const top = make(DUAL_FLAT, {}, { displayId: '1', xFrac: 0.9 });
+    top.windows = { w: { x: 1950, y: 820, width: 500, height: 220 } };
+    top.m.setOffLimitsDisplays(['2']);
+    top.step();
+    expect(top.m.windowSurfaces).toEqual([]);
+    top.goal({ x: 2100, y: 819 });
+    expect(top.until((r) => r.goal === 'unreachable', 30_000)).toBe(true);
+    expect(top.log.some((r) => r.crouchStarted || r.tookOff)).toBe(false);
+    expect(top.m.displayId).toBe('1');
+
+    const down = make(DUAL_MIXED, {}, { displayId: '1', xFrac: 0.05 });
+    down.m.setOffLimitsDisplays(['2']);
+    down.goal({ x: -600, y: 1260 });
+    expect(down.until((r) => r.goal === 'unreachable', 40_000)).toBe(true);
+    expect(down.log.some((r) => r.crouchStarted || r.tookOff || r.steppedOff)).toBe(false);
+    expect(down.m.displayId).toBe('1');
+  });
+
+  it('jumps down from a window only to the open side of the floor', () => {
+    const d = make(DUAL_FLAT, {}, { displayId: '1', xFrac: 0.8 });
+    d.windows = { w: { x: 1400, y: 760, width: 520, height: 280 } };
+    d.goal({ x: 1890, y: 759 });
+    expect(d.until((r) => r.goal === 'arrived', 30_000)).toBe(true);
+    expect(d.m.perchWindowId).toBe('w');
+    d.m.setOffLimitsDisplays(['2']);
+    d.goal({ x: 2200, y: 1040 });
+    let crossed = false;
+    const ok = d.until((r) => {
+      crossed ||= d.m.displayId === '2';
+      return r.goal === 'unreachable';
+    }, 30_000);
+    expect(ok).toBe(true);
+    expect(crossed).toBe(false);
+    expect(d.m.support).toEqual({ kind: 'floor', displayId: '1' });
+    expect(d.m.x).toBeLessThanOrEqual(WALL_X + 1e-6);
+  });
+
+  it('may still move about the off-limits display it is already on, and leave it', () => {
+    const d = make(DUAL_FLAT, {}, { displayId: '2', xFrac: 0.5 });
+    d.m.setOffLimitsDisplays(['2']);
+    d.goal({ x: 3300, y: 1040 });
+    expect(d.until((r) => r.goal === 'arrived', 30_000)).toBe(true);
+    d.goal({ x: 1500, y: 1040 });
+    expect(d.until((r) => r.goal === 'arrived', 60_000)).toBe(true);
+    expect(d.m.displayId).toBe('1');
+    expect(d.m.isOffLimits('2')).toBe(true);
+  });
+
+  it('relocate puts the cat on an open floor clear of the off-limits display, never onto it', () => {
+    const d = make(DUAL_FLAT, {}, { displayId: '2', xFrac: 0.5 });
+    d.m.setOffLimitsDisplays(['2']);
+    expect(d.m.relocate({ x: 2500, y: 900 })).toBe(false);
+    expect(d.m.displayId).toBe('2');
+    expect(d.m.relocate({ x: 1915, y: 900 })).toBe(true);
+    expect(d.m.displayId).toBe('1');
+    expect(d.m.x).toBeLessThanOrEqual(WALL_X + 1e-6);
+    expect(d.m.y).toBe(1040);
+    expect(d.m.grounded).toBe(true);
+  });
+});
+
 describe('Mover: facing', () => {
   it('follows velocity with hysteresis', () => {
     const d = make();

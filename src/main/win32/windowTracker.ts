@@ -12,7 +12,7 @@ import type { SimEvent } from '../../shared/sim';
 import type { Platform, WindowInfo, WorldGeometry } from '../../shared/world';
 import type { Logger, RawWinEvent, Unsubscribe, Win32Api, WindowTracker } from '../contracts';
 import { BoundedQueue } from './collections';
-import { computeFullscreenDisplayIds, computePlatforms } from './platforms';
+import { computeFullscreenDisplayIds, computePlatforms, MIN_PLATFORM_WIDTH } from './platforms';
 import { ExclusionRules } from './processNames';
 import { hasWin32Extensions } from './win32Api';
 import type { NotificationState } from './windowRules';
@@ -69,6 +69,8 @@ const FOREGROUND_REFRESH_MS = 1000;
 const POLLING_MODE_FOREGROUND_MS = 500;
 const RECONCILE_LIST_REUSE_MS = 250;
 const FULLSCREEN_LIST_MAX_AGE_MS = 1000;
+/** getExcludedRects() answer when private windows cannot be located: mask everything. */
+const MASK_EVERYTHING: Rect = Object.freeze({ x: -(2 ** 31), y: -(2 ** 31), width: 2 ** 32, height: 2 ** 32 });
 
 const moved = (a: Rect, b: Rect): boolean =>
   Math.abs(a.x - b.x) > 2 || Math.abs(a.y - b.y) > 2 || Math.abs(a.width - b.width) > 2 || Math.abs(a.height - b.height) > 2;
@@ -430,7 +432,10 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       const t = now();
       if (platformCache && t - platformCache.at <= maxAgeMs) return platformCache.platforms;
       try {
-        platformCache = { at: t, platforms: computePlatforms(freshList(t, maxAgeMs)) };
+        // Owned dialogs, tool windows and our Settings window cut edges too; app windows
+        // alone are the fallback when the full z-order is not available.
+        const occluders = extended?.listOccluders() ?? null;
+        platformCache = { at: t, platforms: computePlatforms(freshList(t, maxAgeMs), MIN_PLATFORM_WIDTH, occluders) };
       } catch (e) {
         reportError('platforms', e);
         platformCache = { at: t, platforms: [] };
@@ -471,9 +476,9 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       // Privacy check: anything we cannot positively clear counts as excluded.
       if (!api.available) return true;
       try {
+        if (extended) return extended.isPointExcluded(p) ?? true;
         const id = api.windowIdAtPoint(p);
         if (id === null) return true;
-        if (extended) return extended.isWindowExcluded(id) ?? true;
         const info = describe(id);
         return info ? info.excluded : true;
       } catch (e) {
@@ -482,21 +487,37 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       }
     },
 
-    getExcludedRects(): Rect[] {
-      // Fresh enumeration (only called per capture). Windows whose exclusion status
-      // cannot be determined are treated as excluded.
-      if (!api.available) return [];
+    isForegroundExcluded(): boolean {
+      // Privacy check of the real foreground window, app window or not (owned dialogs, popups).
+      if (!api.available) return true;
       try {
+        if (extended) return extended.isForegroundExcluded() ?? true;
+        const id = api.getForegroundWindowId();
+        return id !== null && (describe(id)?.excluded ?? true);
+      } catch (e) {
+        reportError('foregroundExcluded', e);
+        return true;
+      }
+    },
+
+    getExcludedRects(): Rect[] {
+      // Fresh enumeration (only called per capture) of every shown window, dialogs and
+      // popups included. When they cannot be located, everything is masked.
+      if (!api.available) return [{ ...MASK_EVERYTHING }];
+      try {
+        if (extended) {
+          const rects = extended.listExcludedRects();
+          return rects ? rects.map((r) => ({ ...r })) : [{ ...MASK_EVERYTHING }];
+        }
         const rects: Rect[] = [];
         for (const w of api.listAppWindows()) {
           if (w.minimized || w.rect.width <= 0 || w.rect.height <= 0) continue;
-          const excluded = extended ? (extended.isWindowExcluded(w.id) ?? true) : w.excluded;
-          if (excluded) rects.push({ ...w.rect });
+          if (withRules(w)?.excluded) rects.push({ ...w.rect });
         }
         return rects;
       } catch (e) {
         reportError('excludedRects', e);
-        return [];
+        return [{ ...MASK_EVERYTHING }];
       }
     },
 

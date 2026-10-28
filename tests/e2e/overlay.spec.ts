@@ -1,5 +1,5 @@
 import type { ElectronApplication } from '@playwright/test';
-import { expect, hook, launchApp, quitApp, test, waitForCat } from './fixtures';
+import { expect, hook, launchApp, quitApp, readLogLines, test, waitForCat } from './fixtures';
 import { win32Probe, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT } from './win32Probe';
 
 const center = (r: { x: number; y: number; width: number; height: number }) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -72,6 +72,51 @@ test.describe('overlay windows', () => {
       await hook(app, 'forceInteractive', null);
       // Back to routing: far from the cat the desktop underneath receives the mouse again.
       await expect.poll(() => ours.has(probe.rootWindowAt(far.x, far.y) ?? '')).toBe(false);
+    } finally {
+      await quitApp(app);
+    }
+  });
+
+  test('live overlay renderers keep their heartbeat: never flagged as hung or recreated', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      await expect.poll(async () => (await hook(app, 'getSimOutput'))?.visible ?? false, { timeout: 20_000 }).toBe(true);
+      const before = await hook(app, 'getOverlays');
+      // Longer than the watchdog's silence limit plus its recreate grace period.
+      for (let i = 0; i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        for (const o of await hook(app, 'getOverlays')) expect(o.healthy, `overlay ${o.displayId} at ${i + 1} s`).toBe(true);
+      }
+      const after = await hook(app, 'getOverlays');
+      expect(after.map((o) => [o.displayId, o.webContentsId, o.crashes])).toEqual(before.map((o) => [o.displayId, o.webContentsId, 0]));
+      expect(readLogLines(userData).filter((l) => l.m.includes('hung'))).toEqual([]);
+    } finally {
+      await quitApp(app);
+    }
+  });
+
+  test('a hung overlay renderer is made click-through and then recreated', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      await expect.poll(async () => (await hook(app, 'getSimOutput'))?.visible ?? false, { timeout: 20_000 }).toBe(true);
+      const out = (await hook(app, 'getSimOutput'))!;
+      const overlays = await hook(app, 'getOverlays');
+      const home = overlays.find((o) => o.displayId === out.displayId && o.active) ?? overlays.find((o) => o.active)!;
+      const page = app.windows().find((p) => p.url().includes(`display=${encodeURIComponent(home.displayId)}`))!;
+      expect(page, 'page of the overlay showing the cat').toBeTruthy();
+      // Wedge the overlay's main thread for good (the promise never settles).
+      void page.evaluate(() => {
+        for (;;) {
+          // spin
+        }
+      }).catch(() => undefined);
+      const find = async () => (await hook(app, 'getOverlays')).find((o) => o.displayId === home.displayId);
+      await expect.poll(async () => { const o = await find(); return o ? o.webContentsId !== home.webContentsId || (!o.healthy && o.ignoreMouse) : false; }, { timeout: 10_000 }).toBe(true);
+      await expect.poll(async () => { const o = await find(); return o !== undefined && o.webContentsId !== home.webContentsId && o.ready && o.healthy; }, { timeout: 30_000 }).toBe(true);
+      expect((await find())!.crashes).toBeGreaterThanOrEqual(1);
+      expect(readLogLines(userData).some((l) => l.m.includes('overlay renderer hung'))).toBe(true);
     } finally {
       await quitApp(app);
     }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MEMORY_DETAILS, MEMORY_KINDS } from '../../../../src/core/behavior/memory';
 import {
   behaviorStateLabel,
   formatAge,
@@ -16,8 +17,10 @@ import {
   formatSampleAge,
   formatShortcut,
   humanizeId,
+  memoryDetailLabel,
   memoryKindLabel,
 } from '../../../../src/renderer/settings/format';
+import { S as STRINGS } from '../../../../src/renderer/settings/strings';
 
 const NOW = Date.UTC(2026, 9, 28, 12, 0, 0);
 const S = 1000;
@@ -116,9 +119,25 @@ describe('labels', () => {
   });
 
   it('maps known memory kinds and behaviour states, falling back to humanized ids', () => {
-    expect(memoryKindLabel('petted')).toBe('Was petted');
+    expect(memoryKindLabel('pet')).toBe('Was petted');
     expect(memoryKindLabel('somethingNew')).toBe('Something new');
+    expect(memoryKindLabel('constructor')).toBe('Constructor');
+    expect(memoryDetailLabel('somethingNew')).toBe('something new');
     expect(behaviorStateLabel('chasingCursor')).toBe('Chasing your pointer');
     expect(behaviorStateLabel('dreamingOfFish')).toBe('Dreaming of fish');
+  });
+
+  it('labels exactly the memory kinds and details the simulation records', () => {
+    const P = STRINGS.personality;
+    expect(Object.keys(P.memoryKinds).sort()).toEqual([...MEMORY_KINDS].sort());
+    expect(Object.keys(P.memoryDetails).sort()).toEqual([...MEMORY_DETAILS].sort());
+    for (const kind of MEMORY_KINDS) {
+      expect(memoryKindLabel(kind), kind).toBe(P.memoryKinds[kind]);
+      expect(memoryKindLabel(kind), kind).not.toBe(humanizeId(kind));
+    }
+    for (const detail of MEMORY_DETAILS) {
+      expect(memoryDetailLabel(detail), detail).toBe(P.memoryDetails[detail]);
+      expect(memoryDetailLabel(detail), detail).not.toBe(detail);
+    }
   });
 });

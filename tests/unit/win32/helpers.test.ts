@@ -109,18 +109,41 @@ describe('window rules', () => {
   });
 
   const monitor = raw(1920, -240, 2560, 1440);
+  /** Work area with a 48 px taskbar. */
+  const work = raw(1920, -240, 2560, 1392);
   it('treats a borderless window covering its monitor as fullscreen', () => {
-    expect(isFullscreenGeometry({ windowRect: monitor, frameRect: monitor, monitorRect: monitor, style: 0x80000000, exStyle: 0, maximized: false })).toBe(true);
+    expect(isFullscreenGeometry({ windowRect: monitor, frameRect: monitor, monitorRect: monitor, workRect: work, style: 0x80000000, exStyle: 0, maximized: false })).toBe(true);
   });
   it('rejects maximized framed windows even when they spill past the monitor', () => {
     const spill = raw(1912, -248, 2576, 1456);
-    expect(isFullscreenGeometry({ windowRect: spill, frameRect: monitor, monitorRect: monitor, style: 0x00cf0000, exStyle: 0x100, maximized: true })).toBe(false);
+    expect(isFullscreenGeometry({ windowRect: spill, frameRect: monitor, monitorRect: monitor, workRect: work, style: 0x00cf0000, exStyle: 0x100, maximized: true })).toBe(false);
   });
   it('accepts a framed, non-maximized window whose visible frame is exactly the monitor', () => {
     const spill = raw(1912, -240, 2576, 1448);
-    expect(isFullscreenGeometry({ windowRect: spill, frameRect: monitor, monitorRect: monitor, style: 0x00cf0000, exStyle: 0, maximized: false })).toBe(true);
+    expect(isFullscreenGeometry({ windowRect: spill, frameRect: monitor, monitorRect: monitor, workRect: work, style: 0x00cf0000, exStyle: 0, maximized: false })).toBe(true);
   });
   it('rejects windows that do not cover the monitor', () => {
-    expect(isFullscreenGeometry({ windowRect: raw(1920, -240, 2560, 1400), frameRect: null, monitorRect: monitor, style: 0x80000000, exStyle: 0, maximized: false })).toBe(false);
+    expect(isFullscreenGeometry({ windowRect: raw(1920, -240, 2560, 1400), frameRect: null, monitorRect: monitor, workRect: work, style: 0x80000000, exStyle: 0, maximized: false })).toBe(false);
+  });
+
+  describe('on a monitor whose work area is the whole monitor (auto-hide taskbar)', () => {
+    const WS_POPUP_SYSMENU_MINMAX = 0x80000000 | 0x00080000 | 0x00020000 | 0x00010000;
+    it('does not count a maximized frameless window as fullscreen', () => {
+      const probe = { windowRect: monitor, frameRect: monitor, monitorRect: monitor, style: WS_POPUP_SYSMENU_MINMAX, exStyle: 0, maximized: true };
+      expect(isFullscreenGeometry({ ...probe, workRect: monitor })).toBe(false);
+      // The same window with a visible taskbar covers it, which only fullscreen windows do.
+      expect(isFullscreenGeometry({ ...probe, workRect: work })).toBe(true);
+    });
+    it('still counts a non-maximized borderless window that covers the monitor', () => {
+      expect(isFullscreenGeometry({ windowRect: monitor, frameRect: monitor, monitorRect: monitor, workRect: monitor, style: 0x80000000, exStyle: 0, maximized: false })).toBe(true);
+    });
+    it('does not count a captioned window sized to the work area', () => {
+      const spill = raw(1912, -240, 2576, 1448);
+      expect(isFullscreenGeometry({ windowRect: spill, frameRect: monitor, monitorRect: monitor, workRect: monitor, style: 0x00cf0000, exStyle: 0, maximized: false })).toBe(false);
+    });
+    it('counts a framed window without a caption whose frame is the monitor', () => {
+      const thickFramePopup = 0x80000000 | 0x00040000;
+      expect(isFullscreenGeometry({ windowRect: monitor, frameRect: monitor, monitorRect: monitor, workRect: monitor, style: thickFramePopup, exStyle: 0, maximized: false })).toBe(true);
+    });
   });
 });

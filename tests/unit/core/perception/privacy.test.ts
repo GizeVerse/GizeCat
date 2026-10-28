@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isLoopbackHostname, isLoopbackUrl, isOllamaCloudModel, joinEndpoint, parseEndpoint } from '../../../../src/core/perception/endpoint';
+import { isLoopbackHostname, isLoopbackUrl, isOllamaCloudModel, joinEndpoint, openAiServerRoot, parseEndpoint } from '../../../../src/core/perception/endpoint';
 import {
   decide,
   decideAiEgress,
   decideCapture,
+  decideEndpointEgress,
   effectiveMode,
   regionSamplePoints,
+  resolveAiEgress,
   type CaptureGateInput,
 } from '../../../../src/core/perception/privacy';
 import { defaultSettings, type Settings } from '../../../../src/shared/settings';
@@ -109,10 +111,64 @@ describe('AI egress and effective mode', () => {
     expect(d.allowed ? null : d.code).toBe('no-provider');
   });
 
-  it('Ollama on loopback is local and needs no cloud permission', () => {
+  it('Ollama on loopback is local and needs no cloud permission once the server confirms the model', () => {
     const s = ai({ provider: 'ollama', ollamaModel: 'qwen3-vl:4b-instruct' });
-    expect(effectiveMode(s)).toBe('ai-local');
-    expect(decide({ ...input({ settings: s }), purpose: 'ai' })).toEqual({ allowed: true });
+    expect(effectiveMode(s, 'local')).toBe('ai-local');
+    expect(decide({ ...input({ settings: s }), purpose: 'ai', locality: 'local' })).toEqual({ allowed: true });
+    expect(resolveAiEgress(s, 'local')).toMatchObject({ ok: true, egress: { cloud: false, unconfirmed: false, loopback: true, label: 'Ollama (this PC)' } });
+  });
+
+  it('a model on a local server that the server has not confirmed is refused without allowCloud (fail closed)', () => {
+    for (const s of [
+      ai({ provider: 'ollama', ollamaModel: 'myvision' }),
+      ai({ provider: 'openai-compatible', openaiBaseUrl: 'http://127.0.0.1:11434/v1', openaiModel: 'myvision' }),
+    ]) {
+      // The default is 'unknown': callers that do not pass the server's answer stay closed.
+      for (const d of [decideAiEgress(s), decideAiEgress(s, 'unknown'), decide({ ...input({ settings: s }), purpose: 'ai' })]) {
+        expect(d.allowed ? null : d.code).toBe('model-unconfirmed');
+      }
+      expect(effectiveMode(s)).toBe('local-stats');
+      expect(resolveAiEgress(s)).toMatchObject({ ok: true, egress: { cloud: false, unconfirmed: true } });
+      // With allowCloud it may run, but is reported as cloud until confirmed.
+      expect(effectiveMode({ ...s, ai: { ...s.ai, allowCloud: true } })).toBe('ai-cloud');
+    }
+  });
+
+  it('a model the local server forwards elsewhere (alias of a cloud model) is cloud', () => {
+    for (const s of [
+      ai({ provider: 'ollama', ollamaModel: 'myvision' }),
+      ai({ provider: 'openai-compatible', openaiBaseUrl: 'http://127.0.0.1:11434/v1', openaiModel: 'myvision' }),
+    ]) {
+      const d = decideAiEgress(s, 'remote');
+      expect(d.allowed ? null : d.code).toBe('cloud-model-not-allowed');
+      expect(d.allowed ? '' : d.reason).toMatch(/runs in the cloud.*Allow cloud/);
+      expect(effectiveMode(s, 'remote')).toBe('local-stats');
+      const allowed = { ...s, ai: { ...s.ai, allowCloud: true } };
+      expect(effectiveMode(allowed, 'remote')).toBe('ai-cloud');
+      expect(resolveAiEgress(allowed, 'remote')).toMatchObject({ ok: true, egress: { cloud: true, label: expect.stringMatching(/\(cloud model\)$/) } });
+    }
+  });
+
+  it('OpenAI-compatible on a loopback Ollama with a "-cloud" model is cloud, whatever the server says', () => {
+    const s = ai({ provider: 'openai-compatible', openaiBaseUrl: 'http://127.0.0.1:11434/v1', openaiModel: 'qwen3-vl:235b-cloud' });
+    for (const locality of ['unknown', 'local', 'remote'] as const) {
+      const d = decideAiEgress(s, locality);
+      expect(d.allowed ? null : d.code).toBe('cloud-model-not-allowed');
+      expect(effectiveMode(s, locality)).toBe('local-stats');
+    }
+    expect(resolveAiEgress(s)).toMatchObject({ ok: true, egress: { cloud: true, label: 'OpenAI-compatible (cloud model)' } });
+    expect(effectiveMode({ ...s, ai: { ...s.ai, allowCloud: true } }, 'local')).toBe('ai-cloud');
+  });
+
+  it('the endpoint rule (for requests without screen data) ignores the model name', () => {
+    expect(decideEndpointEgress(ai({ provider: 'ollama', ollamaModel: 'gpt-oss:120b-cloud' }))).toEqual({ allowed: true });
+    expect(decideEndpointEgress(ai({ provider: 'openai-compatible', openaiBaseUrl: 'http://127.0.0.1:11434/v1', openaiModel: 'x-cloud' }))).toEqual({ allowed: true });
+    const remote = decideEndpointEgress(ai({ provider: 'ollama', ollamaBaseUrl: 'http://192.168.1.20:11434' }));
+    expect(remote.allowed ? null : remote.code).toBe('cloud-not-allowed');
+    expect(decideEndpointEgress(ai({ provider: 'anthropic' })).allowed).toBe(false);
+    expect(decideEndpointEgress(ai({ provider: 'anthropic', allowCloud: true }))).toEqual({ allowed: true });
+    const none = decideEndpointEgress(ai({ provider: 'none' }));
+    expect(none.allowed ? null : none.code).toBe('no-provider');
   });
 
   it('a remote Ollama or OpenAI-compatible host needs allowCloud', () => {
@@ -132,7 +188,8 @@ describe('AI egress and effective mode', () => {
   it('Ollama cloud models count as cloud even on a loopback server', () => {
     const s = ai({ provider: 'ollama', ollamaModel: 'gpt-oss:120b-cloud' });
     const d = decideAiEgress(s);
-    expect(d.allowed ? null : d.code).toBe('cloud-not-allowed');
+    expect(d.allowed ? null : d.code).toBe('cloud-model-not-allowed');
+    expect(d.allowed ? '' : d.reason).not.toMatch(/endpoint is not on this PC/);
     expect(effectiveMode({ ...s, ai: { ...s.ai, allowCloud: true } })).toBe('ai-cloud');
   });
 
@@ -230,6 +287,14 @@ describe('loopback detection resists tricks', () => {
     if (!p.ok) throw new Error('parse');
     expect(joinEndpoint(p.url, '/chat/completions').href).toBe('http://127.0.0.1:1234/v1/chat/completions');
     expect(joinEndpoint(p.url, '../../x').host).toBe('127.0.0.1:1234');
+  });
+
+  it('openAiServerRoot drops a trailing /v1 (where Ollama serves its native API)', () => {
+    expect(openAiServerRoot(new URL('http://127.0.0.1:11434/v1')).href).toBe('http://127.0.0.1:11434/');
+    expect(openAiServerRoot(new URL('http://127.0.0.1:11434/v1/')).href).toBe('http://127.0.0.1:11434/');
+    expect(openAiServerRoot(new URL('http://localhost:8080/proxy/V1')).href).toBe('http://localhost:8080/proxy');
+    expect(openAiServerRoot(new URL('http://127.0.0.1:1234/api')).href).toBe('http://127.0.0.1:1234/api');
+    expect(openAiServerRoot(new URL('http://127.0.0.1:1234/v10')).href).toBe('http://127.0.0.1:1234/v10');
   });
 
   it('detects Ollama cloud model tags', () => {

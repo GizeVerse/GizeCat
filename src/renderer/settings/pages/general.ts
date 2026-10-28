@@ -9,8 +9,9 @@ import { validateCatName, validateShortcut } from '../validate';
 const G = S.general;
 
 /**
- * The simulation ignores a call unless the cat is active, so the button matches the
- * tray and the cat's menu: off while the cat is hidden or paused, with the reason shown.
+ * The simulation ignores a call while the cat is paused (main still reports success),
+ * so the button is off then, as in the tray and the cat's menu, and says why. It is
+ * also off while the cat is hidden; the visibility row explains that case.
  */
 export function callButtonState(status: Pick<AppStatus, 'visible' | 'paused'>): { disabled: boolean; note: string | null } {
   if (!status.visible) return { disabled: true, note: null };

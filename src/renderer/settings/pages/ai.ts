@@ -326,6 +326,9 @@ export function aiPage(ctx: PageContext): PageView {
     const target = providerTarget({ ...view.settings, ai: { ...view.settings.ai, provider } });
     if (target.leavesDevice) {
       setNote(providerNote, cloud ? A.sendsOffDevice(target.label) : A.needsAllowCloud(target.label), cloud ? 'warn' : 'info');
+    } else if (target.destination === 'local') {
+      // A server on this PC can still forward to cloud models main cannot recognise.
+      setNote(providerNote, A.localServer(target.host), 'info');
     } else {
       setNote(providerNote, null);
     }

@@ -4,7 +4,7 @@
 import type { CatRenderState } from '../../shared/cat';
 import type { OverlayApi, OverlayConfig } from '../../shared/ipc';
 import type { Ctx2D } from './cat/draw';
-import { HitRegionReporter } from './hitRegion';
+import { HIT_REFRESH_MS, HitRegionReporter } from './hitRegion';
 import { attachPointerInput } from './input';
 import { SnapshotInterpolator, type InterpSample } from './interpolation';
 import { CatScene, type DeviceRect, type Layer, type LayerProvider } from './scene';
@@ -15,6 +15,8 @@ const QUIET_FRAME_MS = 48;
 const MAX_FRAME_DT_MS = 250;
 const MAX_CONSECUTIVE_ERRORS = 30;
 const ERROR_REPORT_INTERVAL_MS = 2000;
+/** Heartbeat timer period; the region itself is re-sent every HIT_REFRESH_MS at most. */
+const HEARTBEAT_TICK_MS = HIT_REFRESH_MS / 2;
 
 /** Invisible placeholder until the first snapshot arrives (never drawn). */
 const INITIAL_STATE: CatRenderState = {
@@ -63,6 +65,9 @@ export class OverlayRuntime {
   private layer: Layer | null = null;
   private consecutiveErrors = 0;
   private lastErrorAt = Number.NEGATIVE_INFINITY;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
+  /** Drawing failed for good: stay silent so main recreates this overlay. */
+  private gaveUp = false;
   private readonly disposers: (() => void)[] = [];
 
   constructor(
@@ -89,7 +94,24 @@ export class OverlayRuntime {
 
   dispose(): void {
     this.stopLoop();
+    this.stopHeartbeat();
     for (const d of this.disposers.splice(0)) d();
+  }
+
+  /**
+   * While main shows the cat on this overlay, the hit region is re-reported periodically
+   * (from a timer, independent of frame pacing). Main treats the silence of a hung
+   * renderer as a hang: forced click-through, then recreation.
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeat !== null || this.gaveUp) return;
+    this.heartbeat = setInterval(() => this.hits.refresh(performance.now()), HEARTBEAT_TICK_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat === null) return;
+    clearInterval(this.heartbeat);
+    this.heartbeat = null;
   }
 
   reportError(message: string): void {
@@ -106,6 +128,8 @@ export class OverlayRuntime {
   private onRender(s: unknown): void {
     if (!isRenderState(s)) return;
     if (!this.interp.push(s, performance.now())) return;
+    if (s.visible) this.startHeartbeat();
+    else this.stopHeartbeat();
     if (!this.running && s.visible && s.opacity > 0) this.startLoop();
     if (!this.running && !s.visible) this.hits.clear(performance.now());
   }
@@ -174,14 +198,19 @@ export class OverlayRuntime {
     try {
       this.step(now);
       this.consecutiveErrors = 0;
+      // Drawing works again: the next snapshot restarts the heartbeat.
+      this.gaveUp = false;
     } catch (err) {
       this.consecutiveErrors++;
       this.reportError(`overlay frame failed: ${err instanceof Error ? err.message : String(err)}`);
       if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-        // Give up drawing rather than spin; main sees the error reports and the empty hit region.
+        // Give up drawing rather than spin; main sees the error reports and the empty hit
+        // region, and the missing heartbeat makes it recreate this overlay.
         this.clearDirty();
         this.hits.clear(now);
         this.stopLoop();
+        this.gaveUp = true;
+        this.stopHeartbeat();
         return;
       }
     }

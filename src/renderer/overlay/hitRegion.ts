@@ -1,9 +1,13 @@
 // Throttled, change-detected reporting of the cat's interactive hit region to main.
+// While the cat is shown the last region is also re-sent periodically: that refresh is
+// the renderer's heartbeat, which main uses to detect a hung overlay renderer.
 import type { HitRegion } from '../../shared/cat';
 import type { Rect } from '../../shared/geometry';
 
 export const HIT_TOLERANCE_DIP = 2;
 export const HIT_MIN_INTERVAL_MS = 1000 / 15;
+/** The current region is re-reported at least this often while the cat is shown. */
+export const HIT_REFRESH_MS = 500;
 const MAX_RECTS = 8;
 const COORD_LIMIT = 100000;
 const SIZE_LIMIT = 5000;
@@ -67,6 +71,15 @@ export class HitRegionReporter {
       return false;
     }
     return this.emit(clean, now);
+  }
+
+  /**
+   * Heartbeat: re-sends the last region (empty when nothing was drawn yet) unless
+   * something was sent within `refreshMs`. Returns true when something was sent.
+   */
+  refresh(now: number, refreshMs = HIT_REFRESH_MS): boolean {
+    if (now - this.lastSentAt < refreshMs) return false;
+    return this.emit(this.last ?? [], now);
   }
 
   /** Reports an empty region immediately (cat invisible); deduplicated. */
