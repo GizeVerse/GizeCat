@@ -1,6 +1,6 @@
 // Contract between the main-process host and the pure cat simulation (src/core).
 // All coordinates here are PHYSICAL virtual-screen pixels ("px").
-import type { AnimClip, BehaviorState, Emote, Facing } from './cat';
+import type { AnimClip, BehaviorState, CatReaction, Emote, Facing } from './cat';
 import type { PersistedCat } from './catState';
 import type { Point, Rect } from './geometry';
 import type { SceneReport, VisualSummary } from './perception';
@@ -19,10 +19,10 @@ export type SimEvent =
   | { type: 'pointer.dragEnd'; at: Point; velocity: Point }
   // Window / desktop awareness (Tier A)
   | { type: 'window.shown'; window: WindowInfo }
-  | { type: 'window.closed'; id: string; rect: Rect | null; category: AppCategory }
+  | { type: 'window.closed'; id: string; rect: Rect | null; category: AppCategory; excluded?: boolean }
   | { type: 'window.foreground'; window: WindowInfo | null; switchesPerMinute: number }
-  | { type: 'window.moveStart'; id: string }
-  | { type: 'window.moveEnd'; id: string; rect: Rect | null }
+  | { type: 'window.moveStart'; id: string; excluded?: boolean }
+  | { type: 'window.moveEnd'; id: string; rect: Rect | null; excluded?: boolean }
   | { type: 'window.minimized'; id: string }
   | { type: 'window.restored'; window: WindowInfo }
   // User activity (coarse, content-free)
@@ -123,6 +123,8 @@ export interface SimOutput {
   /** Preferred delay before the next tick (ms): ~33 awake, ~100+ asleep, ~500 hidden. */
   nextTickMs: number;
   requests: SimRequest[];
+  /** Short, one-off body-language reaction (e.g. an ear flick on a tap); the renderer plays it once per distinct `at`. */
+  reaction?: CatReaction | null;
 }
 
 export interface CatSimOptions {

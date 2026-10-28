@@ -93,6 +93,10 @@ const GeneralSchema = z.object({
   /** Electron accelerator that shows/hides the cat. */
   toggleShortcut: field(ShortcutSchema, DEFAULT_TOGGLE_SHORTCUT),
   firstRunCompleted: field(z.boolean(), false),
+  /** How the cat starts: always visible, hidden, paused, or as it was when the app last closed. */
+  startupState: field(z.enum(['visible', 'hidden', 'paused', 'remember']), 'visible'),
+  /** Last visible/hidden/paused state, maintained by main for startupState 'remember'. */
+  rememberedState: field(z.enum(['visible', 'hidden', 'paused']), 'visible'),
 });
 
 const AppearanceSchema = z.object({
@@ -124,6 +128,8 @@ const BehaviorSchema = z.object({
   /** What happens when a fullscreen app/game/video is in front on the cat's monitor. */
   fullscreenBehavior: field(z.enum(['hide', 'quiet', 'ignore']), 'hide'),
   disabledBehaviors: field(z.array(z.enum(TOGGLEABLE_BEHAVIORS)).max(TOGGLEABLE_BEHAVIORS.length), []),
+  /** Typical length of a cursor chase in seconds (actual chases vary around it). */
+  chaseDurationSec: field(z.number().min(1).max(20), 4.5),
 });
 
 const InteractionSchema = z.object({

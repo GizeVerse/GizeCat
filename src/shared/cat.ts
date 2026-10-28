@@ -75,6 +75,14 @@ export type RenderStyle = (typeof RENDER_STYLES)[number];
 
 export type Facing = 1 | -1;
 
+export const CAT_REACTIONS = ['earFlick', 'tailFlick', 'headTilt'] as const;
+export type CatReactionKind = (typeof CAT_REACTIONS)[number];
+/** A short body-language reaction layered on the current clip; `at` is sim time (ms) when it started. */
+export interface CatReaction {
+  kind: CatReactionKind;
+  at: number;
+}
+
 /**
  * Nominal footprint of the cat at size 1.0 in DIP. The brain uses it for
  * movement limits; the renderer reports the exact pose bounds via hitboxes.
@@ -123,6 +131,8 @@ export interface CatRenderState {
   shadow: boolean;
   /** Animation playback speed multiplier (settings.appearance.animationSpeed). */
   animSpeed: number;
+  /** One-off reaction to play on top of the clip (once per distinct `at`). */
+  reaction?: CatReaction | null;
 }
 
 /** Hit region reported by a renderer for its current pose, overlay-local DIP. */

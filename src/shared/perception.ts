@@ -21,7 +21,8 @@ export interface VisualFeatures {
   motion: number;
 }
 
-export const VISUAL_EVENT_KINDS = ['dark', 'bright', 'busy', 'quiet', 'bigChange', 'motion', 'still'] as const;
+/** videoLike = sustained fast change in a short burst plus colourful content; newElement = a compact changed area appeared. Coarse heuristics, not recognition. */
+export const VISUAL_EVENT_KINDS = ['dark', 'bright', 'busy', 'quiet', 'bigChange', 'motion', 'still', 'videoLike', 'newElement'] as const;
 export type VisualEventKind = (typeof VISUAL_EVENT_KINDS)[number];
 
 export interface VisualSummary {
