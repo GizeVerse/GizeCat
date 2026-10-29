@@ -9,7 +9,12 @@ export default defineConfig({
     include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
     environment: 'node',
     pool: 'forks',
-    testTimeout: 20000,
+    // Shared machine (other heavy jobs, verify at below-normal priority): the long seeded
+    // behaviour simulations (multi-sim-hour liveness and mix runs, 5-10 s each alone) slow down
+    // several-fold when every core runs one. Half the cores keeps them responsive; the timeout
+    // is only a hang guard, never an assertion.
+    maxWorkers: '50%',
+    testTimeout: 60000,
     restoreMocks: true,
   },
 });

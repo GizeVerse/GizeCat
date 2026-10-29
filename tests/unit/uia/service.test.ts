@@ -218,6 +218,9 @@ describe('TabStripService: refresh policy and privacy', () => {
     expect([stripOps(r, A), stripOps(r, B)]).toEqual([1, 1]);
     r.svc.setInterest([A], r.clock.advance(600));
     await eventually(() => expect(stripOps(r, A)).toBe(2));
+    // The next period counts from the reply (stripAt), so let the read finish before the clock
+    // moves on; under load the fake helper's reply can otherwise arrive after the advance.
+    await eventually(() => expect(r.svc.debugInfo().readsDone).toBe(3));
     r.svc.setInterest([A], r.clock.advance(1100));
     await eventually(() => expect(stripOps(r, A)).toBe(3));
     expect(stripOps(r, B)).toBe(1);
