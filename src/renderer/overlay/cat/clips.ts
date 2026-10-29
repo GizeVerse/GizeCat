@@ -26,6 +26,8 @@ export interface ClipContext {
    * the wall blend in; when absent the clip derives it from `speed`.
    */
   engage?: number;
+  /** Climb only: 0 climbing up (or clinging) .. 1 climbing down, eased by the animator; absent = 0. */
+  descend?: number;
 }
 
 /** Durations (s) of clips that play once and hold their final pose. */
@@ -273,11 +275,13 @@ function climbPose(p: Pose): void {
   setFoot(p, LEG_FF, -0.5, -54, -1.25);
   setFoot(p, LEG_BN, -2, -1, -1.35);
   setFoot(p, LEG_BF, -3, -6, -1.35);
-  p.tailBase = -1.37;
-  p.tailCurl = 1.2;
+  // Tail: hangs from under the rump, mostly straight down (loose, so gravity shapes it), tip curling
+  // away from the wall.
+  p.tailBase = -1.45;
+  p.tailCurl = 0.9;
   p.tailBend = 0;
   p.tailFront = 0;
-  p.tailStiff = 0.4;
+  p.tailStiff = 0.3;
   p.shadow = 0;
   p.lookW = 0.6;
 }
@@ -850,7 +854,8 @@ function clipClimb(p: Pose, c: ClipContext): void {
   // 0 holding still .. 1 climbing (eased by the animator, so it never jumps).
   const move = c.engage !== undefined && Number.isFinite(c.engage) ? clamp01(c.engage) : climbEngagement(speed);
   const still = 1 - move;
-  const stride = strideFor('climb', speed);
+  // The step opens up with the climbing motion, so starting and stopping never jerks the paws.
+  const stride = strideFor('climb', speed) * move;
   const lift = 2 + 3 * move;
 
   // Ladder climb: diagonal pairs reach together (near front with far hind, then the other pair).
@@ -897,6 +902,14 @@ function clipClimb(p: Pose, c: ClipContext): void {
   const sw = (TAU * 2 * t) / CLIMB_IDLE_PERIOD_S;
   p.tailBase += 0.1 * Math.sin(sw) * still + 0.12 * Math.sin(TAU * cyc + 1) * move;
   p.tailCurl += 0.22 * Math.sin(sw - 1.1) * still + 0.3 * Math.sin(TAU * cyc) * move;
+  // Climbing down tail first, the cat holds its tail out to the side for balance (it would otherwise
+  // reach the floor well before the paws), and looks down where it is going.
+  const dn = c.descend !== undefined && Number.isFinite(c.descend) ? clamp01(c.descend) : 0;
+  p.tailBase += 0.6 * dn;
+  p.tailCurl += 0.5 * dn;
+  p.tailStiff += 0.25 * dn;
+  p.headRot -= 0.12 * dn;
+  p.pupilY += 0.45 * dn;
   p.blinkOK = down > 0.2 || up > 0.2 ? 0 : 1;
 }
 
@@ -945,21 +958,26 @@ export function sampleClip(clip: AnimClip, ctx: ClipContext, out: Pose): Pose {
   return out;
 }
 
-/** Cross-fade (ms) between the climb clip and the ground clips (getting onto a wall, pulling up onto a ledge). */
+/** Cross-fade (ms) onto the wall (the mover's mount takes 320 ms, the swing down from a top 460 ms). */
 export const CLIMB_FADE_MS = 280;
-/** Cross-fade (ms) into a quick clip off the wall (leaping or falling off it, a startle) and for grabbing it out of the air. */
-const CLIMB_QUICK_FADE_MS = 210;
+/**
+ * Cross-fade (ms) from the wall back to a ground clip: the pull-up over a top corner carries the
+ * anchor up onto the ledge for 520 ms, and the cat should keep hold of the wall for most of it.
+ */
+export const CLIMB_OFF_FADE_MS = 400;
+/** Cross-fade (ms) from the wall into a quick clip (letting go and falling, leaping off, a startle). */
+const CLIMB_QUICK_FADE_MS = 240;
 
 /** Cross-fade duration (ms) when switching between clips. */
 export function crossFadeMs(from: AnimClip | null, to: AnimClip): number {
   if (from === null) return 0;
   // The climb pose turns the whole body through 90 degrees, with the front paws a body length up:
   // rearing up onto a wall or pulling up over a corner onto the ledge takes a little longer, and even
-  // the quick ways on and off the wall are slower than the usual quick fades (so nothing pops).
-  // Picking the cat up keeps the held fade below, which the mover's scruff settle is timed to.
+  // the quick ways off the wall are slower than the usual quick fades (so nothing pops). Picking the
+  // cat up keeps the held fade below, which the mover's scruff settle is timed to.
   const quick = (c: AnimClip): boolean => c === 'jump' || c === 'fall' || c === 'land' || c === 'startle';
-  if (from === 'climb' && to !== 'held') return quick(to) ? CLIMB_QUICK_FADE_MS : CLIMB_FADE_MS;
-  if (to === 'climb' && from !== 'held') return quick(from) ? CLIMB_QUICK_FADE_MS : CLIMB_FADE_MS;
+  if (from === 'climb' && to !== 'held') return quick(to) ? CLIMB_QUICK_FADE_MS : CLIMB_OFF_FADE_MS;
+  if (to === 'climb' && from !== 'held') return CLIMB_FADE_MS;
   if (to === 'startle' || to === 'land' || to === 'jump') return 150;
   if (to === 'fall' || from === 'land') return 170;
   if (to === 'sleep' || from === 'sleep' || to === 'loaf' || to === 'rollOver' || from === 'rollOver') return 250;

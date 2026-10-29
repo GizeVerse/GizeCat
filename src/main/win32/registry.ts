@@ -54,11 +54,16 @@ function bindRegGetValue(): RegGetValueFn {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const koffi = require('koffi') as Koffi;
       const advapi32 = koffi.load('advapi32.dll');
-      const fn = advapi32.func(
-        'RegGetValueW',
-        'long',
-        ['intptr_t', 'str16', 'str16', 'uint32_t', koffi.out(koffi.pointer('uint32_t')), 'void *', koffi.inout(koffi.pointer('uint32_t'))],
-      ) as RegGetValueFn;
+      // LSTATUS RegGetValueW(HKEY, LPCWSTR subKey, LPCWSTR value, DWORD flags, LPDWORD type, PVOID data, LPDWORD cbData)
+      const fn = advapi32.func('__stdcall', 'RegGetValueW', 'long', [
+        'intptr_t',
+        'str16',
+        'str16',
+        'uint32_t',
+        koffi.out(koffi.pointer('uint32_t')),
+        'void *',
+        koffi.inout(koffi.pointer('uint32_t')),
+      ]) as RegGetValueFn;
       memo = { fn };
     } catch (err) {
       memo = { error: err instanceof Error ? err.message : String(err) };

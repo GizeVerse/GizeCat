@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WorldModel } from '../../../../src/core/movement';
-import { display, DUAL_FLAT, DUAL_MIXED, SINGLE, world } from '../behavior/fixtures';
+import { display, DUAL_FLAT, DUAL_MIXED, ledge, sideId, SINGLE, taskbarId, topId, wall, world } from '../behavior/fixtures';
 
 describe('WorldModel', () => {
   it('puts a floor at the bottom of each work area, inset by half the cat width', () => {
@@ -50,24 +50,61 @@ describe('WorldModel', () => {
 
   it('finds the first surface below a point, preferring window tops above the floor', () => {
     const w = new WorldModel(SINGLE, 1, true);
-    const windows = w.windowSurfaces([{ windowId: 'a', y: 600, x0: 400, x1: 900 }]);
-    expect(windows).toHaveLength(1);
-    expect(w.surfaceBelow(500, 300, windows)?.surface.windowId).toBe('a');
-    expect(w.surfaceBelow(500, 700, windows)?.surface.kind).toBe('floor');
-    expect(w.surfaceBelow(1500, 300, windows)?.y).toBe(1040);
+    const ledges = w.ledgeSurfaces([ledge(topId('a'), 'windowTop', 'a', 600, 400, 900)]);
+    expect(ledges).toHaveLength(1);
+    expect(ledges[0]).toMatchObject({ kind: 'ledge', surfaceId: topId('a'), surfaceKind: 'windowTop', ownerId: 'a', y: 600, landX0: 400, landX1: 900 });
+    // Window tops: the stand range is inset by a quarter body width (84 px at 1x).
+    expect(ledges[0]?.x0).toBe(400 + 21);
+    expect(w.surfaceBelow(500, 300, ledges)?.surface.surfaceId).toBe(topId('a'));
+    expect(w.surfaceBelow(500, 700, ledges)?.surface.kind).toBe('floor');
+    expect(w.surfaceBelow(1500, 300, ledges)?.y).toBe(1040);
   });
 
-  it('rejects window tops that are too narrow, too close to the top or to the floor', () => {
+  it('rejects ledges that are too narrow, too close to the top or to the floor, off screen, malformed or not horizontal', () => {
     const w = new WorldModel(SINGLE, 1, true);
-    const s = w.windowSurfaces([
-      { windowId: 'narrow', y: 500, x0: 100, x1: 150 },
-      { windowId: 'top', y: 10, x0: 100, x1: 900 },
-      { windowId: 'floor', y: 1030, x0: 100, x1: 900 },
-      { windowId: 'off', y: 500, x0: 4000, x1: 4800 },
-      { windowId: 'nan', y: Number.NaN, x0: 100, x1: 900 },
-      { windowId: 'ok', y: 500, x0: 100, x1: 900 },
+    const s = w.ledgeSurfaces([
+      ledge(topId('narrow'), 'windowTop', 'narrow', 500, 100, 150),
+      ledge(topId('top'), 'windowTop', 'top', 10, 100, 900),
+      ledge(topId('floor'), 'windowTop', 'floor', 1030, 100, 900),
+      ledge(topId('off'), 'windowTop', 'off', 500, 4000, 4800),
+      ledge(topId('nan'), 'windowTop', 'nan', Number.NaN, 100, 900),
+      ledge(taskbarId('top'), 'taskbar', 'tb', 600, 0, 1920, { edge: 'top' }),
+      ledge(topId('ok'), 'windowTop', 'ok', 500, 100, 900),
+      ledge(topId('ok'), 'windowTop', 'dup', 400, 100, 900),
     ]);
-    expect(s.map((x) => x.windowId)).toEqual(['ok']);
+    expect(s.map((x) => x.surfaceId)).toEqual([topId('ok')]);
+  });
+
+  it('keeps a bottom taskbar just above the floor (which a window top that low is not), and spans it like a floor', () => {
+    const w = new WorldModel(world(display('1', 0, 0, 1920, 1200, { primary: true })), 1, true);
+    const s = w.ledgeSurfaces([ledge(taskbarId('t'), 'taskbar', 't', 1139, 0, 1920, { edge: 'bottom' }), ledge(topId('low'), 'windowTop', 'low', 1170, 100, 900)]);
+    expect(s.map((x) => x.surfaceKind)).toEqual(['taskbar']);
+    expect(s[0]).toMatchObject({ x0: 42, x1: 1920 - 42 });
+    // A docked taskbar below the work area is the floor already.
+    expect(w.ledgeSurfaces([ledge(taskbarId('t'), 'taskbar', 't', 1199, 0, 1920, { edge: 'bottom' })])).toEqual([]);
+  });
+
+  it('turns window sides into climbable walls on their outside, with room beside them', () => {
+    const w = new WorldModel(SINGLE, 1, true);
+    const tracks = w.wallTracks([
+      wall('a', 'left', 600, 300, 900),
+      wall('a', 'right', 1200, 300, 900),
+      // Flush with the screen edge: no room to hang beside it.
+      wall('b', 'left', 0, 300, 900),
+      // Too short to climb.
+      wall('c', 'right', 1200, 300, 340),
+    ]);
+    expect(tracks.map((t) => t.key)).toEqual([sideId('a', 'left'), sideId('a', 'right')]);
+    const [left, right] = tracks;
+    expect(left).toMatchObject({ x: 600, side: 'left', facing: 1, topLedgeId: topId('a'), yBottom: 900 });
+    expect(right).toMatchObject({ x: 1200, side: 'right', facing: -1 });
+    // The cat stands outside the window before climbing, and its head peeks over the corner at the top.
+    expect(left?.standX).toBeLessThan(600);
+    expect(right?.standX).toBeGreaterThan(1200);
+    expect(left?.yTop).toBeGreaterThan(300);
+    expect(left?.yTop).toBeLessThan(300 + 84);
+    // A wall reaching below the floor ends at the floor.
+    expect(w.wallTrack(wall('d', 'left', 600, 300, 2000))?.yBottom).toBe(1040);
   });
 
   it('falls back to a default display for an empty world', () => {

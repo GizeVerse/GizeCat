@@ -200,6 +200,16 @@ async function runProbe({ BrowserWindow, screen, w3, koffi }) {
   const SWP_QUIET = 0x1 | 0x2 | 0x4 | 0x10; // NOSIZE | NOMOVE | NOZORDER | NOACTIVATE
   const SWP_SHOWWINDOW = 0x40;
   const SWP_HIDEWINDOW = 0x80;
+  // The overlay below mirrors the app (ADR 0002 §2): NonRudeHWND before showInactive(), removed
+  // before destroy, or Windows treats it as a fullscreen app and drops the taskbar's topmost style.
+  const SetPropW = user32.func('int __stdcall SetPropW(void *h, const char16_t *name, intptr_t data)');
+  const RemovePropW = user32.func('intptr_t __stdcall RemovePropW(void *h, const char16_t *name)');
+  const FindWindowW = user32.func('void * __stdcall FindWindowW(const char16_t *cls, const char16_t *title)');
+  const GetWindowLongPtrW = user32.func('intptr_t __stdcall GetWindowLongPtrW(void *h, int idx)');
+  const trayTopmost = () => {
+    const tray = FindWindowW('Shell_TrayWnd', null);
+    return tray ? (Number(GetWindowLongPtrW(tray, -20)) & 0x8) !== 0 : null;
+  };
   const latency = {};
 
   const primary = screen.getPrimaryDisplay();
@@ -297,8 +307,14 @@ async function runProbe({ BrowserWindow, screen, w3, koffi }) {
   overlay.setIgnoreMouseEvents(true);
   overlayId = overlay.getNativeWindowHandle().readBigUInt64LE(0).toString();
   await overlay.loadURL('data:text/html,<html style="background:transparent"><body></body></html>');
+  const trayTopmostBefore = trayTopmost();
+  const overlayHwnd = overlay.getNativeWindowHandle().readBigUInt64LE(0);
+  check('overlay.nonRudeSet', SetPropW(overlayHwnd, 'NonRudeHWND', 1) !== 0);
   overlay.showInactive();
   await sleep(800);
+  // null: no taskbar; false before the overlay: something else fullscreen in front (not ours to judge).
+  if (trayTopmostBefore === true) check('overlay.taskbarKeepsTopmost', trayTopmost() === true);
+  else notes.taskbarTopmostBeforeOverlay = trayTopmostBefore;
   const waPx = screen.dipToScreenRect(null, wa);
   const probePoint = { x: waPx.x + Math.floor(waPx.width / 2), y: waPx.y + Math.floor(waPx.height / 2) };
   const hit = apiOwn.windowIdAtPoint(probePoint);
@@ -310,6 +326,7 @@ async function runProbe({ BrowserWindow, screen, w3, koffi }) {
   check('overlay.notListedAsAppWindow', !apiOwn.listAppWindows().some((w) => w.id === overlayId));
   notes.isExcludedAtThroughOverlay = typeof trackerDefault.isExcludedAt(probePoint) === 'boolean' ? (apiDefault.windowIdAtPoint(probePoint) === null ? 'fail-closed (unresolved)' : 'resolved underlying window') : 'error';
   check('overlay.clickThroughNotAnOccluder', !(apiDefault.listOccluders() || []).some((o) => o.id === overlayId));
+  check('overlay.nonRudeRemoved', Number(RemovePropW(overlayHwnd, 'NonRudeHWND')) === 1);
   overlay.destroy();
 
   // 8b. a small overlay-style window that is hit-testable (like the cat overlay while the

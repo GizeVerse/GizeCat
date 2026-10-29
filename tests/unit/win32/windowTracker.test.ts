@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SimEvent } from '../../../src/shared/sim';
 import type { DisplayGeometry, WorldGeometry } from '../../../src/shared/world';
-import { createWindowTracker } from '../../../src/main/win32/windowTracker';
+import { createWindowTracker, type WindowChange } from '../../../src/main/win32/windowTracker';
 import { createUnavailableWin32Api } from '../../../src/main/win32/win32Api';
 import { createTestLogger, FakeExtendedWin32Api, FakeWin32Api, rect, win } from './fakes';
 
@@ -538,5 +538,99 @@ describe('private windows in window events and platforms', () => {
     const { tracker } = setup(api);
     tracker.start();
     expect(tracker.getPlatforms(0)).toEqual([{ windowId: 'b', y: 300, x0: 100, x1: 300 }]);
+  });
+});
+
+describe('change notices for incremental consumers (surface provider)', () => {
+  const label = (c: WindowChange): string => (c.kind === 'window' ? `${c.id}:${c.change}` : c.kind);
+
+  it('notices raw events at once, settled window changes, z-order changes and start/stop', () => {
+    const api = new FakeWin32Api().add(win('1', rect(0, 0, 800, 600))).add(win('2', rect(900, 0, 800, 600)));
+    const { tracker, run } = setup(api);
+    const seen: WindowChange[] = [];
+    const off = tracker.onChange((c) => seen.push(c));
+    tracker.start();
+    expect(tracker.running).toBe(true);
+    expect(seen.map(label)).toEqual(['all']);
+    seen.length = 0;
+
+    api.fire('moveStart', '1', 5);
+    tracker.drainEvents();
+    // Stamped with the tracker's clock when ingested.
+    expect(seen).toEqual([{ kind: 'raw', id: '1', raw: 'moveStart', at: 1000 }]);
+    expect(tracker.isMoving('1')).toBe(true);
+    expect(tracker.isMoving('2')).toBe(false);
+    api.update('1', { rect: rect(40, 30, 800, 600) });
+    api.fire('moveEnd', '1', 6);
+    run(300);
+    expect(tracker.isMoving('1')).toBe(false);
+    expect(seen.filter((c) => c.kind === 'window').map(label)).toEqual(['1:updated']);
+    expect(tracker.windowInfo('1')?.rect).toEqual(rect(40, 30, 800, 600));
+    seen.length = 0;
+
+    api.update('2', { minimized: true });
+    api.fire('minimizeStart', '2', 7);
+    run(300);
+    expect(seen.map(label)).toEqual(['raw', '2:minimized']);
+    seen.length = 0;
+
+    api.foregroundId = '1';
+    api.fire('foreground', '1', 8);
+    // The safety-net foreground poll may extend the coalescing window once.
+    run(500);
+    expect(seen.filter((c) => c.kind === 'zorder')).toEqual([expect.objectContaining({ kind: 'zorder', id: '1' })]);
+    seen.length = 0;
+
+    api.remove('1');
+    api.fire('destroy', '1', 9);
+    run(300);
+    expect(seen.map(label)).toEqual(['raw', '1:closed']);
+    expect(tracker.windowInfo('1')).toBeNull();
+
+    seen.length = 0;
+    tracker.setExclusions(['x.exe'], []);
+    expect(seen.map(label)).toEqual(['all']);
+    tracker.stop();
+    expect(tracker.running).toBe(false);
+    expect(seen.map(label)).toEqual(['all', 'all']);
+    expect(tracker.listWindows(0)).toEqual([]);
+    off();
+    tracker.start();
+    expect(seen).toHaveLength(2);
+  });
+
+  it('notices a shown window and a restored one, and lists windows in z-order', () => {
+    const api = new FakeWin32Api().add(win('1', rect(0, 0, 800, 600)));
+    const { tracker, run } = setup(api);
+    tracker.start();
+    const seen: WindowChange[] = [];
+    tracker.onChange((c) => seen.push(c));
+    api.add(win('5', rect(100, 100, 400, 300)));
+    api.fire('show', '5', 1);
+    run(300);
+    expect(seen.filter((c) => c.kind === 'window').map(label)).toEqual(['5:shown']);
+    expect(tracker.listWindows(0).map((w) => w.id)).toEqual(['5', '1']);
+    api.update('5', { minimized: true });
+    api.fire('minimizeStart', '5', 2);
+    run(300);
+    seen.length = 0;
+    api.update('5', { minimized: false });
+    api.fire('minimizeEnd', '5', 3);
+    run(300);
+    expect(seen.filter((c) => c.kind === 'window').map(label)).toEqual(['5:restored']);
+  });
+
+  it('a throwing listener is reported and does not break tracking', () => {
+    const api = new FakeWin32Api().add(win('1', rect(0, 0, 800, 600)));
+    const { tracker, run, logger } = setup(api);
+    tracker.onChange(() => {
+      throw new Error('listener bug');
+    });
+    tracker.start();
+    api.update('1', { rect: rect(10, 10, 800, 600) });
+    api.fire('moveStart', '1');
+    api.fire('moveEnd', '1');
+    expect(types(run(300))).toEqual(['window.moveStart', 'window.moveEnd']);
+    expect(logger.entries.some((e) => e.level === 'warn' || e.level === 'error')).toBe(true);
   });
 });

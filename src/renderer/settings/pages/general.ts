@@ -16,7 +16,8 @@ const G = S.general;
  */
 export function launchStatusView(s: LoginItemStatus): { text: string; tone: NoteTone } {
   const L = G.launchStatus;
-  if (!s.writable) return { text: L.notAvailable, tone: 'info' };
+  // Main says why this build may not manage it (dev/portable build, path too long, switched off).
+  if (!s.writable) return { text: s.reason ?? L.notAvailable, tone: 'info' };
   if (s.disabledBy === 'windows') return { text: L.windowsDisabled, tone: 'warn' };
   if (s.enabled && s.active) return { text: L.active, tone: 'ok' };
   if (!s.enabled && !s.active) return { text: s.disabledBy === 'external' ? L.removedOutside : L.off, tone: 'info' };

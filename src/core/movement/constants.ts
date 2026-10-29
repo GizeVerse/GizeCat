@@ -62,8 +62,11 @@ export const MOVEMENT = {
   /** Easing speed toward a support the cat was lifted onto or lowered onto (and at least 1.5x the support's speed). */
   liftDip: 900,
   settleDip: 420,
-  /** A retracting taskbar sets the cat down without a fall when the surface below is at most this far, in body heights. */
-  settleMaxBodyHeights: 0.6,
+  /**
+   * A retracting taskbar (or a surface switched off) sets the cat down without a fall when the
+   * surface below is at most this far, in body heights: a typical taskbar (48 DIP) is a step down.
+   */
+  settleMaxBodyHeights: 1,
   /** Two ledges at the same height (within this) whose ends touch (within joinGapBodyLengths) are walk-connected. */
   walkJoinToleranceDip: 2,
   walkJoinGapBodyLengths: 0.3,
@@ -71,7 +74,8 @@ export const MOVEMENT = {
 
 /** Route effort weights (seconds of walking one leg is worth), before personality multipliers. */
 export const ROUTE_EFFORT = {
-  jumpBase: 0.9,
+  /** Per jump: a cat walks a few seconds along a joined ledge rather than hop down and back up. */
+  jumpBase: 1.4,
   jumpUpPerMax: 0.8,
   jumpDownPerMax: 0.3,
   jumpAcrossPerMax: 0.2,

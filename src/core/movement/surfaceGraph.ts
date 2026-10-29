@@ -69,6 +69,8 @@ export interface RouteParams {
   blockedNode: (n: GraphNode) => boolean;
   /** Edges that failed a precise check during this goal. */
   blockedEdge: (e: GraphEdge) => boolean;
+  /** Arrival points the cat may not use (a shared floor's off-limits stretch). */
+  blockedArrival?: (s: Surface, x: number) => boolean;
 }
 
 export const edgeId = (e: GraphEdge): string => `${e.kind}:${e.from}>${e.to}`;
@@ -135,6 +137,26 @@ export class SurfaceGraph {
    */
   update(world: WorldModel, ledges: readonly Surface[], walls: readonly WallTrack[]): void {
     this.updates++;
+    if (world === this.world && this.sameGeometry(ledges, walls)) {
+      // Nothing moved (the usual tick): refresh the payloads (velocity, focus, rest span), keep every edge.
+      this.prevYs.clear();
+      for (const l of ledges) {
+        const n = this.nodeMap.get(l.key);
+        if (!n) continue;
+        this.prevYs.set(l.key, l.y);
+        n.surface = l;
+      }
+      for (const w of walls) {
+        const up = this.nodeMap.get(upKey(w));
+        const down = this.nodeMap.get(downKey(w));
+        if (up) up.wall = w;
+        if (down) down.wall = w;
+      }
+      this.ledgeList = ledges;
+      this.wallList = walls;
+      this.lastChanged = 0;
+      return;
+    }
     this.prevYs.clear();
     for (const n of this.nodeMap.values()) if (n.kind === 'ledge' && n.surface) this.prevYs.set(n.key, n.surface.y);
     this.ledgeList = ledges;
@@ -188,6 +210,26 @@ export class SurfaceGraph {
       }
     }
     this.lastChanged = changed.length;
+  }
+
+  /** Same surfaces in the same order with exactly the same geometry as at the last update. */
+  private sameGeometry(ledges: readonly Surface[], walls: readonly WallTrack[]): boolean {
+    const pl = this.ledgeList;
+    const pw = this.wallList;
+    if (pl.length !== ledges.length || pw.length !== walls.length) return false;
+    for (let i = 0; i < ledges.length; i++) {
+      const a = pl[i] as Surface;
+      const b = ledges[i] as Surface;
+      if (a === b) continue;
+      if (a.key !== b.key || a.y !== b.y || a.x0 !== b.x0 || a.x1 !== b.x1 || a.landX0 !== b.landX0 || a.landX1 !== b.landX1 || a.phase !== b.phase || a.displayIds[0] !== b.displayIds[0]) return false;
+    }
+    for (let i = 0; i < walls.length; i++) {
+      const a = pw[i] as WallTrack;
+      const b = walls[i] as WallTrack;
+      if (a === b) continue;
+      if (a.key !== b.key || a.x !== b.x || a.yTop !== b.yTop || a.yBottom !== b.yBottom || a.standX !== b.standX || a.topLedgeId !== b.topLedgeId || a.phase !== b.phase || a.displayId !== b.displayId) return false;
+    }
+    return true;
   }
 
   /**
@@ -244,6 +286,7 @@ export class SurfaceGraph {
         if (!target || p.blockedNode(target)) continue;
         const fromX = node.wall ? node.wall.x : clamp(cur.x, e.fromLo, e.fromHi);
         const toX = e.toX ?? (target.surface ? clamp(fromX, target.surface.x0, target.surface.x1) : (target.wall?.x ?? fromX));
+        if (target.surface && p.blockedArrival?.(target.surface, toX)) continue;
         const walk = node.wall ? 0 : walkSec(fromX - cur.x);
         const cost = cur.cost + walk + e.effort * mult(e);
         const old = labels.get(e.to);
@@ -309,19 +352,29 @@ export class SurfaceGraph {
     return Math.abs(x - w.x) <= bw * 1.25 ? x : null;
   }
 
+  /**
+   * Two ledges at the same height whose edges overlap or touch (within a small gap) are
+   * walked across. Floors join each other in the world model and are never at a ledge's
+   * height. The crossing stretch is where the two edges meet (it may lie in the end insets
+   * of the stand ranges; the cat walks out to it, see Mover 'cross').
+   */
   private walkEdge(world: WorldModel, a: GraphNode, b: GraphNode): GraphEdge | null {
     const sa = a.surface as Surface;
     const sb = b.surface as Surface;
-    if (sa.kind === 'floor' && sb.kind === 'floor') return null;
+    if (sa.kind === 'floor' || sb.kind === 'floor') return null;
     if (sb.phase === 'leaving') return null;
     const scale = world.scaleAt({ x: (sa.x0 + sa.x1) / 2, y: sa.y });
     const gap = world.bodyWidth(scale) * MOVEMENT.walkJoinGapBodyLengths;
-    const lo = Math.max(sa.x0, sb.x0 - gap);
-    const hi = Math.min(sa.x1, sb.x1 + gap);
+    const lo = Math.max(sa.landX0, sb.landX0 - gap);
+    const hi = Math.min(sa.landX1, sb.landX1 + gap);
     if (lo > hi) return null;
-    const mid = (lo + hi) / 2;
-    if (Math.abs(world.yAt(sa, mid) - world.yAt(sb, clamp(mid, sb.x0, sb.x1))) > MOVEMENT.walkJoinToleranceDip * scale) return null;
-    return { kind: 'walk', from: a.key, to: b.key, fromLo: lo, fromHi: hi, toX: null, effort: ROUTE_EFFORT.walkJoin, effortKind: 'walk' };
+    if (Math.abs(sa.y - sb.y) > MOVEMENT.walkJoinToleranceDip * scale) return null;
+    // Cross where the two meet: inside the overlap, or at the end of `sa` facing `sb`.
+    const cross0 = Math.max(lo, Math.min(sb.landX0, sa.landX1));
+    const cross1 = Math.min(hi, Math.max(sb.landX1, sa.landX0));
+    const fromLo = Math.min(cross0, cross1);
+    const fromHi = Math.max(cross0, cross1);
+    return { kind: 'walk', from: a.key, to: b.key, fromLo, fromHi, toX: null, effort: ROUTE_EFFORT.walkJoin, effortKind: 'walk' };
   }
 
   private jumpEdge(world: WorldModel, a: GraphNode, b: GraphNode): GraphEdge | null {

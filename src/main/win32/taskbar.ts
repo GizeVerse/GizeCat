@@ -25,6 +25,7 @@ import {
   edgeSign,
   fromRect,
   inferEdge,
+  isHorizontalEdge,
   onScreenExtent,
   rawContains,
   rawEqual,
@@ -37,7 +38,7 @@ import {
   visibleEdgeAt,
   workAreaReachesEdge,
 } from './taskbar/geometry';
-import { TaskbarMotion, type MotionSnapshot, type TaskbarPhase } from './taskbar/motion';
+import { DEFAULT_MOTION_CONFIG, TaskbarMotion, type MotionSnapshot, type TaskbarPhase } from './taskbar/motion';
 import { loadTaskbarNative, SECONDARY_TRAY_CLASS, TRAY_CLASS, type TaskbarNative } from './taskbar/taskbarNative';
 
 export type { TaskbarNative } from './taskbar/taskbarNative';
@@ -76,7 +77,11 @@ export interface TaskbarTrackerHandle extends TaskbarTracker {
 }
 
 export const TASKBAR_RECONCILE_MS = 10_000;
-/** At most one taskbar.shown/hidden event per taskbar per this interval; flips that revert within it emit nothing. */
+/**
+ * Flapping guard: at most one taskbar.shown/hidden event per taskbar per this interval. A flip
+ * that reverts within the interval after the previous event emits nothing; one that persists is
+ * reported on the first sample after the interval. A vanished window is reported at once.
+ */
 export const TASKBAR_EVENT_DEBOUNCE_MS = 250;
 /** A ledge exists while at least this share of the taskbar's thickness is on screen. */
 export const TASKBAR_LEDGE_MIN_FRACTION = 0.5;
@@ -104,8 +109,11 @@ interface Entry {
   primary: boolean;
   monitor: RawRect;
   work: RawRect;
-  /** 'window': MonitorFromWindow; 'appbar': the display holding the docked ABM rect; 'kept': previous attribution. */
-  monitorSource: 'window' | 'appbar' | 'kept';
+  /**
+   * 'window': MonitorFromWindow; 'appbar': the display holding the docked ABM rect; 'kept': previous
+   * attribution; 'geometry': the display on which the rect reads as an auto-hidden taskbar.
+   */
+  monitorSource: 'window' | 'appbar' | 'kept' | 'geometry';
   displayId: string | null;
   scale: number;
   edge: TaskbarEdge;
@@ -245,11 +253,52 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
     return !world || world.displays.some((d) => rawEqual(fromRect(d.boundsPx), monitor, MONITOR_MATCH_TOLERANCE_PX));
   }
 
+  /** `rect` lies fully on a display other than `monitor`. */
+  function onAnotherDisplay(rect: RawRect, monitor: RawRect): boolean {
+    if (!world) return false;
+    return world.displays.some((d) => {
+      const b = fromRect(d.boundsPx);
+      return !rawEqual(b, monitor, MONITOR_MATCH_TOLERANCE_PX) && rawContains(b, rect);
+    });
+  }
+
+  /** `rect` overlaps `monitor` or lies within the match tolerance of it. */
+  function touches(rect: RawRect, monitor: RawRect): boolean {
+    const t = MONITOR_MATCH_TOLERANCE_PX;
+    return rawOverlapArea(rect, { left: monitor.left - t, top: monitor.top - t, right: monitor.right + t, bottom: monitor.bottom + t }) > 0;
+  }
+
+  /**
+   * The one display on which `rect` reads as an auto-hidden taskbar: only a thin strip of it lies
+   * on the display, along one side, and the rest sticks out past that side. A taskbar revealed on
+   * a neighbouring display would lie fully on it instead, so for a rect straddling two displays
+   * this is the steady-state reading. Null when no display (or more than one) fits.
+   */
+  function hiddenOwner(rect: RawRect): DisplayGeometry | null {
+    if (!world) return null;
+    let found: DisplayGeometry | null = null;
+    for (const d of world.displays) {
+      const b = fromRect(d.boundsPx);
+      if (rawOverlapArea(b, rect) === 0) continue;
+      const edge = inferEdge(rect, b);
+      const thickness = thicknessOf(rect, edge);
+      const extent = onScreenExtent(rect, b, edge, thickness);
+      const [s0, s1] = spanOnMonitor(rect, b, edge);
+      const along = isHorizontalEdge(edge) ? rawWidth(rect) : rawHeight(rect);
+      const thin = extent > 0 && extent <= Math.max(DEFAULT_MOTION_CONFIG.hiddenPx, DEFAULT_MOTION_CONFIG.hiddenFraction * thickness);
+      if (!thin || s1 - s0 < along - MONITOR_MATCH_TOLERANCE_PX) continue;
+      if (found) return null;
+      found = d;
+    }
+    return found;
+  }
+
   /**
    * The monitor a taskbar belongs to. An auto-hidden taskbar is mostly outside its monitor, so
    * where another monitor adjoins that side MonitorFromWindow picks the neighbour: the primary's
-   * docked ABM rect (valid while hidden) decides for it, and a secondary keeps the monitor it
-   * was attributed to earlier while its rect is not fully on the one MonitorFromWindow reports.
+   * docked ABM rect (valid while hidden) decides for it; a secondary keeps the monitor it was
+   * attributed to earlier while its rect is not fully on the one MonitorFromWindow reports, and is
+   * otherwise attributed by the hidden-taskbar reading of its rect (hiddenOwner).
    */
   function attribute(
     rect: RawRect,
@@ -265,12 +314,17 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
         return { monitor: bounds, work: fromRect(d.workAreaPx), source: 'appbar' };
       }
     }
-    if (mfw) {
-      if (existing && !rawEqual(existing.monitor, mfw.monitor) && !rawContains(mfw.monitor, rect) && monitorExists(existing.monitor)) {
-        return { monitor: existing.monitor, work: existing.work, source: 'kept' };
-      }
-      return { monitor: mfw.monitor, work: mfw.work, source: 'window' };
+    if (mfw && rawContains(mfw.monitor, rect)) return { monitor: mfw.monitor, work: mfw.work, source: 'window' };
+    if (existing && (!mfw || !rawEqual(existing.monitor, mfw.monitor)) && monitorExists(existing.monitor) && touches(rect, existing.monitor)) {
+      return { monitor: existing.monitor, work: existing.work, source: 'kept' };
     }
+    const owner = hiddenOwner(rect);
+    if (owner) {
+      const bounds = fromRect(owner.boundsPx);
+      if (mfw && rawEqual(mfw.monitor, bounds, MONITOR_MATCH_TOLERANCE_PX)) return { monitor: mfw.monitor, work: mfw.work, source: 'window' };
+      return { monitor: bounds, work: fromRect(owner.workAreaPx), source: 'geometry' };
+    }
+    if (mfw) return { monitor: mfw.monitor, work: mfw.work, source: 'window' };
     return existing ? { monitor: existing.monitor, work: existing.work, source: 'kept' } : null;
   }
 
@@ -439,8 +493,9 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
       e.rect = rect;
       e.visible = visible;
       e.validatedAt = now;
-      if (inferEdge(rect, e.monitor) !== e.edge) {
-        // Moved to another side (or another monitor): rediscover; keep the old state meanwhile.
+      if (inferEdge(rect, e.monitor) !== e.edge || (rawOverlapArea(rect, e.monitor) === 0 && onAnotherDisplay(rect, e.monitor))) {
+        // Moved to another side, or fully onto another monitor (moved there, or a misattributed
+        // hidden taskbar now revealed on its own monitor): rediscover; keep the old state meanwhile.
         forced ??= 'geometry-changed';
         continue;
       }

@@ -3,7 +3,7 @@ import type { BehaviorState } from '../../../../src/shared/cat';
 import type { AiReaction } from '../../../../src/shared/perception';
 import type { SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
-import { callCat, display, DUAL_MIXED, Harness, settingsWith, WAKE_MS, world } from './fixtures';
+import { callCat, display, DUAL_MIXED, Harness, onWindowSurface, onWindowTop, settingsWith, WAKE_MS, world } from './fixtures';
 
 const MIN = 60_000;
 const catPoint = (o: SimOutput | null) => ({ x: o?.x ?? 0, y: (o?.y ?? 0) - 30 });
@@ -31,7 +31,7 @@ describe('window stimuli', () => {
       const rect = { x: Math.max(0, h.last!.x - 300), y: 760, width: 700, height: 280 };
       h.env.windows = { n: rect };
       const states = collect(h, 30_000, (_hh, i) => (i === 0 ? [{ type: 'window.shown', window: windowInfo('n', rect) }] : []));
-      if (states.includes('inspectingWindow')) perched ||= states.includes('jumping') && h.last!.support.kind === 'window';
+      if (states.includes('inspectingWindow')) perched ||= states.includes('jumping') && onWindowSurface(h.last!.support);
     }
     expect(perched).toBe(true);
   });
@@ -77,7 +77,7 @@ describe('window stimuli', () => {
     const rect = { x: Math.max(0, h.last!.x - 300), y: 800, width: 600, height: 240 };
     h.env.windows = { p: rect };
     callCat(h, { x: rect.x + 300, y: 700 });
-    expect(h.runUntil((o) => o.support.kind === 'window' && o.state === 'idle', 30_000)).toBe(true);
+    expect(h.runUntil((o) => onWindowTop(o.support) && o.state === 'idle', 30_000)).toBe(true);
     h.env.windows = {};
     const states = collect(h, 4000);
     expect(states).toContain('falling');

@@ -37,10 +37,13 @@ import { createCatStore } from './store/catStore';
 import { createJsonStore, type JsonReadStatus } from './store/jsonStore';
 import { createSecretFile, createSecretStore } from './store/secretStore';
 import type { SettingsStore } from './store/settingsStore';
+import { createSurfaceProvider } from './surfaces';
 import { installTestHooks } from './testHooks';
 import { createTrayController, toMenuTemplate } from './tray';
+import { createTabStripService, resolveUiaHelperPath } from './uia';
 import { createActivityMonitor, createWin32Api, createWindowTracker, sameWindowExclusions, windowExclusionsFor } from './win32';
 import { createLoginItemRegistry } from './win32/registry';
+import { createTaskbarTracker } from './win32/taskbar';
 
 export interface AppBootstrap {
   logger: RootLogger;
@@ -60,6 +63,8 @@ export interface RunningApp {
 
 const VIEW_STATE_INTERVAL_MS = 250;
 const QUIT_ANIMATION_MS = 1500;
+/** Longest the quit waits for the UIA helper to exit. */
+const TAB_STRIP_DISPOSE_MS = 2500;
 
 function offStatus(settings: Settings, reason: string): PerceptionStatus {
   return {
@@ -122,6 +127,27 @@ export function startApp(boot: AppBootstrap): RunningApp {
     tracker.setExclusions(ex.processes, ex.titlePatterns);
   };
   attempt(log, 'window exclusions', () => applyWindowExclusions(initial));
+
+  // v1.1 environment surfaces: taskbars (sampled from the host's cursor poll), window tops and
+  // sides, and browser tab strips through the UIA helper (fails closed to 'unavailable').
+  const surfaceClock = (): number => performance.now();
+  const taskbars = createTaskbarTracker(logger, { now: surfaceClock, world: display.world });
+  const tabStrips = (() => {
+    try {
+      return createTabStripService({
+        logger: logger.child('tab-strips'),
+        settings: initial,
+        helperPath: resolveUiaHelperPath({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appRoot }),
+        describeWindow: (id) => win32.describeWindow(id),
+        displayAt: (p) => display.displayAt(p),
+        now: surfaceClock,
+      });
+    } catch (err) {
+      log.error('tab-strip service unavailable', { error: err });
+      return null;
+    }
+  })();
+  const surfaces = createSurfaceProvider({ logger, tracker, win32, taskbars, tabStrips, display, settings: initial, now: surfaceClock });
 
   const sim = createCatSim({ persisted: catLoad.cat, settings: initial, world: simWorld(display.world), now: 0, random: Math.random, wallClock: Date.now });
   const registry = createWindowRegistry();
@@ -194,6 +220,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       displayCount: display.world.displays.length,
       perception: perception ? perception.status : offStatus(s, 'Screen analysis is unavailable.'),
       windowAwareness: tracker.mode,
+      surfaces: surfaces.status,
       loginItem: loginItem.status(),
       shortcutRegistered: shortcuts.registered,
       startedAt: boot.startedAt,
@@ -278,6 +305,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
         host: h.debug(),
         overlays: overlays.info().map(({ hwnd: _hwnd, ...o }) => o),
         windowTracker: tracker.debugInfo(),
+        surfaces: surfaces.debugInfo(),
         loginItem: loginItem.debugInfo(),
         win32Available: win32.available,
         encryptionAvailable: secrets.encryptionAvailable,
@@ -344,6 +372,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
       menu.popup({ window: win });
     },
     onSessionEnd: () => sessionEnd.notify('overlay'),
+    // Explorer restarted: new taskbar window handles.
+    onTaskbarCreated: () => taskbars.rediscover('taskbar-created'),
     isLeftButtonDown: () => (win32.available ? win32.isLeftButtonDown() : null),
     clock: () => performance.now(),
   });
@@ -392,6 +422,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
     getSettings: () => settings.get(),
     cursorFallback,
     timeScale: boot.timeScale,
+    surfaces,
+    taskbars,
     onStatusChange: () => {
       const h = host;
       if (h) {
@@ -405,6 +437,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
 
   const offPerceptionStatus = perception?.onStatusChange(() => refreshUi()) ?? null;
   const offDisplay = display.onChange((world) => {
+    attempt(log, 'taskbar world', () => taskbars.setWorld(world));
     host?.onDisplayChanged(world);
     refreshUi();
   });
@@ -420,6 +453,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
       attempt(log, 'window exclusions', () => applyWindowExclusions(next));
     }
     host?.updateSettings(next);
+    // Also forwards to the tab-strip service (toggle, cat size).
+    attempt(log, 'surface settings', () => surfaces.updateSettings(next));
     attempt(log, 'perception settings', () => perception?.updateSettings(next));
     attempt(log, 'overlay settings', () => overlays.applySettings(next, prev));
     logger.setLevel(next.diagnostics.logLevel);
@@ -474,6 +509,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
   async function disposeAll(): Promise<void> {
     const steps: Array<[string, () => void]> = [
       ['host', () => host?.stop()],
+      ['taskbar tracker', () => taskbars.stop()],
+      ['surface provider', () => void surfaces.dispose()],
       ['resource monitor', () => resources.stop()],
       ['shortcuts', () => shortcuts.dispose()],
       ['ipc', () => ipc.dispose()],
@@ -503,6 +540,17 @@ export function startApp(boot: AppBootstrap): RunningApp {
       ['win32', () => win32.dispose()],
     ];
     for (const [what, fn] of steps) attempt(log, `dispose ${what}`, fn);
+    // The UIA helper is asked to quit (and killed after its grace period); never block quit on it.
+    if (tabStrips) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([tabStrips.dispose(), new Promise<void>((resolve) => (timer = setTimeout(resolve, TAB_STRIP_DISPOSE_MS)))]);
+      } catch (err) {
+        log.error('dispose tab-strip service failed', { error: err });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     log.info('shutdown complete');
     await logger.dispose();
   }
@@ -536,6 +584,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
     getRecentLogs: (limit) => logger.recent(limit),
     getDiagnosticsReport: buildReport,
     injectEvent: (ev) => requireHost().enqueue(ev),
+    getSurfaces: () => requireHost().lastSurfaces,
+    getSurfaceStatus: () => surfaces.status,
+    injectSurfaces: (list) => surfaces.injectSurfaces(list, surfaceClock()),
     forceInteractive: (v) => overlays.forceInteractive(v),
     setTimeScale: (s) => requireHost().setTimeScale(s),
     runAction: (a) => actions.run(a),
@@ -549,6 +600,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
   // starts hidden or paused never appears or moves first.
   const plan = startupPlan(initial.general, boot.flags);
   attempt(log, 'window tracker start', () => tracker.start());
+  attempt(log, 'taskbar tracker start', () => taskbars.start());
+  // Lazy: the UIA helper is spawned only once a browser window is of interest.
+  attempt(log, 'tab-strip service start', () => tabStrips?.start());
   attempt(log, 'activity monitor start', () => activity.start());
   host.updateSettings(initial);
   applyViewState(host, plan.view);

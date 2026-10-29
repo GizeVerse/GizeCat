@@ -261,6 +261,15 @@ describe('status', () => {
   it('says a dev or portable build cannot manage it', () => {
     const s = loginItemStatus(base, windowsState('absent', 'absent'), { ...target, writable: false });
     expect(s).toMatchObject({ writable: false, active: false, showNotice: false, reason: expect.stringMatching(/Not available in this build/) });
+    const dev = loginItemStatus(base, windowsState('stale', 'absent'), { ...target, writable: false, blockedBy: ['unpackaged', 'no-uninstaller', 'command-too-long'] });
+    expect(dev.reason).toMatch(/development or portable.*another copy/);
+  });
+
+  it('an installed copy blocked only by the path length or the environment switch says exactly that', () => {
+    const long = loginItemStatus(base, windowsState('absent', 'absent'), { ...target, writable: false, blockedBy: ['command-too-long'] });
+    expect(long.reason).toMatch(/path is too long .*260 characters/);
+    const off = loginItemStatus(base, windowsState('ours', 'absent'), { ...target, writable: false, blockedBy: ['env-off', 'command-too-long'] });
+    expect(off).toMatchObject({ active: true, reason: expect.stringMatching(/DESKTOP_CAT_LOGIN_ITEM=off/) });
   });
 });
 

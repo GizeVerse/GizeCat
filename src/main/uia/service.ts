@@ -36,7 +36,11 @@ export interface TabStripServiceOptions {
   idleShutdownMs: number;
   /** Window descriptions (rect, maximized, exclusion) are re-read at most this often. */
   describeIntervalMs: number;
-  /** Max age of the frame used by surfaces() for windows of interest. */
+  /**
+   * Max age of the window description used by surfaces() for windows of interest. The surface
+   * provider shifts strips with their window between reads, so this only bounds how stale the
+   * exclusion/maximized verdict and the reported position may get.
+   */
   liveDescribeMs: number;
   /** At most one tabs.changed per window per this period (later changes are merged). */
   eventDebounceMs: number;
@@ -63,7 +67,7 @@ export const DEFAULT_TAB_STRIP_OPTIONS: TabStripServiceOptions = {
   pollIntervalMs: 1000,
   idleShutdownMs: 60_000,
   describeIntervalMs: 250,
-  liveDescribeMs: 16,
+  liveDescribeMs: 50,
   eventDebounceMs: 300,
   refreshGapMs: 100,
   maxWindows: 8,
@@ -129,9 +133,11 @@ interface Tracked {
   pendingChange: { change: Change; dueAt: number } | null;
   lastEmitAt: number;
   segCache: { key: string; seg: TabStripSegment } | null;
+  /** Last surface reported for this window (reused while unchanged, so identities stay stable). */
+  surface: LedgeSurface | null;
 }
 
-export interface TabStripDebug {
+export type TabStripDebug = {
   status: SurfaceStatus['tabStrips'];
   reason: string | null;
   enabled: boolean;
@@ -156,13 +162,15 @@ export interface TabStripDebug {
   interested: number;
   withStrip: number;
   watched: number;
+  /** Strip requests sent / answered (ok or error) / failed (error answer or transport). */
   reads: number;
+  readsDone: number;
   readErrors: number;
   lastReadMs: number | null;
   eventsIn: { selected: number; structure: number };
   eventsOut: number;
   eventsDropped: number;
-}
+};
 
 const isBrowserCandidate = (info: WindowInfo): boolean =>
   TAB_STRIP_BROWSERS.includes(info.processName) && !info.excluded && !info.minimized && !info.fullscreen;
@@ -186,7 +194,25 @@ function toGeometry(s: WireStrip): StripGeometry {
 
 const tabStripEnabled = (s: Settings): boolean => !s.behavior.disabledBehaviors.includes('tabStrips');
 
-export type TabStripServiceImpl = TabStripService & { debugInfo(): TabStripDebug & Record<string, unknown> };
+const sameSpan = (a: { x0: number; x1: number } | null, b: { x0: number; x1: number } | null): boolean =>
+  a === b || (a !== null && b !== null && a.x0 === b.x0 && a.x1 === b.x1);
+
+/** Same reported surface apart from its validation time. */
+const sameSurface = (a: LedgeSurface, b: LedgeSurface): boolean =>
+  a.id === b.id &&
+  a.y === b.y &&
+  a.x0 === b.x0 &&
+  a.x1 === b.x1 &&
+  sameSpan(a.rest, b.rest) &&
+  a.focusX === b.focusX &&
+  a.vx === b.vx &&
+  a.vy === b.vy &&
+  a.confidence === b.confidence &&
+  a.displayId === b.displayId &&
+  a.phase === b.phase;
+
+/** The contract with a typed debugInfo (still assignable to TabStripService). */
+export type TabStripServiceImpl = Omit<TabStripService, 'debugInfo'> & { debugInfo(): TabStripDebug };
 
 export function createTabStripService(deps: TabStripServiceDeps): TabStripServiceImpl {
   const o: TabStripServiceOptions = { ...DEFAULT_TAB_STRIP_OPTIONS, ...deps.options };
@@ -197,9 +223,9 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   let started = false;
   let enabled = tabStripEnabled(deps.settings);
   let catSize = deps.settings.appearance.size;
-  /** Not installed / not Windows: cannot be fixed at run time. */
+  /** Not installed / not Windows: cannot be fixed at run time. An injected spawner (tests) runs anywhere. */
   const permanentReason: string | null =
-    process.platform !== 'win32' ? 'tab strips need Windows' : deps.helperPath === null ? 'UI Automation helper not installed' : null;
+    deps.helperPath === null ? 'UI Automation helper not installed' : process.platform !== 'win32' && deps.spawnHelper === undefined ? 'tab strips need Windows' : null;
   let unavailableReason: string | null = permanentReason;
   let helperReady = false;
   let helperDpiMode: string | null = null;
@@ -211,9 +237,11 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const windows = new Map<string, Tracked>();
+  /** Last list returned by surfaces(); returned again (same identity) while nothing changed. */
+  let published: readonly LedgeSurface[] = [];
   const rejected = new Map<string, number>();
   const queue: SimEvent[] = [];
-  const stats = { reads: 0, readErrors: 0, lastReadMs: null as number | null, eventsIn: { selected: 0, structure: 0 }, eventsOut: 0, eventsDropped: 0 };
+  const stats = { reads: 0, readsDone: 0, readErrors: 0, lastReadMs: null as number | null, eventsIn: { selected: 0, structure: 0 }, eventsOut: 0, eventsDropped: 0 };
 
   const client: UiaHelperClient | null =
     deps.helperPath === null
@@ -307,6 +335,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       pendingChange: null,
       lastEmitAt: Number.NEGATIVE_INFINITY,
       segCache: null,
+      surface: null,
     };
     windows.set(id, t);
     return t;
@@ -484,6 +513,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
 
   function onStrip(t: Tracked, r: HelperResponse, hint: boolean): void {
     t.inFlight = false;
+    stats.readsDone++;
     if (windows.get(t.id) !== t || !active()) return;
     const at = now();
     if (!r.ok || r.strip === undefined) {
@@ -601,6 +631,12 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     client?.quit();
   }
 
+  function publish(list: LedgeSurface[]): readonly LedgeSurface[] {
+    if (list.length === published.length && list.every((s, i) => s === published[i])) return published;
+    published = list;
+    return published;
+  }
+
   function armTimer(): void {
     if (timer !== null || o.autoPumpMs <= 0) return;
     timer = setInterval(() => pump(now()), o.autoPumpMs);
@@ -677,7 +713,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     },
 
     surfaces(): readonly LedgeSurface[] {
-      if (!active()) return [];
+      if (!active()) return publish([]);
       const at = now();
       const out: LedgeSurface[] = [];
       for (const t of [...windows.values()]) {
@@ -690,7 +726,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         const sizeMatches = t.strip.frameWidth === t.info.rect.width && t.strip.frameHeight === t.info.rect.height;
         const age = at - t.stripAt;
         const confidence = !sizeMatches ? 0.5 : age <= 2 * o.pollIntervalMs ? 1 : age <= 30_000 ? 0.85 : 0.7;
-        out.push({
+        const next: LedgeSurface = {
           id: tabStripSurfaceId(t.id),
           kind: 'tabStrip',
           ownerId: t.id,
@@ -699,7 +735,9 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
           vx: t.vx,
           vy: t.vy,
           confidence,
-          validatedAt: t.infoAt,
+          // Time the reported geometry was measured (window rect + strip read); unchanged
+          // geometry keeps its object and timestamp (the surface provider keys its shift on it).
+          validatedAt: Math.max(t.infoAt, t.stripAt),
           excluded: false,
           orientation: 'ledge',
           y: seg.y,
@@ -707,9 +745,13 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
           x1: seg.x1,
           rest: seg.rest,
           focusX: seg.focusX,
-        });
+        };
+        const prev = t.surface;
+        const s = prev !== null && sameSurface(prev, next) ? prev : next;
+        t.surface = s;
+        out.push(s);
       }
-      return out;
+      return publish(out);
     },
 
     drainEvents(): SimEvent[] {
@@ -752,6 +794,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         withStrip,
         watched: watchedKey === '' ? 0 : watchedKey.split(',').length,
         reads: stats.reads,
+        readsDone: stats.readsDone,
         readErrors: stats.readErrors,
         lastReadMs: stats.lastReadMs,
         eventsIn: { ...stats.eventsIn },

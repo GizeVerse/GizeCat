@@ -18,7 +18,7 @@ function state(clip: AnimClip, t: number, extra: Partial<CatRenderState> = {}): 
     state: clip === 'sleep' ? 'sleeping' : 'idle',
     clip,
     clipStartedAt: 0,
-    speed: clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : 0,
+    speed: clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : clip === 'climb' ? 0.5 : 0,
     vy: clip === 'jump' ? -300 : clip === 'fall' ? 300 : 0,
     look: { x: 450, y: 250 },
     arousal: 0.3,

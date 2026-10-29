@@ -13,6 +13,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:dev": "node scripts/build.mjs --dev",
+    "build:uia": "node scripts/build-uia-helper.mjs",
     "start": "electron .",
     "dev": "node scripts/build.mjs --dev && electron . --dev",
     "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.web.json",

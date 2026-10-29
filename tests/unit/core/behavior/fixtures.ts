@@ -4,7 +4,8 @@ import type { PersistedCat } from '../../../../src/shared/catState';
 import type { Rect } from '../../../../src/shared/geometry';
 import type { Settings } from '../../../../src/shared/settings';
 import { defaultSettings } from '../../../../src/shared/settings';
-import type { SimEnv, SimEvent, SimOutput } from '../../../../src/shared/sim';
+import type { SimEnv, SimEvent, SimOutput, SimSupport } from '../../../../src/shared/sim';
+import type { LedgeSurface, Surface, SurfaceKind, TaskbarEdge, WallSurface } from '../../../../src/shared/surfaces';
 import type { DisplayGeometry, Platform, WorldGeometry } from '../../../../src/shared/world';
 import { createInstrumentedCatSim, mulberry32 } from '../../../../src/core/behavior';
 import type { DecisionView } from '../../../../src/core/behavior/decide';
@@ -41,7 +42,12 @@ export const DUAL_MIXED = world(
 export const DUAL_FLAT = world(display('1', 0, 0, 1920, 1080, { primary: true, taskbar: 40 }), display('2', 1920, 0, 1920, 1080, { taskbar: 40 }));
 
 export interface EnvOverrides extends Partial<Omit<SimEnv, 'now' | 'dt'>> {
+  /** Plain app windows: the fixture's provider turns them into window-top ledges and side walls. */
   windows?: Record<string, Rect | null>;
+  /** More surfaces (taskbars, tab strips) listed after the windows' and returned by getSurface. */
+  extraSurfaces?: Surface[];
+  /** Window sides are offered (the host only lists them while climbing is allowed). Default true. */
+  walls?: boolean;
 }
 
 export class Harness {
@@ -82,6 +88,8 @@ export class Harness {
   buildEnv(dt: number): SimEnv {
     const e = this.env;
     const windows = e.windows ?? {};
+    const surfaces = e.surfaces ?? [...surfacesFromWindows(windows, this.worldGeometry, { walls: e.walls ?? true, now: this.now }), ...(e.extraSurfaces ?? [])];
+    const byId = new Map(surfaces.map((s) => [s.id, s] as const));
     return {
       now: this.now,
       dt,
@@ -93,8 +101,8 @@ export class Harness {
       foreground: e.foreground ?? null,
       platforms: e.platforms ?? platformsFrom(windows),
       getWindowRect: e.getWindowRect ?? ((id: string) => windows[id] ?? null),
-      surfaces: e.surfaces ?? [],
-      getSurface: e.getSurface ?? (() => null),
+      surfaces,
+      getSurface: e.getSurface ?? ((id: string) => byId.get(id) ?? null),
       fullscreenDisplayIds: e.fullscreenDisplayIds ?? [],
       paused: e.paused ?? false,
       hidden: e.hidden ?? false,
@@ -103,8 +111,12 @@ export class Harness {
     };
   }
 
+  /** Ticks that delivered events (sim time and the events), for tests that attribute reactions to events. */
+  readonly delivered: { at: number; events: readonly SimEvent[] }[] = [];
+
   step(events: readonly SimEvent[] = [], dt = 33): SimOutput {
     this.now += dt;
+    if (events.length > 0) this.delivered.push({ at: this.now, events });
     const out = this.sim.tick(this.buildEnv(dt), events);
     if (this.keepOutputs) this.outputs.push(out);
     this.last = out;
@@ -155,11 +167,67 @@ export function commandsIgnored(h: Harness): number {
   return h.sim.debugInfo().commandsIgnored as number;
 }
 
-/** Window rects -> walkable top edges (no occlusion). */
+/** Window rects -> walkable top edges (no occlusion). Deprecated v1 env field. */
 export function platformsFrom(windows: Record<string, Rect | null>): Platform[] {
   const out: Platform[] = [];
   for (const [id, r] of Object.entries(windows)) if (r) out.push({ windowId: id, y: r.y, x0: r.x, x1: r.x + r.width });
   return out;
+}
+
+export const topId = (windowId: string): string => `windowTop:${windowId}`;
+export const sideId = (windowId: string, side: 'left' | 'right'): string => `windowSide:${windowId}:${side}`;
+export const stripId = (windowId: string): string => `tabStrip:${windowId}`;
+export const taskbarId = (hwnd: string): string => `taskbar:${hwnd}`;
+
+const BASE = { phase: 'stable' as const, vx: 0, vy: 0, confidence: 1, validatedAt: 0, excluded: false };
+
+export function ledge(id: string, kind: Exclude<SurfaceKind, 'windowSide'>, ownerId: string, y: number, x0: number, x1: number, extra: Partial<LedgeSurface> = {}): LedgeSurface {
+  return { ...BASE, id, kind, ownerId, displayId: null, orientation: 'ledge', y, x0, x1, rest: null, focusX: null, ...extra };
+}
+
+export function wall(windowId: string, side: 'left' | 'right', x: number, y0: number, y1: number, extra: Partial<WallSurface> = {}): WallSurface {
+  return { ...BASE, id: sideId(windowId, side), kind: 'windowSide', ownerId: windowId, displayId: null, orientation: 'wall', x, y0, y1, side, topLedgeId: topId(windowId), ...extra };
+}
+
+/** A docked taskbar ledge spanning one display: feet one pixel above its top edge. */
+export function taskbar(hwnd: string, d: DisplayGeometry, top: number, extra: Partial<LedgeSurface> & { edge?: TaskbarEdge } = {}): LedgeSurface {
+  return ledge(taskbarId(hwnd), 'taskbar', hwnd, top - 1, d.boundsPx.x, d.boundsPx.x + d.boundsPx.width, { displayId: d.id, edge: 'bottom', ...extra });
+}
+
+/** A browser tab strip on top of a window, with a resting span and the active tab's centre. */
+export function tabStrip(windowId: string, y: number, x0: number, x1: number, rest: { x0: number; x1: number } | null, focusX: number | null, extra: Partial<LedgeSurface> = {}): LedgeSurface {
+  return ledge(stripId(windowId), 'tabStrip', windowId, y, x0, x1, { rest, focusX, ...extra });
+}
+
+/**
+ * What the host's surface provider reports for plain app windows (no occlusion): each
+ * window's top edge and, while climbing is allowed, its two sides (pulling up onto the top).
+ * A window covering a whole work area (maximized) offers nothing.
+ */
+export function surfacesFromWindows(windows: Record<string, Rect | null>, geometry: WorldGeometry, opts: { walls?: boolean; now?: number } = {}): Surface[] {
+  const out: Surface[] = [];
+  for (const [id, r] of Object.entries(windows)) {
+    if (!r) continue;
+    const maximized = geometry.displays.some((d) => r.x <= d.workAreaPx.x && r.y <= d.workAreaPx.y && r.x + r.width >= d.workAreaPx.x + d.workAreaPx.width && r.y + r.height >= d.workAreaPx.y + d.workAreaPx.height);
+    if (maximized) continue;
+    const validatedAt = opts.now ?? 0;
+    out.push(ledge(topId(id), 'windowTop', id, r.y, r.x, r.x + r.width, { validatedAt }));
+    if (opts.walls ?? true) {
+      out.push(wall(id, 'left', r.x, r.y, r.y + r.height, { validatedAt }));
+      out.push(wall(id, 'right', r.x + r.width, r.y, r.y + r.height, { validatedAt }));
+    }
+  }
+  return out;
+}
+
+/** On some window surface (a window top, a tab strip or a window side). */
+export function onWindowSurface(s: SimSupport): boolean {
+  return s.kind === 'surface' && s.surfaceKind !== 'taskbar';
+}
+
+/** Standing on a window's top edge. */
+export function onWindowTop(s: SimSupport, windowId?: string): boolean {
+  return s.kind === 'surface' && s.surfaceKind === 'windowTop' && (windowId === undefined || s.surfaceId === topId(windowId));
 }
 
 export function settingsWith(patch: { [K in keyof Settings]?: Partial<Settings[K]> }): Settings {
@@ -196,6 +264,11 @@ export function decisionView(o: Partial<DecisionView> = {}): DecisionView {
     perchTarget: null,
     wanderTarget: { x: 1200, y: 1040 },
     cornerTarget: null,
+    typingIntensity: 0,
+    standingOn: 'floor',
+    climbTarget: null,
+    tabStripTarget: null,
+    edgeLook: null,
     surpriseReady: false,
     recentStates: [],
     current: 'idle',

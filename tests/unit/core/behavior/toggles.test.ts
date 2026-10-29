@@ -5,7 +5,7 @@ import type { SimEvent } from '../../../../src/shared/sim';
 import { defaultSettings } from '../../../../src/shared/settings';
 import type { DecisionView } from '../../../../src/core/behavior/decide';
 import { scoreCandidates } from '../../../../src/core/behavior/decide';
-import { Harness, settingsWith } from './fixtures';
+import { Harness, onWindowSurface, settingsWith } from './fixtures';
 
 const MIN = 60_000;
 
@@ -33,6 +33,11 @@ function view(disabled: ToggleableBehavior[]): DecisionView {
     perchTarget: { windowId: 'w', point: { x: 900, y: 800 } },
     wanderTarget: null,
     cornerTarget: null,
+    typingIntensity: 0,
+    standingOn: 'floor',
+    climbTarget: null,
+    tabStripTarget: null,
+    edgeLook: null,
     surpriseReady: false,
     recentStates: [],
     current: 'idle',
@@ -58,7 +63,7 @@ describe('window toggles', () => {
       let onWindow = false;
       h.run(60 * MIN, 100, (hh, i) => {
         if (hh.last!.state === 'inspectingWindow' && hh.sim.debugInfo().variant !== 'explore') inspected = true;
-        if (hh.last!.support.kind === 'window') onWindow = true;
+        if (onWindowSurface(hh.last!.support)) onWindow = true;
         const ev: SimEvent[] = [];
         if (i % 600 === 0) ev.push({ type: 'window.shown', window: { id: `n${i}`, rect: { x: 300, y: 200, width: 1200, height: 700 }, processName: 'a.exe', category: 'browser', minimized: false, maximized: false, fullscreen: false, excluded: false } });
         return ev;
@@ -74,6 +79,6 @@ describe('window toggles', () => {
     h.env.windows = { w: { x: 600, y: 820, width: 800, height: 220 } };
     h.keepOutputs = true;
     h.run(30 * MIN, 100);
-    expect(h.outputs.some((o) => o.support.kind === 'window')).toBe(false);
+    expect(h.outputs.some((o) => onWindowSurface(o.support))).toBe(false);
   });
 });

@@ -63,17 +63,30 @@ function Get-ReconcileLines {
   return @(Get-Content $log -Encoding utf8 | Where-Object { $_ -match '"m":"login item reconciled"' } | ForEach-Object { $_ | ConvertFrom-Json })
 }
 
-$started = New-Object System.Collections.Generic.List[int]
+function Get-LastReconcile {
+  $last = @(Get-ReconcileLines) | Select-Object -Last 1
+  if (-not $last) { return $null }
+  return [ordered]@{ rule = $last.d.rule; gate = @($last.d.gate); state = $last.d.state; ok = $last.d.ok }
+}
+# Native tools through Start-Process: under $ErrorActionPreference = 'Stop', Windows PowerShell
+# 5.1 turns a native command's redirected stderr into a terminating error.
+function Stop-Tree([int]$procId) {
+  $k = Start-Process -FilePath 'taskkill.exe' -ArgumentList @('/PID', "$procId", '/T', '/F') -WindowStyle Hidden -Wait -PassThru
+  return $k.ExitCode
+}
+
+$started = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 function Start-App([string]$exe) {
   # Real launch as a user would start it: no test mode; DESKTOP_CAT_LOGIN_ITEM must not be 'off'.
   $env:DESKTOP_CAT_USER_DATA = $userData
   Remove-Item Env:\DESKTOP_CAT_LOGIN_ITEM -ErrorAction SilentlyContinue
+  Remove-Item Env:\DESKTOP_CAT_TEST -ErrorAction SilentlyContinue
   $p = Start-Process -FilePath $exe -PassThru
-  $started.Add($p.Id)
+  $started.Add($p)
   return $p
 }
 function Stop-App($p) {
-  if ($p -and -not $p.HasExited) { & taskkill /PID $p.Id /T /F | Out-Null }
+  if ($p -and -not $p.HasExited) { $null = Stop-Tree $p.Id }
   if ($p) { $null = $p.WaitForExit(10000) }
   Start-Sleep -Milliseconds 800
 }
@@ -111,23 +124,38 @@ try {
   if ($key) {
     $props = Get-ItemProperty $key.PSPath
     $result.displayVersion = $props.DisplayVersion
-    $result.installLocationMatches = ($props.InstallLocation -eq $target)
+    # electron-builder 26 keeps InstallLocation under its own Software\<guid> key, not in the
+    # Uninstall entry, so the location is checked through the uninstaller path the entry runs.
+    $result.uninstallString = $props.UninstallString
+    $uninstallDir = if ([string]$props.UninstallString -match '^\s*"([^"]+)"') { Split-Path -Parent $Matches[1] } else { $null }
+    # Windows paths compare case-insensitively; a trailing backslash is not significant.
+    $result.installLocationMatches = ($null -ne $uninstallDir) -and ($uninstallDir.TrimEnd('\') -ieq $target.TrimEnd('\'))
   }
   $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Desktop Cat.lnk'
   $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Desktop Cat.lnk'
   $result.startMenuShortcut = Test-Path $startMenu
   $result.desktopShortcut = Test-Path $desktop
+  # The app's write gate requires the uninstaller next to the exe (UNINSTALLER_FILE in loginItem.ts).
+  $result.installedFiles = @(Get-ChildItem -LiteralPath $target -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+  # electron-builder: 'Uninstall <executableName>.exe' (uninstallerFileFor in loginItem.ts).
+  $result.uninstallerNextToExe = Test-Path -LiteralPath (Join-Path $target 'Uninstall DesktopCat.exe')
 
   if ($result.installedExe) {
     # Smoke run with DESKTOP_CAT_LOGIN_ITEM=off: an installed copy must still leave the registry alone.
-    $smoke = & node (Join-Path $root 'scripts\smoke-packaged.mjs') $exe
-    $result.smokeExitCode = $LASTEXITCODE
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $null = & node (Join-Path $root 'scripts\smoke-packaged.mjs') $exe 2>&1
+      $result.smokeExitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $eap }
     $result.smokeLeftRunAlone = ($null -eq (Get-RunText)) -and ($null -eq (Get-ApprovedHex))
 
     # 1. First start registers exactly "<target>\DesktopCat.exe" --launched-at-login, no StartupApproved value.
     $app = Start-App $exe
     $result.firstRegistered = Wait-Until { $null -ne (Get-RunText) } 30
+    $null = Wait-Reconciled 1
     $null = Wait-Until { (Test-Path (Join-Path $userData 'settings.json')) -and ((Get-Content (Join-Path $userData 'settings.json') -Raw) -match '"registeredPath":\s*"') } 15
+    $result.firstReconcile = Get-LastReconcile
     $result.firstRunText = Get-RunText
     $result.firstRunExact = ($result.firstRunText -ceq $expectedRun)
     $result.firstNoApproved = ($null -eq (Get-ApprovedHex))
@@ -138,6 +166,7 @@ try {
     $app = Start-App $exe
     $result.staleRepaired = Wait-Until { (Get-RunText) -ceq $expectedRun } 30
     $null = Wait-Reconciled 2
+    $result.staleReconcile = Get-LastReconcile
     Stop-App $app
 
     # 3. Disabled in Task Manager (03 + FILETIME): the next start leaves both values untouched.
@@ -148,8 +177,8 @@ try {
     Start-Sleep -Seconds 2
     $result.disabledApprovedUntouched = ((Get-ApprovedHex) -eq $disabledHex)
     $result.disabledRunUntouched = ((Get-RunText) -ceq $expectedRun)
-    $last = @(Get-ReconcileLines) | Select-Object -Last 1
-    $result.disabledRule = if ($last) { $last.d.rule } else { $null }
+    $result.disabledReconcile = Get-LastReconcile
+    $result.disabledRule = if ($result.disabledReconcile) { $result.disabledReconcile.rule } else { $null }
     Stop-App $app
 
     # 4. Silent upgrade in place: the entry (and Task Manager's record) survive; user data survives
@@ -173,13 +202,16 @@ try {
       $result.userDataSurvivedUpgrade = (Test-Path (Join-Path $appData 'settings.json')) -and ((Get-Content (Join-Path $appData 'settings.json') -Raw) -eq $upgradeMarker)
     }
 
-    # 5. Uninstall of an entry Startup apps never toggled: both values go, the reinstall marker is left.
-    Remove-LoginValue $approvedKey
+    # 5. Uninstall of an entry re-enabled in Startup apps (02 00..., still the value from step 4):
+    #    both values go and the reinstall marker is left (the uninstaller reads the bytes with
+    #    Electron's rule; every other StartupApproved case is covered by the compiled-harness
+    #    test in tests/integration/win32/registry.real.test.ts).
   }
 
   $uninstaller = Get-ChildItem $target -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($uninstaller) {
     $u = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/S') -Wait -PassThru
+    $result.uninstallerName = $uninstaller.Name
     $result.uninstallExitCode = $u.ExitCode
     Start-Sleep -Seconds 4
   }
@@ -192,18 +224,31 @@ try {
   $result.markerChecked = (-not $markerPreexisting) -and (Test-Path $appData)
   if ($result.markerChecked) { $result.uninstallMarkerWritten = Test-Path $marker }
   if ($result.upgradeDataTested) { $result.userDataSurvivedUninstall = Test-Path (Join-Path $appData 'settings.json') }
+} catch {
+  $result.error = "$($_.Exception.Message) at line $($_.InvocationInfo.ScriptLineNumber)"
 } finally {
-  foreach ($procId in $started) { & taskkill /PID $procId /T /F 2>$null | Out-Null }
-  Remove-Item Env:\DESKTOP_CAT_USER_DATA -ErrorAction SilentlyContinue
-  Remove-LoginValue $runKey
-  Remove-LoginValue $approvedKey
+  # Every step runs even when an earlier one fails; failures are recorded, not thrown.
+  $ErrorActionPreference = 'Continue'
+  $cleanupErrors = New-Object System.Collections.Generic.List[string]
+  $steps = [ordered]@{
+    # Process objects keep their handle open, so a PID can never have been reused by another program.
+    'stop launched apps' = { foreach ($sp in $started) { if (-not $sp.HasExited) { $null = Stop-Tree $sp.Id } } }
+    'environment' = { Remove-Item Env:\DESKTOP_CAT_USER_DATA -ErrorAction SilentlyContinue }
+    'Run value' = { Remove-LoginValue $runKey }
+    'StartupApproved value' = { Remove-LoginValue $approvedKey }
+    'marker' = { if ((-not $markerPreexisting) -and (Test-Path $marker)) { Remove-Item -Force $marker } }
+    'test app data' = { if ($appDataCreated -and (Test-Path $appData)) { Remove-Item -Recurse -Force $appData } }
+    'install folder' = { if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force } }
+    'user data' = { if (Test-Path -LiteralPath $userData) { Start-Sleep -Milliseconds 500; Remove-Item -LiteralPath $userData -Recurse -Force } }
+  }
+  foreach ($step in $steps.GetEnumerator()) {
+    try { & $step.Value } catch { $cleanupErrors.Add("$($step.Key): $($_.Exception.Message)") }
+  }
   $result.cleanupRunGone = ($null -eq (Get-RunText))
   $result.cleanupApprovedGone = ($null -eq (Get-LoginValue $approvedKey))
-  if ((-not $markerPreexisting) -and (Test-Path $marker)) { Remove-Item -Force $marker -ErrorAction SilentlyContinue }
-  if ($appDataCreated) { Remove-Item -Recurse -Force $appData -ErrorAction SilentlyContinue }
-  if (Test-Path $target) { Remove-Item -Recurse -Force $target -ErrorAction SilentlyContinue }
-  if (Test-Path $userData) { Remove-Item -Recurse -Force $userData -ErrorAction SilentlyContinue }
+  $result.cleanupErrors = @($cleanupErrors)
   $cleanupOk = $result.cleanupRunGone -and $result.cleanupApprovedGone
+  # The record stays until both values are confirmed gone.
   if ($cleanupOk) { Remove-Item -Force $recordFile -ErrorAction SilentlyContinue }
 }
 
@@ -212,11 +257,12 @@ $loginOk = $result.smokeLeftRunAlone -and $result.firstRegistered -and $result.f
   $result.staleRepaired -and $result.disabledReconciled -and $result.disabledApprovedUntouched -and $result.disabledRunUntouched -and `
   ($result.disabledRule -eq 'windows-disabled') -and $result.upgradeKeptRun -and $result.upgradeKeptApproved -and `
   $result.uninstallRemovedRun -and $result.uninstallRemovedApproved -and ((-not $result.markerChecked) -or $result.uninstallMarkerWritten)
+$loginOk = $loginOk -and $result.uninstallerNextToExe
 $result.loginOk = [bool]$loginOk
 $result.ok = [bool]($loginOk -and $upgradeDataOk -and $cleanupOk -and ($result.installExitCode -eq 0) -and $result.installedExe -and $result.uninstallEntry -and `
   $result.installLocationMatches -and $result.startMenuShortcut -and $result.desktopShortcut -and ($result.smokeExitCode -eq 0) -and `
   ($result.upgradeExitCode -eq 0) -and $result.upgradeExePresent -and $result.upgradeSingleUninstallEntry -and `
   ($result.uninstallExitCode -eq 0) -and $result.exeRemoved -and $result.uninstallEntryRemoved -and `
-  $result.startMenuShortcutRemoved -and $result.desktopShortcutRemoved)
-$result | ConvertTo-Json
+  $result.startMenuShortcutRemoved -and $result.desktopShortcutRemoved -and (-not $result.error) -and ($result.cleanupErrors.Count -eq 0))
+$result | ConvertTo-Json -Depth 6
 if (-not $result.ok) { exit 1 }

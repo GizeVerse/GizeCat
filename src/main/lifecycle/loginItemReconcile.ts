@@ -91,7 +91,7 @@ export interface WriteGateInput {
   test: boolean;
   /** DESKTOP_CAT_LOGIN_ITEM === 'off' (smoke runs, users who want the app to keep out). */
   envOff: boolean;
-  /** 'Uninstall Desktop Cat.exe' next to the exe: an installed copy (not release/win-unpacked). */
+  /** The uninstaller next to the exe (uninstallerFileFor): an installed copy, not release/win-unpacked. */
   uninstallerPresent: boolean;
   /** Length of the command line the app would register. */
   commandLineChars: number;
@@ -328,14 +328,28 @@ export function writeTookEffect(write: LoginItemWrite, state: WindowsLoginState,
 // ---------------------------------------------------------------------------
 // Status shown in Settings and diagnostics
 
-export function loginItemStatus(li: LoginItemSettings, state: WindowsLoginState, f: LoginTarget & { writable: boolean }): LoginItemStatus {
+/** Why this build may not write its entry, for the status line (null: a dev, test or portable build). */
+function gateReason(blockedBy: readonly WriteGateBlock[]): string | null {
+  // Only an installed copy (packaged, uninstaller present, not under test) gets a specific reason.
+  if (blockedBy.some((b) => b === 'unpackaged' || b === 'test' || b === 'no-uninstaller')) return null;
+  if (blockedBy.includes('env-off')) return 'Turned off on this computer by the DESKTOP_CAT_LOGIN_ITEM=off environment setting.';
+  if (blockedBy.includes('command-too-long')) return `Not available: the install folder path is too long for a Windows startup entry (at most ${MAX_RUN_COMMAND_CHARS} characters). Reinstall Desktop Cat in a shorter folder.`;
+  return null;
+}
+
+export function loginItemStatus(li: LoginItemSettings, state: WindowsLoginState, f: LoginTarget & { writable: boolean; blockedBy?: readonly WriteGateBlock[] }): LoginItemStatus {
   const enabled = effectiveOn(li);
   const run = state.run;
   const ours = state.readable && run !== null && isOurEntry(run, f);
   const active = ours && state.approved !== 'disabled';
   let reason: string | null = null;
-  if (!state.readable) reason = 'Desktop Cat could not read its Windows startup entry.';
-  else if (!f.writable) reason = run !== null && !ours ? 'Not available in this build. Windows starts another copy of Desktop Cat (the installed app) at sign-in.' : 'Not available in this build (development or portable). The installed app manages this.';
+  if (!f.writable) {
+    reason =
+      gateReason(f.blockedBy ?? []) ??
+      (state.readable && run !== null && !ours
+        ? 'Not available in this build (development or portable). Windows starts another copy of Desktop Cat (the installed app) at sign-in.'
+        : 'Not available in this build (development or portable). The installed app manages Start with Windows.');
+  } else if (!state.readable) reason = 'Desktop Cat could not read its Windows startup entry.';
   else if (run !== null && state.approved === 'disabled') reason = 'Disabled in Windows Startup apps. To turn it back on, open Task Manager › Startup apps and enable Desktop Cat.';
   else if (enabled && !active && run !== null) reason = 'The Windows startup entry points to another location. Desktop Cat repairs it the next time you start it yourself.';
   else if (enabled && !active) reason = li.disabledBy === null && li.registeredPath === null ? 'Desktop Cat registers itself the next time it starts.' : 'Windows has no startup entry for Desktop Cat.';

@@ -20,6 +20,12 @@ export interface MotionConfig {
   hiddenFraction: number;
   /** Within this many px of the full thickness it is shown. */
   shownTolerancePx: number;
+  /**
+   * Explorer moves a sliding taskbar every ~15-47 ms (measured), so 16 ms samples often see no
+   * change in between: the last speed is held this long after a change instead of dropping to 0,
+   * and a change within twice this long of the previous one is divided by the time since it.
+   */
+  speedHoldMs: number;
 }
 
 export const DEFAULT_MOTION_CONFIG: MotionConfig = {
@@ -29,6 +35,7 @@ export const DEFAULT_MOTION_CONFIG: MotionConfig = {
   hiddenPx: 3,
   hiddenFraction: 0.08,
   shownTolerancePx: 1,
+  speedHoldMs: 60,
 };
 
 interface Ease {
@@ -60,6 +67,8 @@ export class TaskbarMotion {
   private speed = 0;
   private ease: Ease | null = null;
   private lastAt: number | null = null;
+  /** When the measurement last changed (null: never since the first sample). */
+  private changedAt: number | null = null;
 
   constructor(private readonly cfg: MotionConfig = DEFAULT_MOTION_CONFIG) {}
 
@@ -91,8 +100,14 @@ export class TaskbarMotion {
     this.measured = raw;
     if (this.ease !== null && now - this.ease.t0 >= this.cfg.easeMs) this.ease = null;
     const next = this.ease !== null ? this.effectiveAt(now) : raw;
+    const sinceChange = this.changedAt === null ? Number.POSITIVE_INFINITY : now - this.changedAt;
     if (this.ease !== null) this.speed = ((this.ease.to - this.ease.from) / this.cfg.easeMs) * 1000;
-    else if (dt > 0) this.speed = ((next - prevExtent) / dt) * 1000;
+    else if (changed) {
+      // Mid-slide the previous change is recent: the distance covered since it is the frame step.
+      const span = sinceChange <= 2 * this.cfg.speedHoldMs ? sinceChange : dt;
+      if (span > 0) this.speed = ((next - prevExtent) / span) * 1000;
+    } else if (sinceChange > this.cfg.speedHoldMs) this.speed = 0;
+    if (changed) this.changedAt = now;
     this.extent = next;
     this.lastAt = now;
     this.phaseValue = this.classify(next, this.speed, this.phaseValue);

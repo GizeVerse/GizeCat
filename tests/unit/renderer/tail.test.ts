@@ -76,6 +76,32 @@ describe('tail spring chain', () => {
     for (let i = 1; i < tail.count; i++) expect(tail.y[i]!).toBeLessThanOrEqual(-3 + 1e-9);
   });
 
+  it('lifts a tail out of a ground line that appears above it gradually, then holds it there', () => {
+    // A hanging tail (a cat on a wall), then a ground line just under the root (it pulled up onto a
+    // ledge) while the target still points down into the ground: the clamp must win, without a snap.
+    for (const stiff of [0.3, 0.9]) {
+      const tail = new TailChain();
+      const p = createPose();
+      p.tailBase = -1.5;
+      p.tailCurl = 0;
+      p.tailStiff = stiff;
+      for (let i = 0; i < 200; i++) tail.step(-20, -6, p, 16, 0, 0, Number.NaN);
+      expect(tail.y[tail.count - 1]!).toBeGreaterThan(25);
+      const py = Float64Array.from(tail.y);
+      let worst = 0;
+      for (let i = 0; i < 90; i++) {
+        tail.step(-20, -6, p, 16, 0, 0, -3);
+        for (let k = 1; k < tail.count; k++) {
+          worst = Math.max(worst, Math.abs(tail.y[k]! - py[k]!));
+          py[k] = tail.y[k]!;
+        }
+      }
+      for (let k = 1; k < tail.count; k++) expect(tail.y[k]!, `stiff ${stiff} point ${k}`).toBeLessThanOrEqual(-3 + 1e-9);
+      // Bounded push per frame (a snap would move the tip ~30 DIP at once).
+      expect(worst, `stiff ${stiff}`).toBeLessThan(12);
+    }
+  });
+
   it('snaps (no simulation) after a long gap or on reset', () => {
     const tail = new TailChain();
     const p = createPose();

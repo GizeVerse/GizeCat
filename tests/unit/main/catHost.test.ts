@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createCatHost, type HostOverlays } from '../../../src/main/catHost';
-import type { ActivityMonitor, DisplayService, PerceptionService, Win32Api, WindowTracker } from '../../../src/main/contracts';
+import { createCatHost, type HostOverlays, type HostSurfaceProvider } from '../../../src/main/catHost';
+import type { ActivityMonitor, DisplayService, PerceptionService, TaskbarState, TaskbarTracker, Win32Api, WindowTracker } from '../../../src/main/contracts';
+import type { CatPosition } from '../../../src/main/surfaces';
+import type { Point } from '../../../src/shared/geometry';
 import type { PersistedCat } from '../../../src/shared/catState';
 import { defaultSettings } from '../../../src/shared/settings';
 import type { CatSim, SimEnv, SimEvent, SimOutput, SimRequest } from '../../../src/shared/sim';
+import type { LedgeSurface, Surface, SurfaceStatus } from '../../../src/shared/surfaces';
 import type { WorldGeometry } from '../../../src/shared/world';
 import { manualTimers, memoryLogger } from './helpers';
 
@@ -49,12 +52,20 @@ function makeOutput(over: Partial<SimOutput> = {}): SimOutput {
   };
 }
 
-function harness(opts: { win32Available?: boolean; timeScale?: number } = {}) {
+interface HarnessOptions {
+  win32Available?: boolean;
+  timeScale?: number;
+  surfaces?: HostSurfaceProvider | null;
+  taskbars?: TaskbarTracker | null;
+}
+
+function harness(opts: HarnessOptions = {}) {
   const timers = manualTimers();
   const ticks: Array<{ env: SimEnv; events: readonly SimEvent[] }> = [];
   let nextTickMs = 33;
   let requests: SimRequest[] = [];
   let throwNext = false;
+  let output: Partial<SimOutput> = {};
   const sim: CatSim = {
     tick(env, events) {
       if (throwNext) {
@@ -62,7 +73,7 @@ function harness(opts: { win32Available?: boolean; timeScale?: number } = {}) {
         throw new Error('sim bug');
       }
       ticks.push({ env, events: [...events] });
-      const out = makeOutput({ nextTickMs, requests });
+      const out = makeOutput({ ...output, nextTickMs, requests });
       requests = [];
       return out;
     },
@@ -74,17 +85,22 @@ function harness(opts: { win32Available?: boolean; timeScale?: number } = {}) {
     state: 'idle',
     debugInfo: () => ({}),
   };
+  let cursor: Point = { x: 500, y: 500 };
   const win32 = {
     available: opts.win32Available ?? true,
-    getCursorPos: () => ({ x: 500, y: 500 }),
+    getCursorPos: () => cursor,
     isLeftButtonDown: () => false,
   } as unknown as Win32Api;
   const trackerEvents: SimEvent[] = [];
+  let platformCalls = 0;
   const tracker = {
     mode: 'event-hooks',
     drainEvents: () => trackerEvents.splice(0),
     getForeground: () => null,
-    getPlatforms: () => [],
+    getPlatforms: () => {
+      platformCalls++;
+      return [];
+    },
     getWindowRect: () => null,
     getFullscreenDisplayIds: () => [],
   } as unknown as WindowTracker;
@@ -131,6 +147,8 @@ function harness(opts: { win32Available?: boolean; timeScale?: number } = {}) {
     wallClock: () => new Date(2026, 9, 28, 14, 30),
     timers,
     timeScale: opts.timeScale ?? 1,
+    surfaces: opts.surfaces,
+    taskbars: opts.taskbars,
   });
   return {
     host,
@@ -145,7 +163,12 @@ function harness(opts: { win32Available?: boolean; timeScale?: number } = {}) {
     get saves() {
       return saves;
     },
+    get platformCalls() {
+      return platformCalls;
+    },
     setNextTick: (ms: number) => (nextTickMs = ms),
+    setOutput: (o: Partial<SimOutput>) => (output = o),
+    setCursor: (p: Point) => (cursor = p),
     setRequests: (r: SimRequest[]) => (requests = r),
     throwNext: () => (throwNext = true),
   };
@@ -310,5 +333,293 @@ describe('cat host loop', () => {
     expect(h.timers.size).toBe(0);
     h.timers.advance(5000);
     expect(h.ticks).toHaveLength(1);
+  });
+});
+
+// v1.1 surfaces: the host hands the provider's list to the sim and drives taskbar sampling
+// from its cursor-poll timer (MOCKED provider and taskbar tracker).
+const ledgeAt = (id: string, y: number): LedgeSurface => ({
+  id,
+  kind: 'taskbar',
+  orientation: 'ledge',
+  ownerId: id.split(':')[1] ?? id,
+  displayId: '1',
+  phase: 'stable',
+  vx: 0,
+  vy: 0,
+  confidence: 1,
+  validatedAt: 0,
+  excluded: false,
+  y,
+  x0: 0,
+  x1: 1920,
+  rest: null,
+  focusX: null,
+  edge: 'bottom',
+});
+
+class FakeProvider implements HostSurfaceProvider {
+  list: readonly Surface[] = [ledgeAt('taskbar:1', 1020)];
+  calls: Array<{ now: number; maxAgeMs: number }> = [];
+  live: Array<{ id: string; now: number }> = [];
+  cats: Array<CatPosition | null> = [];
+  events: SimEvent[] = [];
+  throwOnRead = false;
+  readonly status: SurfaceStatus = { taskbar: 'tracked', taskbars: 1, windowSurfaces: 'tracked', tabStrips: 'idle', tabStripReason: null };
+  getSurfaces(now: number, maxAgeMs: number): readonly Surface[] {
+    this.calls.push({ now, maxAgeMs });
+    if (this.throwOnRead) throw new Error('provider bug');
+    return this.list;
+  }
+  getSurface(id: string, now: number): Surface | null {
+    this.live.push({ id, now });
+    if (this.throwOnRead) throw new Error('provider bug');
+    return this.list.find((s) => s.id === id) ?? null;
+  }
+  drainEvents(): SimEvent[] {
+    return this.events.splice(0);
+  }
+  noteCat(cat: CatPosition | null): void {
+    this.cats.push(cat);
+  }
+  updateSettings(): void {}
+  debugInfo(): Record<string, unknown> {
+    return {};
+  }
+  dispose(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+class FakeTaskbarTracker implements TaskbarTracker {
+  available = true;
+  delay = 250;
+  states: TaskbarState[] = [];
+  samples: Array<{ now: number; cursor: Point | null; catNear: boolean }> = [];
+  throwOnSample = false;
+  start(): void {}
+  stop(): void {}
+  sample(now: number, cursor: Point | null, catNear: boolean): number {
+    this.samples.push({ now, cursor, catNear });
+    if (this.throwOnSample) throw new Error('taskbar bug');
+    return this.delay;
+  }
+  taskbars(): readonly TaskbarState[] {
+    return this.states;
+  }
+  surfaces(): readonly LedgeSurface[] {
+    return [];
+  }
+  drainEvents(): SimEvent[] {
+    return [];
+  }
+  debugInfo(): Record<string, unknown> {
+    return {};
+  }
+}
+
+const autoHideBar = (phase: TaskbarState['phase'], over: Partial<TaskbarState> = {}): TaskbarState => ({
+  id: '1',
+  displayId: '1',
+  edge: 'bottom',
+  autoHide: true,
+  rect: phase === 'hidden' ? { x: 0, y: 1078, width: 1920, height: 48 } : { x: 0, y: 1032, width: 1920, height: 48 },
+  dockedRect: { x: 0, y: 1032, width: 1920, height: 48 },
+  shownFraction: phase === 'hidden' ? 0.04 : 1,
+  phase,
+  speed: 0,
+  validatedAt: 0,
+  ...over,
+});
+
+describe('cat host: environment surfaces', () => {
+  it('hands the provider list to the sim each tick, keeps the v1 platform fields and re-reads ridden surfaces live', () => {
+    const surfaces = new FakeProvider();
+    const h = harness({ surfaces });
+    h.host.start();
+    h.timers.advance(0);
+    const env = h.ticks[0]!.env;
+    expect(env.surfaces).toBe(surfaces.list);
+    expect(surfaces.calls[0]).toEqual({ now: 0, maxAgeMs: 1000 });
+    expect(h.platformCalls).toBe(1);
+    expect(env.getWindowRect('1')).toBeNull();
+    h.timers.advance(20);
+    expect(env.getSurface('taskbar:1')).toMatchObject({ y: 1020 });
+    expect(surfaces.live.at(-1)).toEqual({ id: 'taskbar:1', now: 20 });
+    expect(h.host.lastSurfaces).toBe(surfaces.list);
+    expect(h.host.debug().surfaces).toBe(1);
+    h.host.stop();
+  });
+
+  it('tells the provider where the cat is and what it stands on (nothing while hidden)', () => {
+    const surfaces = new FakeProvider();
+    const h = harness({ surfaces });
+    h.setOutput({ x: 640, y: 1020, support: { kind: 'surface', surfaceId: 'taskbar:1', surfaceKind: 'taskbar', orientation: 'ledge' } });
+    h.host.start();
+    h.timers.advance(0);
+    expect(surfaces.cats[0]).toBeNull();
+    h.timers.advance(33);
+    expect(surfaces.cats.at(-1)).toEqual({ x: 640, y: 1020, surfaceId: 'taskbar:1' });
+    h.setOutput({ x: 10, y: 1040 });
+    h.timers.advance(33);
+    h.timers.advance(33);
+    expect(surfaces.cats.at(-1)).toEqual({ x: 10, y: 1040, surfaceId: null });
+    h.host.setHidden(true);
+    h.timers.advance(300);
+    expect(surfaces.cats.at(-1)).toBeNull();
+    expect(surfaces.calls.at(-1)!.maxAgeMs).toBe(5000);
+    h.host.stop();
+  });
+
+  it('drains surface events into the sim, after the window tracker', () => {
+    const surfaces = new FakeProvider();
+    const h = harness({ surfaces });
+    h.host.start();
+    h.timers.advance(0);
+    h.trackerEvents.push({ type: 'window.minimized', id: '7' });
+    surfaces.events.push({ type: 'taskbar.shown', surfaceId: 'taskbar:1', displayId: '1', edge: 'bottom' });
+    h.timers.advance(33);
+    expect(h.ticks.at(-1)!.events).toEqual([
+      { type: 'window.minimized', id: '7' },
+      { type: 'taskbar.shown', surfaceId: 'taskbar:1', displayId: '1', edge: 'bottom' },
+    ]);
+    h.host.stop();
+  });
+
+  it('survives a throwing provider (empty surfaces, null live reads)', () => {
+    const surfaces = new FakeProvider();
+    surfaces.throwOnRead = true;
+    const h = harness({ surfaces });
+    h.host.start();
+    h.timers.advance(0);
+    expect(h.ticks[0]!.env.surfaces).toEqual([]);
+    expect(h.ticks[0]!.env.getSurface('taskbar:1')).toBeNull();
+    h.timers.advance(100);
+    expect(h.ticks.length).toBeGreaterThan(1);
+    expect(h.host.debug().tickErrors).toBe(0);
+    h.host.stop();
+  });
+
+  it('without a provider the sim sees no surfaces', () => {
+    const h = harness();
+    h.host.start();
+    h.timers.advance(0);
+    expect(h.ticks[0]!.env.surfaces).toEqual([]);
+    expect(h.ticks[0]!.env.getSurface('taskbar:1')).toBeNull();
+    h.host.stop();
+  });
+});
+
+describe('cat host: taskbar sampling', () => {
+  it('samples on the cursor-poll timer at the delay the tracker asks for, with no timer of its own', () => {
+    const taskbars = new FakeTaskbarTracker();
+    const h = harness({ taskbars });
+    h.host.start();
+    h.timers.advance(0);
+    expect(taskbars.samples).toEqual([{ now: 0, cursor: { x: 500, y: 500 }, catNear: false }]);
+    // One tick timer and one poll timer, however the two cadences interleave.
+    expect(h.timers.size).toBe(2);
+    h.timers.advance(249);
+    expect(taskbars.samples).toHaveLength(1);
+    h.timers.advance(1);
+    expect(taskbars.samples).toHaveLength(2);
+    taskbars.delay = 16;
+    h.timers.advance(250);
+    const n = taskbars.samples.length;
+    h.timers.advance(160);
+    expect(taskbars.samples.length - n).toBe(10);
+    expect(h.timers.size).toBe(2);
+    // Out-of-range requests are clamped.
+    taskbars.delay = 0;
+    h.timers.advance(32);
+    const m = taskbars.samples.length;
+    h.timers.advance(32);
+    expect(taskbars.samples.length - m).toBe(2);
+    expect(h.host.debug().taskbarDelayMs).toBe(16);
+    h.host.stop();
+    expect(h.timers.size).toBe(0);
+  });
+
+  it('reports the cat near a taskbar when riding it or close to one that can move, not a static docked one', () => {
+    const taskbars = new FakeTaskbarTracker();
+    const h = harness({ taskbars });
+    taskbars.states = [autoHideBar('shown')];
+    h.host.start();
+    h.timers.advance(0);
+    // The first sample runs before the first sim output: nothing is near yet.
+    expect(taskbars.samples.at(-1)!.catNear).toBe(false);
+    h.timers.advance(250);
+    // makeOutput's cat stands at y=1040, right above the shown auto-hide taskbar.
+    expect(taskbars.samples.at(-1)!.catNear).toBe(true);
+    taskbars.states = [autoHideBar('shown', { autoHide: false })];
+    h.timers.advance(250);
+    expect(taskbars.samples.at(-1)!.catNear).toBe(false);
+    taskbars.states = [autoHideBar('hidden')];
+    h.timers.advance(250);
+    expect(taskbars.samples.at(-1)!.catNear).toBe(false);
+    h.setOutput({ x: 640, y: 300, support: { kind: 'surface', surfaceId: 'taskbar:1', surfaceKind: 'taskbar', orientation: 'ledge' } });
+    h.timers.advance(250);
+    h.timers.advance(250);
+    expect(taskbars.samples.at(-1)!.catNear).toBe(true);
+    h.host.stop();
+  });
+
+  it('samples at once when the cursor reaches a hidden auto-hide taskbar edge', () => {
+    const taskbars = new FakeTaskbarTracker();
+    taskbars.states = [autoHideBar('hidden')];
+    const h = harness({ taskbars });
+    h.host.start();
+    h.timers.advance(0);
+    const n = taskbars.samples.length;
+    h.setCursor({ x: 900, y: 1079 });
+    // The next cursor poll (<= 125 ms) samples the taskbar instead of waiting for 250 ms.
+    h.timers.advance(130);
+    expect(taskbars.samples.length).toBe(n + 1);
+    expect(taskbars.samples.at(-1)!.cursor).toEqual({ x: 900, y: 1079 });
+    h.host.stop();
+  });
+
+  it('nudges a slow sim while a taskbar slides next to the cat', () => {
+    const taskbars = new FakeTaskbarTracker();
+    taskbars.delay = 16;
+    const h = harness({ taskbars });
+    h.setNextTick(1000);
+    h.host.start();
+    h.timers.advance(0);
+    taskbars.states = [autoHideBar('showing')];
+    h.timers.advance(100);
+    // Without the nudge the second tick would come at 1000 ms.
+    expect(h.ticks.length).toBeGreaterThanOrEqual(3);
+    h.host.stop();
+  });
+
+  it('idles at 1 Hz while hidden, and survives a throwing tracker', () => {
+    const taskbars = new FakeTaskbarTracker();
+    taskbars.delay = 16;
+    const h = harness({ taskbars });
+    h.host.start();
+    h.timers.advance(0);
+    h.host.setHidden(true);
+    h.timers.advance(1000);
+    const n = taskbars.samples.length;
+    h.timers.advance(3000);
+    expect(taskbars.samples.length - n).toBe(3);
+    h.host.setHidden(false);
+    taskbars.throwOnSample = true;
+    h.timers.advance(3000);
+    expect(h.log.entries.some((e) => e.msg === 'taskbar sample failed')).toBe(true);
+    expect(h.host.debug().taskbarDelayMs).toBe(1000);
+    h.host.stop();
+  });
+
+  it('re-checks an unavailable tracker rarely', () => {
+    const taskbars = new FakeTaskbarTracker();
+    taskbars.available = false;
+    const h = harness({ taskbars });
+    h.host.start();
+    h.timers.advance(10_000);
+    expect(taskbars.samples).toEqual([]);
+    expect(h.host.debug().taskbarDelayMs).toBeNull();
+    h.host.stop();
   });
 });

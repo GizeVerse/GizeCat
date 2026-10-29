@@ -57,6 +57,8 @@ export interface SurfaceProviderOptions extends Omit<WindowSurfaceOptions, 'clim
   interestIntervalMs: number;
   /** Bound on the windows passed to setInterest. */
   maxInterest: number;
+  /** Bound on the listed surfaces (taskbars first, then windows top-down in z-order). */
+  maxSurfaces: number;
 }
 
 export const DEFAULT_SURFACE_OPTIONS: Readonly<SurfaceProviderOptions> = Object.freeze({
@@ -69,6 +71,7 @@ export const DEFAULT_SURFACE_OPTIONS: Readonly<SurfaceProviderOptions> = Object.
   interestRadiusDip: 300,
   interestIntervalMs: 500,
   maxInterest: 4,
+  maxSurfaces: 256,
 });
 
 export interface SurfaceProviderDeps {
@@ -114,6 +117,11 @@ export interface SurfaceProviderExtras {
   noteCat(cat: CatPosition | null): void;
   /** Test mode only (E2E): replaces every surface with `list` (SIMULATED geometry); null restores the real ones. */
   injectSurfaces(list: readonly Surface[] | null, now: number): void;
+  debugInfo(): SurfaceProviderDebug;
+}
+
+/** What createSurfaceProvider returns: the contract plus the host/test extras (typed debug info). */
+export interface SurfaceProviderHandle extends SurfaceProvider, SurfaceProviderExtras {
   debugInfo(): SurfaceProviderDebug;
 }
 
@@ -218,7 +226,21 @@ function reorderedRects(prev: readonly Occluder[], next: readonly Occluder[]): R
   return out;
 }
 
-export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvider & SurfaceProviderExtras {
+/** Content of a tab-strip ledge that places it (validatedAt and confidence excluded). */
+const stripKey = (s: LedgeSurface): string => `${s.y},${s.x0},${s.x1},${s.rest ? `${s.rest.x0},${s.rest.x1}` : '-'},${s.focusX ?? '-'}`;
+
+/** Same strips with the same geometry, phase, confidence and privacy flag (validatedAt ignored). */
+function sameStrips(a: readonly LedgeSurface[], b: readonly LedgeSurface[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i]!;
+    const q = b[i]!;
+    if (p.id !== q.id || p.ownerId !== q.ownerId || p.phase !== q.phase || p.confidence !== q.confidence || p.excluded !== q.excluded || stripKey(p) !== stripKey(q)) return false;
+  }
+  return true;
+}
+
+export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProviderHandle {
   const log = deps.logger.child('surfaces');
   const clock = deps.now ?? (() => performance.now());
   const opts: SurfaceProviderOptions = { ...DEFAULT_SURFACE_OPTIONS, ...deps.options };
@@ -246,7 +268,14 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
   let composedWindows: { version: number; list: Surface[] } = { version: -1, list: [] };
   let composed: { windows: Surface[]; taskbars: readonly LedgeSurface[] | null; list: readonly Surface[] } | null = null;
   let strips: readonly LedgeSurface[] = [];
-  const stripBases = new Map<string, { validatedAt: number; rect: Rect }>();
+  /**
+   * The frame each strip was placed on by the tab-strip service: y is exact (a strip stands on
+   * its frame top), x and size come from a live read when the strip's geometry last changed.
+   * Between service reads the strip is shifted by the window's movement since then.
+   */
+  const stripBases = new Map<string, { key: string; rect: Rect }>();
+  /** Ids of the taskbar occluders currently leading `order`. */
+  let barIds = new Set<string>();
 
   let injected: { list: readonly Surface[]; byId: Map<string, Surface> } | null = null;
   const injectedEvents: SimEvent[] = [];
@@ -371,9 +400,11 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
   function stripPlacement(e: Entry): StripPlacement | null {
     const s = strips.find((x) => x.ownerId === e.id);
     if (!s) return null;
+    const key = stripKey(s);
     let base = stripBases.get(e.id);
-    if (!base || base.validatedAt !== s.validatedAt) {
-      base = { validatedAt: s.validatedAt, rect: e.rect };
+    if (!base || base.key !== key) {
+      // Normally set by refreshStrips from a live read; this is the fallback (no tracking).
+      base = { key, rect: { ...e.rect, y: s.y } };
       stripBases.set(e.id, base);
     }
     const dx = e.rect.x - base.rect.x;
@@ -441,9 +472,12 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       }
       const rect = info.rect;
       if (idx >= 0) order[idx] = { id, rect };
-      // A window the snapshot has not seen yet: new windows open on top; the next
-      // enumeration places it exactly.
-      else order.unshift({ id, rect });
+      // A window the snapshot has not seen yet: new windows open on top (below the taskbars);
+      // the next enumeration places it exactly.
+      else {
+        const firstWindow = order.findIndex((o) => !barIds.has(o.id));
+        order.splice(firstWindow < 0 ? order.length : firstWindow, 0, { id, rect });
+      }
       let e = entries.get(id);
       if (!e) {
         e = newEntry(info, rect, now);
@@ -490,11 +524,9 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       }
     }
     // The taskbars are topmost: their live rects lead the z-order (replacing stale listings).
-    const bars = taskbars.available ? taskbars.taskbars().filter((t) => t.shownFraction > 0 && t.rect.width > 0 && t.rect.height > 0) : [];
-    if (bars.length > 0) {
-      const ids = new Set(bars.map((t) => t.id));
-      next = [...bars.map((t) => ({ id: t.id, rect: { ...t.rect } })), ...next.filter((o) => !ids.has(o.id))];
-    }
+    const bars = taskbarOccluders();
+    barIds = new Set(bars.map((o) => o.id));
+    if (bars.length > 0) next = [...bars, ...next.filter((o) => !barIds.has(o.id))];
     markAffected(...reorderedRects(order, next));
     order = next;
 
@@ -523,6 +555,31 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       if (e.built !== EMPTY_WINDOW_SURFACES) windowVersion++;
     }
     entries = nextEntries;
+  }
+
+  /** Live taskbar rects (tracker state, no OS call) as occluders; a hidden one keeps its edge strip. */
+  function taskbarOccluders(): Occluder[] {
+    if (!taskbars.available) return [];
+    try {
+      return taskbars
+        .taskbars()
+        .filter((t) => t.shownFraction > 0 && t.rect.width > 0 && t.rect.height > 0)
+        .map((t) => ({ id: t.id, rect: { ...t.rect } }));
+    } catch (e) {
+      report('taskbarOccluders', e);
+      return [];
+    }
+  }
+
+  /** A taskbar sliding in or out cuts the windows under it at once (not only at the next snapshot). */
+  function syncTaskbarOccluders(): void {
+    const bars = taskbarOccluders();
+    const prev = order.filter((o) => barIds.has(o.id));
+    if (bars.length === prev.length && bars.every((b, i) => b.id === prev[i]!.id && sameRect(b.rect, prev[i]!.rect))) return;
+    markAffected(...prev.map((o) => o.rect), ...bars.map((o) => o.rect));
+    const ids = new Set(bars.map((o) => o.id));
+    order = [...bars, ...order.filter((o) => !barIds.has(o.id) && !ids.has(o.id))];
+    barIds = ids;
   }
 
   /** Windows being dragged or sized raise no events until the drag ends: re-read them live. */
@@ -564,7 +621,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
   }
 
   /** Tab strips changed (new list): recompute their owners. */
-  function refreshStrips(): void {
+  function refreshStrips(now: number): void {
     let next: readonly LedgeSurface[] = [];
     if (tabStrips && tabStripsOn) {
       try {
@@ -574,7 +631,8 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
         next = [];
       }
     }
-    if (next === strips) return;
+    // The service builds a new list on every call: only a change of content counts.
+    if (next === strips || sameStrips(next, strips)) return;
     for (const s of strips) recompute.add(s.ownerId);
     for (const s of next) recompute.add(s.ownerId);
     strips = next;
@@ -582,6 +640,17 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     windowVersion++;
     const owners = new Set(next.map((s) => s.ownerId));
     for (const id of stripBases.keys()) if (!owners.has(id)) stripBases.delete(id);
+    // A strip whose geometry changed was just placed on the window's current frame by the
+    // service: anchor it to a live read (which also catches moves that raised no event).
+    for (const s of next) {
+      const e = entries.get(s.ownerId);
+      if (!e) continue;
+      const key = stripKey(s);
+      if (stripBases.get(e.id)?.key === key) continue;
+      const r = liveRect(e, now);
+      if (r !== null && !sameRect(r, e.rect)) moveEntry(e, r, now);
+      stripBases.set(e.id, { key, rect: { ...(r ?? e.rect), y: s.y } });
+    }
   }
 
   /** Phases and velocities change with time alone. */
@@ -673,7 +742,8 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     const windows = windowSurfacesList();
     const bars = taskbarSurfaces();
     if (composed && composed.windows === windows && composed.taskbars === bars) return composed.list;
-    const list: readonly Surface[] = bars && bars.length > 0 ? [...bars, ...windows] : windows;
+    let list: readonly Surface[] = bars && bars.length > 0 ? [...bars, ...windows] : windows;
+    if (list.length > opts.maxSurfaces) list = list.slice(0, opts.maxSurfaces);
     composed = { windows, taskbars: bars, list };
     return list;
   }
@@ -683,7 +753,8 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     if (now - interestAt < opts.interestIntervalMs) return;
     interestAt = now;
     const ids: string[] = [];
-    if (tabStripsOn && windowTracking()) {
+    // No cat on screen (hidden, or no output yet): nothing is of interest, the helper idles.
+    if (tabStripsOn && windowTracking() && catPos !== null) {
       const add = (id: string): void => {
         if (!ids.includes(id) && ids.length < opts.maxInterest) ids.push(id);
       };
@@ -799,6 +870,8 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
           if (entries.size > 0 || order.length > 0) {
             entries = new Map();
             order = [];
+            barIds = new Set();
+            stripBases.clear();
             windowVersion++;
           }
           needSnapshot = true;
@@ -811,8 +884,9 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
             refreshSnapshot(now);
             if (periodic) recomputeAll = true;
           }
+          syncTaskbarOccluders();
           trackMoving(now);
-          refreshStrips();
+          refreshStrips(now);
           refreshTimed(now);
           recomputeAffected(now);
         }
@@ -978,6 +1052,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       }
       entries.clear();
       order = [];
+      barIds = new Set();
       injected = null;
       injectedEvents.length = 0;
       stripBases.clear();

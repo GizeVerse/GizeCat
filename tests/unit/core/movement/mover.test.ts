@@ -1,42 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { Point, Rect } from '../../../../src/shared/geometry';
+import type { Point } from '../../../../src/shared/geometry';
 import type { WorldGeometry } from '../../../../src/shared/world';
-import type { MoveGoal, MoverConfig, MoverStep } from '../../../../src/core/movement';
+import type { MoverConfig, MoverStep } from '../../../../src/core/movement';
 import { MOVEMENT, Mover } from '../../../../src/core/movement';
-import { display, DUAL_FLAT, DUAL_MIXED, insideAnyWorkArea, platformsFrom, SINGLE, world } from '../behavior/fixtures';
+import { display, DUAL_FLAT, DUAL_MIXED, insideAnyWorkArea, SINGLE, topId, world } from '../behavior/fixtures';
+import { SurfaceDriver } from './surfaceDriver';
 
-class Driver {
-  now = 0;
-  windows: Record<string, Rect | null> = {};
-  hiddenPlatforms = new Set<string>();
-  dragCursor: Point | null = null;
-  moving = new Set<string>();
-  log: MoverStep[] = [];
-  constructor(
-    public m: Mover,
-    public w: WorldGeometry,
-  ) {}
+/** Support of a cat standing on window `id`'s top edge. */
+const TOP = (id: string) => ({ kind: 'surface', surfaceId: topId(id), surfaceKind: 'windowTop', orientation: 'ledge' }) as const;
 
-  step(dt = 16): MoverStep {
-    this.now += dt;
-    const visible: Record<string, Rect | null> = {};
-    for (const [k, v] of Object.entries(this.windows)) if (!this.hiddenPlatforms.has(k)) visible[k] = v;
-    this.m.sense(platformsFrom(visible));
-    const r = this.m.step({ now: this.now, dtMs: dt, dragCursor: this.dragCursor, getWindowRect: (id) => this.windows[id] ?? null, movingWindowIds: this.moving });
-    this.log.push(r);
+class Driver extends SurfaceDriver {
+  override step(dt = 16): MoverStep {
+    const r = super.step(dt);
     expect(Number.isFinite(this.m.x) && Number.isFinite(this.m.y)).toBe(true);
     expect(insideAnyWorkArea(this.w, this.m.x, this.m.y, 2.5)).toBe(true);
     return r;
-  }
-
-  until(pred: (r: MoverStep) => boolean, maxMs: number, dt = 16): boolean {
-    const end = this.now + maxMs;
-    while (this.now < end) if (pred(this.step(dt))) return true;
-    return false;
-  }
-
-  goal(g: Partial<MoveGoal> & { x: number; y: number }): void {
-    this.m.setGoal({ pace: 'walk', allowJump: true, ...g });
   }
 }
 
@@ -87,7 +65,7 @@ describe('Mover: gravity and landing', () => {
     liftTo(d, { x: 960, y: 100 });
     d.m.endDrag(null, { x: 0, y: 0 }, d.now, true);
     expect(d.until((r) => r.landed !== null, 3000, 250)).toBe(true);
-    expect(d.m.support).toEqual({ kind: 'window', windowId: 'a' });
+    expect(d.m.support).toEqual(TOP('a'));
     expect(d.m.y).toBe(700);
   });
 });
@@ -113,7 +91,7 @@ describe('Mover: jumps', () => {
     expect(crouched && tookOff).toBe(true);
     expect(landedAt).not.toBeNull();
     expect((landedAt as unknown as Point).y).toBe(800);
-    expect(d.m.support).toEqual({ kind: 'window', windowId: 'w' });
+    expect(d.m.support).toEqual(TOP('w'));
     expect(d.m.x).toBeCloseTo(1400, 0);
   });
 
@@ -128,8 +106,8 @@ describe('Mover: jumps', () => {
     expect(d.now - t0).toBeLessThan(MOVEMENT.crouchMs + 20);
   });
 
-  it('reports unreachable for a surface higher than the maximum jump', () => {
-    const d = make();
+  it('reports unreachable for a surface higher than the maximum jump (no climbing)', () => {
+    const d = make(SINGLE, { walls: false });
     d.windows = { w: { x: 700, y: 1040 - 500, width: 500, height: 400 } };
     d.goal({ x: 950, y: 539 });
     expect(d.until((r) => r.goal === 'unreachable', 30_000)).toBe(true);
@@ -145,7 +123,7 @@ describe('Mover: jumps', () => {
     };
     d.goal({ x: 1100, y: 439 });
     expect(d.until((r) => r.goal === 'arrived', 40_000)).toBe(true);
-    expect(d.m.support).toEqual({ kind: 'window', windowId: 'high' });
+    expect(d.m.support).toEqual(TOP('high'));
     expect(d.log.filter((r) => r.tookOff).length).toBe(2);
   });
 
@@ -212,7 +190,7 @@ describe('Mover: perches', () => {
 
   it('falls when the perch stays occluded past the grace period', () => {
     const d = onWindow();
-    d.hiddenPlatforms.add('w');
+    d.hidden.add(topId('w'));
     const t0 = d.now;
     expect(d.until((r) => r.perchLost, 2000)).toBe(true);
     expect(d.now - t0).toBeGreaterThanOrEqual(MOVEMENT.perchGraceMs);
@@ -339,7 +317,8 @@ describe('Mover: off-limits (fullscreen) displays', () => {
     top.windows = { w: { x: 1950, y: 820, width: 500, height: 220 } };
     top.m.setOffLimitsDisplays(['2']);
     top.step();
-    expect(top.m.windowSurfaces).toEqual([]);
+    expect(top.m.ledgeSurfaces).toEqual([]);
+    expect(top.m.wallTracks).toEqual([]);
     top.goal({ x: 2100, y: 819 });
     expect(top.until((r) => r.goal === 'unreachable', 30_000)).toBe(true);
     expect(top.log.some((r) => r.crouchStarted || r.tookOff)).toBe(false);

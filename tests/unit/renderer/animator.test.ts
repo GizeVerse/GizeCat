@@ -9,7 +9,7 @@ const input = (clip: AnimClip, clipStartedAt: number, extra: Partial<AnimInput> 
   clip,
   clipStartedAt,
   sleeping: clip === 'sleep',
-  speed: clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : 0,
+  speed: clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : clip === 'climb' ? 0.5 : 0,
   vy: 0,
   lookX: 0,
   lookY: 0,

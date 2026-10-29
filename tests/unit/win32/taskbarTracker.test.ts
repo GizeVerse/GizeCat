@@ -489,6 +489,41 @@ describe('taskbar tracker: multiple monitors and other edges', () => {
     expect((r.tracker.debugInfo() as { taskbars: Array<{ monitorSource: string }>; discoveries: number }).taskbars[0]!.monitorSource).toBe('kept');
   });
 
+  it('attributes a secondary taskbar first seen hidden to its own monitor, not the one below that MonitorFromWindow picks', () => {
+    const n = new FakeTaskbarNative();
+    n.monitors = [
+      { monitor: S_MON, work: S_MON },
+      { monitor: T_MON, work: T_MON },
+    ];
+    n.abmPos = null;
+    // Hidden: 2 px on S, 46 px over T (which therefore reads it as a 96 % shown TOP taskbar of T).
+    n.add(510n, { className: 'Shell_SecondaryTrayWnd', rect: bottomAt(S_MON, 1078, 48) });
+    const world: WorldGeometry = { version: 5, displays: [display('S', S_MON, 1), display('T', T_MON, 1)] };
+    const r = makeRig(n, world);
+    expect(r.tracker.taskbars()[0]).toMatchObject({ displayId: 'S', edge: 'bottom', phase: 'hidden', autoHide: true });
+    expect((r.tracker.debugInfo() as { taskbars: Array<{ monitorSource: string; role: string }> }).taskbars[0]).toMatchObject({ monitorSource: 'geometry', role: 'ledge' });
+    // Revealed on S: a ledge on S.
+    n.move(510n, bottomAt(S_MON, 1032, 48));
+    r.at(1250);
+    r.at(1450);
+    expect(r.tracker.surfaces()).toEqual([expect.objectContaining({ id: 'taskbar:510', displayId: 'S', y: 1031, x0: 1920, x1: 3840 })]);
+    expect(types(r.events)).toEqual(['taskbar.shown']);
+  });
+
+  it('rediscovers a taskbar that moved fully onto another monitor', () => {
+    const n = new FakeTaskbarNative();
+    n.monitors.push({ monitor: S_MON, work: S_MON });
+    n.abmPos = null;
+    n.add(520n, { className: 'Shell_SecondaryTrayWnd', rect: bottomAt(P_MON, 1152, 48) });
+    const world: WorldGeometry = { version: 6, displays: [...WORLD_P.displays, display('S', S_MON, 1)] };
+    const r = makeRig(n, world);
+    expect(r.tracker.taskbars()[0]!.displayId).toBe('P');
+    n.move(520n, bottomAt(S_MON, 1032, 48));
+    r.at(2500);
+    expect((r.tracker.debugInfo() as { lastDiscovery: { reason: string } }).lastDiscovery.reason).toBe('geometry-changed');
+    expect(r.tracker.taskbars()[0]).toMatchObject({ displayId: 'S', edge: 'bottom', phase: 'shown' });
+  });
+
   it('attributes the hidden primary by its docked SHAppBarMessage rect even when MonitorFromWindow disagrees', () => {
     const n = primaryHidden();
     const below: RawRect = { left: 0, top: 1200, right: 1920, bottom: 2400 };

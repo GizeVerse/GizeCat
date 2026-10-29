@@ -4,7 +4,7 @@ import type { SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
 import { TOGGLEABLE_BEHAVIORS } from '../../../../src/shared/settings';
 import { SLOWEST_TICK_MS } from '../../../../src/core/behavior/sim';
-import { callCat, DUAL_MIXED, Harness, settingsWith, SINGLE } from './fixtures';
+import { callCat, DUAL_MIXED, Harness, onWindowSurface, settingsWith, SINGLE } from './fixtures';
 
 const MIN = 60_000;
 
@@ -93,7 +93,7 @@ describe('disabled behaviours', () => {
       const states = new Set(h.outputs.map((o) => o.state));
       for (const bad of ['chasingCursor', 'seekingAttention', 'inspectingWindow', 'grooming'] as const) expect(states.has(bad)).toBe(false);
       expect(h.outputs.some((o) => o.clip === 'groom')).toBe(false);
-      expect(h.outputs.some((o) => o.support.kind === 'window')).toBe(false);
+      expect(h.outputs.some((o) => onWindowSurface(o.support))).toBe(false);
       expect(h.outputs.some((o) => o.state === 'playing' && o.clip === 'run')).toBe(false);
       expect(states.has('playing')).toBe(true);
     }
@@ -244,7 +244,7 @@ describe('quit', () => {
       expect((readyAt as unknown as number) - t0).toBeLessThanOrEqual(1200);
       expect(count).toBe(1);
       expect(['sleeping', 'away']).toContain(h.last!.state);
-      expect(h.last!.support.kind === 'floor' || h.last!.support.kind === 'window').toBe(true);
+      expect(h.last!.support.kind === 'floor' || h.last!.support.kind === 'surface').toBe(true);
     }
   });
 });

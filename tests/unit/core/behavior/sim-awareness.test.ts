@@ -7,7 +7,7 @@ import type { VisualEventKind, VisualSummary } from '../../../../src/shared/perc
 import type { SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
 import { PERCEPTION_FLOOR_MS } from '../../../../src/core/behavior/sim';
-import { decisionView, Harness, scoreOf, settingsWith, WAKE_MS } from './fixtures';
+import { decisionView, Harness, onWindowSurface, scoreOf, settingsWith, WAKE_MS } from './fixtures';
 
 const MIN = 60_000;
 const ACTIVE: ReadonlySet<BehaviorState> = new Set(['running', 'playing', 'chasingCursor']);
@@ -239,7 +239,7 @@ describe('F13: private windows', () => {
       h.step([{ type: 'window.shown', window: windowInfo('w', rect, { excluded }) }]);
       let on = false;
       h.run(60 * MIN, 100, (hh) => {
-        if (hh.last!.support.kind === 'window') on = true;
+        if (onWindowSurface(hh.last!.support)) on = true;
       });
       if (on) n++;
     }
@@ -257,10 +257,10 @@ describe('F13: private windows', () => {
     h.env.foreground = windowInfo('w', rect, { excluded: true });
     h.keepOutputs = true;
     h.run(30 * MIN, 100);
-    expect(h.outputs.some((o) => o.support.kind === 'window')).toBe(false);
+    expect(h.outputs.some((o) => onWindowSurface(o.support))).toBe(false);
     h.env.foreground = windowInfo('w', rect, { excluded: false });
     h.run(60 * MIN, 100);
-    expect(h.outputs.some((o) => o.support.kind === 'window')).toBe(true);
+    expect(h.outputs.some((o) => onWindowSurface(o.support))).toBe(true);
   });
 
   it('moving or closing a private window gets at most a glance: no following, inspecting or investigating', () => {

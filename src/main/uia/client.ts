@@ -93,6 +93,7 @@ export class UiaHelperClient {
   private exitWaiters: Array<() => void> = [];
   private problemsLogged = 0;
   private stderrLogged = false;
+  private lastTimeoutCheckAt = Number.NEGATIVE_INFINITY;
   private readonly maxLineBytes: number;
   private readonly maxPending: number;
   private readonly log: Logger;
@@ -143,6 +144,7 @@ export class UiaHelperClient {
     this.discarding = false;
     this.stderrLogged = false;
     this.startedAt = this.o.now();
+    this.lastTimeoutCheckAt = this.startedAt;
     let child: ChildProcessLike;
     try {
       child = this.o.spawn(this.o.helperPath);
@@ -184,6 +186,7 @@ export class UiaHelperClient {
     if (this.pending.size >= this.maxPending) return Promise.reject(new HelperTransportError('busy'));
     const id = this.nextId;
     this.nextId = this.nextId >= MAX_REQUEST_ID ? 1 : this.nextId + 1;
+    this.lastTimeoutCheckAt = Math.max(this.lastTimeoutCheckAt, now);
     return new Promise<HelperResponse>((resolve, reject) => {
       this.pending.set(id, { resolve, reject, sentAt: now });
       try {
@@ -196,8 +199,18 @@ export class UiaHelperClient {
     });
   }
 
-  /** Fails requests older than the timeout; returns how many timed out. */
+  /**
+   * Fails requests older than the timeout; returns how many timed out. The owner calls this at
+   * least every timeout period; a longer gap since the previous call (or request) means the host
+   * itself was stalled or suspended, not the helper, so pending requests get a fresh period instead.
+   */
   checkTimeouts(now: number): number {
+    const gap = now - this.lastTimeoutCheckAt;
+    this.lastTimeoutCheckAt = now;
+    if (gap > this.o.requestTimeoutMs) {
+      for (const p of this.pending.values()) p.sentAt = Math.max(p.sentAt, now);
+      return 0;
+    }
     let n = 0;
     for (const [id, p] of this.pending) {
       if (now - p.sentAt < this.o.requestTimeoutMs) continue;

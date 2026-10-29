@@ -7,14 +7,20 @@ import { AI_REACTIONS, VISUAL_EVENT_KINDS } from '../../../../src/shared/percept
 import type { Rect } from '../../../../src/shared/geometry';
 import { TOGGLEABLE_BEHAVIORS } from '../../../../src/shared/settings';
 import type { SimEvent } from '../../../../src/shared/sim';
+import type { Surface } from '../../../../src/shared/surfaces';
 import type { WindowInfo, WorldGeometry } from '../../../../src/shared/world';
 import { APP_CATEGORIES } from '../../../../src/shared/world';
 import { canTransition, MAX_STATE_CHANGES_PER_WINDOW, mulberry32, STATE_CHANGE_WINDOW_MS, STATE_SPECS } from '../../../../src/core/behavior';
 import { mayInterrupt, PHYSICAL_STATES } from '../../../../src/core/behavior/states';
 import type { Random } from '../../../../src/core/behavior/random';
-import { DUAL_FLAT, DUAL_MIXED, Harness, insideAnyWorkArea, settingsWith, SINGLE } from './fixtures';
+import { MOVEMENT } from '../../../../src/core/movement';
+import { display, DUAL_FLAT, DUAL_MIXED, Harness, insideAnyWorkArea, settingsWith, SINGLE, stripId, surfacesFromWindows, tabStrip, taskbar, taskbarId, world } from './fixtures';
 
-const WORLDS: WorldGeometry[] = [DUAL_MIXED, SINGLE, DUAL_FLAT];
+/** Two auto-hide displays (work area = whole screen) at mixed DPI: taskbars slide in above the floor. */
+const AUTOHIDE_MIXED = world(display('1', 0, 0, 1920, 1200, { primary: true }), display('2', 1920, -200, 2560, 1440, { scale: 1.25 }));
+const WORLDS: WorldGeometry[] = [DUAL_MIXED, SINGLE, DUAL_FLAT, AUTOHIDE_MIXED];
+/** Longest a free fall may last before the mover forces a landing (MAX_FLIGHT_MS), plus a tick. */
+const MAX_AIR_MS = 6000 + 500;
 const STATE_SET: ReadonlySet<string> = new Set(BEHAVIOR_STATES);
 const CLIP_SET: ReadonlySet<string> = new Set(ANIM_CLIPS);
 const EMOTE_SET: ReadonlySet<string> = new Set(EMOTES);
@@ -26,6 +32,8 @@ interface FuzzResult {
   states: Set<BehaviorState>;
   forbiddenSeen: Set<BehaviorState>;
   debug: Record<string, unknown>;
+  /** Ticks spent on each kind of environment surface. */
+  onSurface: Record<string, number>;
 }
 
 function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {}): FuzzResult {
@@ -149,6 +157,59 @@ function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {})
 
   const forbidden: ReadonlySet<BehaviorState> = new Set(opts.disabledAll ? ['chasingCursor', 'seekingAttention', 'inspectingWindow', 'grooming'] : []);
 
+  // ---- v1.1 surfaces: a provider emulation with sliding taskbars, tab strips on some windows,
+  // a lagging list (surfaces missing while live) and vanished surfaces (getSurface null).
+  const browsers = new Set(['w1', 'w3']);
+  const taskbars = new Map<string, { progress: number; dir: -1 | 0 | 1; flapUntil: number }>();
+  let listed: Surface[] = [];
+  let live = new Map<string, Surface>();
+  const missingSince = new Map<string, number>();
+  let airSince: number | null = null;
+  const onSurface: Record<string, number> = {};
+  const surfaceEvents: SimEvent[] = [];
+  const buildSurfaces = (): void => {
+    const geometry = WORLDS[worldIdx] as WorldGeometry;
+    const all: Surface[] = [];
+    for (const s of surfacesFromWindows(windows, geometry, { walls: true, now: h.now })) {
+      if (s.orientation === 'ledge' && browsers.has(s.ownerId)) {
+        const span = s.x1 - s.x0;
+        const strip = tabStrip(s.ownerId, s.y, s.x0 + span * 0.05, s.x1 - span * 0.15, r() < 0.8 ? { x0: s.x0 + span * 0.1, x1: s.x0 + span * 0.6 } : null, r() < 0.7 ? s.x0 + span * r() : null);
+        all.push(strip);
+      } else if (s.orientation === 'wall' && browsers.has(s.ownerId)) {
+        all.push({ ...s, topLedgeId: stripId(s.ownerId) });
+      } else {
+        all.push(s);
+      }
+    }
+    for (const d of geometry.displays) {
+      const tb = taskbars.get(d.id) ?? { progress: 0, dir: 0, flapUntil: -Infinity };
+      taskbars.set(d.id, tb);
+      const wasListed = tb.progress >= 0.5;
+      if (h.now < tb.flapUntil && r() < 0.3) tb.dir = tb.dir >= 0 ? -1 : 1;
+      else if (tb.dir === 0 && r() < 0.004) tb.dir = tb.progress > 0.5 ? -1 : 1;
+      tb.progress = Math.min(1, Math.max(0, tb.progress + tb.dir * (0.15 + r() * 0.5)));
+      if (tb.progress === 0 || tb.progress === 1) tb.dir = 0;
+      if (r() < 0.0005) tb.flapUntil = h.now + 10_000;
+      const thick = 48 * d.scaleFactor;
+      const bottom = d.boundsPx.y + d.boundsPx.height;
+      const isListed = tb.progress >= 0.5;
+      if (isListed) {
+        const phase = tb.dir > 0 ? 'entering' : tb.dir < 0 ? 'leaving' : 'stable';
+        all.push(taskbar(d.id, d, bottom - thick * tb.progress, { phase, vy: -tb.dir * 900 }));
+      }
+      if (isListed && !wasListed) surfaceEvents.push({ type: 'taskbar.shown', surfaceId: taskbarId(d.id), displayId: d.id, edge: 'bottom' });
+      if (!isListed && wasListed) surfaceEvents.push({ type: 'taskbar.hidden', surfaceId: taskbarId(d.id), displayId: d.id, edge: 'bottom' });
+    }
+    live = new Map(all.map((s) => [s.id, s] as const));
+    // Vanished: getSurface already says gone while the (lagging) list may still have it.
+    if (r() < 0.01 && all.length > 0) live.delete(pick(all).id);
+    // Lag: listed surfaces missing for a moment while still live.
+    listed = r() < 0.03 ? all.filter(() => r() < 0.7) : all;
+    h.env.surfaces = listed;
+    const liveNow = live;
+    h.env.getSurface = (id: string) => liveNow.get(id) ?? null;
+  };
+
   for (let i = 0; i < ticks; i++) {
     // Environment drift.
     if (r() < 0.002) {
@@ -176,9 +237,18 @@ function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {})
     if (h.env.dragCursor && r() < 0.02) h.env.dragCursor = null;
     h.env.foreground = r() < 0.001 ? null : (h.env.foreground ?? null);
 
-    const events: SimEvent[] = [];
+    buildSurfaces();
+    const events: SimEvent[] = surfaceEvents.splice(0);
     const n = r() < 0.15 ? 1 + Math.floor(r() * 3) : 0;
     for (let k = 0; k < n; k++) events.push(randomEvent());
+    if (r() < 0.01) {
+      const ids = [...live.keys()];
+      const any = ids.length > 0 && r() < 0.7 ? pick(ids) : `tabStrip:w${Math.floor(r() * 9)}`;
+      const kind = r();
+      if (kind < 0.3) events.push({ type: 'taskbar.shown', surfaceId: any, displayId: r() < 0.5 ? '1' : null, edge: 'bottom' });
+      else if (kind < 0.5) events.push({ type: 'taskbar.hidden', surfaceId: any, displayId: null, edge: 'bottom' });
+      else events.push({ type: 'tabs.changed', surfaceId: any, ownerId: pick(['w1', 'w3', 'w0']), change: pick(['added', 'removed', 'selected', 'geometry'] as const), focusX: r() < 0.1 ? Number.NaN : randPoint().x });
+    }
     const dt = r() < 0.9 ? 16 + Math.floor(r() * 120) : 250 + Math.floor(r() * 200);
     const before = h.transitions.length;
     const out = h.step(events, dt);
@@ -208,8 +278,31 @@ function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {})
     check(out.visible || out.opacity < 0.02, 'invisible but opaque');
     check(out.state !== 'held' || out.support.kind === 'held', 'held without held support');
     check(out.support.kind !== 'air' || AIR_STATES.has(out.state), 'airborne in a grounded state');
-    if (!out.snap && prev.support.kind !== 'held' && out.support.kind !== 'held' && prev.support.kind !== 'window' && out.support.kind !== 'window') {
+    // Riding surfaces moves with them (the fuzz moves windows in jumps), so only floors, air and walking are checked.
+    if (!out.snap && prev.support.kind !== 'held' && out.support.kind !== 'held' && prev.support.kind !== 'surface' && out.support.kind !== 'surface') {
       check(Math.hypot(out.x - prev.x, out.y - prev.y) <= 4000 * (dt / 1000) + 8, 'teleport without snap');
+    }
+    // v1.1 surfaces.
+    if (out.support.kind === 'surface') onSurface[out.support.surfaceKind] = (onSurface[out.support.surfaceKind] ?? 0) + 1;
+    const onWall = out.support.kind === 'surface' && out.support.orientation === 'wall';
+    check((out.clip === 'climb') === onWall, 'climb clip off a wall (or a wall without it)');
+    if (out.support.kind === 'surface') {
+      // Never attached to a surface the provider says is gone ...
+      check(live.has(out.support.surfaceId), 'attached to a vanished surface');
+      const sid = out.support.surfaceId;
+      // ... nor to one missing from the list for longer than the (moving) grace.
+      if (listed.some((s) => s.id === sid)) missingSince.delete(sid);
+      else if (!missingSince.has(sid)) missingSince.set(sid, h.now);
+      check(h.now - (missingSince.get(sid) ?? h.now) <= MOVEMENT.perchMovingGraceMs + 500, 'attached to an unlisted surface past the grace');
+      check(!PHYSICAL_STATES.has(out.state) || out.state === 'landing' || out.state === 'jumping', 'physical state while attached');
+    } else {
+      missingSince.clear();
+    }
+    if (out.support.kind === 'air') {
+      airSince ??= h.now;
+      check(h.now - airSince <= MAX_AIR_MS, 'airborne for too long');
+    } else {
+      airSince = null;
     }
     for (const req of out.requests) {
       if (req.type === 'perception') {
@@ -249,9 +342,9 @@ function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {})
   let ready = q.requests.some((x) => x.type === 'quitReady');
   while (!ready && h.now - t0 < 1200) ready = h.step([], 33).requests.some((x) => x.type === 'quitReady');
   expect(ready).toBe(true);
-  console.log(`fuzz seed=${seed}: ${ticks} ticks, ${Math.round(h.now / 60_000)} sim-min, ${checked} transitions, states=${states.size}`);
+  console.log(`fuzz seed=${seed}: ${ticks} ticks, ${Math.round(h.now / 60_000)} sim-min, ${checked} transitions, states=${states.size}, ticks on surfaces=${JSON.stringify(onSurface)}`);
   expect(checked).toBeGreaterThan(ticks / 200);
-  return { ticks, simMs: h.now, states, forbiddenSeen, debug: h.sim.debugInfo() };
+  return { ticks, simMs: h.now, states, forbiddenSeen, debug: h.sim.debugInfo(), onSurface };
 }
 
 describe('simulation fuzz', () => {
@@ -261,11 +354,15 @@ describe('simulation fuzz', () => {
     expect(res.debug.eventErrors).toBe(0);
     // The run is long and varied enough to visit almost every state.
     expect(res.states.size).toBeGreaterThanOrEqual(BEHAVIOR_STATES.length - 2);
+    // The run really exercised taskbars, window tops and sides, and tab strips.
+    for (const kind of ['taskbar', 'windowTop', 'windowSide', 'tabStrip']) expect(res.onSurface[kind] ?? 0, kind).toBeGreaterThan(0);
   }, 300_000);
 
   it('disabled behaviours never occur under random stimuli', () => {
     const res = fuzz(2, 60_000, { disabledAll: true });
     expect([...res.forbiddenSeen]).toEqual([]);
     expect(res.debug.invalidSamples).toEqual([]);
+    // Everything switched off: no window tops, sides, taskbars or tab strips either.
+    expect(res.onSurface).toEqual({});
   }, 300_000);
 });

@@ -86,17 +86,44 @@ function clipToWorkAreasOnRow(spans: readonly Span[], y: number, displays: reado
   return out.sort((p, q) => p[0] - q[0]);
 }
 
-/** y-ranges of [y0, y1) inside work areas that fully contain the column band [bx0, bx1). */
-function workAreaRowsForBand(bx0: number, bx1: number, y0: number, y1: number, displays: readonly DisplayGeometry[]): Span[] {
-  const out: Span[] = [];
-  for (const d of displays) {
-    const wa = d.workAreaPx;
-    if (bx0 < wa.x || bx1 > wa.x + wa.width) continue;
-    const a = Math.max(y0, wa.y);
-    const b = Math.min(y1, wa.y + wa.height);
-    if (b > a) out.push([a, b]);
+/** True when the x-spans cover [x0, x1) completely. */
+function coversRange(spans: readonly Span[], x0: number, x1: number): boolean {
+  let reach = x0;
+  for (const [a, b] of [...spans].sort((p, q) => p[0] - q[0])) {
+    if (a > reach) return false;
+    if (b > reach) reach = b;
+    if (reach >= x1) return true;
   }
-  return out.sort((p, q) => p[0] - q[0]);
+  return reach >= x1;
+}
+
+/**
+ * y-ranges of [y0, y1) on which the column band [bx0, bx1) lies entirely inside the union of
+ * the work areas (a band may straddle two side-by-side displays; it may not leave the screen).
+ */
+function workAreaRowsForBand(bx0: number, bx1: number, y0: number, y1: number, displays: readonly DisplayGeometry[]): Span[] {
+  if (!(y1 > y0) || !(bx1 > bx0)) return [];
+  const areas = displays.map((d) => d.workAreaPx).filter((wa) => wa.x < bx1 && wa.x + wa.width > bx0 && wa.y < y1 && wa.y + wa.height > y0);
+  if (areas.length === 0) return [];
+  // Elementary rows between the work areas' top/bottom edges: coverage is constant on each.
+  const cuts = new Set<number>([y0, y1]);
+  for (const wa of areas) {
+    if (wa.y > y0 && wa.y < y1) cuts.add(wa.y);
+    const bottom = wa.y + wa.height;
+    if (bottom > y0 && bottom < y1) cuts.add(bottom);
+  }
+  const ys = [...cuts].sort((a, b) => a - b);
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i + 1 < ys.length; i++) {
+    const a = ys[i]!;
+    const b = ys[i + 1]!;
+    const xs: Span[] = areas.filter((wa) => wa.y <= a && wa.y + wa.height >= b).map((wa) => [wa.x, wa.x + wa.width] as const);
+    if (!coversRange(xs, bx0, bx1)) continue;
+    const prev = out[out.length - 1];
+    if (prev && prev[1] === a) prev[1] = b;
+    else out.push([a, b]);
+  }
+  return out;
 }
 
 const spanLength = (s: Span): number => s[1] - s[0];

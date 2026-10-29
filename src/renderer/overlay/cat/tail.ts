@@ -16,11 +16,14 @@ const MAX_STEPS = 30;
 const RESET_GAP_MS = 250;
 /** Larger per-frame body displacement (cat-local DIP) is a teleport, not motion. */
 const MAX_SHIFT = 40;
-/** Max upward correction per sub-step when a point is below the ground line (while easing in). */
-const GROUND_PUSH = 0.6;
-const GROUND_RAMP_S = 0.25;
-/** A ground line that moves up by more than this (DIP) in one frame eases in again (e.g. pulling up onto a ledge). */
+/**
+ * The ground clamp is hard, but a ground line that appears (landing, stopping after a jump) or moves
+ * up by more than GROUND_JUMP DIP in one frame (pulling up onto a ledge) starts at the tail's deepest
+ * point and rises to its height at GROUND_RISE_DIP_S, so the tail is lifted out smoothly instead of
+ * snapping (about 4 DIP per 60 Hz frame).
+ */
 const GROUND_JUMP = 1.5;
+const GROUND_RISE_DIP_S = 240;
 /** Max free-point speed (DIP/s) from inertia and target pull; root drag is not limited. */
 const MAX_SPEED = 600;
 
@@ -32,7 +35,8 @@ export class TailChain {
   readonly tx = new Float64Array(POINTS);
   readonly ty = new Float64Array(POINTS);
   private ready = false;
-  private groundBlend = 1;
+  /** The clamp line in effect (cat-local y): at or below the requested ground, rising to it; NaN for none. */
+  private groundLine = Number.NaN;
   private lastGroundY = Number.NaN;
   /** Tail radius multiplier from puff (1 = normal). */
   puff = 1;
@@ -60,8 +64,9 @@ export class TailChain {
     const valid = Number.isFinite(dtMs) && dtMs > 0;
     if (!this.ready || (valid && dtMs > RESET_GAP_MS) || !Number.isFinite(rootX) || !Number.isFinite(rootY)) {
       this.snapToTarget();
-      this.constrain(groundY, Number.POSITIVE_INFINITY);
+      this.constrain(groundY);
       this.lastGroundY = groundY;
+      this.groundLine = groundY;
       for (let i = 0; i < POINTS; i++) {
         this.px[i] = this.x[i]!;
         this.py[i] = this.y[i]!;
@@ -90,15 +95,17 @@ export class TailChain {
     const h = dtMs / 1000 / steps;
     const keep = Math.exp(-5 * h);
     const maxMove = MAX_SPEED * h;
-    // The ground clamp eases in over GROUND_RAMP_S after it switches on or jumps up, then is hard.
-    if (Number.isFinite(groundY)) {
-      if (Number.isFinite(this.lastGroundY) && groundY < this.lastGroundY - GROUND_JUMP) this.groundBlend = 0;
-      this.groundBlend = Math.min(1, this.groundBlend + dtMs / 1000 / GROUND_RAMP_S);
+    // The clamp line: a new or raised ground starts under the tail's deepest point and rises; a
+    // lower one applies at once (it never moves a point).
+    if (!Number.isFinite(groundY)) {
+      this.groundLine = Number.NaN;
+    } else if (!Number.isFinite(this.groundLine) || groundY < this.lastGroundY - GROUND_JUMP) {
+      this.groundLine = Math.max(groundY, this.deepestY());
     } else {
-      this.groundBlend = 0;
+      this.groundLine = Math.max(groundY, this.groundLine);
     }
     this.lastGroundY = groundY;
-    const push = this.groundBlend >= 1 ? Number.POSITIVE_INFINITY : GROUND_PUSH + this.groundBlend * 4;
+    const rise = GROUND_RISE_DIP_S * h;
     for (let s = 0; s < steps; s++) {
       for (let i = 1; i < POINTS; i++) {
         const cx = this.x[i]!;
@@ -122,7 +129,8 @@ export class TailChain {
         this.x[i] = nx;
         this.y[i] = ny;
       }
-      this.constrain(groundY, push);
+      if (this.groundLine > groundY) this.groundLine = Math.max(groundY, this.groundLine - rise);
+      this.constrain(this.groundLine);
     }
 
     for (let i = 1; i < POINTS; i++) {
@@ -133,7 +141,15 @@ export class TailChain {
     }
   }
 
-  private constrain(groundY: number, push = GROUND_PUSH): void {
+  /** Deepest (largest y) free point, -Infinity when none is finite. */
+  private deepestY(): number {
+    let y = Number.NEGATIVE_INFINITY;
+    for (let i = 1; i < POINTS; i++) if (this.y[i]! > y) y = this.y[i]!;
+    return y;
+  }
+
+  /** Restores the segment lengths and keeps free points at or above `groundY` (NaN: no clamp). */
+  private constrain(groundY: number): void {
     for (let i = 1; i < POINTS; i++) {
       const ax = this.x[i - 1]!;
       const ay = this.y[i - 1]!;
@@ -148,9 +164,8 @@ export class TailChain {
       let nx = ax + (dx / d) * TAIL_SEG_LEN;
       let ny = ay + (dy / d) * TAIL_SEG_LEN;
       if (Number.isFinite(groundY) && ny > groundY) {
-        // Push up towards the ground line (bounded per sub-step, so a clamp that switches on
-        // mid-motion eases in instead of popping) while keeping the segment length exact.
-        const gy = Math.max(groundY, ny - push) - ay;
+        // Onto the ground line, keeping the segment length exact.
+        const gy = groundY - ay;
         if (Math.abs(gy) < TAIL_SEG_LEN) {
           ny = ay + gy;
           nx = ax + (dx >= 0 ? 1 : -1) * Math.sqrt(TAIL_SEG_LEN * TAIL_SEG_LEN - gy * gy);

@@ -3,8 +3,8 @@
 // look-at, one-off reactions, mood on tail/ears/pupils, purr vibration, pendulum
 // swing while held).
 import type { AnimClip, CatReaction, CatReactionKind } from '../../../shared/cat';
-import { crossFadeMs, gaitHz, isGait, sampleClip, type ClipContext } from './clips';
-import { clamp, clamp01, damp, easeOut, lerp, noise1, pulse, smooth, TAU } from './math';
+import { climbEngagement, crossFadeMs, gaitHz, isGait, sampleClip, type ClipContext } from './clips';
+import { clamp, clamp01, damp, easeOut, lerp, noise1, pulse, smooth, sseg, TAU } from './math';
 import { blendPose, copyPose, createPose, sanitizePose, type Pose } from './pose';
 import { TORSO_T } from './rig';
 
@@ -57,8 +57,21 @@ const TAIL_AUTHORED: ReadonlySet<AnimClip> = new Set<AnimClip>([
 const MAX_LAYER_DT_S = 0.1;
 /** Rate (1/s) at which the climb clip follows speed changes (start/stop on the wall without a pop). */
 const CLIMB_SPEED_RATE = 9;
+/**
+ * Rate (1/s) at which the climbing motion develops after the cat starts climbing on the wall, and
+ * settles into clinging after it stops (~0.45 s to 90 %).
+ */
+const CLIMB_ENGAGE_RATE = 5;
 /** Anchor vertical speed (cat-local DIP/s) beyond which the climb gait runs downwards / upwards again. */
 const CLIMB_DIR_DIP_S = 4;
+/** Rate (1/s) at which the tail and head settle into the climbing-down (or up) carriage. */
+const CLIMB_DESCEND_RATE = 4;
+/**
+ * After leaving the wall the anchor still travels for a while (pulling up onto the ledge, stepping
+ * down to the floor): the ground shadow fades back in over this window (s after the clip changed),
+ * so it does not appear under a cat that is still in the air beside the window.
+ */
+const OFF_WALL_SHADOW_S: readonly [number, number] = [0.15, 0.5];
 
 export class CatAnimator {
   /** Final pose (clip + cross-fade + procedural layers). */
@@ -108,10 +121,17 @@ export class CatAnimator {
   private swing = 0;
   private swingVel = 0;
 
-  /** Eased speed the climb clip plays at, the anchor's smoothed vertical speed and the gait direction. */
+  /**
+   * Climb: eased speed the gait plays at, eased engagement (0 clinging .. 1 climbing), the anchor's
+   * smoothed vertical speed, the gait direction, and seconds since the clip left 'climb'.
+   */
   private climbSpeed = 0;
+  private climbEngage = 0;
   private climbVy = 0;
   private climbDir = 1;
+  /** Eased 0 (up or clinging) .. 1 (climbing down). */
+  private climbDescend = 0;
+  private offWallS = Number.POSITIVE_INFINITY;
 
   /** `at` of the newest reaction seen; each distinct one is considered once. */
   private reactionSeen = Number.NaN;
@@ -143,6 +163,14 @@ export class CatAnimator {
   }
 
   /**
+   * True for a short while after the clip left 'climb': the anchor may still be travelling beside
+   * the window (pulling up onto the ledge, stepping down to the floor), so it is not on a surface yet.
+   */
+  get leavingWall(): boolean {
+    return this.offWallS < OFF_WALL_SHADOW_S[1];
+  }
+
+  /**
    * @param motionX horizontal body motion since the last frame (cat-local DIP), drives the held swing.
    * @param motionY vertical body motion since the last frame (cat-local DIP, + = down): a cat moving
    *   down a wall climbs down tail first, so the climb gait runs backwards and its paws keep their grip.
@@ -158,10 +186,14 @@ export class CatAnimator {
       if (!first) copyPose(this.fromPose, this.base);
       if (!isGait(input.clip) || (this.clip !== null && !isGait(this.clip))) this.cycle = 0;
       if (input.clip === 'climb' && this.clip !== 'climb') {
+        // The cross-fade carries the pose onto the wall, clinging; the climbing motion then develops.
         this.climbSpeed = speed;
+        this.climbEngage = 0;
         this.climbVy = 0;
         this.climbDir = 1;
+        this.climbDescend = 0;
       }
+      if (this.clip === 'climb' && input.clip !== 'climb') this.offWallS = 0;
       this.fadeDur = first ? 0 : crossFadeMs(this.clip, input.clip) / 1000;
       this.fadeElapsed = 0;
       this.clip = input.clip;
@@ -173,13 +205,24 @@ export class CatAnimator {
     if (!Number.isFinite(c.t)) c.t = 0;
     let gaitSpeed = speed;
     let dir = 1;
+    c.engage = undefined;
+    c.descend = undefined;
     if (input.clip === 'climb') {
       this.climbSpeed = damp(this.climbSpeed, speed, CLIMB_SPEED_RATE, dt);
+      this.climbEngage = damp(this.climbEngage, climbEngagement(speed), CLIMB_ENGAGE_RATE, dt);
       if (dt > 0 && Number.isFinite(motionY)) this.climbVy = damp(this.climbVy, clamp(motionY / dt, -3000, 3000), 8, dt);
       if (this.climbVy > CLIMB_DIR_DIP_S) this.climbDir = -1;
       else if (this.climbVy < -CLIMB_DIR_DIP_S) this.climbDir = 1;
       gaitSpeed = this.climbSpeed;
       dir = this.climbDir;
+      // Holding still keeps whichever way the tail was held; it changes while climbing.
+      const descending = this.climbDir < 0 ? 1 : 0;
+      this.climbDescend = damp(this.climbDescend, lerp(this.climbDescend, descending, this.climbEngage), CLIMB_DESCEND_RATE, dt);
+      c.engage = this.climbEngage;
+      c.descend = this.climbDescend;
+      this.offWallS = Number.POSITIVE_INFINITY;
+    } else if (this.offWallS < OFF_WALL_SHADOW_S[1]) {
+      this.offWallS += dt;
     }
     if (isGait(input.clip)) this.cycle += dir * gaitHz(input.clip, gaitSpeed) * dt * animSpeed;
     // Gait clips only use the cycle's fractional part; keep it finite and small (a backwards climb counts down).
@@ -213,6 +256,7 @@ export class CatAnimator {
     this.applyMood(p, input.clip, c.arousal, c.contentment);
     this.applyPurr(p);
     this.applySwing(p, input.clip, motionX, dt);
+    if (this.offWallS < OFF_WALL_SHADOW_S[1]) p.shadow *= sseg(this.offWallS, OFF_WALL_SHADOW_S[0], OFF_WALL_SHADOW_S[1]);
     sanitizePose(p);
     return p;
   }

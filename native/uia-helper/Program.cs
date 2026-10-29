@@ -151,6 +151,8 @@ namespace DesktopCat.Uia
                 return true;
             }
             string line = raw.TrimEnd('\r');
+            // Some hosts prefix the stream with a UTF-8 byte order mark.
+            if (line.Length > 0 && line[0] == '﻿') line = line.Substring(1);
             if (line.Length == 0) return true;
             Dictionary<string, object> req;
             try

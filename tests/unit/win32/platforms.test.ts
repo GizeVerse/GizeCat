@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DisplayGeometry } from '../../../src/shared/world';
-import { computeFullscreenDisplayIds, computePlatforms, subtractSpan } from '../../../src/main/win32/platforms';
+import { computeFullscreenDisplayIds, computePlatforms, openColumnSpans, openRowSpans, subtractSpan } from '../../../src/main/win32/platforms';
 import { rect, win } from './fakes';
 
 describe('subtractSpan', () => {
@@ -13,6 +13,35 @@ describe('subtractSpan', () => {
     expect(subtractSpan([[0, 100]], 50, 200)).toEqual([[0, 50]]);
     expect(subtractSpan([[0, 100]], -1, 101)).toEqual([]);
     expect(subtractSpan([[0, 100]], 100, 200)).toEqual([[0, 100]]);
+  });
+});
+
+describe('open spans (shared with the v1.1 surface provider)', () => {
+  it('openRowSpans cuts a row by the rects that contain it (half-open rows)', () => {
+    const above = [rect(100, 50, 100, 100), rect(300, 200, 50, 50), rect(400, 99, 50, 1)];
+    expect(openRowSpans(99, 0, 500, above)).toEqual([
+      [0, 100],
+      [200, 400],
+      [450, 500],
+    ]);
+    // A rect ending at the row (y + height === row) does not cover it.
+    expect(openRowSpans(150, 0, 500, above)).toEqual([[0, 500]]);
+    expect(openRowSpans(10, 50, 50, above)).toEqual([]);
+    expect(openRowSpans(60, 120, 180, above)).toEqual([]);
+  });
+
+  it('openColumnSpans cuts a column band by the y-ranges of rects overlapping it', () => {
+    const above = [rect(90, 100, 50, 100), rect(200, 300, 50, 50), rect(60, 400, 40, 20)];
+    // Band [95, 101): the first rect overlaps it, the third touches it from the left (x + width = 100 > 95).
+    expect(openColumnSpans(95, 101, 0, 500, above)).toEqual([
+      [0, 100],
+      [200, 400],
+      [420, 500],
+    ]);
+    // Rects that only touch the band's edges do not cut it.
+    expect(openColumnSpans(140, 200, 0, 500, above)).toEqual([[0, 500]]);
+    expect(openColumnSpans(0, 10, 50, 50, above)).toEqual([]);
+    expect(openColumnSpans(10, 10, 0, 50, above)).toEqual([]);
   });
 });
 

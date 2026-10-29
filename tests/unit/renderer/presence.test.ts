@@ -89,7 +89,7 @@ describe('presence rect covers the drawn cat', () => {
                     state: clip === 'sleep' ? 'sleeping' : 'idle',
                     clip,
                     clipStartedAt: 0,
-                    speed: clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : 0,
+                    speed: clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : clip === 'climb' ? 0.5 : 0,
                     vy: clip === 'jump' ? -300 : clip === 'fall' ? 300 : 0,
                     look: { x: ANCHOR.x + 60 * facing, y: ANCHOR.y - 60 },
                     arousal: 0.9,

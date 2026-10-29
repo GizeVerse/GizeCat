@@ -36,8 +36,10 @@ namespace DesktopCat.Uia
     /// <summary>Event subscriptions of one watched window.</summary>
     internal sealed class WatchEntry
     {
-        public AutomationElement Window;
+        /// <summary>Tab-strip region (or container): ElementSelected, subtree (browser UI only).</summary>
         public AutomationElement Target;
+        /// <summary>BrowserView: StructureChanged on its direct children (the content view reports tab switches/additions), or null.</summary>
+        public AutomationElement Content;
         public AutomationEventHandler Selected;
         public StructureChangedEventHandler Structure;
     }
@@ -532,18 +534,21 @@ namespace DesktopCat.Uia
                 {
                     StripElements s = GetElements(key, h);
                     AutomationElement target = s.Region ?? s.Container;
-                    if (target == null || s.Window == null) return false;
+                    if (target == null) return false;
                     var entry = new WatchEntry();
-                    entry.Window = s.Window;
                     entry.Target = target;
+                    entry.Content = s.BrowserView;
                     string hwnd = key;
+                    // Handlers never touch the sender: it may be a web-content node.
                     entry.Selected = (sender, e) => events.Notify(hwnd, "selected");
                     entry.Structure = (sender, e) => events.Notify(hwnd, "structure");
                     // The active request keeps the event cache to activation-free properties.
                     using (safeRequest.Activate())
                     {
                         Automation.AddAutomationEventHandler(SelectionItemPattern.ElementSelectedEvent, entry.Target, TreeScope.Subtree, entry.Selected);
-                        Automation.AddStructureChangedEventHandler(entry.Window, TreeScope.Subtree, entry.Structure);
+                        // Children scope only: the content view (a direct child of BrowserView) reports
+                        // tab switches/additions; a subtree registration would reach into web content.
+                        if (entry.Content != null) Automation.AddStructureChangedEventHandler(entry.Content, TreeScope.Children, entry.Structure);
                     }
                     watches[key] = entry;
                     return true;
@@ -573,12 +578,16 @@ namespace DesktopCat.Uia
             {
                 // The window is gone or the provider failed; nothing left to remove.
             }
-            try
+            if (entry.Content != null)
             {
-                Automation.RemoveStructureChangedEventHandler(entry.Window, entry.Structure);
-            }
-            catch (Exception)
-            {
+                try
+                {
+                    Automation.RemoveStructureChangedEventHandler(entry.Content, entry.Structure);
+                }
+                catch (Exception)
+                {
+                    // Same as above.
+                }
             }
             events.SetWatched(watches.Keys);
         }

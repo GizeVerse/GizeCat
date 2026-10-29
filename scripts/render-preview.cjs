@@ -2,13 +2,19 @@
 //
 // Contact sheets (every clip, skin, style, scale, light/dark, faces, emotes, transitions):
 //   node scripts/with-lock.mjs preview -- npx electron scripts/render-preview.cjs [--only=faces,clips-1] [--dpr=1] [--bench]
+// A trailing * selects by prefix, e.g. --only=climb* renders the v1.1 climb sheets: climb-focus
+// (clinging idle and climbing, both facings), climb-cycle, climb-skins-*/climb-pixel-* (every skin,
+// light/dark), climb-scales, climb-emotes, climb-transitions, climb-strip* (walk, mount, climb,
+// pull-up onto the top) and climb-strip-down* (swing down, climb down, step off), with the mover's
+// timings and speeds.
 //
 // End-to-end overlay smoke (the real preload + overlay runtime in an offscreen window,
-// fed with synthetic CatRenderState snapshots; checks hit-region IPC and captures frames):
+// fed with synthetic CatRenderState snapshots; checks hit-region IPC, including a climbing
+// cat's vertical hit region, and captures frames):
 //   node scripts/with-lock.mjs preview -- npx electron scripts/render-preview.cjs --overlay
 //
-// Writes PNGs to out/preview/. Uses a temporary userData dir and software rendering, never
-// sends OS input, and always exits (hard timeout).
+// Writes PNGs to out/preview/ (or --out=<dir>). Uses a temporary userData dir and software
+// rendering, never sends OS input, and always exits (hard timeout).
 'use strict';
 const { app, BrowserWindow, ipcMain, net, protocol } = require('electron');
 const fs = require('node:fs');
@@ -20,7 +26,6 @@ const root = path.resolve(__dirname, '..');
 const pageSrc = path.join(__dirname, 'preview-page');
 const pageOut = path.join(root, 'out', 'preview-page');
 const overlayOut = path.join(root, 'out', 'preview-overlay');
-const outDir = path.join(root, 'out', 'preview');
 const SCHEME = 'dcat-preview';
 
 const argv = process.argv.slice(2);
@@ -28,7 +33,10 @@ const arg = (name) => {
   const a = argv.find((x) => x.startsWith(`--${name}=`));
   return a ? a.slice(name.length + 3) : null;
 };
+// PNGs go to out/preview unless --out=<dir> is given (`npm run build` wipes out/).
+const outDir = arg('out') ? path.resolve(arg('out')) : path.join(root, 'out', 'preview');
 const only = (arg('only') || '').split(',').filter(Boolean);
+const wanted = (name) => only.length === 0 || only.some((o) => (o.endsWith('*') ? name.startsWith(o.slice(0, -1)) : o === name));
 const dpr = Number(arg('dpr') || '1') || 1;
 const doBench = argv.includes('--bench');
 const doOverlay = argv.includes('--overlay');
@@ -75,7 +83,7 @@ async function renderSheets() {
   await win.loadFile(path.join(pageOut, 'index.html'));
   const names = await win.webContents.executeJavaScript('window.__preview.list()');
   for (const name of names) {
-    if (only.length && !only.includes(name)) continue;
+    if (!wanted(name)) continue;
     const t0 = Date.now();
     const url = await win.webContents.executeJavaScript(`window.__preview.render(${JSON.stringify(name)}, ${dpr})`);
     const file = path.join(outDir, `${name}.png`);
@@ -232,6 +240,19 @@ async function overlaySmoke() {
     await sleep(33);
   }
   await capture('walk');
+  // Phase 1b: climb a window's left edge (wall line x = 420, wall to the cat's right) for 1.2 s.
+  const wallX = 420;
+  const climbAt = Date.now() - t0 + 10000;
+  const climbFrom = regions.length;
+  let climbY = 300;
+  const startClimb = Date.now();
+  while (Date.now() - startClimb < 1200) {
+    climbY = 300 - 50 * ((Date.now() - startClimb) / 1200);
+    send({ x: wallX, y: climbY, clip: 'climb', state: 'walking', speed: 0.5, clipStartedAt: climbAt });
+    await sleep(33);
+  }
+  await capture('climb');
+  const climbRegions = regions.slice(climbFrom).filter(({ r }) => r && Array.isArray(r.rects) && r.rects.length > 0);
   const sitAt = Date.now() - t0 + 10000;
   for (let i = 0; i < 25; i++) {
     send({ x: 420, clip: 'sit', state: 'idle', speed: 0, clipStartedAt: sitAt, emote: 'heart', emoteStartedAt: sitAt + 200, look: { x: 520, y: 200 } });
@@ -255,6 +276,19 @@ async function overlaySmoke() {
 
   const problems = [];
   if (visibleRegions === 0) problems.push('no hit region while visible');
+  // Climbing (scale 1.5): the hit region follows the vertical pose, about a body length up the wall
+  // from the hind-paw anchor, and stays on the cat's side of the wall line (paws reach just past it).
+  const lastClimb = climbRegions.at(-1);
+  let climbReach = 0;
+  let climbRight = 0;
+  if (!lastClimb) {
+    problems.push('no hit region while climbing');
+  } else {
+    climbReach = climbY - Math.min(...lastClimb.r.rects.map((q) => q.y));
+    climbRight = Math.max(...lastClimb.r.rects.map((q) => q.x + q.width)) - wallX;
+    if (climbReach < 1.5 * 70) problems.push(`climbing hit region reaches only ${climbReach.toFixed(1)} DIP up the wall`);
+    if (climbRight > 1.5 * 12) problems.push(`climbing hit region crosses the wall line by ${climbRight.toFixed(1)} DIP`);
+  }
   for (const { r } of regions) {
     const bad = checkRegion(r);
     if (bad) problems.push(`invalid hit region: ${bad}`);
@@ -275,6 +309,7 @@ async function overlaySmoke() {
   console.log(
     `render-preview: overlay smoke: ${regions.length} hit-region messages (${visibleRegions} while visible), min gap ${minGap} ms, ` +
       `last visible rects ${lastVisible ? lastVisible.r.rects.length : 0}, after hide ${lastAfterHide ? lastAfterHide.r.rects.length : 'n/a'}; ` +
+      `climbing: ${climbRegions.length} regions, reach ${climbReach.toFixed(1)} DIP up, ${climbRight.toFixed(1)} DIP past the wall; ` +
       `api [${api.keys.join(', ')}]; shots ${shots.join(', ')}`,
   );
   win.destroy();

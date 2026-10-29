@@ -10,7 +10,7 @@ import type { Point } from '../../../src/shared/geometry';
 import { defaultSettings, type Settings } from '../../../src/shared/settings';
 import type { SimEvent } from '../../../src/shared/sim';
 import type { LedgeSurface, Surface, SurfaceStatus, WallSurface } from '../../../src/shared/surfaces';
-import type { DisplayGeometry, WindowInfo, WorldGeometry } from '../../../src/shared/world';
+import type { DisplayGeometry, WorldGeometry } from '../../../src/shared/world';
 import { createTestLogger, FakeExtendedWin32Api, FakeWin32Api, rect, win } from '../win32/fakes';
 
 /** FakeExtendedWin32Api whose z-order (listOccluders) follows its app windows plus extra non-app windows on top. */
@@ -197,8 +197,10 @@ describe('window top ledges', () => {
     ] as const) {
       const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
       const s = setup({ api, displays: [disp('1', 0, 0, 1920, 1200, scale)] });
-      const top = ledge(s.tick(), 'windowTop:101');
+      const list = s.tick();
+      const top = ledge(list, 'windowTop:101');
       expect([top.y, top.x0, top.x1], `scale ${scale}`).toEqual([400, 300 + inset, 1100 - inset]);
+      expect(wall(list, 'windowSide:101:right'), `scale ${scale}`).toMatchObject({ x: 1100, y0: 400 + inset, y1: 900 - inset });
       expect(top).toMatchObject({ kind: 'windowTop', ownerId: '101', displayId: '1', phase: 'stable', excluded: false, rest: null, focusX: null, confidence: 1 });
     }
     const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
@@ -290,6 +292,24 @@ describe('window side walls', () => {
       { id: '65552', displayId: '1', edge: 'bottom', autoHide: true, rect: rect(0, 1140, 1920, 60), dockedRect: rect(0, 1140, 1920, 60), shownFraction: 1, phase: 'shown', speed: 0, validatedAt: 1000 },
     ];
     expect(wall(s.tick(), 'windowSide:101:left')).toMatchObject({ y0: 608, y1: 1140 });
+  });
+
+  it('are cut at once by an auto-hide taskbar sliding in, without waiting for the next z-order read', () => {
+    const api = new SurfaceApi().add(win('101', rect(300, 600, 600, 560)));
+    const s = setup({ api, displays: [disp('1', 0, 0, 1920, 1200, 1, 1200)] });
+    const tb = (y: number, shownFraction: number): TaskbarState => ({
+      id: '65552', displayId: '1', edge: 'bottom', autoHide: true, rect: rect(0, y, 1920, 60), dockedRect: rect(0, 1140, 1920, 60), shownFraction, phase: shownFraction >= 1 ? 'shown' : 'showing', speed: 0, validatedAt: 1000,
+    });
+    s.taskbars.states = [tb(1198, 2 / 60)];
+    expect(wall(s.tick(), 'windowSide:101:left')).toMatchObject({ y0: 608, y1: 1152 });
+    const calls = api.occluderCalls;
+    s.taskbars.states = [tb(1150, 50 / 60)];
+    expect(wall(s.tick(16), 'windowSide:101:left')).toMatchObject({ y0: 608, y1: 1150 });
+    s.taskbars.states = [tb(1140, 1)];
+    expect(wall(s.tick(16), 'windowSide:101:left')).toMatchObject({ y0: 608, y1: 1140 });
+    expect(api.occluderCalls).toBe(calls);
+    s.taskbars.states = [tb(1198, 2 / 60)];
+    expect(wall(s.tick(16), 'windowSide:101:left')).toMatchObject({ y1: 1152 });
   });
 
   it('exist only while climbing is allowed', () => {
@@ -488,6 +508,43 @@ describe('tab strips', () => {
     expect(s.provider.getSurface('tabStrip:102', s.now() + 5)).toMatchObject({ id: 'tabStrip:102', kind: 'tabStrip', y: 200, x0: 308, confidence: 0.5 });
   });
 
+  it('keep their objects when the service returns a new list with the same content', () => {
+    const api = new SurfaceApi().add(browser('102'));
+    const s = setup({ api });
+    s.tabs!.ledges = [stripLedge('102')];
+    const a = s.tick();
+    const recomputes = s.provider.debugInfo().recomputes;
+    // The real service builds a fresh array (and a fresh validatedAt) on every call.
+    s.tabs!.ledges = [stripLedge('102', { validatedAt: 1500 })];
+    const b = s.tick();
+    expect(b).toBe(a);
+    expect(s.provider.debugInfo().recomputes).toBe(recomputes);
+  });
+
+  it('are not shifted twice when the service re-places them on the moved frame', () => {
+    const api = new SurfaceApi().add(browser('102'));
+    const s = setup({ api });
+    s.tabs!.ledges = [stripLedge('102')];
+    s.tick();
+    // A snap (no move events): the service re-reads the frame first and moves its strip.
+    api.update('102', { rect: rect(400, 260, 1100, 700) });
+    s.tabs!.ledges = [stripLedge('102', { y: 260, x0: 441, x1: 1350, rest: { x0: 441, x1: 1350 }, focusX: 600 })];
+    const list = s.tick();
+    expect(ledge(list, 'tabStrip:102')).toMatchObject({ y: 260, x0: 441, x1: 1350, focusX: 600 });
+    // The live read that anchored the strip also moved the window's own surfaces.
+    expect(wall(list, 'windowSide:102:left')).toMatchObject({ x: 400 });
+    // The settled tracker change that follows does not shift it again.
+    api.fire('moveStart', '102');
+    api.fire('moveEnd', '102');
+    expect(ledge(s.run(300), 'tabStrip:102')).toMatchObject({ y: 260, x0: 441, x1: 1350 });
+    // Riding: a live read while dragging shifts the strip from the frame it was placed on.
+    api.fire('moveStart', '102');
+    s.tick(16);
+    api.update('102', { rect: rect(410, 250, 1100, 700) });
+    s.provider.noteCat({ x: 700, y: 260, surfaceId: 'tabStrip:102' });
+    expect(s.provider.getSurface('tabStrip:102', s.now() + 10)).toMatchObject({ y: 250, x0: 451, x1: 1360, focusX: 610 });
+  });
+
   it('are ignored while the tabStrips toggle is off', () => {
     const api = new SurfaceApi().add(browser('102'));
     const settings = defaultSettings();
@@ -519,6 +576,13 @@ describe('tab strips', () => {
     expect(s.tabs!.interest.length).toBe(n);
     s.run(600);
     expect(s.tabs!.interest.every((c) => !c.ids.includes('106') && !c.ids.includes('107'))).toBe(true);
+    // Hidden cat: interest is withdrawn once, then nothing more is sent.
+    s.provider.noteCat(null);
+    s.run(600);
+    expect(s.tabs!.interest.at(-1)!.ids).toEqual([]);
+    const sent = s.tabs!.interest.length;
+    s.run(2000);
+    expect(s.tabs!.interest.length).toBe(sent);
   });
 });
 
@@ -601,6 +665,14 @@ describe('taskbars, events and status', () => {
     const api = new FakeWin32Api().add(win('101', rect(300, 400, 800, 500))).add(win('102', rect(600, 300, 200, 300)));
     const s = setup({ api });
     expect(ledge(s.tick(), 'windowTop:101')).toMatchObject({ x0: 308, x1: 600 });
+  });
+
+  it('caps the list (taskbars first, then windows top-down)', () => {
+    const api = new SurfaceApi();
+    for (let i = 0; i < 6; i++) api.add(win(String(300 + i), rect(100 + i * 300, 300, 250, 300)), false);
+    const s = setup({ api, options: { maxSurfaces: 4 } });
+    s.taskbars.ledges = [bar()];
+    expect(ids(s.tick())).toEqual(['taskbar:65552', 'windowTop:300', 'windowSide:300:left', 'windowSide:300:right']);
   });
 
   it('rebuilds after a display change (new scale, new insets)', () => {

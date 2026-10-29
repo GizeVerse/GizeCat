@@ -20,7 +20,7 @@ function advanceTo(puppet: CatPuppet, clip: AnimClip, seconds: number, extra: { 
         clip,
         clipStartedAt: 0,
         sleeping: clip === 'sleep',
-        speed: extra.speed ?? (clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : 0),
+        speed: extra.speed ?? (clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : clip === 'climb' ? 0.5 : 0),
         vy: extra.vy ?? (clip === 'jump' ? -300 : clip === 'fall' ? 400 : 0),
         lookX: 30,
         lookY: -30,
@@ -76,7 +76,7 @@ describe('animation clips', () => {
   it('looping clips keep moving (not frozen)', () => {
     const a = createPose();
     const b = createPose();
-    for (const clip of ['walk', 'run', 'annoyed', 'groom', 'pawAt', 'rollOver', 'crouch'] as const) {
+    for (const clip of ['walk', 'run', 'annoyed', 'groom', 'pawAt', 'rollOver', 'crouch', 'climb'] as const) {
       sampleClip(clip, ctxFor(1.0), a);
       sampleClip(clip, ctxFor(1.37), b);
       const moved = POSE_KEYS.some((k) => Math.abs(a[k] - b[k]) > 1e-3);

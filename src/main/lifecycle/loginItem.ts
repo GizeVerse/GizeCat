@@ -37,8 +37,17 @@ export const LOGIN_ITEM_NAME = 'io.github.enesiltas.desktopcat';
 export const LOGIN_ITEM_ARGS: readonly string[] = [LAUNCHED_AT_LOGIN_FLAG];
 /** DESKTOP_CAT_LOGIN_ITEM=off keeps any build from writing the entry (smoke runs). */
 export const LOGIN_ITEM_ENV = 'DESKTOP_CAT_LOGIN_ITEM';
-/** Present next to the exe only in an installed copy (not in release/win-unpacked). */
-export const UNINSTALLER_FILE = 'Uninstall Desktop Cat.exe';
+/**
+ * The uninstaller electron-builder writes next to the exe of an installed copy (never into
+ * release/win-unpacked): `Uninstall ${productFilename}.exe`, where productFilename is
+ * `win.executableName` when set and the exe is `${productFilename}.exe`, so the name follows the
+ * exe's own base name in every configuration (VERIFIED on a real install: `Uninstall DesktopCat.exe`).
+ */
+export function uninstallerFileFor(execPath: string): string {
+  return `Uninstall ${path.win32.parse(execPath).name}.exe`;
+}
+/** This build's uninstaller (electron-builder.yml: executableName DesktopCat). */
+export const UNINSTALLER_FILE = uninstallerFileFor('DesktopCat.exe');
 /** Left in userData by a real uninstall (installer.nsh): a missing entry then means "reinstalled", not "opted out". */
 export const UNINSTALL_MARKER_FILE = 'login-item-removed-by-uninstall';
 /** Settings and diagnostics re-read the registry at most this often. */
@@ -124,10 +133,10 @@ export function createLoginItemService(opts: LoginItemServiceOptions): LoginItem
     packaged: opts.packaged,
     test: opts.test,
     envOff: (opts.env[LOGIN_ITEM_ENV] ?? '').trim().toLowerCase() === 'off',
-    uninstallerPresent: exists(path.join(path.dirname(opts.execPath), UNINSTALLER_FILE)),
+    uninstallerPresent: exists(path.join(path.dirname(opts.execPath), uninstallerFileFor(opts.execPath))),
     commandLineChars: commandLineFor(target).length,
   });
-  const writeTarget = { ...target, writable: gate.writable };
+  const writeTarget = { ...target, writable: gate.writable, blockedBy: gate.blockedBy };
 
   let cached: { state: WindowsLoginState; at: number } | null = null;
   let lastReport: ReconcileReport | null = null;

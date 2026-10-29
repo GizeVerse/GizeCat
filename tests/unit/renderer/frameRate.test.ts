@@ -104,7 +104,7 @@ function state(clip: AnimClip, t: number, extra: Partial<CatRenderState> = {}): 
     state: clip === 'sleep' ? 'sleeping' : clip === 'held' ? 'held' : 'idle',
     clip,
     clipStartedAt: 0,
-    speed: clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : 0,
+    speed: clip === 'walk' ? 0.7 : clip === 'run' ? 2.5 : clip === 'climb' ? 0.5 : 0,
     vy: clip === 'jump' ? -300 : clip === 'fall' ? 300 : 0,
     look: null,
     arousal: 0.3,
@@ -143,11 +143,13 @@ describe('scene motion classification', () => {
         expect(share(intervals(clip, 8000, () => ({ arousal })), CALM_FRAME_MS), `${clip} arousal ${arousal}`).toBeGreaterThan(0.95);
       }
       expect(share(intervals('sleep', 8000, () => ({ arousal })), QUIET_FRAME_MS), `sleep arousal ${arousal}`).toBeGreaterThan(0.95);
+      // Clinging still to a wall (glances, a re-grip, the hanging tail's sway) is calm too.
+      expect(share(intervals('climb', 9000, () => ({ arousal, speed: 0 })), CALM_FRAME_MS), `clinging arousal ${arousal}`).toBeGreaterThan(0.95);
     }
   });
 
   it('locomotion, held, airborne, lashing and quick clips always run at the full rate', () => {
-    for (const clip of ['walk', 'run', 'crouch', 'annoyed', 'pawAt', 'held', 'jump', 'fall', 'rollOver'] as AnimClip[]) {
+    for (const clip of ['walk', 'run', 'crouch', 'annoyed', 'pawAt', 'held', 'jump', 'fall', 'rollOver', 'climb'] as AnimClip[]) {
       expect(share(intervals(clip, 4000), FULL_RATE_MS), clip).toBe(1);
     }
     // A calm clip whose anchor moves (riding a moving window, carried) is not calm.

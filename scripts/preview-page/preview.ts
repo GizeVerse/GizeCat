@@ -1,7 +1,8 @@
 // Preview page for scripts/render-preview.cjs: renders contact sheets of the real
 // overlay rig (same CatScene used by the overlay renderer) into canvases.
 import { ANIM_CLIPS, CAT_BASE_WIDTH_DIP, EMOTES, SKINS, type AnimClip, type BehaviorState, type CatRenderState, type Emote, type SkinId } from '../../src/shared/cat';
-import { CLIMB_FADE_MS, CLIMB_IDLE_PERIOD_S, clipDurationS, gaitHz, loopPeriodS } from '../../src/renderer/overlay/cat/clips';
+import { MOVEMENT } from '../../src/core/movement/constants';
+import { CLIMB_FADE_MS, clipDurationS, gaitHz, loopPeriodS } from '../../src/renderer/overlay/cat/clips';
 import { seededRandom } from '../../src/renderer/overlay/cat/math';
 import { CatScene, type Layer, type LayerProvider } from '../../src/renderer/overlay/scene';
 
@@ -35,13 +36,17 @@ interface Cell {
   script?: Script;
 }
 
-/** One leg of a scripted run: the anchor moves linearly to `to` (cell-local DIP) over `ms`. */
+/** One leg of a scripted run: the anchor moves to `to` (cell-local DIP) over `ms`, linearly or eased. */
 interface Seg {
   clip: AnimClip;
   ms: number;
   to: { x: number; y: number };
+  /** Smoothstep instead of linear motion (the mover's mount, pull-up, swing and dismount). */
+  ease?: boolean;
   /** Gait speed (body-lengths/s); default: derived from the anchor motion for walk/run/climb, else 0. */
   speed?: number;
+  /** Facing during this leg (default: the cell's). */
+  facing?: 1 | -1;
   state?: BehaviorState;
 }
 
@@ -156,19 +161,20 @@ function renderScripted(ctx: CanvasRenderingContext2D, c: Cell, script: Script, 
       i++;
     }
     const seg = script.segs[i]!;
-    const k = Math.min(1, (t - segStart) / seg.ms);
+    const k0 = Math.min(1, (t - segStart) / seg.ms);
+    const k = seg.ease ? k0 * k0 * (3 - 2 * k0) : k0;
     const x = from.x + (seg.to.x - from.x) * k;
     const y = from.y + (seg.to.y - from.y) * k;
     const dist = Math.hypot(seg.to.x - from.x, seg.to.y - from.y);
     const locomotion = seg.clip === 'walk' || seg.clip === 'run' || seg.clip === 'climb';
-    const speed = seg.speed ?? (locomotion && k < 1 ? dist / (seg.ms / 1000) / (CAT_BASE_WIDTH_DIP * scale) : 0);
+    const speed = seg.speed ?? (locomotion && k0 < 1 ? dist / (seg.ms / 1000) / (CAT_BASE_WIDTH_DIP * scale) : 0);
     // A run of legs with the same clip is one clip to the brain: it keeps its start time.
     let clipStart = segStart;
     for (let j = i - 1, at = segStart; j >= 0 && script.segs[j]!.clip === seg.clip; j--) {
       at -= script.segs[j]!.ms;
       clipStart = at;
     }
-    const st = makeState({ ...c, speed, vy: 0 }, seg.clip, ox + x, oy + y, t, clipStart, seq);
+    const st = makeState({ ...c, speed, vy: 0, facing: seg.facing ?? c.facing }, seg.clip, ox + x, oy + y, t, clipStart, seq);
     st.state = seg.state ?? st.state;
     scene.update({ x: ox + x, y: oy + y, state: st, simTime: t, dtMs: seq === 0 ? 0 : dt, snapped: seq === 0 });
     seq++;
@@ -400,7 +406,7 @@ function climbCells(extra: Partial<Cell>, labelPrefix = ''): Cell[] {
 
 function climbFocusSheet(): Sheet {
   const cells = [...climbCells({ scale: 2.3 }), ...climbCells({ scale: 2.3, facing: -1 }, 'f-1 ')];
-  return { cols: 4, cellW: 250, cellH: 300, bg: LIGHT, fg: '#333', cells, ground: 0.8 };
+  return { cols: 4, cellW: 250, cellH: 330, bg: LIGHT, fg: '#333', cells, ground: 0.71 };
 }
 
 /** One climbing cycle in 8 phases, at a brisk and a slow climb. */
@@ -413,7 +419,7 @@ function climbCycleSheet(): Sheet {
       cells.push({ label: `v${speed} ${(i / 8).toFixed(3)}`, clip: 'climb', t, speed, wall: true, scale: 1.8 });
     }
   }
-  return { cols: 8, cellW: 190, cellH: 270, bg: LIGHT, fg: '#333', cells, ground: 0.82 };
+  return { cols: 8, cellW: 190, cellH: 280, bg: LIGHT, fg: '#333', cells, ground: 0.77 };
 }
 
 function climbSkinsSheet(bg: string, fg: string, style: 'smooth' | 'pixel'): Sheet {
@@ -428,7 +434,7 @@ function climbSkinsSheet(bg: string, fg: string, style: 'smooth' | 'pixel'): She
     cells.push({ ...base, label: `${skin} f-1 still`, t: 1.0, speed: 0, facing: -1 });
     cells.push({ ...base, label: `${skin} f-1 climb`, t: 1 + 0.25 / hz, speed: 0.5, facing: -1 });
   }
-  return { cols: 6, cellW: 150, cellH: 200, bg, fg, cells, ground: 0.8 };
+  return { cols: 6, cellW: 150, cellH: 210, bg, fg, cells, ground: 0.76 };
 }
 
 function climbScalesSheet(): Sheet {
@@ -440,14 +446,14 @@ function climbScalesSheet(): Sheet {
       }
     }
   }
-  return { cols: 6, cellW: 200, cellH: 250, bg: LIGHT, fg: '#333', cells, ground: 0.8 };
+  return { cols: 6, cellW: 200, cellH: 280, bg: LIGHT, fg: '#333', cells, ground: 0.76 };
 }
 
 function climbEmotesSheet(): Sheet {
   const cells: Cell[] = [];
   for (const emote of EMOTES) cells.push({ label: emote, clip: 'climb', t: 1, speed: 0, emote, emoteAgeMs: 500, scale: 1.4, wall: true });
   cells.push({ label: 'heart f-1', clip: 'climb', t: 1, speed: 0, emote: 'heart', emoteAgeMs: 900, scale: 1.4, wall: true, facing: -1 });
-  return { cols: 4, cellW: 170, cellH: 200, bg: LIGHT, fg: '#333', cells, ground: 0.84 };
+  return { cols: 4, cellW: 170, cellH: 230, bg: LIGHT, fg: '#333', cells, ground: 0.8 };
 }
 
 function climbTransitionsSheet(): Sheet {
@@ -480,41 +486,84 @@ function climbTransitionsSheet(): Sheet {
 }
 
 /**
- * Walk to a window, climb its side edge, pull up over the corner and stand on its top: the
- * anchor moves like the sim's (grip point on the wall line while climbing), sampled over time.
+ * Geometry of the climb strips, cell-local DIP, as the mover sees a window side (core/movement
+ * world.ts wallTrack and surfaceGraph cornerX): the cat stands 0.55 body lengths out from the wall
+ * before mounting it, the climb ends 0.55 body lengths below the top edge, and it pulls up to half
+ * a body length inside the top corner.
  */
-function climbStripSheet(bg: string, facing: 1 | -1, style: 'smooth' | 'pixel', skin: SkinId): Sheet {
-  const s = 1.3;
+function stripGeometry(f: 1 | -1, s: number): { W: number; floor: number; top: number; wallX: number; yTop: number; standX: number; cornerX: number; window: Script['window'] } {
   const W = 230;
   const floor = 238;
-  const f = facing;
-  const wallX = f > 0 ? 150 : W - 150;
   const top = 92;
-  // Climbing stops with the front paws on the top edge.
-  const reach = 60 * s;
-  const fade = CLIMB_FADE_MS;
+  const wallX = f > 0 ? 150 : W - 150;
+  const bl = CAT_BASE_WIDTH_DIP * s;
+  const window = f > 0 ? { x: wallX, y: top, w: W - wallX - 4, h: floor - top + 6 } : { x: 4, y: top, w: wallX - 4, h: floor - top + 6 };
+  return { W, floor, top, wallX, yTop: top + 0.55 * bl, standX: wallX - f * 0.55 * bl, cornerX: wallX + f * 0.5 * bl, window };
+}
+
+/** Seconds into a script at which each of its segments starts (plus its end). */
+function segStarts(segs: readonly Seg[]): number[] {
+  const out = [0];
+  for (const sg of segs) out.push(out[out.length - 1]! + sg.ms / 1000);
+  return out;
+}
+
+/** Samples `n` moments spread over segment `i` (from `a` to `b` of its duration). */
+function within(starts: readonly number[], i: number, n: number, a = 0.15, b = 0.95): number[] {
+  const t0 = starts[i]!;
+  const d = starts[i + 1]! - t0;
+  return Array.from({ length: n }, (_, k) => t0 + d * (n === 1 ? (a + b) / 2 : a + ((b - a) * k) / (n - 1)));
+}
+
+/**
+ * Walk to a window, mount its side edge, climb it, hold, pull up over the corner and stand on its
+ * top, with the mover's timings and speeds (MOVEMENT) at movement speed 1. By default the clip
+ * leaves 'climb' as the pull-up starts, so the cross-fade runs while the anchor rises onto the ledge;
+ * `pullUpClip: 'climb'` keeps the clip on the wall until the pull-up has ended instead (for comparison).
+ */
+function climbStripSheet(bg: string, facing: 1 | -1, style: 'smooth' | 'pixel', skin: SkinId, pullUpClip: AnimClip = 'stand'): Sheet {
+  const s = 1.3;
+  const f = facing;
+  const g = stripGeometry(f, s);
+  const start = { x: g.standX - f * 80, y: g.floor };
   const segs: Seg[] = [
-    { clip: 'walk', ms: 900, to: { x: wallX - 14 * s * f, y: floor } },
-    // The sim switches to climb at the wall: the anchor reaches the wall line within one tick.
-    { clip: 'climb', ms: 33, to: { x: wallX, y: floor }, speed: 0.5 },
-    { clip: 'climb', ms: 1200, to: { x: wallX, y: top + reach } },
-    { clip: 'climb', ms: 500, to: { x: wallX, y: top + reach }, speed: 0 },
-    // Pull-up at the corner over the cross-fade: the anchor rises to the ledge, then steps in.
-    { clip: 'stand', ms: fade * 0.55, to: { x: wallX + 6 * s * f, y: top }, state: 'idle' },
-    { clip: 'stand', ms: fade * 0.45, to: { x: wallX + 18 * s * f, y: top }, state: 'idle' },
-    { clip: 'stand', ms: 2000, to: { x: wallX + 18 * s * f, y: top }, state: 'idle' },
+    { clip: 'walk', ms: (80 / (MOVEMENT.walkDip * s)) * 1000, to: { x: g.standX, y: g.floor } },
+    { clip: 'climb', ms: MOVEMENT.mountMs, to: { x: g.wallX, y: g.floor }, speed: 0, ease: true },
+    { clip: 'climb', ms: ((g.floor - g.yTop) / (MOVEMENT.climbUpDip * s)) * 1000, to: { x: g.wallX, y: g.yTop }, speed: MOVEMENT.climbUpDip / CAT_BASE_WIDTH_DIP },
+    { clip: 'climb', ms: 700, to: { x: g.wallX, y: g.yTop }, speed: 0 },
+    { clip: pullUpClip, ms: MOVEMENT.pullUpMs, to: { x: g.cornerX, y: g.top }, speed: 0, ease: true, state: 'idle' },
+    { clip: 'stand', ms: 1500, to: { x: g.cornerX, y: g.top }, state: 'idle' },
   ];
-  const script: Script = {
-    start: { x: wallX - 110 * f, y: floor },
-    segs,
-    window: f > 0 ? { x: wallX, y: top, w: W - wallX - 4, h: floor - top + 6 } : { x: 4, y: top, w: wallX - 4, h: floor - top + 6 },
-    floor,
-  };
-  const climbEnd = 0.9 + 0.033 + 1.2 + 0.5;
-  const marks = [0.5, 0.86, 0.95, 1.05, 1.2, 1.5, 1.85, 2.2, 2.5];
-  for (let k = 0; k <= 8; k++) marks.push(climbEnd + (k * fade) / 1000 / 7);
+  const script: Script = { start, segs, window: g.window, floor: g.floor };
+  const st = segStarts(segs);
+  const marks = [...within(st, 0, 1, 0.6), ...within(st, 1, 3, 0.25, 1), ...within(st, 2, 4), ...within(st, 3, 1, 0.8), ...within(st, 4, 7, 0.1, 1), ...within(st, 5, 2, 0.1, 0.8)];
   const cells: Cell[] = marks.map((t) => ({ label: `${t.toFixed(2)}s`, clip: 'stand', t, scale: s, facing, style, skin, script }));
-  return { cols: 6, cellW: W, cellH: 250, bg, fg: bg === DARK ? '#c9d1e0' : '#333', cells };
+  return { cols: 6, cellW: g.W, cellH: 250, bg, fg: bg === DARK ? '#c9d1e0' : '#333', cells };
+}
+
+/**
+ * Walk along a window top to its corner, swing down onto the side edge (turning to face the
+ * window), climb down tail first, step off onto the floor and walk away.
+ */
+function climbDownStripSheet(bg: string, facing: 1 | -1, style: 'smooth' | 'pixel', skin: SkinId): Sheet {
+  const s = 1.3;
+  const f = facing;
+  const g = stripGeometry(f, s);
+  const start = { x: g.cornerX + f * 60, y: g.top };
+  const away = { x: g.standX - f * 50, y: g.floor };
+  const segs: Seg[] = [
+    { clip: 'walk', ms: (60 / (MOVEMENT.walkDip * s)) * 1000, to: { x: g.cornerX, y: g.top }, facing: f > 0 ? -1 : 1 },
+    { clip: 'climb', ms: MOVEMENT.swingMs, to: { x: g.wallX, y: g.yTop }, speed: 0, ease: true },
+    { clip: 'climb', ms: ((g.floor - g.yTop) / (MOVEMENT.climbDownDip * s)) * 1000, to: { x: g.wallX, y: g.floor }, speed: MOVEMENT.climbDownDip / CAT_BASE_WIDTH_DIP },
+    { clip: 'stand', ms: MOVEMENT.dismountMs, to: { x: g.standX, y: g.floor }, ease: true, state: 'idle' },
+    { clip: 'walk', ms: (50 / (MOVEMENT.walkDip * s)) * 1000, to: away, facing: f > 0 ? -1 : 1 },
+    { clip: 'stand', ms: 800, to: away, facing: f > 0 ? -1 : 1, state: 'idle' },
+  ];
+  const script: Script = { start, segs, window: g.window, floor: g.floor };
+  const st = segStarts(segs);
+  const marks = [...within(st, 0, 1, 0.7), ...within(st, 1, 5, 0.1, 1), ...within(st, 2, 6, 0.1, 0.95), ...within(st, 3, 3, 0.2, 1), ...within(st, 4, 2, 0.3, 0.9), ...within(st, 5, 1, 0.5)];
+  const cells: Cell[] = marks.map((t) => ({ label: `${t.toFixed(2)}s`, clip: 'stand', t, scale: s, facing, style, skin, script }));
+  return { cols: 6, cellW: g.W, cellH: 250, bg, fg: bg === DARK ? '#c9d1e0' : '#333', cells };
 }
 
 const SHEETS: Record<string, () => Sheet> = {
@@ -545,6 +594,9 @@ const SHEETS: Record<string, () => Sheet> = {
   'climb-transitions': climbTransitionsSheet,
   'climb-strip': () => climbStripSheet(LIGHT, 1, 'smooth', 'ginger'),
   'climb-strip-mirror': () => climbStripSheet(DARK, -1, 'pixel', 'tuxedo'),
+  'climb-strip-late-switch': () => climbStripSheet(LIGHT, 1, 'smooth', 'ginger', 'climb'),
+  'climb-strip-down': () => climbDownStripSheet(LIGHT, 1, 'smooth', 'calico'),
+  'climb-strip-down-mirror': () => climbDownStripSheet(DARK, -1, 'smooth', 'gray'),
 };
 
 /** Average cost of update+draw per frame (ms) over `frames` frames of a walking cat. */

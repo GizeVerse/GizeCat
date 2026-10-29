@@ -39,18 +39,19 @@ export class CatPuppet {
     this.rig.solve(p);
     // The ground clamp only makes sense while the cat is upright and not airborne. A cat on a wall
     // has no ground under it, except the one it just climbed up from: its tail rests on that until
-    // the climb lifts it clear.
+    // the climb lifts it clear. Just after it leaves the wall the anchor is still on its way onto the
+    // ledge or down to the floor, so that support stays the only ground until it has arrived.
     const airborne = input.clip === 'held' || input.clip === 'jump' || input.clip === 'fall';
-    const climbing = input.clip === 'climb';
-    const upright = !airborne && !climbing && Math.abs(p.rot) < 0.3 && p.rollY > 0.6 && p.offY > -2;
-    if (climbing) {
+    const onWall = !airborne && (input.clip === 'climb' || this.animator.leavingWall);
+    const upright = !airborne && !onWall && Math.abs(p.rot) < 0.3 && p.rollY > 0.6 && p.offY > -2;
+    if (onWall) {
       if (Number.isFinite(motionY)) this.climbGround -= motionY;
       if (!(this.climbGround > -1 && this.climbGround < CLIMB_GROUND_REACH)) this.climbGround = Number.NaN;
     } else {
       this.climbGround = upright ? 0 : Number.NaN;
     }
     const lift = -TAIL_RADIUS_TIP * this.tail.puff - 0.4;
-    const groundY = upright ? lift : climbing ? this.climbGround + lift : Number.NaN;
+    const groundY = upright ? lift : onWall ? this.climbGround + lift : Number.NaN;
     this.tail.step(this.rig.tailRootX, this.rig.tailRootY, p, dtMs, -motionX, -motionY, groundY);
   }
 

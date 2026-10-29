@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCrashGuard, readRelaunchHistory } from '../../../src/main/lifecycle/crashGuard';
 import { hasFlag, parseTimeScale, parseUserDataOverride } from '../../../src/main/lifecycle/launchArgs';
-import { LOGIN_ITEM_NAME, UNINSTALL_MARKER_FILE, UNINSTALLER_FILE } from '../../../src/main/lifecycle/loginItem';
+import { LOGIN_ITEM_NAME, UNINSTALL_MARKER_FILE, UNINSTALLER_FILE, uninstallerFileFor } from '../../../src/main/lifecycle/loginItem';
 import { createQuitSequence } from '../../../src/main/lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndKind } from '../../../src/main/lifecycle/sessionEnd';
 import { createShortcutManager } from '../../../src/main/lifecycle/shortcuts';
@@ -299,9 +299,24 @@ describe('login item names shared with the installer', () => {
     expect(nsh).toMatch(/\$\{ifNot\} \$\{isUpdated\}/);
   });
 
-  it('the uninstall marker the app looks for is the one the uninstaller writes', () => {
+  it('the uninstall marker the app looks for is the one the uninstaller writes, in the userData folder', () => {
     expect(nsh).toContain(`$APPDATA\\Desktop Cat\\${UNINSTALL_MARKER_FILE}`);
-    expect(UNINSTALLER_FILE).toBe('Uninstall Desktop Cat.exe');
+    // Electron's userData folder is %APPDATA%\<productName>.
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { productName: string };
+    expect(pkg.productName).toBe('Desktop Cat');
+  });
+
+  it('the write gate looks for the uninstaller electron-builder really writes (Uninstall <productFilename>.exe)', () => {
+    // app-builder-lib appInfo: productFilename = win.executableName when set, else the product name;
+    // the exe is <productFilename>.exe and the uninstaller "Uninstall <productFilename>.exe" (common.nsh).
+    const yml = fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8');
+    const executableName = /^\s+executableName:\s*(\S+)\s*$/m.exec(yml)?.[1];
+    expect(executableName).toBe('DesktopCat');
+    expect(UNINSTALLER_FILE).toBe(`Uninstall ${executableName}.exe`);
+    expect(uninstallerFileFor(`C:\\Users\\Ada\\AppData\\Local\\Programs\\DesktopCat\\${executableName}.exe`)).toBe(UNINSTALLER_FILE);
+    expect(uninstallerFileFor('C:\\Users\\Ada Lovelace\\dcat install 1\\DesktopCat.exe')).toBe('Uninstall DesktopCat.exe');
+    // A dev run (electron.exe) can never find one.
+    expect(uninstallerFileFor('C:\\src\\cat\\node_modules\\electron\\dist\\electron.exe')).toBe('Uninstall electron.exe');
   });
 
   it('the value name equals the AppUserModelID (Electron defaults the name to it)', () => {

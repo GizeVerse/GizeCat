@@ -38,6 +38,10 @@ export const IDLE_TASKBAR_SAMPLE_MS = 1000;
 const TASKBAR_RECHECK_MS = 5000;
 /** The cat counts as near a (moving or auto-hide) taskbar within this distance (DIP, scaled). */
 export const CAT_NEAR_TASKBAR_DIP = 150;
+/** Longest gap between sim ticks while a taskbar near the cat is sliding (ms). */
+export const MOVING_SURFACE_TICK_MS = 33;
+/** Cursor distance from a hidden auto-hide taskbar's screen edge that triggers an immediate sample (DIP, scaled). */
+export const TASKBAR_REVEAL_BAND_DIP = 6;
 const ASLEEP: ReadonlySet<BehaviorState> = new Set<BehaviorState>(['sleeping', 'fallingAsleep']);
 const NO_SURFACES: readonly Surface[] = Object.freeze([]);
 
@@ -213,9 +217,10 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   }
 
   /**
-   * The cat rides a taskbar, or is within CAT_NEAR_TASKBAR_DIP of one that can move (auto-hide
-   * or sliding). A static docked taskbar is always next to a floor-standing cat, and fast
-   * sampling it would only burn timer wake-ups.
+   * The cat rides a taskbar, or is within CAT_NEAR_TASKBAR_DIP of one that is on screen and can
+   * move (auto-hide, or sliding). A static docked taskbar is always next to a floor-standing
+   * cat, and a hidden one does not move until the cursor reaches its edge (see
+   * cursorAtHiddenTaskbarEdge): fast sampling either would only burn timer wake-ups.
    */
   function catNearTaskbar(tb: TaskbarTracker): boolean {
     const out = lastOutput;
@@ -224,10 +229,43 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     const limit = CAT_NEAR_TASKBAR_DIP * displayScale(out.displayId);
     const p = { x: out.x, y: out.y };
     for (const s of tb.taskbars()) {
-      if (!s.autoHide && s.phase !== 'showing' && s.phase !== 'hiding') continue;
+      const moving = s.phase === 'showing' || s.phase === 'hiding';
+      if (!moving && !(s.autoHide && s.phase === 'shown')) continue;
       if (distanceToRect(s.dockedRect, p) <= limit) return true;
     }
     return false;
+  }
+
+  /**
+   * The cursor is in the reveal band of a hidden auto-hide taskbar: sample now instead of at the
+   * idle cadence, so a reveal under the cat is followed from its first frame (the cursor poll
+   * already runs every 16-125 ms; this adds no timer).
+   */
+  function cursorAtHiddenTaskbarEdge(tb: TaskbarTracker, c: Point): boolean {
+    for (const s of tb.taskbars()) {
+      if (!s.autoHide || s.phase !== 'hidden') continue;
+      const d = s.dockedRect;
+      const band = Math.ceil(TASKBAR_REVEAL_BAND_DIP * displayScale(s.displayId));
+      const inX = c.x >= d.x && c.x < d.x + d.width;
+      const inY = c.y >= d.y && c.y < d.y + d.height;
+      if (s.edge === 'bottom' && inX && c.y >= d.y + d.height - band && c.y < d.y + d.height) return true;
+      if (s.edge === 'top' && inX && c.y >= d.y && c.y < d.y + band) return true;
+      if (s.edge === 'left' && inY && c.x >= d.x && c.x < d.x + band) return true;
+      if (s.edge === 'right' && inY && c.x >= d.x + d.width - band && c.x < d.x + d.width) return true;
+    }
+    return false;
+  }
+
+  /** A sample is not already imminent and the cursor just reached a hidden taskbar's edge. */
+  function revealPending(tb: TaskbarTracker, cursor: Point, t: number): boolean {
+    if (!tb.available || taskbarDueAt - t <= MIN_TASKBAR_SAMPLE_MS) return false;
+    try {
+      return cursorAtHiddenTaskbarEdge(tb, cursor);
+    } catch (err) {
+      taskbarErrors++;
+      if (taskbarErrors <= 5 || taskbarErrors % 1000 === 0) log.warn('taskbar state failed', { error: err, count: taskbarErrors });
+      return false;
+    }
   }
 
   function sampleTaskbars(t: number, cursor: Point | null): void {
@@ -238,8 +276,14 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
     let delay: number;
     try {
-      delay = taskbars.sample(t, cursor, catNearTaskbar(taskbars));
+      const near = catNearTaskbar(taskbars);
+      delay = taskbars.sample(t, cursor, near);
       taskbarSamples++;
+      // A taskbar sliding under or next to the cat is followed at a smooth tick rate even
+      // while the sim itself would tick slowly (asleep).
+      if (near && !hidden && !paused && taskbars.taskbars().some((s) => s.phase === 'showing' || s.phase === 'hiding')) {
+        scheduleTick(Math.max(0, MOVING_SURFACE_TICK_MS - (t - lastTickAt)));
+      }
     } catch (err) {
       taskbarErrors++;
       if (taskbarErrors <= 5 || taskbarErrors % 1000 === 0) log.warn('taskbar sample failed', { error: err, count: taskbarErrors });
@@ -450,7 +494,9 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       if (pollErrors <= 5) log.error('cursor poll failed', { error: err });
       cursorDueAt = t + 250;
     }
-    if (t >= taskbarDueAt) sampleTaskbars(t, cursor);
+    if (t >= taskbarDueAt || (!hidden && !locked && cursor !== null && taskbars !== null && revealPending(taskbars, cursor, t))) {
+      sampleTaskbars(t, cursor);
+    }
     pollTimer = timers.setTimeout(poll, Math.max(1, Math.min(cursorDueAt, taskbarDueAt) - t));
   }
 

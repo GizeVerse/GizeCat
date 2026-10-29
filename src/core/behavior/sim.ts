@@ -7,7 +7,7 @@ import type { Point, Rect } from '../../shared/geometry';
 import { clamp, isFiniteRect, rectCenter } from '../../shared/geometry';
 import type { Settings, ToggleableBehavior } from '../../shared/settings';
 import type { CatSim, CatSimOptions, SimEnv, SimEvent, SimOutput, SimRequest } from '../../shared/sim';
-import type { LedgeSurface, Surface as EnvSurface, SurfaceKind, WallSurface } from '../../shared/surfaces';
+import type { LedgeSurface, Surface as EnvSurface, WallSurface } from '../../shared/surfaces';
 import type { WindowInfo, WorldGeometry } from '../../shared/world';
 import type { LandingInfo, MoverConfig, MoverStep, Pace, RoutePreference, SupportLoss } from '../movement';
 import { Mover } from '../movement';
@@ -345,6 +345,9 @@ export class CatSimImpl implements CatSim {
       });
       this.onMoverStep(step);
       if (step.snapped) snap = true;
+    } else if (this.mover.stepAway({ now: this.now, dtMs: dt, dragCursor: null, getSurface: (id) => this.safeSurface(id), movingWindowIds: this.movingWindows })) {
+      // Hidden: it stays with its ledge, and a ledge that vanished meanwhile leaves it on the floor below.
+      snap = true;
     }
     this.reconcilePhysical();
     this.drives();
@@ -662,8 +665,11 @@ export class CatSimImpl implements CatSim {
       case 'seekingAttention':
         return !d.has('seekAttention');
       case 'inspectingWindow':
-        // 'explore' (the autonomous jump onto a window top) and 'edge' (sitting on one) are 'Sit on windows'; the rest is 'Inspect windows'.
-        return variant === 'explore' || variant === 'edge' ? !d.has('perchOnWindows') : !d.has('inspectWindows');
+        // 'explore' (the autonomous jump onto a window top) is 'Sit on windows'; 'edge' (sitting on a window top
+        // looking down into the window) needs both 'Sit on windows' and 'Inspect windows'; the rest is 'Inspect windows'.
+        if (variant === 'explore') return !d.has('perchOnWindows');
+        if (variant === 'edge') return !d.has('perchOnWindows') && !d.has('inspectWindows');
+        return !d.has('inspectWindows');
       case 'walking':
         if (variant === 'climb') return !d.has('climbWindows') && !d.has('perchOnWindows');
         if (variant === 'tabStrip') return !d.has('tabStrips');
@@ -701,6 +707,8 @@ export class CatSimImpl implements CatSim {
     const free = cause === 'physical' || cause === 'lifecycle';
     // While held, airborne or away the cat cannot act on anything else; the request simply waits.
     if (!free && ((PHYSICAL_STATES.has(from) && from !== 'landing') || from === 'away')) return 'blocked';
+    // Clinging to a wall it finishes the climb first: only direct interaction and commands get through.
+    if ((cause === 'autonomous' || cause === 'stimulus') && this.mover.onWall) return 'blocked';
     if (!free && (!this.allowedInMode(to) || !this.allowedByToggles(to, init.variant ?? null))) return 'invalid';
     if (from === to) return this.refresh(to, cause, init);
     // Physical changes are immediate consequences of the body: never routed through other states.
@@ -1414,7 +1422,7 @@ export class CatSimImpl implements CatSim {
   private updMove(a: Activity): void {
     const env = this.env;
     if (a.variant === 'follow') {
-      const rect = a.windowId ? this.safeWindowRect(a.windowId) : null;
+      const rect = a.windowId ? this.windowRect(a.windowId, true) : null;
       if (!rect || this.now - a.startedAt > 6000) {
         this.finish();
         return;
@@ -1426,13 +1434,29 @@ export class CatSimImpl implements CatSim {
       this.finish();
       return;
     }
-    if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.startedAt > TRAVEL_TIMEOUT_MS) {
+    const timeout = a.variant === 'climb' ? CLIMB_TIMEOUT_MS : TRAVEL_TIMEOUT_MS;
+    if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.startedAt > timeout) {
       this.finish(a.then);
       if (a.variant === 'called') this.emotes.show('heart', this.now);
       return;
     }
-    const pace: Pace = a.state === 'running' ? 'run' : a.variant === 'favorite' || a.variant === 'nearby' ? 'slow' : 'walk';
-    this.goTo(a.target, pace, a.variant !== 'retreat' && a.variant !== 'playful');
+    switch (a.variant) {
+      case 'climb':
+        // Up a window side to its top corner (then a pull-up), or down from the corner of the top it stands on.
+        this.goTo(a.target, 'walk', true, undefined, { route: 'climb' });
+        return;
+      case 'taskbar':
+        // Onto the taskbar, or down off it to the floor it covers: exactly the surface named.
+        this.goTo(a.target, 'walk', true, undefined, { literal: true });
+        return;
+      case 'tabStrip':
+        this.goTo(a.target, 'slow', true, undefined, { route: 'noClimb' });
+        return;
+      default: {
+        const pace: Pace = a.state === 'running' ? 'run' : a.variant === 'favorite' || a.variant === 'nearby' ? 'slow' : 'walk';
+        this.goTo(a.target, pace, a.variant !== 'retreat' && a.variant !== 'playful');
+      }
+    }
   }
 
   private updChase(a: Activity): void {
@@ -1535,7 +1559,8 @@ export class CatSimImpl implements CatSim {
   }
 
   private updInspect(a: Activity): void {
-    const rect = a.windowId ? this.safeWindowRect(a.windowId) : null;
+    if (a.variant === 'edge') return this.updEdge(a);
+    const rect = a.windowId ? this.windowRect(a.windowId, true) : null;
     if (!rect) {
       this.finish();
       return;
@@ -1547,7 +1572,7 @@ export class CatSimImpl implements CatSim {
         this.phase(a, 'look', range(this.random, 4000, 9000));
         return;
       }
-      const top = this.mover.windowSurfaces.find((w) => w.windowId === a.windowId);
+      const top = this.mover.ledgeSurfaces.find((l) => l.ownerId === a.windowId && (l.surfaceKind === 'windowTop' || l.surfaceKind === 'tabStrip'));
       if (top) {
         this.goTo({ x: clamp(this.mover.x, top.x0, top.x1), y: top.y }, 'walk', true);
       } else {
@@ -1561,6 +1586,41 @@ export class CatSimImpl implements CatSim {
     if (!this.phaseElapsed(a)) return;
     if (a.phase === 'look' && this.mover.perchWindowId === a.windowId && chance(this.random, 0.5)) this.phase(a, 'loaf', range(this.random, 4000, 9000));
     else this.finish();
+  }
+
+  /** Sitting at the edge of the window top it stands on, looking down into the window. */
+  private updEdge(a: Activity): void {
+    const m = this.mover;
+    const on = m.attachedSurface;
+    if (!a.windowId || !on || on.ownerId !== a.windowId || on.surfaceKind !== 'windowTop' || !m.grounded) {
+      this.finish();
+      return;
+    }
+    if (a.phase === 'approach') {
+      if (!a.target || a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 10_000) {
+        this.stop();
+        this.phase(a, 'look', range(this.random, 4000, 9000));
+        return;
+      }
+      this.goTo(a.target, 'slow', false);
+      return;
+    }
+    this.stop();
+    const look = this.edgeLookPoint(a.windowId);
+    this.mover.faceToward(look.x, this.now);
+    if (!this.phaseElapsed(a)) return;
+    if (a.phase === 'look' && chance(this.random, 0.4)) this.phase(a, 'loaf', range(this.random, 5000, 12_000));
+    else this.finish();
+  }
+
+  /** A point inside the window below the cat on its top edge: where it looks while sitting there. */
+  private edgeLookPoint(windowId: string): Point {
+    const m = this.mover;
+    const bh = m.bodyHeight;
+    const rect = this.windowRect(windowId);
+    const ahead = m.x + m.facing * 1.2 * this.bl;
+    if (!rect) return { x: ahead, y: m.y + 3 * bh };
+    return { x: clamp(ahead, rect.x, rect.x + rect.width), y: Math.max(m.y + bh, Math.min(m.y + 4 * bh, rect.y + rect.height * 0.5)) };
   }
 
   private updWatchUser(a: Activity): void {
@@ -1827,16 +1887,25 @@ export class CatSimImpl implements CatSim {
       case 'display.changed':
         return;
       // Privacy verdicts are kept in every mode, so a window marked private stays off limits.
+      // Window rects from events back up surface geometry (in memory only).
       case 'window.shown':
       case 'window.restored':
-        if (ev.window) this.notePrivacy(ev.window.id, ev.window.excluded);
-        break;
       case 'window.foreground':
-        if (ev.window) this.notePrivacy(ev.window.id, ev.window.excluded);
+        if (ev.window) {
+          this.notePrivacy(ev.window.id, ev.window.excluded);
+          if (!ev.window.minimized) this.noteWindowRect(ev.window.id, ev.window.rect);
+        }
         break;
       case 'window.moveStart':
+        this.notePrivacy(ev.id, ev.excluded);
+        break;
       case 'window.moveEnd':
         this.notePrivacy(ev.id, ev.excluded);
+        this.noteWindowRect(ev.id, ev.rect);
+        break;
+      case 'window.closed':
+      case 'window.minimized':
+        this.windowRects.delete(ev.id);
         break;
       case 'command.callCat':
         // Called while a fullscreen app keeps it hidden or quiet: it comes over to the caller's display.
@@ -1884,7 +1953,8 @@ export class CatSimImpl implements CatSim {
         this.movingWindows.delete(ev.id);
         const excluded = ev.excluded === true || this.excludedWindows.has(ev.id);
         this.excludedWindows.delete(ev.id);
-        if (ev.rect && isFiniteRect(ev.rect)) this.onWindowClosed(ev.rect, ev.category, excluded);
+        // The window the cat is on: losing its footing is the reaction (the mover drops it).
+        if (ev.rect && isFiniteRect(ev.rect) && this.mover.perchWindowId !== ev.id) this.onWindowClosed(ev.rect, ev.category, excluded);
         return;
       }
       case 'window.foreground':
@@ -1923,8 +1993,157 @@ export class CatSimImpl implements CatSim {
         return;
       case 'command.play':
         return this.onPlayCommand();
+      case 'taskbar.shown':
+        return this.onTaskbarShown(ev.surfaceId);
+      case 'taskbar.hidden':
+        return this.onTaskbarHidden(ev.surfaceId);
+      case 'tabs.changed':
+        return this.onTabsChanged(ev.surfaceId, ev.ownerId, ev.change, ev.focusX);
       default:
         return;
+    }
+  }
+
+  // ---- environment surfaces ---------------------------------------------------------
+
+  /**
+   * Current geometry of a ledge of the given kind: the usable one the mover knows, else the
+   * listed surface (not yet usable, e.g. still sliding in). Never a private window's, and
+   * never a surface of another kind (a stale or mismatched id in an event).
+   */
+  private ledgeGeometry(id: string, kind: 'taskbar' | 'tabStrip'): { y: number; x0: number; x1: number; rest: { x0: number; x1: number } | null; ownerId: string | null } | null {
+    const usable = this.mover.ledgeById(id);
+    if (usable) return usable.surfaceKind === kind ? { y: usable.y, x0: usable.x0, x1: usable.x1, rest: usable.rest, ownerId: usable.ownerId } : null;
+    const s = this.surfaceIndex.get(id);
+    if (!s || s.orientation !== 'ledge' || s.kind !== kind || s.excluded === true || this.excludedWindows.has(s.ownerId)) return null;
+    if (!Number.isFinite(s.y) || !Number.isFinite(s.x0) || !Number.isFinite(s.x1) || s.x1 <= s.x0) return null;
+    return { y: s.y, x0: s.x0, x1: s.x1, rest: null, ownerId: s.ownerId };
+  }
+
+  /** Distance from the cat's anchor to the nearest point of a ledge, in body lengths. */
+  private ledgeDistanceBl(l: { y: number; x0: number; x1: number }): number {
+    const m = this.mover;
+    return Math.hypot(clamp(m.x, l.x0, l.x1) - m.x, l.y - m.y) / this.bl;
+  }
+
+  /**
+   * An auto-hide taskbar slid into view. How much the cat cares depends on how close it
+   * is, what it is doing and its personality, and habituates fast: repeated shows soon get
+   * nothing more than a glance. It may look toward it, or walk over and hop onto it (rare,
+   * with a long cooldown); however often it flaps, at most one decision per few seconds.
+   * Held, airborne or thrown, it ignores it; asleep it wakes only when it is right there and
+   * curious enough (the physical lift of a cat standing above it happens regardless).
+   */
+  private onTaskbarShown(surfaceId: string): void {
+    if (this.disabled.has('taskbarPlay') || typeof surfaceId !== 'string') return;
+    const s = this.act.state;
+    if (PHYSICAL_STATES.has(s)) return;
+    const tb = this.ledgeGeometry(surfaceId, 'taskbar');
+    if (!tb) return;
+    const habituation = this.surfaceHabit.register(`taskbar:${surfaceId}`, this.now);
+    if (!this.reactions.take('taskbarReact', this.now, TASKBAR_REACT_GAP_MS)) return;
+    const m = this.mover;
+    const t = this.cat.traits;
+    const st = this.cat.stats;
+    const dist = this.ledgeDistanceBl(tb);
+    const r = surfaceRelevance({
+      distBodyLengths: dist,
+      curiosity: t.curiosity,
+      playfulness: t.playfulness,
+      energy: st.energy,
+      confidence: t.confidence,
+      sensitivity: this.settings.behavior.activitySensitivity,
+      habituation,
+      typing: this.typing,
+    });
+    const point = { x: clamp(m.x, tb.x0, tb.x1), y: tb.y };
+    if (m.attachedSurface?.surfaceId === surfaceId) return;
+    if (ASLEEP_STATES.has(s)) {
+      // Right next to it, a curious, rested cat may get up to see; otherwise an ear flick at most.
+      const wakes = s === 'sleeping' && this.act.variant !== 'intro' && dist < 1.5 && r >= 0.5 && t.curiosity >= 0.6 && st.energy >= 0.5;
+      if (wakes && chance(this.random, 0.5 * t.curiosity) && this.reactions.take('taskbarWake', this.now, TASKBAR_WAKE_COOLDOWN_MS)) {
+        this.request('wakingUp', 'stimulus');
+        return;
+      }
+      if (dist < 3) this.react('earFlick');
+      return;
+    }
+    if (m.onWall) {
+      if (r >= 0.05) this.setGlance(point, 1200);
+      return;
+    }
+    // Standing on the floor it covers: the taskbar lifts the cat (physics); nothing to walk over to.
+    const cur = m.currentSurface;
+    if (cur?.kind === 'floor' && m.x >= tb.x0 && m.x <= tb.x1 && tb.y < m.y && m.y - tb.y <= 1.5 * m.bodyHeight) return;
+    const intense = this.typing || (this.settings.behavior.reactToTyping && this.env !== null && this.env.typingIntensity > 0.5);
+    const calm = CALM_STATES.has(s) || (s === 'walking' && this.act.cause !== 'command' && this.act.cause !== 'interaction');
+    if (r >= 0.45 && calm && !intense && st.fear < 0.3 && this.reactions.ready('taskbarHop', this.now) && dist > 0.5 && m.canReach(point)) {
+      if (this.request('walking', 'stimulus', { variant: 'taskbar', target: point, windowId: surfaceId }) === 'ok') {
+        this.reactions.set('taskbarHop', this.now, range(this.random, TASKBAR_HOP_COOLDOWN_MS[0], TASKBAR_HOP_COOLDOWN_MS[1]));
+        return;
+      }
+    }
+    if (r >= 0.2 && CALM_STATES.has(s) && s !== 'curious' && this.reactions.take('taskbarLook', this.now, TASKBAR_LOOK_COOLDOWN_MS)) {
+      if (this.request('curious', 'stimulus', { target: point, variant: 'look' }) === 'ok') return;
+    }
+    if (r >= 0.05 && !ACTIVE_STATES.has(s)) this.setGlance(point, 1500);
+  }
+
+  /**
+   * A taskbar started sliding away. A trip to it is called off. Standing on it, the cat
+   * flicks an ear and rides it down (the mover then sets it down or lets it drop calmly);
+   * now and then a lively one hops down to the floor instead.
+   */
+  private onTaskbarHidden(surfaceId: string): void {
+    if (this.disabled.has('taskbarPlay') || typeof surfaceId !== 'string') return;
+    const a = this.act;
+    if ((a.state === 'walking' || a.state === 'running') && a.variant === 'taskbar' && a.windowId === surfaceId) this.finish();
+    const m = this.mover;
+    if (m.attachedSurface?.surfaceId !== surfaceId || !m.grounded) return;
+    const s = a.state;
+    if (PHYSICAL_STATES.has(s) || ASLEEP_STATES.has(s)) return;
+    this.react('earFlick');
+    const t = this.cat.traits;
+    const st = this.cat.stats;
+    if (this.typing || !(CALM_STATES.has(s) || s === 'walking') || st.energy < 0.4) return;
+    if (!chance(this.random, 0.5 * t.playfulness * st.energy) || !this.reactions.take('taskbarHopOff', this.now, 60_000)) return;
+    const floor = m.world.surfaceBelow(m.x, m.y + 1, []);
+    if (!floor) return;
+    this.request('walking', 'stimulus', { variant: 'taskbar', target: { x: floor.x, y: floor.y } });
+  }
+
+  /**
+   * A tab was selected or added in a browser tab strip (geometry only, never names). Nearby
+   * and awake, the cat glances at the active tab; standing on the strip it may now and then
+   * walk over to it (cooldown, habituation, not while the user types).
+   */
+  private onTabsChanged(surfaceId: string, ownerId: string, change: 'added' | 'removed' | 'selected' | 'geometry', focusX: number | null): void {
+    if (this.disabled.has('tabStrips') || (change !== 'selected' && change !== 'added')) return;
+    if (typeof focusX !== 'number' || !Number.isFinite(focusX) || typeof surfaceId !== 'string') return;
+    if (typeof ownerId === 'string' && this.excludedWindows.has(ownerId)) return;
+    const s = this.act.state;
+    if (ASLEEP_STATES.has(s) || PHYSICAL_STATES.has(s)) return;
+    const strip = this.ledgeGeometry(surfaceId, 'tabStrip');
+    if (!strip) return;
+    const m = this.mover;
+    const onIt = m.attachedSurface?.surfaceId === surfaceId;
+    const focus = { x: clamp(focusX, strip.x0, strip.x1), y: strip.y };
+    if (!onIt && this.ledgeDistanceBl({ y: strip.y, x0: focus.x, x1: focus.x }) > 10) return;
+    const habituation = this.surfaceHabit.register(`tabs:${surfaceId}`, this.now);
+    if (habituation > 0.9) return;
+    // Look at the tab itself, just below the strip's top edge.
+    const look = { x: focus.x, y: strip.y + 0.4 * m.bodyHeight };
+    if (onIt && m.grounded && CALM_STATES.has(s) && !this.typing && habituation < 0.6) {
+      const rest = strip.rest ?? { x0: strip.x0, x1: strip.x1 };
+      const x = clamp(focus.x, rest.x0, rest.x1);
+      if (Math.abs(x - m.x) > 1.5 * this.bl && chance(this.random, 0.2 + 0.4 * this.cat.traits.curiosity) && this.reactions.take('tabInvestigate', this.now, TAB_INVESTIGATE_COOLDOWN_MS)) {
+        const then: FollowUp = { state: 'idle', init: { target: look } };
+        if (this.request('walking', 'stimulus', { variant: 'tabStrip', target: { x, y: strip.y }, then }) === 'ok') return;
+      }
+    }
+    if (!ACTIVE_STATES.has(s)) {
+      this.setGlance(look, 1500);
+      if (onIt) this.mover.faceToward(focus.x, this.now);
     }
   }
 
@@ -2118,7 +2337,7 @@ export class CatSimImpl implements CatSim {
   private onMoveStart(id: string, excluded: boolean): void {
     this.movingWindows.add(id);
     if (!this.settings.behavior.reactToWindows || this.mover.perchWindowId === id) return;
-    const rect = this.safeWindowRect(id);
+    const rect = this.windowRect(id);
     if (!rect || ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state)) return;
     const r = this.windowRelevanceFor(rect, 'unknown', excluded, false, 'move');
     // A private window being moved gets a glance at most.
@@ -2411,6 +2630,11 @@ export class CatSimImpl implements CatSim {
       perchTarget: this.perchTarget(),
       wanderTarget: this.wanderTarget(),
       cornerTarget: this.cornerTarget(),
+      typingIntensity: this.settings.behavior.reactToTyping && Number.isFinite(env.typingIntensity) ? clamp(env.typingIntensity, 0, 1) : 0,
+      standingOn: this.mover.attachedSurface?.surfaceKind ?? 'floor',
+      climbTarget: this.climbTarget(),
+      tabStripTarget: this.tabStripTarget(),
+      edgeLook: this.edgeLookTarget(),
       surpriseReady: this.reactions.ready('surprise', this.now),
       recentStates: this.recentStates,
       current: this.act.state,
@@ -2423,7 +2647,8 @@ export class CatSimImpl implements CatSim {
     const s = m.currentSurface;
     const r = m.walkRange;
     if (!s || !r) return null;
-    if (s.kind === 'window' && chance(this.random, 0.5)) {
+    // From a window top or tab strip the cat often wanders back down; a taskbar is walked along like a floor.
+    if (s.kind === 'ledge' && s.surfaceKind !== 'taskbar' && chance(this.random, 0.5)) {
       const fp = m.world.nearestFloorPoint({ x: m.x, y: m.y + 1 });
       return { x: fp.x, y: fp.y };
     }
@@ -2435,17 +2660,82 @@ export class CatSimImpl implements CatSim {
     return null;
   }
 
-  /** The far end of the floor the cat stands on (a corner), when it is at least three body lengths away. */
+  /**
+   * The far end of the surface the cat stands on (a corner of the floor, of a window top or
+   * of the taskbar), when it is a walk away: three body lengths on a floor, 1.5 on a ledge.
+   */
   private cornerTarget(): Point | null {
     const m = this.mover;
     const s = m.currentSurface;
     const r = m.walkRange;
-    if (!s || !r || s.kind !== 'floor') return null;
-    const left = r.x0 + 0.6 * this.bl;
-    const right = r.x1 - 0.6 * this.bl;
+    if (!s || !r || !m.grounded) return null;
+    const floor = s.kind === 'floor';
+    const inset = (floor ? 0.6 : 0.1) * this.bl;
+    const left = r.x0 + inset;
+    const right = r.x1 - inset;
     if (right <= left) return null;
     const x = m.x - left > right - m.x ? left : right;
-    return Math.abs(x - m.x) >= 3 * this.bl ? { x, y: m.y } : null;
+    return Math.abs(x - m.x) >= (floor ? 3 : 1.5) * this.bl ? { x, y: m.y } : null;
+  }
+
+  /** The nearest climb that can start from where the cat stands (up a window side, or down from the top it is on). */
+  private climbTarget(): { point: Point; dir: 'up' | 'down' } | null {
+    const m = this.mover;
+    if (!m.grounded || this.disabled.has('climbWindows') || this.disabled.has('perchOnWindows') || !this.reactions.ready('climb', this.now)) return null;
+    let best: { point: Point; dir: 'up' | 'down' } | null = null;
+    let bestDist = Infinity;
+    for (const o of m.climbOptions()) {
+      if (this.excludedWindows.has(o.ownerId)) continue;
+      const dist = Math.abs(o.startX - m.x) / this.bl;
+      if (dist > 15 || dist >= bestDist) continue;
+      best = { point: { x: o.target.x, y: o.target.y }, dir: o.dir };
+      bestDist = dist;
+    }
+    return best;
+  }
+
+  /**
+   * On a tab strip: another point of its resting span to walk to. Elsewhere (when the visit
+   * cooldown allows): a resting point on the nearest reachable tab strip.
+   */
+  private tabStripTarget(): Point | null {
+    const m = this.mover;
+    if (!m.grounded || this.disabled.has('tabStrips')) return null;
+    const on = m.attachedSurface;
+    if (on?.surfaceKind === 'tabStrip') {
+      const strip = m.ledgeById(on.surfaceId) ?? m.currentSurface;
+      if (!strip) return null;
+      const rest = strip.rest ?? { x0: strip.x0, x1: strip.x1 };
+      if (rest.x1 - rest.x0 < 1.5 * this.bl) return null;
+      for (let i = 0; i < 2; i++) {
+        const x = range(this.random, rest.x0, rest.x1);
+        if (Math.abs(x - m.x) >= 1.5 * this.bl) return { x, y: strip.y };
+      }
+      return null;
+    }
+    if (!this.reactions.ready('tabStripVisit', this.now)) return null;
+    const strips = m.ledgeSurfaces
+      .filter((l) => l.surfaceKind === 'tabStrip' && l.phase !== 'leaving' && !(l.ownerId !== null && this.excludedWindows.has(l.ownerId)))
+      .map((l) => ({ l, d: Math.hypot(clamp(m.x, l.x0, l.x1) - m.x, l.y - m.y) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 2);
+    for (const { l } of strips) {
+      const rest = l.rest ?? { x0: l.x0, x1: l.x1 };
+      const point = { x: rest.x0 + (rest.x1 - rest.x0) * range(this.random, 0.2, 0.8), y: l.y };
+      if (m.canReach(point, 'noClimb')) return point;
+    }
+    return null;
+  }
+
+  /** Standing on a window top: a spot along it where the cat may sit at the edge and look down into the window. */
+  private edgeLookTarget(): { windowId: string; point: Point } | null {
+    const m = this.mover;
+    const on = m.attachedSurface;
+    const r = m.walkRange;
+    if (!m.grounded || !r || !on || on.surfaceKind !== 'windowTop' || on.ownerId.length === 0) return null;
+    if (this.disabled.has('perchOnWindows') || this.disabled.has('inspectWindows') || this.excludedWindows.has(on.ownerId)) return null;
+    const x = clamp(m.x + (chance(this.random, 0.5) ? 1 : -1) * range(this.random, 0, 2) * this.bl, r.x0, r.x1);
+    return { windowId: on.ownerId, point: { x, y: m.y } };
   }
 
   private retreatTarget(): Point | null {
@@ -2461,14 +2751,15 @@ export class CatSimImpl implements CatSim {
   private perchTarget(): { windowId: string; point: Point } | null {
     const m = this.mover;
     if (!m.grounded) return null;
-    const options = m.windowSurfaces
-      .filter((w) => w.windowId !== null && w.windowId !== m.perchWindowId)
-      .map((w) => ({ w, x: clamp(m.x, w.x0, w.x1) }))
-      .sort((a, b) => Math.hypot(a.x - m.x, a.w.y - m.y) - Math.hypot(b.x - m.x, b.w.y - m.y))
+    const here = m.perchWindowId;
+    const options = m.ledgeSurfaces
+      .filter((l) => l.surfaceKind === 'windowTop' && l.ownerId !== null && l.ownerId !== here && l.phase !== 'leaving')
+      .map((l) => ({ l, x: clamp(m.x, l.x0, l.x1) }))
+      .sort((a, b) => Math.hypot(a.x - m.x, a.l.y - m.y) - Math.hypot(b.x - m.x, b.l.y - m.y))
       .slice(0, 3);
     for (const o of options) {
-      const point = { x: o.x, y: o.w.y };
-      if (m.canReach(point)) return { windowId: o.w.windowId as string, point };
+      const point = { x: o.x, y: o.l.y };
+      if (m.canReach(point)) return { windowId: o.l.ownerId as string, point };
     }
     return null;
   }
@@ -2488,7 +2779,7 @@ export class CatSimImpl implements CatSim {
           point = { x: fp.x, y: fp.y };
         }
       } else {
-        const w = m.windowSurfaces.find((s) => s.displayIds.includes(d.id) && x >= s.x0 && x <= s.x1);
+        const w = m.ledgeSurfaces.find((s) => (s.surfaceKind === 'windowTop' || s.surfaceKind === 'tabStrip') && s.displayIds.includes(d.id) && x >= s.x0 && x <= s.x1);
         if (w) point = { x, y: w.y };
       }
       if (point) return { point, distBodyLengths: Math.hypot(point.x - m.x, point.y - m.y) / this.bl };
@@ -2521,16 +2812,24 @@ export class CatSimImpl implements CatSim {
     const d = m.fullWorldModel.display(m.displayId);
     if (!d) return;
     const xFrac = clamp((m.x - d.workAreaPx.x) / d.workAreaPx.width, 0, 1);
-    learnSpot(this.cat.memory, { displayKey: d.id, xFrac, kind: m.perchWindowId ? 'window' : 'floor' }, ms / 60_000, this.wall());
+    // A spot on a window top or tab strip is a 'window' spot; on a taskbar it is the floor it covers.
+    const on = m.attachedSurface;
+    const kind = on && on.surfaceKind !== 'taskbar' ? 'window' : 'floor';
+    learnSpot(this.cat.memory, { displayKey: d.id, xFrac, kind }, ms / 60_000, this.wall());
     this.markDirty();
   }
 
+  /**
+   * Where to come back after a restart. Surfaces (taskbars, windows, tab strips) are gone or
+   * elsewhere by then, so a cat on one is restored on the floor below the same spot.
+   */
   private lastPosition(): PersistedCat['lastPosition'] {
     const m = this.mover;
     const d = m.fullWorldModel.display(m.displayId);
     if (!d) return null;
     const xFrac = clamp((m.x - d.workAreaPx.x) / d.workAreaPx.width, 0, 1);
-    const support = m.support.kind === 'window' ? 'window' : m.support.kind === 'floor' ? 'floor' : 'air';
+    const kind = m.support.kind;
+    const support = kind === 'floor' || kind === 'surface' ? 'floor' : 'air';
     return { displayKey: d.id.slice(0, 64), xFrac: Number.isFinite(xFrac) ? xFrac : 0.5, support };
   }
 
@@ -2554,7 +2853,8 @@ export class CatSimImpl implements CatSim {
         return a.phase === 'look' ? a.target : null;
       case 'inspectingWindow': {
         if (a.phase === 'approach') return null;
-        const r = a.windowId ? this.safeWindowRect(a.windowId) : null;
+        if (a.variant === 'edge' && a.windowId) return this.edgeLookPoint(a.windowId);
+        const r = a.windowId ? this.windowRect(a.windowId) : null;
         return r ? rectCenter(r) : a.target;
       }
       case 'playing':
@@ -2587,6 +2887,9 @@ export class CatSimImpl implements CatSim {
     const a = this.act;
     const m = this.mover;
     if (this.oneShot && this.now >= this.oneShot.until) this.oneShot = null;
+    // On a wall the body is in the vertical climbing pose whatever the activity (getting on,
+    // climbing, pulling up over the corner, stepping off).
+    if (m.onWall) return 'climb';
     if (this.oneShot && CALM_STATES.has(a.state)) return this.oneShot.clip;
     const scale = m.scale;
     return clipFor(a.state, a.phase, {
@@ -2595,6 +2898,29 @@ export class CatSimImpl implements CatSim {
       moveThreshold: 6 * scale,
       vy: m.vy,
     });
+  }
+
+  /**
+   * Approximate body bounds, px. Upright: one body width across and one body height above
+   * the anchor. Climbing: the body hangs along the wall outside the window, about one body
+   * length up from the grip at the anchor and one body height out from the wall line; the
+   * box covers that vertical pose and the upright footprint (so the presence margins the
+   * renderer is tested against still contain the drawing while it blends between poses).
+   */
+  private bodyBounds(): Rect {
+    const m = this.mover;
+    const bw = m.bodyWidth;
+    const bh = m.bodyHeight;
+    const upright = { x0: m.x - bw / 2, y0: m.y - bh, x1: m.x + bw / 2, y1: m.y };
+    const wall = m.onWall ? m.wall : null;
+    if (!wall) return { x: upright.x0, y: upright.y0, width: bw, height: bh };
+    const out = wall.side === 'left' ? -1 : 1;
+    const outer = m.x + out * 0.95 * bh;
+    const inner = m.x - out * 0.15 * bh;
+    const x0 = Math.min(upright.x0, outer, inner);
+    const x1 = Math.max(upright.x1, outer, inner);
+    const y0 = Math.min(upright.y0, m.y - bw);
+    return { x: x0, y: y0, width: x1 - x0, height: upright.y1 - y0 };
   }
 
   private fadeTarget(): number {
@@ -2608,8 +2934,11 @@ export class CatSimImpl implements CatSim {
     if (this.quitting) return 33;
     const s = this.act.state;
     const env = this.env;
-    if (s === 'sleeping') return this.mode === 'normal' ? 150 : SLOWEST_TICK_MS;
     const m = this.mover;
+    // Carried by its support (eased onto / off a taskbar, riding a window being dragged), asleep or not.
+    const on = m.attachedSurface;
+    if (m.settling || (on !== null && this.movingWindows.has(on.ownerId))) return 33;
+    if (s === 'sleeping') return this.mode === 'normal' ? 150 : SLOWEST_TICK_MS;
     if (!m.grounded || m.groundSpeed > 1 || env?.cursorOverCat || env?.dragCursor) return 33;
     return Math.min(STATE_SPECS[s].tickMs, SLOWEST_TICK_MS);
   }
@@ -2626,7 +2955,8 @@ export class CatSimImpl implements CatSim {
     }
     const bw = m.bodyWidth;
     const bh = m.bodyHeight;
-    const speedBl = m.grounded ? m.groundSpeed / bw : 0;
+    // Gait rate: along the ground, or along the wall while climbing.
+    const speedBl = m.grounded ? m.groundSpeed / bw : m.onWall ? m.climbSpeed / bw : 0;
     const k = 1 - Math.exp(-this.dt / 600);
     const st = this.cat.stats;
     this.arousal += (clamp(AROUSAL[this.act.state] + 0.3 * st.fear, 0, 1) - this.arousal) * k;
@@ -2671,7 +3001,7 @@ export class CatSimImpl implements CatSim {
       snap,
       displayId: m.displayId,
       support: m.support,
-      boundsPx: { x: m.x - bw / 2, y: m.y - bh, width: bw, height: bh },
+      boundsPx: this.bodyBounds(),
       nextTickMs: this.nextTickMs(),
       requests,
       reaction: visible && this.reaction && now - this.reaction.at < REACTION_HOLD_MS ? { ...this.reaction } : null,

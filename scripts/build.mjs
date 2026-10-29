@@ -5,6 +5,7 @@ import { build, context } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildUiaHelper } from './build-uia-helper.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dev = process.argv.includes('--dev');
@@ -72,6 +73,15 @@ function copyStatic() {
   }
 }
 
+/**
+ * The UI Automation helper (browser tab strips) into out/native. Without csc.exe (.NET Framework
+ * 4.x) it is skipped and logged; the app then reports tab strips as unavailable. A compile error
+ * in the helper's sources fails the build.
+ */
+function buildNative() {
+  buildUiaHelper({ outDir: path.join(outDir, 'native') });
+}
+
 fs.rmSync(outDir, { recursive: true, force: true });
 if (watch) {
   for (const t of targets) {
@@ -79,10 +89,12 @@ if (watch) {
     await ctx.watch();
   }
   copyStatic();
+  buildNative();
   console.log('build: watching for changes');
 } else {
   const t0 = Date.now();
   await Promise.all(targets.map((t) => build(t)));
   copyStatic();
+  buildNative();
   console.log(`build: ${dev ? 'development' : 'production'} bundle written to out/ in ${Date.now() - t0} ms`);
 }

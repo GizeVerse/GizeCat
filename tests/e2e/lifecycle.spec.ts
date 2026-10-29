@@ -141,6 +141,70 @@ test.describe('lifecycle', () => {
     expect(lines.filter((l) => l.l === 'error')).toEqual([]);
   });
 
+  test('Start with Windows: the Startup section shows main’s state and only the dedicated actions change it', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      // An unpackaged test build never writes the registry, whatever the real HKCU Run holds.
+      const status = (await hook(app, 'getStatus')).loginItem;
+      expect(status).toMatchObject({ writable: false, preference: 'unset', enabled: true, disabledBy: null, showNotice: false });
+
+      const page = await settingsPage(app);
+      await page.waitForFunction(() => 'desktopCatSettings' in globalThis);
+      await showPage(page, 'general');
+      const startup = page.getByRole('switch', { name: 'Start with Windows' });
+      // The visible switch is the input's label (the input itself is transparent, under the track).
+      const startupToggle = startup.locator('xpath=..');
+      await expect(startup).toBeChecked();
+      await expect(page.getByText('Not available in this build (development or portable).')).toBeVisible();
+      await expect(page.getByText('Desktop Cat now starts with Windows')).toBeHidden();
+
+      // The section is main-owned: a renderer patch is refused, malformed actions are rejected.
+      const refused = await page.evaluate(async () => {
+        const api = (globalThis as unknown as { desktopCatSettings: Record<string, (...a: unknown[]) => Promise<unknown>> }).desktopCatSettings;
+        return {
+          patch: await api.update!({ loginItem: { preference: 'disabled' } }),
+          mixed: await api.update!({ general: { catName: 'Pixel' }, loginItem: { noticeShown: true } }),
+          badAction: await api.action!('setLaunchAtLogin'),
+        };
+      });
+      expect(refused).toEqual({
+        patch: { ok: false, error: 'loginItem can only be changed through its dedicated actions' },
+        mixed: { ok: false, error: 'loginItem can only be changed through its dedicated actions' },
+        badAction: { ok: false, message: 'Unknown action.' },
+      });
+      expect((await hook(app, 'getSettings')).general.catName).toBe('Miso');
+
+      // The switch runs disableLaunchAtLogin: the choice is saved, nothing is written in this build.
+      await startupToggle.click();
+      await expect.poll(async () => (await hook(app, 'getSettings')).loginItem).toMatchObject({ preference: 'disabled', decidedBy: 'user', disabledBy: 'user' });
+      await expect(startup).not.toBeChecked();
+      await expect(startup).toBeEnabled();
+      await startupToggle.click();
+      await expect.poll(async () => (await hook(app, 'getSettings')).loginItem).toMatchObject({ preference: 'enabled', decidedBy: 'user', disabledBy: null });
+      await expect(startup).toBeChecked();
+
+      const dismissed = await page.evaluate(() =>
+        (globalThis as unknown as { desktopCatSettings: { action(a: string): Promise<unknown> } }).desktopCatSettings.action('dismissLaunchNotice'),
+      );
+      expect(dismissed).toEqual({ ok: true });
+      expect((await hook(app, 'getSettings')).loginItem.noticeShown).toBe(true);
+      await hook(app, 'runAction', 'completeFirstRun');
+    } finally {
+      expect(await quitApp(app)).toBe(0);
+    }
+    const lines = readLogLines(userData);
+    const reconciled = lines.filter((l) => l.m === 'login item reconciled').map((l) => l.d as { rule: string; write: unknown; gate: string[] });
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0]).toMatchObject({ rule: 'gate-closed', write: null });
+    expect(reconciled[0]!.gate).toEqual(expect.arrayContaining(['unpackaged', 'test']));
+    expect(lines.filter((l) => l.m === 'login item written' || l.m.startsWith('writing the login item'))).toEqual([]);
+    expect(lines.filter((l) => l.l === 'error')).toEqual([]);
+    const saved = JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')) as { schemaVersion: number; loginItem: Record<string, unknown> };
+    expect(saved.schemaVersion).toBe(2);
+    expect(saved.loginItem).toMatchObject({ preference: 'enabled', decidedBy: 'user', disabledBy: null, noticeShown: true, registeredPath: null });
+  });
+
   test('"As I left it" brings a paused cat back paused after a restart', async ({ userData }) => {
     const app = await launchApp(userData);
     try {

@@ -204,14 +204,16 @@ export function scoreCandidates(v: DecisionView): Scored<Candidate>[] {
     const score = (0.04 + 0.32 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * (0.6 + 0.4 * t.confidence) * excursion;
     add(cand('inspectingWindow', { variant: 'explore', windowId: v.perchTarget.windowId, target: v.perchTarget.point }), score);
   }
-  // On a window top: sit at its edge and look down into the window.
-  if (v.edgeLook && !v.disabled.has('perchOnWindows')) {
+  // On a window top: sit at its edge and look down into the window ('Sit on windows' and 'Inspect windows').
+  if (v.edgeLook && !v.disabled.has('perchOnWindows') && !v.disabled.has('inspectWindows')) {
     add(cand('inspectingWindow', { variant: 'edge', windowId: v.edgeLook.windowId, target: v.edgeLook.point }), (0.05 + 0.2 * t.curiosity) * calmMul);
   }
   // Climbing a window side is 'Climb windows' (and needs 'Sit on windows' for the top it leads to).
   if (v.climbTarget && !v.disabled.has('climbWindows') && !v.disabled.has('perchOnWindows')) {
+    // About as attractive as jumping up to explore a window top (climbing is the way up a tall one); the
+    // climb cooldown (1.5-4 min) keeps it occasional.
     const up = v.climbTarget.dir === 'up';
-    const score = (0.02 + 0.14 * t.curiosity * (0.4 + s.boredom) * (0.5 + t.energyLevel)) * energyGate * activeMul * excursion * (up ? 0.6 + 0.4 * t.confidence : 1);
+    const score = (0.06 + 0.3 * t.curiosity * (0.3 + s.boredom) * (0.5 + t.energyLevel)) * energyGate * activeMul * excursion * (up ? 0.6 + 0.4 * t.confidence : 1);
     add(cand('walking', { variant: 'climb', target: v.climbTarget.point, then: up ? 'idle' : null }), score);
   }
   if (v.tabStripTarget && !v.disabled.has('tabStrips')) {

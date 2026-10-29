@@ -97,6 +97,32 @@ describe('taskbar motion state machine', () => {
     expect(m.snapshot().phase).toBe('hidden');
   });
 
+  it('holds the speed between Explorer frames sampled faster than they arrive (measured ~31 ms steps)', () => {
+    // REAL slide-out shape (probe, 2026-10-29): ~4-5 px every ~31 ms, sampled every 16 ms.
+    const m = new TaskbarMotion();
+    m.update(0, 60, 60);
+    let t = 0;
+    let extent = 60;
+    const speeds: number[] = [];
+    for (let frame = 0; frame < 10; frame++) {
+      for (const dt of [16, 15]) {
+        t += dt;
+        if (dt === 15) extent -= 4.5;
+        m.update(t, extent, 60);
+        // The first step after rest is divided by the sample interval (nothing better is known).
+        if (frame >= 2) speeds.push(m.snapshot().extentSpeed);
+      }
+    }
+    // Never back to 0 mid-slide; each step of 4.5 px per 31 ms is one consistent speed.
+    expect(speeds.every((s) => s < 0)).toBe(true);
+    for (const s of speeds) expect(s).toBeCloseTo((-4.5 / 31) * 1000, 5);
+    expect(m.snapshot().phase).toBe('hiding');
+    // At rest the held speed expires.
+    m.update(t + 16, extent, 60);
+    m.update(t + 70, extent, 60);
+    expect(m.snapshot().extentSpeed).toBe(0);
+  });
+
   it('keeps the direction while momentarily still between hidden and shown', () => {
     const m = new TaskbarMotion();
     m.update(0, 60, 60);
