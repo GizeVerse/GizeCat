@@ -27,7 +27,7 @@ All in `%APPDATA%\Desktop Cat\` (removed by deleting that folder; kept on uninst
 - Up to 3 `*.corrupt-<time>.json` copies per file, kept only if a file was unreadable, for inspection.
 - `secrets.json` — only if you enter an AI API key: the key encrypted with Windows DPAPI via Electron `safeStorage` (readable only by your Windows account). **No backup or quarantine copy of this file is ever kept; removing a key deletes it from disk.**
 - `relaunch-history.json` — timestamps of automatic restarts after crashes (bounded).
-- `logs\` — rotating diagnostic logs, capped at ~3 MB even if another program holds the file open. Logs never contain window titles, API keys or image data; key-like strings are redacted.
+- `logs\` — rotating diagnostic logs, capped at ~3 MB even if another program holds the file open. Logs never contain window titles, API keys or image data; key-like strings are redacted. Since v1.1.1 a `surfaces summary` line (at most once a minute, only when it changes) records how many window edges, tab strips and taskbars the cat can see and reach, as counts, kinds and a reason code — never which windows or apps. The same counts (plus your displays' sizes and scaling and the cat's position) appear in Settings → Diagnostics → Surfaces and in the diagnostics export; the optional surface outlines draw the edges' positions on your own screen only.
 
 If settings ever have to be restored from `settings.json.bak`, screen-analysis consent and "Allow cloud processing" are reset to off, so a restore can never re-enable something you turned off.
 

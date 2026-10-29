@@ -32,6 +32,20 @@
 | **Helper failure policy** (after the v1.1 review): a request timeout blames the window it concerned; that window is quarantined (30 s, doubling to 10 min) while the feature keeps working for others; replacing a stalled helper has its own allowance (20 per 10 min); when the crash budget is exhausted the feature reports *unavailable* and retries by itself after 10 min. Riding continuity: while the cat stands on a browser's window top, that top stays listed even if a tab strip is discovered; walls name the top ledge actually listed. | One unresponsive browser must not disable tab strips for the session; discovery must never drop a perched cat. |
 | Optional visual fallback: **not used** for geometry. | Native + UIA geometry suffices; screen analysis remains opt-in perception only. |
 
+## 4. v1.1.1: reaching surfaces from the floor
+
+v1.1.0 shipped with surfaces that a cat on the floor could not reach on a real desktop: the installed cat never left the floor (diagnosis, evidence and why tests missed it: [docs/research/v1.1.1-floor-only-diagnosis.md](../research/v1.1.1-floor-only-diagnosis.md)). The fix keeps the one surface model and the one planner.
+
+| Decision | Why |
+|---|---|
+| **Leap and cling**: a graph edge `leap` from any support (floor, taskbar, window top, tab strip) onto a window side whose foot is beyond step reach, with the grip ≤ `wallLeapUpDip` above the feet; executed as the normal anticipation crouch plus one ballistic arc with jump gravity (`climbPhase 'leap'`, rendered with the jump clip), then the normal climb and corner pull-up. A side vanishing mid-leap turns into a free fall; a drag interrupts it like a jump. | Real floating windows end 80–500 px above the floor and their tops are ~1000 px up: beyond the 525 px jump and the 48 px step-on reach. Cats leap and grab; no teleport or stretched glide. |
+| **Top re-resolution**: a climbing cat whose planned top is replaced (a tab strip measured mid-climb replaces the window top, or the reverse) switches to the top the live side now leads to; the provider also keeps the top listed when the cat gets onto a side. | The swap made every browser climb reverse at the corner. |
+| **Landing span** `LedgeSurface.land`: a tab strip carries the open window-top edge it lies on; the cat may land or pull up anywhere on it and walks onto the strip's resting span. A strip that is unusable falls back to the plain window top. | Strips exclude the browser's controls, so pull-ups at the corners missed them and sides led nowhere. |
+| **Tab-strip measurement** for up to 3 visible, non-maximized browsers with an open top edge (slow 3 s refresh), not only those within 300 DIP of the cat. | From the floor no browser was ever measured. |
+| **Selection**: window tops and tab strips both count as perch targets, more candidates are checked for reachability, tab strips may be reached by climbing; failed trips use a short retry; the approach timeout scales with the route; an **explore urge** grows (personality-aware) while elevated surfaces are reachable but unvisited and resets on arrival. | With a typical (low-boredom, often typing) profile the cat never chose to go up; a default configuration must not suppress climbing forever. |
+| **Maximized windows stay surface-free** and are reported as such. | Their top is the screen's top edge (no room for the cat) and they cover every window below; moving or resizing user windows is not acceptable. |
+| **Surface diagnostics** (Settings → Diagnostics → Surfaces, the export, a rate-limited `surfaces summary` log line) and a session-only, click-through **surface outline** layer. Counts, kinds, reasons and geometry only. | v1.1.0's failure was invisible in its logs. |
+
 ## Consequences
 
 - A new unsigned helper exe ships in `resources/` (fails closed: tab strips off, window tops still work; restarted with backoff).
