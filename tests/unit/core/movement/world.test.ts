@@ -137,4 +137,54 @@ describe('WorldModel', () => {
     const bad = new WorldModel(world(display('x', 0, 0, 0, 0)), 1, true);
     expect(bad.usedFallback).toBe(true);
   });
+
+  it("widens a ledge's landing range by its open edge (LedgeSurface.land), clamped to the work area; the stand range stays", () => {
+    const w = new WorldModel(SINGLE, 1, true);
+    const [strip] = w.ledgeSurfaces([ledge('tabStrip:b', 'tabStrip', 'b', 600, 600, 800, { land: { x0: 400, x1: 1000 } })]);
+    expect(strip).toMatchObject({ x0: 600, x1: 800, landX0: 400, landX1: 1000, landWide: true });
+    // Off the screen's left edge: clamped like the span itself.
+    const [edge] = w.ledgeSurfaces([ledge('tabStrip:c', 'tabStrip', 'c', 600, 100, 300, { land: { x0: -200, x1: 320 } })]);
+    expect(edge).toMatchObject({ x0: 100, x1: 300, landX0: 0, landX1: 320 });
+    // Never narrower than the span; an edge no wider (or malformed) changes nothing.
+    const [same] = w.ledgeSurfaces([ledge('tabStrip:d', 'tabStrip', 'd', 600, 600, 800, { land: { x0: 650, x1: 700 } })]);
+    expect(same).toMatchObject({ landX0: 600, landX1: 800 });
+    expect(same?.landWide).toBeUndefined();
+    const [bad] = w.ledgeSurfaces([ledge('tabStrip:e', 'tabStrip', 'e', 600, 600, 800, { land: { x0: Number.NaN, x1: 900 } })]);
+    expect(bad).toMatchObject({ landX0: 600, landX1: 800 });
+    // Plain ledges are unchanged.
+    expect(w.ledgeSurfaces([ledge(topId('a'), 'windowTop', 'a', 600, 400, 900)])[0]?.landWide).toBeUndefined();
+  });
+
+  it('says why a ledge or a side is turned down, with the same verdicts as ledgeSurface / wallTrack', () => {
+    const w = new WorldModel(SINGLE, 1, true);
+    const ledges = [
+      [ledge(topId('narrow'), 'windowTop', 'narrow', 500, 100, 150), 'tooNarrow'],
+      [ledge(topId('top'), 'windowTop', 'top', 10, 100, 900), 'noHeadroom'],
+      [ledge(topId('floor'), 'windowTop', 'floor', 1030, 100, 900), 'nearFloor'],
+      [ledge(topId('off'), 'windowTop', 'off', 500, 4000, 4800), 'offDisplay'],
+      [ledge(topId('nan'), 'windowTop', 'nan', Number.NaN, 100, 900), 'invalid'],
+      [ledge(taskbarId('top'), 'taskbar', 'tb', 600, 0, 1920, { edge: 'top' }), 'unsupportedEdge'],
+      [ledge(taskbarId('low'), 'taskbar', 'tb', 1039.5, 0, 1920, { edge: 'bottom' }), 'nearFloor'],
+    ] as const;
+    for (const [l, why] of ledges) {
+      expect(w.ledgeSurfaceOrReason(l, false)).toBe(why);
+      expect(w.ledgeSurface(l, false)).toBeNull();
+    }
+    const walls = [
+      [wall('b', 'left', 0, 300, 900), 'noRoomBeside'],
+      [wall('c', 'right', 1200, 300, 340), 'tooShort'],
+      [wall('d', 'right', 1200, 900, 300), 'invalid'],
+      [wall('e', 'right', 5000, 300, 900), 'offDisplay'],
+    ] as const;
+    for (const [s, why] of walls) {
+      expect(w.wallTrackOrReason(s)).toBe(why);
+      expect(w.wallTrack(s)).toBeNull();
+    }
+    expect(w.ledgeSurfaceOrReason(ledge(topId('ok'), 'windowTop', 'ok', 500, 100, 900), false)).toMatchObject({ key: topId('ok') });
+    // The list conversions report every turned-down surface, those past the cap as 'capped'.
+    const seen: string[] = [];
+    const kept = w.ledgeSurfaces([ledges[0][0], ledge(topId('a'), 'windowTop', 'a', 500, 100, 900), ledge(topId('b'), 'windowTop', 'b', 400, 100, 900)], new Set(), 1, (l, why) => seen.push(`${l.id}:${why}`));
+    expect(kept.map((s) => s.key)).toEqual([topId('a')]);
+    expect(seen).toEqual([`${topId('narrow')}:tooNarrow`, `${topId('b')}:capped`]);
+  });
 });

@@ -46,8 +46,11 @@ export const MOVEMENT = {
   pounceMaxBodyLengths: 2.2,
 
   // ---- v1.1 surfaces --------------------------------------------------------------
-  /** Climbing speeds on a window side at movementSpeed = 1. */
-  climbUpDip: 45,
+  /**
+   * Climbing speeds on a window side at movementSpeed = 1. Up: a little under the walking pace
+   * (70), so a 500 px side at 125 % takes under 7 s instead of 9 (v1.1.1; was 45).
+   */
+  climbUpDip: 60,
   climbDownDip: 60,
   /** Getting onto a wall from the ground, and stepping off it at the bottom. */
   mountMs: 320,
@@ -55,8 +58,18 @@ export const MOVEMENT = {
   /** Pulling up over a top corner onto the ledge, and the reverse swing down onto the wall. */
   pullUpMs: 520,
   swingMs: 460,
-  /** Lowest a wall may end above the support the cat climbs from, in body heights. */
+  /** Lowest a wall may end above the support the cat steps onto it from, in body heights. */
   wallReachBodyHeights: 0.6,
+  /**
+   * Leap and cling (v1.1.1): from a support the cat jumps onto a window side that ends higher
+   * than it can step onto. The grip (anchor at hind-paw height) is at most this far above the
+   * take-off feet: the same jump power as onto a ledge (maxJumpUpDip).
+   */
+  wallLeapUpDip: 420,
+  /** Where on the side it likes to catch it, above its feet (higher only when the side ends higher). */
+  wallLeapGripDip: 300,
+  /** Apex of the leap above the grip: it catches the side near the top of its arc, falling slowly. */
+  wallLeapClearanceDip: 12,
   /** A ledge rising through the cat's feet lifts it when it comes from at most this far below, in body heights. */
   liftMaxBodyHeights: 0.9,
   /** Easing speed toward a support the cat was lifted onto or lowered onto (and at least 1.5x the support's speed). */

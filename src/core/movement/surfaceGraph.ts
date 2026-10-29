@@ -8,6 +8,8 @@
 //   jump     support -> support within the jump solver's reach (up/across limits)
 //   drop     ledge end -> first support below it (computed on demand)
 //   mount    support -> up:wall when the wall's bottom is within reach of that support
+//   leap     support -> up:wall when the wall ends higher than it can step on: a jump from
+//            beside the wall that catches the side (v1.1.1); carries the grip height
 //   pullUp   up:wall -> its top ledge at the corner
 //   swing    top ledge -> down:wall at the corner (step off the ledge end onto the wall)
 //   dismount down:wall -> first support below the wall's foot (computed on demand)
@@ -17,7 +19,7 @@ import { MOVEMENT, ROUTE_EFFORT } from './constants';
 import type { Surface, WallTrack, WorldModel } from './world';
 
 export type GraphNodeKind = 'floor' | 'ledge' | 'wallUp' | 'wallDown';
-export type GraphEdgeKind = 'walk' | 'jump' | 'drop' | 'mount' | 'pullUp' | 'swing' | 'dismount';
+export type GraphEdgeKind = 'walk' | 'jump' | 'drop' | 'mount' | 'leap' | 'pullUp' | 'swing' | 'dismount';
 
 export interface GraphNode {
   key: string;
@@ -41,6 +43,10 @@ export interface GraphEdge {
   /** Effort in seconds before personality multipliers (walking to the take-off point excluded). */
   effort: number;
   effortKind: 'walk' | 'jump' | 'climb';
+  /** Leaps: the share of `effort` that is the jump (weighed like a jump; the rest like a climb). */
+  jumpPart?: number;
+  /** Leaps: anchor height on the wall where the cat catches it. */
+  gripY?: number;
 }
 
 export interface RouteStep {
@@ -71,6 +77,13 @@ export interface RouteParams {
   blockedEdge: (e: GraphEdge) => boolean;
   /** Arrival points the cat may not use (a shared floor's off-limits stretch). */
   blockedArrival?: (s: Surface, x: number) => boolean;
+}
+
+interface SearchLabel {
+  cost: number;
+  x: number;
+  prev: string | null;
+  step: RouteStep | null;
 }
 
 export const edgeId = (e: GraphEdge): string => `${e.kind}:${e.from}>${e.to}`;
@@ -237,27 +250,60 @@ export class SurfaceGraph {
    * `start` may be a surface that is not in the graph (a ledge kept during its grace).
    */
   route(start: Surface, startX: number, destKey: string, destX: number, p: RouteParams): Route | null {
-    const world = this.world;
-    if (!world) return null;
-    const startNode: GraphNode = this.nodeMap.get(start.key) ?? { key: start.key, kind: start.kind === 'floor' ? 'floor' : 'ledge', surface: start, wall: null, hash: '' };
+    if (!this.world) return null;
     if (!this.nodeMap.has(destKey) && destKey !== start.key) return null;
-    interface Label {
-      cost: number;
-      x: number;
-      prev: string | null;
-      step: RouteStep | null;
+    const labels = this.search(this.startNode(start), startX, p, destKey);
+    const end = labels?.get(destKey);
+    if (!labels || !end) return null;
+    const steps: RouteStep[] = [];
+    let k: string | null = destKey;
+    while (k !== null) {
+      const l = labels.get(k) as SearchLabel;
+      if (l.step) steps.unshift(l.step);
+      k = l.prev;
     }
-    const labels = new Map<string, Label>([[startNode.key, { cost: 0, x: startX, prev: null, step: null }]]);
+    return { steps, cost: end.cost + Math.abs(destX - end.x) / Math.max(1, p.walkSpeedPx) };
+  }
+
+  /**
+   * Keys of every node a route could reach from `start` (a surface, or the key of the wall node
+   * the cat climbs on) with these params: the planner's search without a destination.
+   */
+  reachable(start: Surface | string, startX: number, p: RouteParams): Set<string> {
+    if (!this.world) return new Set();
+    const node = typeof start === 'string' ? this.nodeMap.get(start) : this.startNode(start);
+    if (!node) return new Set();
+    return new Set(this.search(node, startX, p, null)?.keys() ?? []);
+  }
+
+  /** `start` may be a surface that is not in the graph (a ledge kept during its grace). */
+  private startNode(start: Surface): GraphNode {
+    return this.nodeMap.get(start.key) ?? { key: start.key, kind: start.kind === 'floor' ? 'floor' : 'ledge', surface: start, wall: null, hash: '' };
+  }
+
+  /**
+   * Dijkstra from `startNode` over the eager and on-demand edges. With `destKey` it stops once
+   * that node is settled and returns the labels (null when it cannot be reached); without one
+   * it labels everything reachable.
+   */
+  private search(startNode: GraphNode, startX: number, p: RouteParams, destKey: string | null): Map<string, SearchLabel> | null {
+    const labels = new Map<string, SearchLabel>([[startNode.key, { cost: 0, x: startX, prev: null, step: null }]]);
     const settled = new Set<string>();
     const walkSec = (dx: number): number => Math.abs(dx) / Math.max(1, p.walkSpeedPx);
+    const jumpMult = p.jumpEffort * (p.preferClimb ? 4 : 1);
     const mult = (e: GraphEdge): number => {
-      if (e.effortKind === 'jump') return p.jumpEffort * (p.preferClimb ? 4 : 1);
+      if (e.effortKind === 'jump') return jumpMult;
       if (e.effortKind === 'climb') return p.climbEffort * ROUTE_EFFORT.climbMultiplier * (p.preferClimb ? 0.2 : 1);
       return 1;
     };
+    // A leap is a jump followed by a climb: each part weighed as what it is.
+    const weighed = (e: GraphEdge): number => {
+      const jump = e.jumpPart ?? 0;
+      return (e.effort - jump) * mult(e) + jump * jumpMult;
+    };
     for (let guard = 0; guard < 512; guard++) {
       let curKey: string | null = null;
-      let cur: Label | null = null;
+      let cur: SearchLabel | null = null;
       for (const [k, l] of labels) {
         if (settled.has(k)) continue;
         if (!cur || l.cost < cur.cost) {
@@ -265,35 +311,26 @@ export class SurfaceGraph {
           curKey = k;
         }
       }
-      if (!cur || curKey === null) return null;
+      if (!cur || curKey === null) return destKey === null ? labels : null;
       settled.add(curKey);
-      if (curKey === destKey) {
-        const steps: RouteStep[] = [];
-        let k: string | null = curKey;
-        while (k !== null) {
-          const l = labels.get(k) as Label;
-          if (l.step) steps.unshift(l.step);
-          k = l.prev;
-        }
-        return { steps, cost: cur.cost + walkSec(destX - cur.x) };
-      }
+      if (curKey === destKey) return labels;
       const node = curKey === startNode.key ? startNode : this.nodeMap.get(curKey);
       if (!node) continue;
       for (const e of this.outgoing(node)) {
         if (settled.has(e.to) || p.blockedEdge(e)) continue;
-        if (!p.allowClimb && (e.kind === 'mount' || e.kind === 'swing')) continue;
+        if (!p.allowClimb && (e.kind === 'mount' || e.kind === 'leap' || e.kind === 'swing')) continue;
         const target = this.nodeMap.get(e.to);
         if (!target || p.blockedNode(target)) continue;
         const fromX = node.wall ? node.wall.x : clamp(cur.x, e.fromLo, e.fromHi);
         const toX = e.toX ?? (target.surface ? clamp(fromX, target.surface.x0, target.surface.x1) : (target.wall?.x ?? fromX));
         if (target.surface && p.blockedArrival?.(target.surface, toX)) continue;
         const walk = node.wall ? 0 : walkSec(fromX - cur.x);
-        const cost = cur.cost + walk + e.effort * mult(e);
+        const cost = cur.cost + walk + weighed(e);
         const old = labels.get(e.to);
         if (!old || cost < old.cost) labels.set(e.to, { cost, x: toX, prev: curKey, step: { edge: e, fromX, toX } });
       }
     }
-    return null;
+    return destKey === null ? labels : null;
   }
 
   /** Eager edges plus the on-demand drop/dismount edges of a node. */
@@ -330,7 +367,7 @@ export class SurfaceGraph {
       return jump ? [jump] : [];
     }
     if (a.surface && b.kind === 'wallUp' && b.wall) {
-      const e = this.mountEdge(world, a, b.wall);
+      const e = this.mountEdge(world, a, b.wall) ?? this.leapEdge(world, a, b.wall);
       return e ? [e] : [];
     }
     if (a.kind === 'wallUp' && a.wall && b.surface && b.kind === 'ledge' && a.wall.topLedgeId === b.key) {
@@ -344,12 +381,32 @@ export class SurfaceGraph {
     return [];
   }
 
-  /** x on the top ledge where the cat pulls up / swings down at a wall's top corner, or null when that end of the ledge is not at the wall. */
+  /**
+   * x on the top ledge where the cat pulls up / swings down at a wall's top corner, or null when
+   * that end of the ledge is not at the wall. A ledge whose landing range was widened by its
+   * window's open edge (a tab strip, LedgeSurface.land) also counts when that edge reaches the
+   * corner although its stand range starts further in: the cat walks onto it from there.
+   */
   cornerX(world: WorldModel, w: WallTrack, top: Surface): number | null {
     const bw = world.bodyWidth(w.scale);
     const inward = w.side === 'left' ? 1 : -1;
-    const x = clamp(w.x + inward * bw * 0.5, top.x0, top.x1);
-    return Math.abs(x - w.x) <= bw * 1.25 ? x : null;
+    const corner = w.x + inward * bw * 0.5;
+    const x = clamp(corner, top.x0, top.x1);
+    if (Math.abs(x - w.x) <= bw * 1.25) return x;
+    if (!top.landWide) return null;
+    const lx = clamp(corner, top.landX0, top.landX1);
+    return Math.abs(lx - w.x) <= bw * 1.25 ? lx : null;
+  }
+
+  /**
+   * Anchor height at which a cat leaping from feet at `feetY` catches the wall: about
+   * wallLeapGripDip above its feet, within the climbable stretch, at most wallLeapUpDip up.
+   * Null when the stretch is out of leap reach (or not above the feet).
+   */
+  leapGripY(w: WallTrack, feetY: number, scale: number): number | null {
+    const highest = Math.max(w.yTop, feetY - MOVEMENT.wallLeapUpDip * scale);
+    if (highest > w.yBottom || highest >= feetY) return null;
+    return clamp(feetY - MOVEMENT.wallLeapGripDip * scale, highest, w.yBottom);
   }
 
   /**
@@ -412,6 +469,29 @@ export class SurfaceGraph {
     const climb = (Math.min(ys, w.yBottom) - w.yTop) / w.scale / MOVEMENT.climbUpDip;
     const x = clamp(w.standX, s.x0, s.x1);
     return { kind: 'mount', from: a.key, to: upKey(w), fromLo: x, fromHi: x, toX: w.x, effort: MOVEMENT.mountMs / 1000 + climb, effortKind: 'climb' };
+  }
+
+  /**
+   * Leap and cling: where the wall ends too high above the support to step on (and only
+   * there, so a side reaching the support keeps its proven step-on), the cat jumps from the
+   * same stand point beside it and catches the side within jump reach, then climbs. Effort:
+   * the jump (as jumpEdge rates one) plus the climb from the grip to the top.
+   */
+  private leapEdge(world: WorldModel, a: GraphNode, w: WallTrack): GraphEdge | null {
+    const s = a.surface as Surface;
+    if (w.phase === 'leaving' || w.topLedgeId === s.key) return null;
+    if (w.standX < s.x0 - 1 || w.standX > s.x1 + 1) return null;
+    const x = clamp(w.standX, s.x0, s.x1);
+    const ys = world.yAt(s, x);
+    const bw = world.bodyWidth(w.scale);
+    const bh = world.bodyHeight(w.scale);
+    if (ys < w.yTop + bw * 0.3 || ys <= w.yBottom + bh * MOVEMENT.wallReachBodyHeights) return null;
+    const scale = world.scaleAt({ x, y: ys });
+    const grip = this.leapGripY(w, ys, scale);
+    if (grip === null) return null;
+    const jump = ROUTE_EFFORT.jumpBase + MOVEMENT.crouchMs / 1000 + (ROUTE_EFFORT.jumpUpPerMax * (ys - grip)) / (MOVEMENT.maxJumpUpDip * scale);
+    const climb = (grip - w.yTop) / w.scale / MOVEMENT.climbUpDip;
+    return { kind: 'leap', from: a.key, to: upKey(w), fromLo: x, fromHi: x, toX: w.x, effort: jump + climb, effortKind: 'climb', jumpPart: jump, gripY: grip };
   }
 
   private onDemand(n: GraphNode): GraphEdge[] {

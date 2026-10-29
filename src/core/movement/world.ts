@@ -5,6 +5,7 @@ import type { Facing } from '../../shared/cat';
 import { CAT_BASE_HEIGHT_DIP, CAT_BASE_WIDTH_DIP } from '../../shared/cat';
 import type { Point } from '../../shared/geometry';
 import { clamp, isFiniteRect, rectBottom, rectRight } from '../../shared/geometry';
+import type { NavRejectReason } from '../../shared/surfaceDiagnostics';
 import type { LedgeSurface, SurfaceKind, SurfacePhase, WallSurface } from '../../shared/surfaces';
 import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
 import { MOVEMENT } from './constants';
@@ -40,9 +41,14 @@ export interface Surface {
   /** Range the anchor may occupy while standing on the surface. */
   x0: number;
   x1: number;
-  /** Range in which a falling anchor lands on the surface. */
+  /** Range in which a falling anchor lands on the surface (ledges: also where a pull-up may end). */
   landX0: number;
   landX1: number;
+  /**
+   * Ledges: the landing range was widened by the provider's open edge (LedgeSurface.land, a tab
+   * strip's window top). A cat set down there is not snapped into [x0, x1]: it walks in.
+   */
+  landWide?: boolean;
   /** Floors only, sorted left to right. */
   pieces: readonly FloorPiece[];
   /** Ledges: preferred resting span for the anchor (inside [x0, x1]), or null for anywhere. */
@@ -298,28 +304,34 @@ export class WorldModel {
    * Duplicate ids keep their first entry. At most `maxCount` are kept, in list order; the
    * ids in `keep` (what the cat stands on or is heading for) always make the cut.
    */
-  ledgeSurfaces(ledges: readonly LedgeSurface[], keep: ReadonlySet<string> = NO_IDS, maxCount = MAX_PER_KIND): Surface[] {
-    return capped(ledges, maxCount, keep, (l) => this.ledgeSurface(l, false));
+  ledgeSurfaces(ledges: readonly LedgeSurface[], keep: ReadonlySet<string> = NO_IDS, maxCount = MAX_PER_KIND, onReject?: RejectSink<LedgeSurface>): Surface[] {
+    return capped(ledges, maxCount, keep, (l) => this.ledgeSurfaceOrReason(l, false), onReject);
   }
 
   /** One ledge as a walkable surface, or null. `relaxed` keeps a ledge the cat already stands on (geometry sanity only). */
   ledgeSurface(l: LedgeSurface, relaxed: boolean): Surface | null {
-    if (l.orientation !== 'ledge' || typeof l.id !== 'string' || l.id.length === 0) return null;
-    if (!Number.isFinite(l.y) || !Number.isFinite(l.x0) || !Number.isFinite(l.x1) || l.x1 - l.x0 < 1) return null;
-    if (l.kind === 'windowSide') return null;
-    if (l.kind === 'taskbar' && (l.edge === 'top' || l.edge === 'left' || l.edge === 'right')) return null;
+    const r = this.ledgeSurfaceOrReason(l, relaxed);
+    return typeof r === 'string' ? null : r;
+  }
+
+  /** Like ledgeSurface, but says why a ledge is not walkable (diagnostics). */
+  ledgeSurfaceOrReason(l: LedgeSurface, relaxed: boolean): Surface | NavRejectReason {
+    if (l.orientation !== 'ledge' || typeof l.id !== 'string' || l.id.length === 0) return 'invalid';
+    if (!Number.isFinite(l.y) || !Number.isFinite(l.x0) || !Number.isFinite(l.x1) || l.x1 - l.x0 < 1) return 'invalid';
+    if (l.kind === 'windowSide') return 'invalid';
+    if (l.kind === 'taskbar' && (l.edge === 'top' || l.edge === 'left' || l.edge === 'right')) return 'unsupportedEdge';
     const d = this.displayAt({ x: (l.x0 + l.x1) / 2, y: l.y });
-    if (!d) return null;
+    if (!d) return 'offDisplay';
     const wa = d.workAreaPx;
     const bw = this.bodyWidth(d.scaleFactor);
     const bh = this.bodyHeight(d.scaleFactor);
     if (!relaxed) {
-      if (l.y - bh * 0.8 < wa.y) return null;
+      if (l.y - bh * 0.8 < wa.y) return 'noHeadroom';
       if (l.kind === 'taskbar') {
         const floorY = this.floorYAt((l.x0 + l.x1) / 2) ?? rectBottom(wa);
-        if (floorY - l.y < 2 * d.scaleFactor) return null;
+        if (floorY - l.y < 2 * d.scaleFactor) return 'nearFloor';
       } else if (rectBottom(wa) - l.y < bh * 0.5) {
-        return null;
+        return 'nearFloor';
       }
     }
     const lx0 = Math.max(l.x0, wa.x);
@@ -327,7 +339,7 @@ export class WorldModel {
     // Tab strips arrive as ANCHOR spans already clear of the browser controls and inset by half the
     // cat (src/main/uia/segment.ts), so they are not narrowed again and may be shorter than a body.
     const anchorSpan = l.kind === 'tabStrip';
-    if (lx1 - lx0 < (relaxed ? 1 : anchorSpan ? bw * 0.25 : bw * 0.9)) return null;
+    if (lx1 - lx0 < (relaxed ? 1 : anchorSpan ? bw * 0.25 : bw * 0.9)) return 'tooNarrow';
     // A taskbar spans its display: like on a floor, the cat keeps its whole body on screen.
     const inset = l.kind === 'taskbar' ? bw / 2 : anchorSpan ? 0 : bw * 0.25;
     let x0 = lx0 + inset;
@@ -342,6 +354,15 @@ export class WorldModel {
       const r1 = clamp(l.rest.x1, x0, x1);
       if (r1 - r0 >= 1) rest = { x0: r0, x1: r1 };
     }
+    // The open edge around the ledge (a tab strip's window top) widens where it is landed or
+    // pulled up onto, clamped like the span; the stand range stays [x0, x1].
+    let landX0 = lx0;
+    let landX1 = lx1;
+    const land = l.land;
+    if (land && Number.isFinite(land.x0) && Number.isFinite(land.x1) && land.x1 > land.x0) {
+      landX0 = Math.min(lx0, Math.max(land.x0, wa.x));
+      landX1 = Math.max(lx1, Math.min(land.x1, rectRight(wa)));
+    }
     return {
       kind: 'ledge',
       key: l.id,
@@ -352,8 +373,9 @@ export class WorldModel {
       y: l.y,
       x0,
       x1,
-      landX0: lx0,
-      landX1: lx1,
+      landX0,
+      landX1,
+      ...(landX0 < lx0 || landX1 > lx1 ? { landWide: true } : {}),
       pieces: [],
       rest,
       focusX: typeof l.focusX === 'number' && Number.isFinite(l.focusX) ? l.focusX : null,
@@ -368,30 +390,37 @@ export class WorldModel {
    * same display; the climbable stretch runs from just below the top corner (head over the
    * edge) down to the bottom end or the floor, whichever is higher. Capped like ledgeSurfaces.
    */
-  wallTracks(walls: readonly WallSurface[], keep: ReadonlySet<string> = NO_IDS, maxCount = MAX_PER_KIND): WallTrack[] {
-    return capped(walls, maxCount, keep, (w) => this.wallTrack(w));
+  wallTracks(walls: readonly WallSurface[], keep: ReadonlySet<string> = NO_IDS, maxCount = MAX_PER_KIND, onReject?: RejectSink<WallSurface>): WallTrack[] {
+    return capped(walls, maxCount, keep, (w) => this.wallTrackOrReason(w), onReject);
   }
 
   wallTrack(w: WallSurface): WallTrack | null {
-    if (w.orientation !== 'wall' || w.kind !== 'windowSide' || typeof w.id !== 'string' || w.id.length === 0) return null;
-    if (!Number.isFinite(w.x) || !Number.isFinite(w.y0) || !Number.isFinite(w.y1) || w.y1 <= w.y0) return null;
-    if (w.side !== 'left' && w.side !== 'right') return null;
+    const r = this.wallTrackOrReason(w);
+    return typeof r === 'string' ? null : r;
+  }
+
+  /** Like wallTrack, but says why a side is not climbable (diagnostics). */
+  wallTrackOrReason(w: WallSurface): WallTrack | NavRejectReason {
+    if (w.orientation !== 'wall' || w.kind !== 'windowSide' || typeof w.id !== 'string' || w.id.length === 0) return 'invalid';
+    if (!Number.isFinite(w.x) || !Number.isFinite(w.y0) || !Number.isFinite(w.y1) || w.y1 <= w.y0) return 'invalid';
+    if (w.side !== 'left' && w.side !== 'right') return 'invalid';
     const outward = w.side === 'left' ? -1 : 1;
     const d = this.displayAt({ x: w.x + outward, y: (w.y0 + w.y1) / 2 }) ?? this.displayAt({ x: w.x + outward, y: w.y0 });
-    if (!d) return null;
+    // Against the screen's edge (a display inside the window, none beside it): no room to hang there.
+    if (!d) return this.displayAt({ x: w.x - outward, y: (w.y0 + w.y1) / 2 }) ? 'noRoomBeside' : 'offDisplay';
     const wa = d.workAreaPx;
     const bw = this.bodyWidth(d.scaleFactor);
     const bh = this.bodyHeight(d.scaleFactor);
     // Room for the body beside the edge (it sticks out about one body height while hanging).
     const outer = w.x + outward * bh * 0.85;
-    if (outer < wa.x || outer > rectRight(wa)) return null;
+    if (outer < wa.x || outer > rectRight(wa)) return 'noRoomBeside';
     const standX = w.x + outward * bw * 0.55;
     const floorY = this.floorYAt(standX) ?? rectBottom(wa);
     // Highest anchor on the wall: the front paws (about 0.73 body lengths above the anchor) rest
     // on the top edge instead of poking over it.
     const yTop = Math.max(w.y0 + bw * 0.73, wa.y + bw);
     const yBottom = Math.min(w.y1, floorY);
-    if (yBottom - yTop < bw * 0.25) return null;
+    if (yBottom - yTop < bw * 0.25) return 'tooShort';
     return {
       key: w.id,
       ownerId: typeof w.ownerId === 'string' ? w.ownerId : '',
@@ -465,11 +494,21 @@ export class WorldModel {
   }
 }
 
+/** Receives each surface the world model turned down, with the reason (diagnostics). */
+export type RejectSink<T> = (item: T, reason: NavRejectReason) => void;
+
 /**
  * Converts surfaces in list order, skipping invalid ones and later duplicates of an id, and
  * keeps at most `maxCount`: the ids in `keep` always, the others first come first served.
+ * `onReject` hears about every surface turned down (those past the cap as 'capped').
  */
-function capped<T extends { id: string }, R>(items: readonly T[], maxCount: number, keep: ReadonlySet<string>, convert: (item: T) => R | null): R[] {
+function capped<T extends { id: string }, R extends object>(
+  items: readonly T[],
+  maxCount: number,
+  keep: ReadonlySet<string>,
+  convert: (item: T) => R | NavRejectReason,
+  onReject?: RejectSink<T>,
+): R[] {
   const out: R[] = [];
   const seen = new Set<string>();
   const room = Math.max(0, maxCount - keep.size);
@@ -477,9 +516,15 @@ function capped<T extends { id: string }, R>(items: readonly T[], maxCount: numb
   for (const item of items) {
     if (!item || seen.has(item.id)) continue;
     const kept = keep.has(item.id);
-    if (!kept && others >= room) continue;
+    if (!kept && others >= room) {
+      onReject?.(item, 'capped');
+      continue;
+    }
     const r = convert(item);
-    if (r === null) continue;
+    if (typeof r === 'string') {
+      onReject?.(item, r);
+      continue;
+    }
     seen.add(item.id);
     out.push(r);
     if (!kept) others++;

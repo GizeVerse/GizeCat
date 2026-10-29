@@ -49,7 +49,11 @@ export interface LedgeSurface extends SurfaceBase {
   /**
    * v1.1.1: the open edge the cat may land on or pull up onto, when wider than [x0, x1]
    * (a tab strip's window top, so a climb up the window's side can end at the corner and
-   * walk onto the strip). Omitted: landing is limited to [x0, x1].
+   * walk onto the strip). It should contain [x0, x1] at the same `y`; the sim only ever
+   * widens with it (clamped to the work area) and keeps standing/resting to [x0, x1]: a cat
+   * set down on the rest of the edge walks onto the span, never snapped. Serve it on the
+   * live lookup too (getSurface): there it is what holds the cat while it walks in.
+   * Omitted: landing is limited to [x0, x1].
    */
   land?: { x0: number; x1: number };
   /** Something worth looking at on/under this ledge (e.g. the active tab's centre x), or null. */
