@@ -2,6 +2,69 @@
 
 Labels: **REAL** = executed and observed on the machine below; **MOCKED** = executed against fakes/mock servers; **SIMULATED** = real code driven with synthetic geometry/events; **UNVERIFIED** = not executed.
 
+# v1.1.1 (2026-10-29): the cat never left the floor
+
+Code: branch `feat/v1.1-surfaces`, application code at `19cd1dd` (later commits change tests, scripts and docs only; nothing that ships). Installer `release/Desktop-Cat-Setup-1.1.1.exe`, 121,464,882 bytes, SHA-256 `D7B52F171FC0DA1C726AFE39A23EE67814236B63978D5B709D3B431DBB8EF36D`, unsigned; `release/win-unpacked` is its payload from the same `npm run package`. Same machine as below: Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide bottom taskbar, Edge 156.0.4314.50, Chrome 155.0.8059.79. The user was working at the desk during the runs (maximized windows in front much of the time; they dragged test windows and the test cat in early runs).
+
+## Reported failure, reproduced (REAL)
+
+- The installed 1.1.0 (`%LOCALAPPDATA%\Programs\DesktopCat`) is byte-identical to the release build (`app.asar`, `DesktopCatUia.exe` SHA-256). Its own records after ~23.5 min awake: `windowsInspected 0`, no favourite spots, support `floor`, boredom 0.02; nothing disabled in settings. `main.log` had no surface counts at all — the failure was invisible.
+- Window layout snapshot (geometry/class/exe only, no titles): three maximized windows (one in front) cover the whole screen; the floating windows end 82–485 px above the floor with tops 907–1095 px above it.
+- Dev build with test hooks, own userData and own throwaway windows (time ×8): a typical window `[308,140,1284,892]` was never reached (0/913 samples over 1920 sim-s); an own floating Edge window was never measured (tab strips *idle* 43/43 checks, like the user's log); a small window within jump reach was reached only after raising boredom to 0.6.
+- Headless replay of the real geometry through the real provider/world/graph/sim (SIMULATED): 0 surfaces with the maximized window in front; 0 edges from the floor to any floating window; browser climbs reversed at the corner (0/25 reached a top).
+
+Root causes RC1–RC7 and why the tests missed them: [docs/research/v1.1.1-floor-only-diagnosis.md](research/v1.1.1-floor-only-diagnosis.md). Design: ADR 0002 §4.
+
+## Automated suites
+
+| Tier | Result |
+|---|---|
+| `node .claude/scripts/verify.mjs full` (final tree) | **PASS** — typecheck, lint, unit, build, e2e (final run on the committed tree, not stale) |
+| Vitest (unit + integration) | **3078 passed, 2 skipped** (139 files; the 2 skipped are the opt-in real-browser UIA tests) |
+| Playwright E2E (real app) | **30 passed, 3 skipped** of 33: the opt-in browser test (run separately below) and two environment preconditions that held because a maximized window was in front of the taskbar/probe (*taskbar topmost before start*, *small probe really topmost*), as in v1.1.0 |
+| Opt-in real-browser E2E (`DESKTOP_CAT_REAL_BROWSER=1`, `…_KIND=chrome`) | Edge and Chrome: **passed** (REAL, below) |
+
+New coverage: leap edges for side feet 40–480 px above the floor at 100/125/150 % with the app's floor inset (and their absence beyond reach); the user's five real window frames reached end to end; continuous leap physics (bounded per-tick motion, exact parabola), cling, climb, pull-up, walk; tab strip replacing the top mid-climb (and the reverse), window closed mid-climb, side vanishing mid-leap, drag/throw mid-leap and mid-climb; landing spans (pull-up beside a strip, walk-in, no stall/snap/glide on drops, dismounts, lifts); tab-strip interest for far visible browsers, top fallback, top held while clinging; selection beyond the nearest candidates, retry cooldowns, explore urge (personality, typing, reset), liveness with the user's profile (≥ 90 % of 20 seeds up within 10 sim-min; 3–15 trips/sim-h; ≥ 1/sim-h while typing heavily; 0 with nothing reachable); diagnostics producers, verdict (every branch incl. `frontMaximized`, `noWayUp`), schema, IPC sender checks, session-only outlines (DIP conversion, ≤ 4 Hz, suppressed while hidden/fullscreen), summary log rate limit; an integration suite composing the app's real pipeline on a virtual clock (32 tests; 28 of them fail on the pre-fix code, 11 on the stage-1 code without the behaviour fix).
+
+## Real-Windows checks (REAL)
+
+| Area | Check | Result |
+|---|---|---|
+| **Packaged build traversal** | `scripts/qa-traversal-packaged.mjs`: `release/win-unpacked/DesktopCat.exe` (fuses on, no test hooks), own userData, real time; own always-on-top window of typical size `[297,180,1334×832]` (top 1015 px above the floor, bottom 183 px above); observed through the app's own `surfaces summary` log lines | 10 s: on the floor, verdict *exploring*, 1 top + 2 sides reachable; **2 min 20 s: on the window's side; 3 min 20 s: on its top (excursion 1)**; then down by itself; window closed → back on the floor; 0 errors; `DESKTOP_CAT_TEST=1` ignored (boot `packaged:true, test:false`). Raw: `docs/research/v1.1.1-evidence/qa-traversal-packaged.json` |
+| Diagnostics, user's situation | first attempt of the same check: the test window had not reached the topmost band (fixed by re-asserting `HWND_TOPMOST` on it) and sat behind the user's maximized window | the packaged app logged verdict `frontMaximized`, 0 surfaces, for 10 min — exactly the user's situation, now visible in the log and on the Diagnostics page |
+| Dev build traversal (E2E) | `surfaces.spec.ts` "REAL traversal", fresh cat, time ×12 | two full runs: first on a side at 128.9 / 165.2 sim-s, on the top at 137.8 / 174.2 sim-s (11.5 / 14.5 s wall) via 1 leap + 1 pull-up, walked 404 / 482 px along it; window closed → on the floor 110 / 239 ms later |
+| Edge 156 tab strip (E2E, opt-in) | own Edge, temp profile, floating `[296,180,1328×832]`, not maximized | strip measured 9 ms after start while the cat was on the floor (`land` 306–1614 around the strip 403–1190); cat on the strip at 153 sim-s (1 leap, 1 pull-up), walked 366 px; Edge closed gracefully, profile deleted |
+| Chrome 155 tab strip (E2E, opt-in) | own Chrome, temp profile, same size | strip measured 15 ms after start; cat on the strip at 273 sim-s (1 leap, 1 pull-up), walked 846 px; Chrome closed gracefully, profile deleted |
+| Packaged app | `npm run package`, `@electron/fuses read`, `smoke-packaged.mjs`, helper `--version`, asar contents | fuses unchanged (RunAsNode/NODE_OPTIONS/inspect off, asar integrity + only-from-asar on); smoke: first instance stays up, second launch exits 0, 0 errors, login item gate closed, 0 Run writes (1 warning: the global shortcut is held by the user's running 1.1.0); helper protocol 1, per-monitor-v2 (helper source unchanged since 1.1.0; the rebuilt exe differs only by compiler-embedded ids); `app.asar` contains the v1.1.1 code |
+| Resource benchmark | below | |
+
+## Resource benchmark (REAL, `scripts/bench.mjs --phase-sec=90`)
+
+Dev build of the same code. CPU in % of one core over all app processes. Raw: `docs/bench/bench-2026-10-29T14-55-28-100Z.json`. No browser was open, so the tab-strip helper did not run (it is sampled now when it does).
+
+| Phase | CPU avg (max) | Private MB | Timers / handles |
+|---|---|---|---|
+| Awake, kept active (33 % of samples napping) | 1.05 % (1.23 %) | 335 → 355 | 5 → 5 / 7 → 7 |
+| Asleep | 0.66 % (1.05 %) | 364 → 357 | 5 → 5 / 7 → 7 |
+| Hidden | **0.03 %** (0.07 %) | 301 → 301 | 5 → 5 / 7 → 7 |
+| Paused | 0.58 % (0.60 %) | 311 → 316 | 5 → 5 / 7 → 7 |
+
+Against v1.1.0 (0.95 / 0.58 / 0.02 / 0.54 %) about +0.04–0.10 % of a core (the 2 s look-around for reachable targets, the 10 s summary-log check — the 5th timer); machine load differed between the runs. 0 tick errors, 0 errors, 1 warning (the shortcut held by the user's running cat).
+
+## Adversarial review (REAL)
+
+5 dimensions (movement, behaviour, provider/tab strips, security/privacy, performance) over the v1.1.1 diff, each with an independent verifier: **13 findings, 12 confirmed (3 medium, 9 low), 1 refuted, 0 critical/high**. All 12 fixed with regression tests (each fix reverted once to confirm its test fails): a drop from beside a tab strip stalled or snapped the cat; dismounts/lifts onto a landing span glided or snapped; a too-narrow strip left a browser without a top; the verdict said *exploring* when only dead-end sides were reachable; "heading for" reported look targets; the helper never idled while a floating browser was visible (even with the cat asleep) and far browsers were re-described at 50 ms; useless browsers took far slots; outlines stayed drawn while the cat was hidden or over fullscreen apps.
+
+## Not verified in v1.1.1 (UNVERIFIED)
+
+- **Installing 1.1.1 over the user's running 1.1.0** on this machine: not done. The user's cat is running, and the NSIS installer first uninstalls the registered installation, which would replace the user's running app; `install-test.ps1` also refuses to run while the production startup entry exists. The installer uses the same electron-builder/NSIS configuration whose install, upgrade (1.0 → 1.1), startup registration and uninstall passed REAL for 1.1.0 (below); the 1.1.0 → 1.1.1 upgrade itself was not observed.
+- The user's own browsers (their profiles, extensions, toolbar layouts) — only own instances with temp profiles were used; the user's own windows were never moved, focused or clicked.
+- Maximized windows: by design nothing to climb (reported as such).
+- Multi-monitor, mixed DPI hardware, Windows 10, a docked (always shown) taskbar, scales other than 125 % (100/150 % SIMULATED only), Firefox and vertical tabs (not supported).
+- Long runs (hours), and the tab-strip helper's cost while resident for long periods (its per-read cost and memory were measured REAL in v1.1: 0.8–1.7 ms per read, ~22 MB private).
+- A user dragging or throwing the cat mid-leap on the real desktop (SIMULATED and covered by unit/integration tests).
+- Earlier v1.1 items still open: a real reboot/sign-in start, the cat riding a physically revealed taskbar, the one-time tray notice actually appearing, a standard-user token.
+
 # v1.1.0 (2026-10-29)
 
 Code: branch `feat/v1.1-surfaces`. The install, upgrade and probe runs below used an installer built from `9b5314c`; the final `release/Desktop-Cat-Setup-1.1.0.exe` was rebuilt from `b4a339b` (identical application code — that commit only changed documentation and the shipped `THIRD_PARTY_NOTICES.md`) and passed the packaged smoke test again. SHA-256 `73D24CB942912A018D82AD2EDFE216EC29C93999B714FD5C0455E9F85926F870`, 115.8 MB, unsigned. Same machine as v1.0 (below): Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide **bottom** taskbar, Edge 156.0.4314.50, Chrome 155.0.8059.79. During the final runs the user had a full-monitor Chrome window in front (this strips the taskbar's topmost flag — a Windows behaviour, see below).
