@@ -85,6 +85,42 @@ describe('surface verdict', () => {
     expect(surfaceVerdict(input({ decision: decisionDiagnostics({ targets: { perch: 'cooldown', climb: 'available', tabStrip: 'noSurfaces' } }) })).code).toBe('exploring');
   });
 
+  it('says there is no way up when the cat reaches only window sides and the last look found no top to go to (BEH-1)', () => {
+    const sides = { ...emptySurfaceCounts(), taskbar: 1, windowSide: 2 };
+    const noWayUp = { perch: 'noSurfaces', climb: 'unreachable', tabStrip: 'noSurfaces' } as const;
+    const v = surfaceVerdict(input({ nav: navDiagnostics({ reachable: sides }), decision: decisionDiagnostics({ targets: noWayUp, exploreUrge: 0 }) }));
+    expect(v.code).toBe('noWayUp');
+    expect(v.text).toBe('The cat can reach 2 window sides, but none leads to a window top it can stand on (the tops have no room above them or are not usable).');
+    for (const targets of [
+      { perch: 'unreachable', climb: 'unreachable', tabStrip: 'noSurfaces' },
+      { perch: 'excluded', climb: 'unreachable', tabStrip: 'unreachable' },
+      // One kind switched off is not "all switched off".
+      { perch: 'noSurfaces', climb: 'unreachable', tabStrip: 'disabled' },
+    ] as const) {
+      expect(surfaceVerdict(input({ nav: navDiagnostics({ reachable: sides }), decision: decisionDiagnostics({ targets, exploreUrge: 0 }) })).code).toBe('noWayUp');
+    }
+    // A top in reach that the last look still could not use: no claim about the tops.
+    const withTop = surfaceVerdict(input({ decision: decisionDiagnostics({ targets: { perch: 'unreachable', climb: 'unreachable', tabStrip: 'noSurfaces' } }) }));
+    expect(withTop).toEqual({ code: 'noWayUp', text: 'The cat can reach 1 window top and 2 window sides from where it is, but none of them is a way up it can use right now.' });
+  });
+
+  it("the last look in mid-air ('notGrounded') says nothing about the way up: still 'exploring'", () => {
+    const sides = { ...emptySurfaceCounts(), windowSide: 2 };
+    const v = surfaceVerdict(input({ nav: navDiagnostics({ reachable: sides }), decision: decisionDiagnostics({ targets: { perch: 'noSurfaces', climb: 'notGrounded', tabStrip: 'noSurfaces' }, exploreUrge: 0 }) }));
+    expect(v.code).toBe('exploring');
+    expect(surfaceVerdict(input({ decision: decisionDiagnostics({ targets: { perch: 'notGrounded', climb: 'notGrounded', tabStrip: 'notGrounded' } }) })).code).toBe('exploring');
+  });
+
+  it('says there is no way up when the cat knows window sides but no top or tab strip at all, reachable or not', () => {
+    const sides = { ...emptySurfaceCounts(), windowSide: 2 };
+    const expected = { code: 'noWayUp', text: 'The cat knows 2 window sides, but none leads to a window top it can stand on (the tops have no room above them or are not usable).' };
+    // Sides reachable (the sim counts a side it can get onto) or not: no top exists to go to, whatever the last look said.
+    expect(surfaceVerdict(input({ nav: navDiagnostics({ accepted: sides, reachable: sides, rejected: { noHeadroom: 1 } }) }))).toEqual(expected);
+    expect(surfaceVerdict(input({ nav: navDiagnostics({ accepted: sides, reachable: emptySurfaceCounts(), rejected: {} }), decision: decisionDiagnostics({ targets: { perch: 'notGrounded', climb: 'notGrounded', tabStrip: 'notGrounded' } }) }))).toEqual(expected);
+    // A tab strip is a top too.
+    expect(surfaceVerdict(input({ nav: navDiagnostics({ accepted: { ...sides, tabStrip: 1 }, reachable: { ...sides, tabStrip: 1 } }) })).code).toBe('exploring');
+  });
+
   it('otherwise says what the cat can reach and how much it wants to explore', () => {
     const v = surfaceVerdict(input());
     expect(v.code).toBe('exploring');
@@ -93,7 +129,7 @@ describe('surface verdict', () => {
   });
 
   it('covers every code and lists counts in plain English', () => {
-    expect(SURFACE_VERDICT_CODES).toHaveLength(9);
+    expect(SURFACE_VERDICT_CODES).toHaveLength(10);
     expect(describeCounts(emptySurfaceCounts())).toBe('no window edges');
     expect(describeCounts({ taskbar: 3, windowTop: 0, windowSide: 0, tabStrip: 2 })).toBe('2 tab strips');
     expect(describeCounts({ taskbar: 0, windowTop: 1, windowSide: 1, tabStrip: 0 })).toBe('1 window top and 1 window side');

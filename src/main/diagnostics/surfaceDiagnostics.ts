@@ -247,7 +247,11 @@ export function createSurfaceDiagnosticsSource(opts: { clock: () => number; buil
   };
 }
 
-/** What the 'surfaces summary' log line carries: counts by kind, flags and the verdict code only. */
+/**
+ * What the 'surfaces summary' log line carries: counts by kind, flags, the verdict code, what
+ * the cat stands on (a kind) and its trips up this session (a count), so a packaged build's
+ * main.log shows that the cat went up. Nothing else.
+ */
 export interface SurfaceSummary {
   listed: SurfaceCounts;
   accepted: SurfaceCounts;
@@ -255,6 +259,8 @@ export interface SurfaceSummary {
   frontMaximized: boolean;
   tabStrips: ProviderDiagnostics['tabStrips']['state'];
   verdict: SurfaceVerdictCode;
+  support: DecisionDiagnostics['support'];
+  excursions: number;
 }
 
 export function surfaceSummary(a: AssembledSurfaceDiagnostics): SurfaceSummary {
@@ -266,6 +272,8 @@ export function surfaceSummary(a: AssembledSurfaceDiagnostics): SurfaceSummary {
     frontMaximized: d.provider.frontMaximized,
     tabStrips: d.provider.tabStrips.state,
     verdict: a.code,
+    support: d.decision.support,
+    excursions: d.decision.excursions,
   };
 }
 

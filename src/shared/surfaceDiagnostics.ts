@@ -110,7 +110,7 @@ export interface DecisionDiagnostics {
   support: 'floor' | SurfaceKind | 'air' | 'held' | 'none';
   /** Kind of surface the current activity is heading for, or null. */
   targetKind: 'floor' | SurfaceKind | null;
-  /** Availability of each elevated destination type at the last decision. */
+  /** Availability of each elevated destination type at the last decision or the last look around (every 2 s on the floor or a taskbar, asleep too). */
   targets: Record<DecisionTarget, TargetAvailability>;
   /** 0..1: grows while elevated surfaces are reachable but unvisited; raises the odds of an excursion. */
   exploreUrge: number;

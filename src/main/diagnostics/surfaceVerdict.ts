@@ -4,13 +4,18 @@
 import type { DecisionDiagnostics, NavDiagnostics, NavRejectReason, ProviderDiagnostics, ProviderSkipReason, SurfaceCounts } from '../../shared/surfaceDiagnostics';
 import type { SurfaceKind, SurfaceStatus } from '../../shared/surfaces';
 
-/** Priority order: the first that applies is the verdict. */
+/**
+ * Priority order: the first that applies is the verdict. 'noWayUp' is decided in two places:
+ * right after 'noneAccepted' when the cat knows window sides but no top or tab strip at all,
+ * and after 'cooldown' when the last look found no way up from what it can reach.
+ */
 export const SURFACE_VERDICT_CODES = [
   'observersUnavailable',
   'elevated',
   'frontMaximized',
   'nothingListed',
   'noneAccepted',
+  'noWayUp',
   'noneReachable',
   'switchedOff',
   'cooldown',
@@ -69,7 +74,17 @@ const KIND_WORDS: Record<(typeof ELEVATED_KINDS)[number], [string, string]> = {
   tabStrip: ['tab strip', 'tab strips'],
 };
 
-const elevatedTotal = (c: SurfaceCounts): number => ELEVATED_KINDS.reduce((n, k) => n + (Number.isFinite(c[k]) ? Math.max(0, c[k]) : 0), 0);
+const n0 = (v: number): number => (Number.isFinite(v) ? Math.max(0, v) : 0);
+const elevatedTotal = (c: SurfaceCounts): number => ELEVATED_KINDS.reduce((n, k) => n + n0(c[k]), 0);
+/** Surfaces the cat can stand on up there (a side only leads to one). */
+const topsTotal = (c: SurfaceCounts): number => n0(c.windowTop) + n0(c.tabStrip);
+
+const NO_TOP_TEXT = 'none leads to a window top it can stand on (the tops have no room above them or are not usable)';
+/**
+ * A way up the decision can take, or may soon: 'notGrounded' means the last look happened in
+ * mid-air or on a side, so it says nothing about the way up from the floor.
+ */
+const WAY_UP: ReadonlySet<string> = new Set(['available', 'cooldown', 'notGrounded']);
 
 /** The reason with the highest count (ties: the earlier one in `order`), or null when none counts. */
 function topReason<R extends string>(counts: Partial<Record<R, number>>, order: readonly R[]): R | null {
@@ -119,6 +134,10 @@ export function surfaceVerdict(d: SurfaceVerdictInput): SurfaceVerdict {
     const edges = listed === 1 ? '1 window edge' : `${listed} window edges`;
     return { code: 'noneAccepted', text: `The cat sees ${edges} but can't use any of them: ${why ? REJECT_TEXT[why] : 'none passed its safety checks'}.` };
   }
+  // Window sides alone lead nowhere: every way up ends on a top or a tab strip.
+  if (topsTotal(d.nav.accepted) === 0) {
+    return { code: 'noWayUp', text: `The cat knows ${describeCounts(d.nav.accepted)}, but ${NO_TOP_TEXT}.` };
+  }
   if (elevatedTotal(d.nav.reachable) === 0) {
     return {
       code: 'noneReachable',
@@ -132,6 +151,17 @@ export function surfaceVerdict(d: SurfaceVerdictInput): SurfaceVerdict {
   const available = t.perch === 'available' || t.climb === 'available' || t.tabStrip === 'available';
   if (!available && (t.perch === 'cooldown' || t.climb === 'cooldown' || t.tabStrip === 'cooldown')) {
     return { code: 'cooldown', text: 'The cat explored recently and is taking a break before its next trip up.' };
+  }
+  if (!WAY_UP.has(t.perch) && !WAY_UP.has(t.climb) && !WAY_UP.has(t.tabStrip)) {
+    // What it reaches does not take it up (e.g. the sides of a window whose top is at the screen's top edge).
+    const reach = describeCounts(d.nav.reachable);
+    return {
+      code: 'noWayUp',
+      text:
+        topsTotal(d.nav.reachable) === 0
+          ? `The cat can reach ${reach}, but ${NO_TOP_TEXT}.`
+          : `The cat can reach ${reach} from where it is, but none of them is a way up it can use right now.`,
+    };
   }
   const urge = Math.round((Number.isFinite(d.decision.exploreUrge) ? Math.min(1, Math.max(0, d.decision.exploreUrge)) : 0) * 100);
   return { code: 'exploring', text: `The cat can reach ${describeCounts(d.nav.reachable)} from where it is; its urge to explore is ${urge}%.` };

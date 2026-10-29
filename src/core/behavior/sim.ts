@@ -309,6 +309,8 @@ export class CatSimImpl implements CatSim {
   private nextDecisionAt = -Infinity;
   private nextAdvanceAt = -Infinity;
   private nextDriveAt = -Infinity;
+  /** Where goTo last sent the mover; what it is heading for while the mover still pursues it (diagnostics). */
+  private goalPoint: Point | null = null;
   /** v1.1.1 exploration: the urge (DecisionView.exploreUrge), what is reachable, the trip under way, the top being explored. */
   private exploreUrge = 0;
   private scan: TargetScan = EMPTY_SCAN;
@@ -428,7 +430,7 @@ export class CatSimImpl implements CatSim {
     this.syncEmotes();
     if (this.mover.setConfig(this.moverConfig())) this.snapNext = true;
     if (!this.allowedByToggles(this.act.state, this.act.variant)) {
-      this.mover.setGoal(null);
+      this.stop();
       this.act.done = true;
       this.act.then = null;
     }
@@ -494,12 +496,18 @@ export class CatSimImpl implements CatSim {
     return m.attachedSurface?.surfaceKind ?? 'floor';
   }
 
-  /** Kind of surface the current activity (the one a jump interrupted) is heading for, or null. */
+  /**
+   * Kind of surface the cat is on its way to: the goal the mover is pursuing for the current
+   * activity (or for the one a jump interrupted), or null while it does not travel. An
+   * activity's target is not used: some only look at it (watching the user, a curious look).
+   */
   private targetKind(): DecisionDiagnostics['targetKind'] {
-    const a = PHYSICAL_STATES.has(this.act.state) && this.suspended ? this.suspended : this.act;
-    const t = a.target;
-    if (!isFinitePoint(t) || a.done) return null;
-    const p = this.mover.surfacePointFor(t);
+    const g = this.goalPoint;
+    if (g === null || !this.mover.hasGoal) return null;
+    // There already, or as close as it gets: it is not heading anywhere.
+    const status = this.act.goalStatus;
+    if (!PHYSICAL_STATES.has(this.act.state) && (status === 'arrived' || status === 'unreachable')) return null;
+    const p = this.mover.surfacePointFor(g);
     return p.surface.kind === 'floor' ? 'floor' : (p.surface.surfaceKind ?? null);
   }
 
@@ -709,10 +717,11 @@ export class CatSimImpl implements CatSim {
   private finish(next: FollowUp | null = null): void {
     this.act.done = true;
     if (next) this.act.then = next;
-    this.mover.setGoal(null);
+    this.stop();
   }
 
   private goTo(p: Point, pace: Pace, allowJump: boolean, arriveRadiusPx?: number, opts: { route?: RoutePreference; literal?: boolean } = {}): void {
+    this.goalPoint = isFinitePoint(p) ? { x: p.x, y: p.y } : null;
     this.mover.setGoal({
       x: p.x,
       y: p.y,
@@ -725,6 +734,7 @@ export class CatSimImpl implements CatSim {
   }
 
   private stop(): void {
+    this.goalPoint = null;
     this.mover.setGoal(null);
   }
 
@@ -2991,6 +3001,8 @@ export class CatSimImpl implements CatSim {
    * or a taskbar (not held, not in the air) and some way up is within reach: faster for a
    * curious, playful cat, slower for a lazy one (0 to 1 in 3-8 min), half as fast while the user
    * types. With nothing within reach it does not grow. Getting up onto a top resets it.
+   * The ways up are looked for every URGE_SCAN_MS down there, asleep too, and the decision
+   * diagnostics follow that look: windows come and go between decisions (surface verdict).
    */
   private updateUrge(dt: number): void {
     if (this.mode !== 'normal' || !(dt > 0)) return;
@@ -2998,9 +3010,12 @@ export class CatSimImpl implements CatSim {
     const s = this.act.state;
     const on = m.attachedSurface;
     const low = m.grounded && (on === null || on.surfaceKind === 'taskbar');
-    if (!low || ASLEEP_STATES.has(s) || PHYSICAL_STATES.has(s)) return;
-    if (this.now - this.scan.at >= URGE_SCAN_MS) this.scan = this.scanTargets();
-    if (!this.canGoUp(this.scan)) return;
+    if (!low || PHYSICAL_STATES.has(s)) return;
+    if (this.now - this.scan.at >= URGE_SCAN_MS) {
+      this.scan = this.scanTargets();
+      this.decisionTargets = { ...this.scan.status };
+    }
+    if (ASLEEP_STATES.has(s) || !this.canGoUp(this.scan)) return;
     this.exploreUrge = Math.min(1, this.exploreUrge + ((this.typing ? 0.5 : 1) * dt) / this.urgeTauMs());
   }
 

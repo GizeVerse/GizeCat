@@ -156,7 +156,7 @@ describe('surface diagnostics cache', () => {
 describe("'surfaces summary' log line", () => {
   const summaryOf = (over: Partial<SurfaceDiagnosticsInputs> = {}) => surfaceSummary(assembleSurfaceDiagnostics(inputs(over)));
 
-  it('logs counts by kind, flags and the verdict code only (no titles, ids or process names)', () => {
+  it('logs counts by kind, flags, the verdict code, the support kind and the trips up only (no titles, ids or process names)', () => {
     const log = memoryLogger();
     expect(createSurfaceSummaryLog({ logger: log }).note(summaryOf(), 0)).toBe(true);
     expect(log.entries).toHaveLength(1);
@@ -168,6 +168,8 @@ describe("'surfaces summary' log line", () => {
       frontMaximized: false,
       tabStrips: 'active',
       verdict: 'exploring',
+      support: 'floor',
+      excursions: 2,
     });
     const json = JSON.stringify(log.entries);
     expect(json).not.toContain(TITLE);
@@ -193,6 +195,40 @@ describe("'surfaces summary' log line", () => {
     expect(sl.note(c, 189_999)).toBe(false);
     expect(sl.note(c, 190_000)).toBe(true);
     expect(log.entries.map((e) => (e.data as { verdict: string }).verdict)).toEqual(['exploring', 'observersUnavailable', 'frontMaximized']);
+  });
+
+  it('a trip up shows in the log: a new support kind or excursion count is a change, still at most once per 60 s', () => {
+    const log = memoryLogger();
+    const sl = createSurfaceSummaryLog({ logger: log });
+    const withDecision = (over: Partial<ReturnType<typeof decisionDiagnostics>>) => summaryOf({ sim: () => ({ nav: navDiagnostics(), decision: decisionDiagnostics(over) }) });
+    const floor = withDecision({ support: 'floor', excursions: 0 });
+    const side = withDecision({ support: 'windowSide', excursions: 0 });
+    const top = withDecision({ support: 'windowTop', excursions: 1 });
+    const back = withDecision({ support: 'floor', excursions: 1 });
+    expect(sl.note(floor, 0)).toBe(true);
+    // Climbing within the minute: held back, then logged once the interval has passed.
+    expect(sl.note(side, 30_000)).toBe(false);
+    expect(sl.note(top, 60_000)).toBe(true);
+    expect(sl.note(top, 130_000)).toBe(false);
+    expect(sl.note(back, 130_000)).toBe(true);
+    // Only the excursion count changes (a trip up and down between two checks): a change.
+    const again = withDecision({ support: 'floor', excursions: 2 });
+    expect(sl.note(again, 200_000)).toBe(true);
+    // Only the support kind changes (same counts, same verdict): a change.
+    const onTaskbar = withDecision({ support: 'taskbar', excursions: 2 });
+    expect(onTaskbar.verdict).toBe(again.verdict);
+    expect(sl.note(onTaskbar, 260_000)).toBe(true);
+    expect(sl.note(onTaskbar, 400_000)).toBe(false);
+    expect(log.entries.map((e) => e.data as { support: string; excursions: number; verdict: string })).toMatchObject([
+      { support: 'floor', excursions: 0, verdict: 'exploring' },
+      { support: 'windowTop', excursions: 1, verdict: 'elevated' },
+      { support: 'floor', excursions: 1, verdict: 'exploring' },
+      { support: 'floor', excursions: 2, verdict: 'exploring' },
+      { support: 'taskbar', excursions: 2, verdict: 'exploring' },
+    ]);
+    // A producer's out-of-contract support or a bogus count never reaches the log as is.
+    const odd = withDecision({ support: 'ceiling' as never, excursions: Number.NaN });
+    expect({ support: odd.support, excursions: odd.excursions }).toEqual({ support: 'none', excursions: 0 });
   });
 });
 

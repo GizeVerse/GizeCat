@@ -357,4 +357,52 @@ describe('decision diagnostics (v1.1.1)', () => {
     h.run(500);
     expect(decision(h).support).toBe('none');
   });
+
+  it('"heading for" is where the cat travels: nothing while it only looks (watching the user, a curious look), the destination while it walks or goes to a window', () => {
+    let looking = 0;
+    let travelling = 0;
+    const wrong: string[] = [];
+    const heading = new Set<string>();
+    for (const seed of [1, 2]) {
+      const h = new Harness({ seed, world: USER_SCREEN, persisted: userCat(seed) });
+      // A small window in front whose top lies below the foreground window's centre: the look point projects onto that top.
+      h.env.windows = { small: { x: 700, y: 700, width: 400, height: 300 }, w: TYPICAL_FRAME };
+      h.env.foreground = { id: 'w', rect: TYPICAL_FRAME, processName: 'app.exe', category: 'code', minimized: false, maximized: false, fullscreen: false, excluded: false };
+      h.run(WAKE_MS, 100);
+      drive(h, 10 * MIN, (o) => {
+        const d = decision(h);
+        const phase = h.sim.debugInfo().phase;
+        if ((d.state === 'watchingUser' && (phase === 'sit' || phase === 'loaf')) || (d.state === 'curious' && phase === 'look')) {
+          looking++;
+          if (d.targetKind !== null) wrong.push(`seed ${seed} ${d.state}/${String(phase)} on ${d.support}: ${d.targetKind}`);
+        }
+        if ((d.state === 'walking' || (d.state === 'inspectingWindow' && phase === 'approach')) && o.speed > 0 && o.support.kind === 'floor') {
+          travelling++;
+          if (d.targetKind === null) wrong.push(`seed ${seed} ${d.state}/${String(phase)} moving: no destination`);
+          else heading.add(d.targetKind);
+        }
+      }, 50);
+    }
+    expect(looking).toBeGreaterThan(100);
+    expect(travelling).toBeGreaterThan(100);
+    expect(wrong.slice(0, 5)).toEqual([]);
+    expect([...heading]).toEqual(expect.arrayContaining(['floor', 'windowTop']));
+  });
+
+  it('the targets follow the windows between decisions: a window opened while the cat naps on the floor shows up within a few seconds', () => {
+    const h = userHarness(5);
+    h.env.windows = {};
+    h.run(WAKE_MS, 100);
+    h.step([{ type: 'command.sleep' }]);
+    expect(h.runUntil((o) => o.state === 'sleeping', 30_000, 100)).toBe(true);
+    h.run(5000, 100);
+    expect(decision(h).targets).toEqual({ perch: 'noSurfaces', climb: 'noSurfaces', tabStrip: 'noSurfaces' });
+    h.env.windows = { w: TYPICAL_FRAME };
+    h.run(3000, 100);
+    expect(h.last!.state).toBe('sleeping');
+    expect(decision(h).targets.perch).toBe('available');
+    expect(decision(h).targets.climb).toBe('available');
+    // Asleep, the urge does not grow.
+    expect(decision(h).exploreUrge).toBe(0);
+  });
 });
