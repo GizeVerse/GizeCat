@@ -21,7 +21,13 @@ Run on a Windows 10/11 x64 machine. Heavy steps go through `node scripts/with-lo
 - [ ] Code signing: set `CSC_LINK`/`CSC_KEY_PASSWORD` (or Azure Trusted Signing) if an identity exists. **Never** describe an unsigned build as signed.
 - [ ] `npx @electron/fuses read --app release/win-unpacked/DesktopCat.exe` — RunAsNode, NODE_OPTIONS and inspect disabled; ASAR integrity + only-load-from-ASAR enabled.
 - [ ] `release/win-unpacked/resources/app.asar.unpacked/node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node` exists.
+- [ ] `release/win-unpacked/resources/native/DesktopCatUia.exe` exists and `DesktopCatUia.exe --version` prints the protocol version (the build only warns when csc.exe is missing; a release must not ship without the helper).
 - [ ] `node scripts/smoke-packaged.mjs` — packaged exe starts, 0 log errors, second launch exits 0.
+- [ ] `node scripts/taskbar-probe.mjs` — overlays keep the taskbar topmost (NonRudeHWND) and the reveal strip still hits the taskbar.
+- [ ] `node scripts/uia-probe.mjs --browsers edge,chrome` — tab strips found through the shipped helper with your own throwaway browser instances; no web-accessibility activation.
+- [ ] `node scripts/login-item-probe.mjs` — Electron's Run-value quoting and StartupApproved rules still match the app's reader.
+- [ ] Manual: install the previous release, then upgrade → settings migrate (v1 → v2), startup is registered once with the installed path and the one-time notice appears; a Task Manager disable survives the upgrade.
+- [ ] Manual: reveal an auto-hide taskbar with the mouse next to the cat → it may hop on and ride, is set down calmly when it hides, and taskbar buttons stay clickable.
 - [ ] `powershell -File scripts/install-test.ps1` — exits 0: silent install, smoke, silent uninstall, shortcuts and uninstall entry removed.
 - [ ] Manual: install over the previous version → settings and cat memories preserved.
 - [ ] Manual: multi-monitor with different scale factors (drag the cat across), disconnect a monitor while the cat is on it.

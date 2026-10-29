@@ -958,26 +958,47 @@ export function sampleClip(clip: AnimClip, ctx: ClipContext, out: Pose): Pose {
   return out;
 }
 
-/** Cross-fade (ms) onto the wall (the mover's mount takes 320 ms, the swing down from a top 460 ms). */
+/**
+ * Cross-fade (ms) onto the wall at movement speed 1 (the mover's mount takes 320 ms, the swing down
+ * from a top 460 ms).
+ */
 export const CLIMB_FADE_MS = 280;
 /**
- * Cross-fade (ms) from the wall back to a ground clip: the pull-up over a top corner carries the
- * anchor up onto the ledge for 520 ms, and the cat should keep hold of the wall for most of it.
+ * Cross-fade (ms) from the wall back to a ground clip at movement speed 1: the pull-up over a top
+ * corner carries the anchor up onto the ledge for 520 ms, and the cat should keep hold of the wall
+ * for most of it.
  */
 export const CLIMB_OFF_FADE_MS = 400;
 /** Cross-fade (ms) from the wall into a quick clip (letting go and falling, leaping off, a startle). */
 const CLIMB_QUICK_FADE_MS = 240;
 
-/** Cross-fade duration (ms) when switching between clips. */
-export function crossFadeMs(from: AnimClip | null, to: AnimClip): number {
+const quickClip = (c: AnimClip): boolean => c === 'jump' || c === 'fall' || c === 'land' || c === 'startle';
+
+/**
+ * True for a clip change the mover times as a wall manoeuvre: getting onto a wall (mount, swing
+ * down from a top) or off it onto a support (pull-up, step-off). Those take 1/movementSpeed as long
+ * (src/core/movement/mover.ts), so the renderer's fades and off-wall timing must scale with them.
+ */
+export function isWallManoeuvre(from: AnimClip | null, to: AnimClip): boolean {
+  if (from === null || from === 'held' || to === 'held') return false;
+  if (to === 'climb') return from !== 'climb';
+  return from === 'climb' && !quickClip(to);
+}
+
+/** settings.behavior.movementSpeed as the wall timings use it (1 when missing or invalid). */
+export function wallTimeScale(movementSpeed: number | undefined): number {
+  return movementSpeed !== undefined && Number.isFinite(movementSpeed) && movementSpeed > 0 ? clamp(movementSpeed, 0.25, 4) : 1;
+}
+
+/** Cross-fade duration (ms) when switching between clips (wall manoeuvres at `movementSpeed`). */
+export function crossFadeMs(from: AnimClip | null, to: AnimClip, movementSpeed = 1): number {
   if (from === null) return 0;
   // The climb pose turns the whole body through 90 degrees, with the front paws a body length up:
   // rearing up onto a wall or pulling up over a corner onto the ledge takes a little longer, and even
   // the quick ways off the wall are slower than the usual quick fades (so nothing pops). Picking the
   // cat up keeps the held fade below, which the mover's scruff settle is timed to.
-  const quick = (c: AnimClip): boolean => c === 'jump' || c === 'fall' || c === 'land' || c === 'startle';
-  if (from === 'climb' && to !== 'held') return quick(to) ? CLIMB_QUICK_FADE_MS : CLIMB_OFF_FADE_MS;
-  if (to === 'climb' && from !== 'held') return CLIMB_FADE_MS;
+  if (from === 'climb' && to !== 'held') return quickClip(to) ? CLIMB_QUICK_FADE_MS : CLIMB_OFF_FADE_MS / wallTimeScale(movementSpeed);
+  if (to === 'climb' && from !== 'held') return CLIMB_FADE_MS / wallTimeScale(movementSpeed);
   if (to === 'startle' || to === 'land' || to === 'jump') return 150;
   if (to === 'fall' || from === 'land') return 170;
   if (to === 'sleep' || from === 'sleep' || to === 'loaf' || to === 'rollOver' || from === 'rollOver') return 250;

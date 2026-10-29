@@ -9,7 +9,9 @@
 #
 # The login item uses the production value name (that is what is under test), so the script
 # refuses to run when that value (or its StartupApproved twin) already exists, records what it
-# may create to a file before the first launch, and removes both values in finally.
+# may create to a file before the first launch, and removes both values in finally. finally also
+# uninstalls when the run stopped before its own uninstall step (an error, Ctrl+C), and removes
+# the Uninstall entry, electron-builder's key and the shortcuts this run's install left behind.
 #   node scripts/with-lock.mjs install-test -- powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -26,8 +28,26 @@ $recordFile = Join-Path $env:TEMP ("dcat-install-test-" + $rand + ".json")
 $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 $appData = Join-Path $env:APPDATA 'Desktop Cat'
 $marker = Join-Path $appData 'login-item-removed-by-uninstall'
+$uninstallerExe = Join-Path $target 'Uninstall DesktopCat.exe'
+$startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Desktop Cat.lnk'
+$desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Desktop Cat.lnk'
 
 function Find-UninstallKey { Get-ChildItem $uninstallRoot -ErrorAction SilentlyContinue | Where-Object { (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'Desktop Cat' } }
+function Test-UnderTarget([string]$path) {
+  # Windows paths compare case-insensitively; a trailing backslash is not significant.
+  $t = $target.TrimEnd('\')
+  $ci = [System.StringComparison]::OrdinalIgnoreCase
+  return [string]::Equals($path.TrimEnd('\'), $t, $ci) -or $path.StartsWith($t + '\', $ci)
+}
+# Keys this run's install created: the Uninstall entry whose uninstaller lives under $target, and
+# electron-builder's own HKCU\Software\<app guid> key whose InstallLocation is $target.
+function Find-OwnInstallKeys {
+  @(Find-UninstallKey | Where-Object { [string](Get-ItemProperty $_.PSPath).UninstallString -match '^\s*"([^"]+)"' -and (Test-UnderTarget $Matches[1]) })
+  @(Get-ChildItem 'HKCU:\Software' -ErrorAction SilentlyContinue | Where-Object {
+      $loc = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).InstallLocation
+      $loc -and (Test-UnderTarget ([string]$loc))
+    })
+}
 
 function Get-LoginValue([string]$subKey) {
   $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subKey)
@@ -98,6 +118,10 @@ if ($before -gt 0) { throw 'Desktop Cat is already installed for this user; refu
 if ($null -ne (Get-RunText)) { throw "HKCU\$runKey\$valueName already exists; refusing to touch a real startup entry" }
 if ($null -ne (Get-LoginValue $approvedKey)) { throw "HKCU\$approvedKey\$valueName already exists; refusing to touch a real Startup apps record" }
 $markerPreexisting = Test-Path $marker
+# Shortcuts the cleanup may remove: only those this run's install creates.
+$startMenuPreexisting = Test-Path $startMenu
+$desktopPreexisting = Test-Path $desktop
+$installed = $false
 $appDataCreated = $false
 $expectedRun = '"' + (Join-Path $target 'DesktopCat.exe') + '" --launched-at-login'
 $disabledBytes = [byte[]](0x03, 0, 0, 0, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0x01)
@@ -105,9 +129,10 @@ $enabledBytes = [byte[]](0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 # Recorded before anything can write, so a dead run can still be cleaned up by hand.
 [ordered]@{
-  purpose = 'Desktop Cat install-test; remove these values if this file is still here'
+  purpose = 'Desktop Cat install-test; remove these values (and run the uninstaller if it is still there) if this file is still here'
   values = @("HKCU\$runKey\$valueName", "HKCU\$approvedKey\$valueName")
   target = $target
+  uninstaller = "`"$uninstallerExe`" /S"
   userData = $userData
   startedAt = (Get-Date).ToString('o')
 } | ConvertTo-Json | Set-Content -Path $recordFile -Encoding utf8
@@ -115,6 +140,8 @@ $enabledBytes = [byte[]](0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 $cleanupOk = $false
 try {
   New-Item -ItemType Directory -Force $userData | Out-Null
+  # Set first: from here on finally uninstalls, also after an error or Ctrl+C mid-install.
+  $installed = $true
   $p = Start-Process -FilePath $setup.FullName -ArgumentList @('/S', "/D=$target") -Wait -PassThru
   $result.installExitCode = $p.ExitCode
   $exe = Join-Path $target 'DesktopCat.exe'
@@ -131,8 +158,6 @@ try {
     # Windows paths compare case-insensitively; a trailing backslash is not significant.
     $result.installLocationMatches = ($null -ne $uninstallDir) -and ($uninstallDir.TrimEnd('\') -ieq $target.TrimEnd('\'))
   }
-  $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Desktop Cat.lnk'
-  $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Desktop Cat.lnk'
   $result.startMenuShortcut = Test-Path $startMenu
   $result.desktopShortcut = Test-Path $desktop
   # The app's write gate requires the uninstaller next to the exe (UNINSTALLER_FILE in loginItem.ts).
@@ -234,10 +259,24 @@ try {
     # Process objects keep their handle open, so a PID can never have been reused by another program.
     'stop launched apps' = { foreach ($sp in $started) { if (-not $sp.HasExited) { $null = Stop-Tree $sp.Id } } }
     'environment' = { Remove-Item Env:\DESKTOP_CAT_USER_DATA -ErrorAction SilentlyContinue }
+    # A run that stopped between install and uninstall (an error, Ctrl+C) must not leave an Apps &
+    # features entry, shortcuts or electron-builder's key behind: uninstall first, then leftovers.
+    'uninstall' = {
+      if ($installed -and (Test-Path -LiteralPath $uninstallerExe)) {
+        $null = Start-Process -FilePath $uninstallerExe -ArgumentList @('/S') -Wait -PassThru
+        # The NSIS uninstaller finishes from a temporary copy of itself.
+        $result.cleanupUninstalled = Wait-Until { (-not (Test-Path -LiteralPath $uninstallerExe)) -and (@(Find-OwnInstallKeys).Count -eq 0) } 30
+      }
+    }
     'Run value' = { Remove-LoginValue $runKey }
     'StartupApproved value' = { Remove-LoginValue $approvedKey }
     'marker' = { if ((-not $markerPreexisting) -and (Test-Path $marker)) { Remove-Item -Force $marker } }
     'test app data' = { if ($appDataCreated -and (Test-Path $appData)) { Remove-Item -Recurse -Force $appData } }
+    'install registry keys' = { if ($installed) { foreach ($k in @(Find-OwnInstallKeys)) { Remove-Item -LiteralPath $k.PSPath -Recurse -Force } } }
+    'shortcuts' = {
+      if ($installed -and (-not $startMenuPreexisting) -and (Test-Path -LiteralPath $startMenu)) { Remove-Item -LiteralPath $startMenu -Force }
+      if ($installed -and (-not $desktopPreexisting) -and (Test-Path -LiteralPath $desktop)) { Remove-Item -LiteralPath $desktop -Force }
+    }
     'install folder' = { if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force } }
     'user data' = { if (Test-Path -LiteralPath $userData) { Start-Sleep -Milliseconds 500; Remove-Item -LiteralPath $userData -Recurse -Force } }
   }
@@ -246,9 +285,10 @@ try {
   }
   $result.cleanupRunGone = ($null -eq (Get-RunText))
   $result.cleanupApprovedGone = ($null -eq (Get-LoginValue $approvedKey))
+  $result.cleanupInstallGone = (@(Find-OwnInstallKeys).Count -eq 0) -and (-not (Test-Path -LiteralPath $target))
   $result.cleanupErrors = @($cleanupErrors)
-  $cleanupOk = $result.cleanupRunGone -and $result.cleanupApprovedGone
-  # The record stays until both values are confirmed gone.
+  $cleanupOk = $result.cleanupRunGone -and $result.cleanupApprovedGone -and $result.cleanupInstallGone
+  # The record stays until both values and the install are confirmed gone.
   if ($cleanupOk) { Remove-Item -Force $recordFile -ErrorAction SilentlyContinue }
 }
 

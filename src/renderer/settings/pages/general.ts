@@ -10,16 +10,18 @@ import { validateCatName, validateShortcut } from '../validate';
 const G = S.general;
 
 /**
- * The status line under "Start with Windows". Main reports the state as data; the common
- * cases are worded here, anything unusual (stale entry, unreadable registry, a Task Manager
- * disable the user just tried to switch on) uses main's explanation.
+ * The status line under "Start with Windows". Main reports the state as data, live from the
+ * registry; the common cases are worded here, anything unusual (stale entry, unreadable
+ * registry, a Task Manager disable the user just tried to switch on, an entry left after an
+ * opt-out) uses main's explanation.
  */
 export function launchStatusView(s: LoginItemStatus): { text: string; tone: NoteTone } {
   const L = G.launchStatus;
   // Main says why this build may not manage it (dev/portable build, path too long, switched off).
   if (!s.writable) return { text: s.reason ?? L.notAvailable, tone: 'info' };
-  if (s.disabledBy === 'windows') return { text: L.windowsDisabled, tone: 'warn' };
   if (s.enabled && s.active) return { text: L.active, tone: 'ok' };
+  // Only while Windows really does not start it: what the registry shows wins over the recorded reason.
+  if (s.disabledBy === 'windows' && !s.active) return { text: L.windowsDisabled, tone: 'warn' };
   if (!s.enabled && !s.active) return { text: s.disabledBy === 'external' ? L.removedOutside : L.off, tone: 'info' };
   return { text: s.reason ?? (s.enabled ? L.pending : L.off), tone: 'warn' };
 }

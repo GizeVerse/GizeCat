@@ -11,7 +11,7 @@ v1's launch-at-login status check is wrong for the default install path, and v1 
 - **`src/main/app.ts:154-161`**: `isActive()` returns `openAtLogin && executableWillLaunchAtLogin !== false`. Lines 413-415 call set and then re-read on a setting change.
 - **`src/shared/settings.ts:91`**: `launchAtLogin: field(z.boolean(), false)` with `SETTINGS_SCHEMA_VERSION = 1`. The settings store saves the whole object, so **every v1 `settings.json` contains `"launchAtLogin": false`, whether or not the user ever touched it**.
 - **`build/installer.nsh`**: `customUnInstall` deletes the Run and StartupApproved values unless `${isUpdated}`. electron-builder always passes `--updated` to the old uninstaller during an upgrade (`app-builder-lib/templates/nsis/include/installUtil.nsh:205`), so upgrades keep the entry.
-- **Default per-user install folder** is `%LOCALAPPDATA%\Programs\Desktop Cat\`. `getWindowsInstallationDirName` uses `productFilename` when `oneClick: false`, and its regex allows spaces. The uninstaller is named `Uninstall Desktop Cat.exe` (`common.nsh:17`).
+- **Default per-user install folder — corrected after a real install:** `%LOCALAPPDATA%\Programs\DesktopCat\`, with the uninstaller `Uninstall DesktopCat.exe`. electron-builder derives both from `win.executableName` (`DesktopCat`), not from `productName`; an earlier draft of this brief said `Desktop Cat`, which was wrong.
 - **Existing tests**: `install-test.ps1` and `smoke-packaged.mjs` have no login checks. `tests/unit/main/lifecycle.test.ts:292` has one test with a fake API.
 
 ## 2. What Electron 44.9.3 actually does
@@ -51,7 +51,7 @@ getLoginItemSettings(o?: { path?: string; args?: string[] }): { openAtLogin: boo
 | koffi 3.3.4 from Node: `RegGetValueW` / `RegSetKeyValueW` / `RegDeleteKeyValueW` (HKCU as `intptr_t -2147483647`) | Exact UTF-16 round-trip. Returns 2 when the value is absent and 1630 for the wrong type. REAL (`koffi-reg.cjs`). |
 
 **What this means for v1** (INFERRED from source and probes; not seen on a real install):
-1. The default install path contains a space, so `isActive()` is always false. Settings shows the "launchInactive" warning even when the app really will start at sign-in.
+1. When the exe path contains a space (a user profile or custom install folder with a space — the default folder has none), `isActive()` is false. Settings shows the "launchInactive" warning even when the app really will start at sign-in.
 2. In dev runs the pre-quoted `appRoot` argument produces a broken entry, and it can overwrite the installed app's entry.
 
 ## 3. Mechanisms compared
@@ -101,7 +101,7 @@ loginItem: { preference: 'unset' | 'enabled' | 'disabled';
 - `app.isPackaged`
 - not test mode
 - `DESKTOP_CAT_LOGIN_ITEM !== 'off'`
-- `Uninstall Desktop Cat.exe` exists next to `execPath` (`release/win-unpacked` has no uninstaller)
+- `Uninstall DesktopCat.exe` (derived from the exe name) exists next to `execPath` (`release/win-unpacked` has no uninstaller)
 - the command line is at most 260 characters
 
 Unpackaged and dev runs only read the status and never write, which removes both v1 dev bugs. The environment switch can only disable writes, so it is safe to honour in packaged builds.

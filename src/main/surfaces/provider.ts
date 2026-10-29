@@ -10,11 +10,25 @@
 //   windows being dragged are re-read live. Only windows touched by a change are recomputed,
 //   and unchanged surfaces keep their object identity.
 // - Browser tab strips (TabStripService) replace their window's top ledge, cut to the open
-//   part of the edge and shifted with the window while it moves.
-// - getSurface(id) re-reads that one owner live (GetWindowRect/DWM) for the cat riding it.
-// Privacy: windows matching the exclusions are flagged `excluded` (the verdict comes from the
-// tracker: process rules always, title rules only while analysis is on); tab-strip interest
-// and tab events are never forwarded for them. No window title is read here.
+//   part of the edge and shifted with the window while it moves. A strip found or lost while
+//   the cat stands on the window's top does not swap the ledge under it: the one it is on
+//   stays listed under its id until it leaves (walls name whichever top is listed).
+// - getSurface(id) re-reads that one owner live (GetWindowRect/DWM) for the cat riding it and
+//   rebuilds the surface from the live frame, however far a drag, snap or resize moved it since
+//   the last tick: the cat's reported spot (noteCat, in the frame of the previous tick) is
+//   carried with the window first. For the surface the cat is attached to, the sim reads:
+//   * null: the window is gone (closed, minimized, cloaked), maximized or fullscreen, or that
+//     kind of surface is off. The mover treats it as 'gone', a sudden loss.
+//   * a surface that does not hold the cat's spot, or is not in getSurfaces(): the window is
+//     still there but the spot is covered by a window in front, cut away, no longer climbable,
+//     or the window turned private. Without an open part left it is the bare edge (never
+//     listed). The mover keeps the cat up for its grace (perchGraceMs) and then drops it
+//     calmly ('occluded'): no startle.
+//   Other ids: the current geometry, or null when not offered.
+// Privacy: windows matching the exclusions offer no surfaces (the verdict comes from the
+// tracker: process rules always, title rules only while analysis is on); only the surface the
+// cat is on is still served, flagged `excluded`, so it leaves calmly. Tab-strip interest and tab
+// events are never forwarded for them. No window title is read here.
 import os from 'node:os';
 import type { Rect } from '../../shared/geometry';
 import type { Settings } from '../../shared/settings';
@@ -27,6 +41,7 @@ import { hasWin32Extensions } from '../win32/win32Api';
 import type { WindowChange, WindowTrackerExtras } from '../win32/windowTracker';
 import {
   ATTACH_TOLERANCE_PX,
+  bareWindowSurface,
   buildWindowSurfaces,
   computeOpenSpans,
   defaultCornerRadiusDip,
@@ -34,7 +49,6 @@ import {
   offersSurfaces,
   parseSurfaceId,
   scaleForRect,
-  stripId,
   type Attachment,
   type BuiltWindowSurfaces,
   type StripPlacement,
@@ -92,6 +106,11 @@ export interface CatPosition {
   x: number;
   y: number;
   surfaceId: string | null;
+  /**
+   * The user hid the cat. The sim keeps it on its surface meanwhile, so the attachment still
+   * steers which span is served; nothing is of tab-strip interest.
+   */
+  hidden?: boolean;
 }
 
 // A type alias (not an interface) so it is assignable to the contract's Record<string, unknown>.
@@ -113,7 +132,7 @@ export type SurfaceProviderDebug = {
 };
 
 export interface SurfaceProviderExtras {
-  /** Host feedback each tick: the cat's position and attachment (null while hidden). */
+  /** Host feedback each tick: the cat's position and attachment (null before the first output). */
   noteCat(cat: CatPosition | null): void;
   /** Test mode only (E2E): replaces every surface with `list` (SIMULATED geometry); null restores the real ones. */
   injectSurfaces(list: readonly Surface[] | null, now: number): void;
@@ -164,7 +183,8 @@ const CONFIDENCE_ENTERING = 0.7;
 const CONFIDENCE_LEAVING = 0.3;
 const CONFIDENCE_STRIP_SHIFTED = 0.8;
 const CONFIDENCE_STRIP_RESIZED = 0.6;
-const CONFIDENCE_STRIP_FALLBACK = 0.5;
+/** The bare edge served under a cat whose surface has no open part left. */
+const CONFIDENCE_COVERED = 0.3;
 /** Raw hook events that announce a window is about to disappear. */
 const LEAVING_RAW: ReadonlySet<string> = new Set(['minimizeStart', 'hide', 'cloaked', 'destroy']);
 const TASKBAR_EVENTS: ReadonlySet<SimEvent['type']> = new Set(['taskbar.shown', 'taskbar.hidden']);
@@ -192,14 +212,20 @@ function sameSurface(a: Surface | null, b: Surface | null): boolean {
 /** Keeps the previous object for every surface whose content did not change. */
 function stabilize(prev: BuiltWindowSurfaces, next: BuiltWindowSurfaces): { built: BuiltWindowSurfaces; changed: boolean } {
   const pick = <T extends Surface>(p: T | null, n: T | null): T | null => (sameSurface(p, n) ? p : n);
-  const built: BuiltWindowSurfaces = {
-    windowTop: pick(prev.windowTop, next.windowTop),
-    strip: pick(prev.strip, next.strip),
-    left: pick(prev.left, next.left),
-    right: pick(prev.right, next.right),
-  };
-  const changed = built.windowTop !== prev.windowTop || built.strip !== prev.strip || built.left !== prev.left || built.right !== prev.right;
+  const windowTop = pick(prev.windowTop, next.windowTop);
+  const strip = pick(prev.strip, next.strip);
+  // The listed top is one of the two (or an alias of the plain top under the strip's id).
+  const top = next.top === null ? null : next.top === next.windowTop ? windowTop : next.top === next.strip ? strip : pick(prev.top, next.top);
+  const built: BuiltWindowSurfaces = { windowTop, strip, top, left: pick(prev.left, next.left), right: pick(prev.right, next.right) };
+  const changed = built.windowTop !== prev.windowTop || built.strip !== prev.strip || built.top !== prev.top || built.left !== prev.left || built.right !== prev.right;
   return { built: changed ? built : prev, changed };
+}
+
+/** The attachment the host last reported, with its owner window and the frame it was in then. */
+interface CatAttachment extends Attachment {
+  owner: string | null;
+  /** The owner's frame when the cat was there (null: unknown, e.g. a window not tracked yet). */
+  frame: Rect | null;
 }
 
 /** Same ids in the same order: the snapshots differ only in rects (or not at all). */
@@ -261,7 +287,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
   const enteringIds = new Map<string, number>();
   const recompute = new Set<string>();
   let affected: Rect[] = [];
-  let attach: Attachment | null = null;
+  let attach: CatAttachment | null = null;
   let catPos: CatPosition | null = null;
 
   let windowVersion = 0;
@@ -431,6 +457,25 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     return out;
   }
 
+  /**
+   * The cat's attachment on this window, carried onto its current frame. The host reports
+   * where the cat was after the previous tick, in the frame the window had then; a drag, snap
+   * or resize may have moved it by any amount since. The spot moves the way the sim carries
+   * the cat: along a ledge when the window translates (same width; a resize leaves it where
+   * it was), along a wall with the window's top edge. The sim carries the cat only when its
+   * part of the edge moved as a whole, so where it was is the fallback (a part bounded by a
+   * window that stayed put).
+   */
+  function attachmentFor(e: Entry): Attachment | null {
+    const a = attach;
+    if (!a || a.owner !== e.id) return null;
+    const f = a.frame;
+    const dx = f && e.rect.width === f.width ? e.rect.x - f.x : 0;
+    const dy = f ? e.rect.y - f.y : 0;
+    if (dx === 0 && dy === 0) return { surfaceId: a.surfaceId, x: a.x, y: a.y };
+    return { surfaceId: a.surfaceId, x: a.x + dx, y: a.y + dy, reported: { x: a.x, y: a.y } };
+  }
+
   /** Recomputes one window's surfaces; true when any listed surface changed. */
   function computeEntry(e: Entry, now: number): boolean {
     recomputes++;
@@ -439,7 +484,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     e.spans = null;
     if (offersSurfaces(e.info, e.rect, displays)) {
       e.spans = computeOpenSpans(e.rect, aboveRects(e.id), displays, { ...opts, climbWindows });
-      next = buildWindowSurfaces(e.id, e.rect, e.spans, displays, meta(e, now), stripPlacement(e), attach);
+      next = buildWindowSurfaces(e.id, e.rect, e.spans, displays, meta(e, now), stripPlacement(e), attachmentFor(e));
     }
     const r = stabilize(e.built, next);
     e.built = r.built;
@@ -582,10 +627,15 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     barIds = ids;
   }
 
-  /** Windows being dragged or sized raise no events until the drag ends: re-read them live. */
+  /**
+   * Windows being dragged or sized raise no events until the drag ends: re-read them live.
+   * So is the window the cat is on (a snap or a programmatic move announces itself only after
+   * the tracker's coalescing), so that the list agrees with the live read the sim rides on (the
+   * read is shared with getSurface at the same moment).
+   */
   function trackMoving(now: number): void {
     for (const e of entries.values()) {
-      if (!tracker.isMoving(e.id)) continue;
+      if (e.id !== attach?.owner && !tracker.isMoving(e.id)) continue;
       const r = liveRect(e, now);
       if (r === null) {
         dirtyIds.add(e.id);
@@ -717,10 +767,10 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     const list: Surface[] = [];
     for (const o of order) {
       const e = entries.get(o.id);
-      if (!e) continue;
+      // Private windows offer nothing (the surface the cat is on is still served live, see header).
+      if (!e || e.info.excluded) continue;
       const b = e.built;
-      const top = b.strip ?? (strips.some((s) => s.ownerId === e.id) ? null : b.windowTop);
-      if (top) list.push(top);
+      if (b.top) list.push(b.top);
       if (b.left) list.push(b.left);
       if (b.right) list.push(b.right);
     }
@@ -754,35 +804,28 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     interestAt = now;
     const ids: string[] = [];
     // No cat on screen (hidden, or no output yet): nothing is of interest, the helper idles.
+    // Otherwise only the browser the cat is on and those whose top edge is within reach
+    // (interestRadiusDip, about a jump) are polled; the foreground one is no exception.
     if (tabStripsOn && windowTracking() && catPos !== null) {
+      const cat = catPos;
       const add = (id: string): void => {
         if (!ids.includes(id) && ids.length < opts.maxInterest) ids.push(id);
       };
       const usable = (info: WindowInfo | null): info is WindowInfo => info !== null && info.category === 'browser' && !info.excluded && !info.minimized;
-      if (catPos?.surfaceId) {
-        const p = parseSurfaceId(catPos.surfaceId);
+      if (cat.surfaceId) {
+        const p = parseSurfaceId(cat.surfaceId);
         if (p && p.kind !== 'taskbar' && usable(tracker.windowInfo(p.owner))) add(p.owner);
       }
-      let fg: WindowInfo | null = null;
-      try {
-        fg = tracker.getForeground();
-      } catch (e) {
-        report('foreground', e);
+      const near: Array<{ id: string; d: number }> = [];
+      for (const e of entries.values()) {
+        if (!usable(e.info)) continue;
+        const r = e.rect;
+        const dx = cat.x < r.x ? r.x - cat.x : cat.x > r.x + r.width ? cat.x - (r.x + r.width) : 0;
+        const d = Math.hypot(dx, cat.y - r.y);
+        if (d <= opts.interestRadiusDip * scaleForRect(display.world.displays, r)) near.push({ id: e.id, d });
       }
-      if (usable(fg) && entries.has(fg.id)) add(fg.id);
-      if (catPos) {
-        const cat = catPos;
-        const near: Array<{ id: string; d: number }> = [];
-        for (const e of entries.values()) {
-          if (!usable(e.info)) continue;
-          const r = e.rect;
-          const dx = cat.x < r.x ? r.x - cat.x : cat.x > r.x + r.width ? cat.x - (r.x + r.width) : 0;
-          const d = Math.hypot(dx, cat.y - r.y);
-          if (d <= opts.interestRadiusDip * scaleForRect(display.world.displays, r)) near.push({ id: e.id, d });
-        }
-        near.sort((a, b) => a.d - b.d);
-        for (const n of near) add(n.id);
-      }
+      near.sort((a, b) => a.d - b.d);
+      for (const n of near) add(n.id);
     }
     if (ids.length === 0 && interest.length === 0) return;
     interest = ids;
@@ -793,12 +836,16 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     }
   }
 
-  /** Live geometry of one window surface for the cat riding it. */
-  function liveWindowSurface(kind: 'windowTop' | 'tabStrip' | 'windowSide', owner: string, side: 'left' | 'right' | null, now: number): Surface | null {
+  /** Live geometry of one window surface for the cat riding it (what null and the rest mean: see the header). */
+  function liveWindowSurface(id: string, kind: 'windowTop' | 'tabStrip' | 'windowSide', owner: string, side: 'left' | 'right' | null, now: number): Surface | null {
     if (!windowTracking()) return null;
     const e = entries.get(owner);
     if (!e) return null;
     if (kind === 'windowSide' && !climbWindows) return null;
+    const attached = attach?.surfaceId === id;
+    // A private window offers nothing; the surface the cat is on is still served (flagged and
+    // unlisted) so that it leaves calmly instead of losing it all at once.
+    if (e.info.excluded && !attached) return null;
     const r = liveRect(e, now);
     if (r === null) {
       // Gone, minimized or cloaked: the tracker settles it; drop it from listings meanwhile.
@@ -813,24 +860,29 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       e.readAt = now;
       e.confidence = CONFIDENCE_FRESH;
     }
+    // Maximized, fullscreen, covering the work area: gone for the cat.
     if (!e.spans) return null;
     const displays = display.world.displays;
-    // Strict: if the cat's attachment point on this surface is covered, the surface is lost.
-    const strict = buildWindowSurfaces(e.id, e.rect, e.spans, displays, { ...meta(e, now), validatedAt: now }, stripPlacement(e), attach, true);
+    const m: SurfaceMeta = { ...meta(e, now), validatedAt: now };
+    // Built like the listing (same attachment, same span choice), from the live frame.
+    const b = buildWindowSurfaces(e.id, e.rect, e.spans, displays, m, stripPlacement(e), attachmentFor(e));
+    let s: Surface | null;
     switch (kind) {
       case 'windowTop':
         // Also while a tab strip replaces it in listings: the edge is physically still there.
-        return strict.windowTop;
-      case 'tabStrip': {
-        if (strict.strip) return strict.strip;
-        // The strip vanished (helper restarted, tabs re-laid out) under a riding cat: keep the
-        // ledge continuous on the window's top edge under the same id.
-        const top = strict.windowTop;
-        return top ? { ...top, id: stripId(owner), kind: 'tabStrip', confidence: Math.min(top.confidence, CONFIDENCE_STRIP_FALLBACK) } : null;
-      }
+        s = b.windowTop;
+        break;
+      case 'tabStrip':
+        s = b.top?.id === id ? b.top : b.strip;
+        break;
       case 'windowSide':
-        return side === 'left' ? strict.left : strict.right;
+        s = side === 'left' ? b.left : b.right;
+        break;
     }
+    if (s || !attached) return s;
+    // Nothing of it is open any more (covered, no room beside a side) while the window is
+    // still there: the cat stands on the bare edge, unlisted, until the sim lets it go calmly.
+    return bareWindowSurface(id, e.rect, e.spans.inset, displays, { ...m, confidence: Math.min(m.confidence, CONFIDENCE_COVERED) });
   }
 
   function injectedTaskbarEvents(prev: readonly Surface[], next: readonly Surface[]): void {
@@ -908,7 +960,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
           const bars = taskbarSurfaces();
           return bars?.find((s) => s.id === id) ?? null;
         }
-        return liveWindowSurface(p.kind, p.owner, p.kind === 'windowSide' ? p.side : null, now);
+        return liveWindowSurface(id, p.kind, p.owner, p.kind === 'windowSide' ? p.side : null, now);
       } catch (e) {
         report('getSurface', e);
         return null;
@@ -971,22 +1023,28 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     },
 
     noteCat(cat: CatPosition | null): void {
-      catPos = cat && Number.isFinite(cat.x) && Number.isFinite(cat.y) ? { ...cat } : null;
-      const next = catPos && catPos.surfaceId ? { surfaceId: catPos.surfaceId, x: catPos.x, y: catPos.y } : null;
-      const owner = (a: Attachment | null): string | null => {
-        const p = a ? parseSurfaceId(a.surfaceId) : null;
-        return p && p.kind !== 'taskbar' ? p.owner : null;
-      };
-      const before = owner(attach);
-      const after = owner(next);
+      const at = cat && Number.isFinite(cat.x) && Number.isFinite(cat.y) ? cat : null;
+      // A hidden cat is still on its surface (the sim keeps it there): only interest stops.
+      catPos = at && at.hidden !== true ? { x: at.x, y: at.y, surfaceId: at.surfaceId } : null;
+      let next: CatAttachment | null = null;
+      if (at && at.surfaceId) {
+        const p = parseSurfaceId(at.surfaceId);
+        const owner = p && p.kind !== 'taskbar' ? p.owner : null;
+        const e = owner ? entries.get(owner) : undefined;
+        // The owner's frame now is the one the last output was computed in (the host notes the
+        // cat before reading surfaces): attachmentFor carries the spot from there.
+        next = { surfaceId: at.surfaceId, x: at.x, y: at.y, owner, frame: e ? { ...e.rect } : null };
+      }
+      const before = attach?.owner ?? null;
+      const after = next?.owner ?? null;
       // Span choice depends on where the cat is: re-evaluate the windows it left or joined,
       // and the one it rides when it moved past the edge of its span.
-      if (before !== after) {
+      if (before !== after || attach?.surfaceId !== next?.surfaceId) {
         if (before) recompute.add(before);
         if (after) recompute.add(after);
       } else if (after && next && attach && (next.x !== attach.x || next.y !== attach.y)) {
         const e = entries.get(after);
-        const listed = e ? [e.built.windowTop, e.built.strip, e.built.left, e.built.right].find((s) => s?.id === next.surfaceId) : undefined;
+        const listed = e ? [e.built.top, e.built.windowTop, e.built.strip, e.built.left, e.built.right].find((s) => s?.id === next.surfaceId) : undefined;
         if (listed && (listed.orientation === 'ledge' ? next.x < listed.x0 - ATTACH_TOLERANCE_PX || next.x > listed.x1 + ATTACH_TOLERANCE_PX : next.y < listed.y0 - ATTACH_TOLERANCE_PX || next.y > listed.y1 + ATTACH_TOLERANCE_PX)) {
           recompute.add(after);
         }

@@ -1,13 +1,20 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "general": {
     "catName": "Miso",
-    "launchAtLogin": false,
     "shortcutsEnabled": true,
     "toggleShortcut": "Control+Alt+Shift+C",
     "firstRunCompleted": false,
     "startupState": "visible",
     "rememberedState": "visible"
+  },
+  "loginItem": {
+    "preference": "unset",
+    "decidedBy": "default",
+    "disabledBy": null,
+    "registeredPath": null,
+    "v1Value": null,
+    "noticeShown": false
   },
   "appearance": {
     "skin": "ginger",

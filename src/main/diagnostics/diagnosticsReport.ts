@@ -1,11 +1,12 @@
 // Builds the user-exportable diagnostics JSON. Contains no secrets, window
-// titles, process lists or images; exclusion lists are reduced to counts and the
-// whole report is passed through redaction once more. Pure.
+// titles, process lists, images or the user's profile path (it holds the Windows
+// account name); exclusion lists are reduced to counts and the whole report is
+// passed through redaction once more. Pure.
 import type { AppStatus, ResourceSample } from '../../shared/ipc';
 import { DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS, type Settings } from '../../shared/settings';
 import type { WorldGeometry } from '../../shared/world';
 import { formatEntry, type LogEntry } from './logger';
-import { redactString, redactValue } from './redact';
+import { redactString, redactValue, scrubUserProfile } from './redact';
 
 export const DIAGNOSTICS_LOG_LINES = 500;
 
@@ -15,6 +16,8 @@ export interface DiagnosticsInput {
   os: { platform: string; release: string; arch: string; totalMemoryMB: number; locale?: string };
   world: WorldGeometry;
   settings: Settings;
+  /** The user's profile folder (os.homedir()), replaced by %USERPROFILE% wherever it appears. */
+  userProfile?: string;
   apiKeysStored: { anthropic: boolean; openaiCompatible: boolean };
   status: AppStatus;
   cat: Record<string, unknown>;
@@ -50,7 +53,19 @@ export function settingsForDiagnostics(s: Settings): Record<string, unknown> {
       excludedTitlePatterns: { count: excludedTitlePatterns.length, isDefault: sameList(excludedTitlePatterns, DEFAULT_EXCLUDED_TITLE_PATTERNS) },
     },
     ai: { ...s.ai, ollamaBaseUrl: scrubUrl(s.ai.ollamaBaseUrl), openaiBaseUrl: scrubUrl(s.ai.openaiBaseUrl) },
+    // The exe path the app registered lies under the user's profile; services.loginItem says whether it is this exe.
+    loginItem: { ...s.loginItem, registeredPath: s.loginItem.registeredPath === null ? null : REGISTERED_PATH_PLACEHOLDER },
   };
+}
+
+export const REGISTERED_PATH_PLACEHOLDER = '[path]';
+
+/** Applies `fn` to every string in a redacted (plain JSON) value. */
+function mapStrings(value: unknown, fn: (s: string) => string): unknown {
+  if (typeof value === 'string') return fn(value);
+  if (Array.isArray(value)) return value.map((v) => mapStrings(v, fn));
+  if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mapStrings(v, fn)]));
+  return value;
 }
 
 export function buildDiagnosticsReport(input: DiagnosticsInput): Record<string, unknown> {
@@ -78,5 +93,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): Record<string, 
   };
   // Resource samples are plain numbers and would be truncated by the generic redactor.
   const resources = input.resources.map((r) => ({ at: r.at, cpuPercent: r.cpuPercent, workingSetMB: r.workingSetMB }));
-  return { ...(redactValue(report) as Record<string, unknown>), resources, logs };
+  const profile = input.userProfile;
+  const scrub = (v: unknown): unknown => (profile ? mapStrings(v, (str) => scrubUserProfile(str, profile)) : v);
+  return { ...(scrub(redactValue(report)) as Record<string, unknown>), resources, logs: scrub(logs) };
 }

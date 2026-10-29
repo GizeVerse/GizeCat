@@ -19,9 +19,9 @@ export interface TaskbarNative {
   getWindowRect(h: Hwnd): RawRect | null;
   /** MonitorFromWindow(NEAREST) + GetMonitorInfoW. */
   getMonitorRects(h: Hwnd): { monitor: RawRect; work: RawRect } | null;
-  /** ABM_GETSTATE bits (global auto-hide setting). Cross-process: at most once per discovery. */
+  /** ABM_GETSTATE bits (global auto-hide setting). Cross-process: only on discoveries that can change it, never per reconcile. */
   appBarState(): number;
-  /** ABM_GETTASKBARPOS: the primary taskbar's docked rect and ABE_* edge. Cross-process: at most once per discovery. */
+  /** ABM_GETTASKBARPOS: the primary taskbar's docked rect and ABE_* edge. Cross-process: like appBarState. */
   appBarTaskbarPos(): { edge: number; rect: RawRect } | null;
   /** GWL_EXSTYLE (diagnostics: WS_EX_TOPMOST). */
   getExStyle(h: Hwnd): number;

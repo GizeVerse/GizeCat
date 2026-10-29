@@ -118,6 +118,8 @@ const TAB_VISIT_COOLDOWN_MS = 120_000;
 const TAB_INVESTIGATE_COOLDOWN_MS = 60_000;
 /** Longest tick the simulation integrates; the host clamps dt to the same 250 ms. */
 export const MAX_SIM_DT_MS = 250;
+/** How far the paws of a cat on a wall reach past the wall line into the window, body lengths (~5.5 DIP). */
+const WALL_PAW_REACH_BL = 0.065;
 /**
  * Slowest tick the sim asks for (hidden, or asleep outside normal mode). It stays clear
  * of MAX_SIM_DT_MS so a timer that fires a little late still delivers its whole delay
@@ -463,8 +465,8 @@ export class CatSimImpl implements CatSim {
       size: this.settings.appearance.size,
       movementSpeed: b.movementSpeed,
       allowMultiMonitor: b.allowMultiMonitor,
+      // A shown taskbar is always a support ('taskbarPlay' only gates the reactions to it, see onTaskbarShown).
       perchOnWindows: !b.disabledBehaviors.includes('perchOnWindows'),
-      taskbars: !b.disabledBehaviors.includes('taskbarPlay'),
       walls: !b.disabledBehaviors.includes('climbWindows'),
       tabStrips: !b.disabledBehaviors.includes('tabStrips'),
       // A confident cat jumps more readily; an energetic, curious one minds climbing less.
@@ -2905,11 +2907,13 @@ export class CatSimImpl implements CatSim {
   }
 
   /**
-   * Approximate body bounds, px. Upright: one body width across and one body height above
-   * the anchor. Climbing: the body hangs along the wall outside the window, about one body
-   * length up from the grip at the anchor and one body height out from the wall line; the
-   * box covers that vertical pose and the upright footprint (so the presence margins the
-   * renderer is tested against still contain the drawing while it blends between poses).
+   * Approximate body bounds, px (also the overlay's click-through fallback until the renderer
+   * reports its hit region). Upright: one body width across and one body height above the
+   * anchor. On a wall the body hangs outside the window, about one body length up from the
+   * grip at the anchor and one body height out from the wall line; the box covers that
+   * vertical pose and the upright footprint (so the presence margins the renderer is tested
+   * against still contain the drawing while it blends between poses), but never reaches into
+   * the window past the paws on the wall line, except while it crosses the top corner.
    */
   private bodyBounds(): Rect {
     const m = this.mover;
@@ -2921,8 +2925,14 @@ export class CatSimImpl implements CatSim {
     const out = wall.side === 'left' ? -1 : 1;
     const outer = m.x + out * 0.95 * bh;
     const inner = m.x - out * 0.15 * bh;
-    const x0 = Math.min(upright.x0, outer, inner);
-    const x1 = Math.max(upright.x1, outer, inner);
+    let x0 = Math.min(upright.x0, outer, inner);
+    let x1 = Math.max(upright.x1, outer, inner);
+    const phase = m.climbPhase;
+    if (phase !== 'pullUp' && phase !== 'swing') {
+      const paws = WALL_PAW_REACH_BL * bw;
+      if (out < 0) x1 = Math.max(x0, Math.min(x1, wall.x + paws));
+      else x0 = Math.min(x1, Math.max(x0, wall.x - paws));
+    }
     const y0 = Math.min(upright.y0, m.y - bw);
     return { x: x0, y: y0, width: x1 - x0, height: upright.y1 - y0 };
   }

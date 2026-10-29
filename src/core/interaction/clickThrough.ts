@@ -1,6 +1,7 @@
 // Click-through decision for the overlays (pure). The overlay ignores the mouse unless
-// the cursor is inside the cat's reported hit region; everything uncertain resolves
-// to "click-through" so the cat can never block the desktop.
+// the cursor is inside the cat's reported hit region, minus the screen areas that must
+// always reach the window below (taskbars); everything uncertain resolves to
+// "click-through" so the cat can never block the desktop.
 import type { Point, Rect } from '../../shared/geometry';
 
 export interface ClickThroughInput {
@@ -8,6 +9,12 @@ export interface ClickThroughInput {
   cursor: Point | null;
   /** Cat hit region in px (renderer-reported rects mapped to world space). */
   hitRects: readonly Rect[];
+  /**
+   * Screen areas (px) the overlay never takes the mouse over, whatever the cat's pose:
+   * on-screen taskbars and the reveal bands of auto-hide ones. They are cut out of the hit
+   * region after the hysteresis margin is added, so the margin never reaches into them.
+   */
+  excludeRects?: readonly Rect[];
   /** Current state; enables the hysteresis margin. */
   interactive: boolean;
   interactionsEnabled: boolean;
@@ -40,15 +47,58 @@ function inside(r: Rect, p: Point, margin: number): boolean {
   return p.x >= r.x - margin && p.x < r.x + r.width + margin && p.y >= r.y - margin && p.y < r.y + r.height + margin;
 }
 
+const nonEmpty = (r: Rect): boolean => r.width > 0 && r.height > 0;
+const finiteRect = (r: Rect): boolean => Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.width) && Number.isFinite(r.height);
+
+/** Appends the parts of `r` outside `hole` (at most four: above, below, left, right). */
+function subtract(r: Rect, hole: Rect, out: Rect[]): void {
+  const rx1 = r.x + r.width;
+  const ry1 = r.y + r.height;
+  const hx1 = hole.x + hole.width;
+  const hy1 = hole.y + hole.height;
+  if (hole.x >= rx1 || hx1 <= r.x || hole.y >= ry1 || hy1 <= r.y) {
+    out.push(r);
+    return;
+  }
+  const top = Math.max(r.y, hole.y);
+  const bottom = Math.min(ry1, hy1);
+  if (hole.y > r.y) out.push({ x: r.x, y: r.y, width: r.width, height: hole.y - r.y });
+  if (hy1 < ry1) out.push({ x: r.x, y: hy1, width: r.width, height: ry1 - hy1 });
+  if (hole.x > r.x) out.push({ x: r.x, y: top, width: hole.x - r.x, height: bottom - top });
+  if (hx1 < rx1) out.push({ x: hx1, y: top, width: rx1 - hx1, height: bottom - top });
+}
+
+/**
+ * `rects` with every hole cut out: non-overlapping pieces covering exactly the points of
+ * the rects outside all holes (half-open rects, like the hit test). Empty or non-finite
+ * holes cut nothing.
+ */
+export function clipRects(rects: readonly Rect[], holes: readonly Rect[]): Rect[] {
+  let out = rects.filter(nonEmpty);
+  for (const hole of holes) {
+    if (!finiteRect(hole) || !nonEmpty(hole)) continue;
+    const next: Rect[] = [];
+    for (const r of out) subtract(r, hole, next);
+    out = next;
+  }
+  return out;
+}
+
+const grow = (r: Rect, m: number): Rect => (m === 0 ? r : { x: r.x - m, y: r.y - m, width: r.width + 2 * m, height: r.height + 2 * m });
+
 export function decideInteractive(input: ClickThroughInput, config: ClickThroughConfig = DEFAULT_CLICK_THROUGH): boolean {
   if (!input.interactionsEnabled || !input.visible) return false;
   const age = Number.isNaN(input.hitRegionAgeMs) ? Infinity : input.hitRegionAgeMs;
+  // A press can only start inside the clipped region; the overlay then keeps the captured
+  // pointer for the whole drag (also across a taskbar) so the moves and the release arrive.
   if (input.dragging) return age <= config.maxDragRegionAgeMs || input.rendererHealthy;
   if (!input.rendererHealthy || age > config.maxRegionAgeMs) return false;
   const c = input.cursor;
   if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y)) return false;
   const margin = input.interactive ? config.hysteresisPx : 0;
-  return input.hitRects.some((r) => r.width > 0 && r.height > 0 && inside(r, c, margin));
+  const zone = input.hitRects.filter(nonEmpty).map((r) => grow(r, margin));
+  // Nothing left of the region once the excluded areas are cut out: click-through.
+  return clipRects(zone, input.excludeRects ?? []).some((r) => inside(r, c, 0));
 }
 
 export interface PollIntervalInput {

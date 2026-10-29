@@ -1,6 +1,6 @@
 // TaskbarTracker over a scripted fake native (MOCKED Win32, SIMULATED taskbar motion):
 // discovery, the per-taskbar state machine, debounced events, ledge surfaces, cadence,
-// Explorer restarts, secondary/top/left/right taskbars and unavailable APIs.
+// Explorer restarts, secondary/top/left/right taskbars, the click guard and unavailable APIs.
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Point } from '../../../src/shared/geometry';
 import type { SimEvent } from '../../../src/shared/sim';
@@ -180,16 +180,46 @@ describe('taskbar tracker: discovery', () => {
     expect(r.log.entries.some((e) => e.msg === 'taskbars discovered')).toBe(true);
   });
 
-  it('calls SHAppBarMessage at most once per discovery and rediscovers on the 10 s reconcile', () => {
+  it('rediscovers on the 10 s reconcile without calling SHAppBarMessage, reusing the cached answer', () => {
     const r = makeRig(primaryHidden());
+    const dbg = () =>
+      r.tracker.debugInfo() as { lastDiscovery: { reason: string }; discoveries: number; taskbars: Array<{ thicknessSource: string; autoHideBy: string }> };
     expect(r.native.count('appBarState')).toBe(1);
     expect(r.native.count('appBarTaskbarPos')).toBe(1);
-    for (let t = 1250; t < 11_000; t += 250) r.at(t);
+    // One simulated hour at the idle cadence: 360 reconciles, no cross-process call.
+    for (let t = 1250; t <= 3_601_000; t += 250) r.at(t);
+    expect(dbg().lastDiscovery.reason).toBe('reconcile');
+    expect(dbg().discoveries).toBe(361);
     expect(r.native.count('appBarState')).toBe(1);
-    r.at(11_000);
-    expect(r.native.count('appBarState')).toBe(2);
-    expect(r.native.count('appBarTaskbarPos')).toBe(2);
-    expect((r.tracker.debugInfo() as { lastDiscovery: { reason: string } }).lastDiscovery.reason).toBe('reconcile');
+    expect(r.native.count('appBarTaskbarPos')).toBe(1);
+    // ... and the reconciled taskbar still carries the cached cross-check.
+    expect(dbg().taskbars[0]).toMatchObject({ thicknessSource: 'appbar', autoHideBy: 'both' });
+    expect(r.tracker.taskbars()[0]!.dockedRect).toEqual(px(P_SHOWN));
+  });
+
+  it('queries SHAppBarMessage again on the discoveries that can change its answer', () => {
+    const r = makeRig(primaryHidden());
+    const calls = () => [r.native.count('appBarState'), r.native.count('appBarTaskbarPos')];
+    expect(calls()).toEqual([1, 1]); // start
+    r.tracker.rediscover('taskbar-created');
+    r.at(1100);
+    expect(calls()).toEqual([2, 2]);
+    r.at(3100); // the follow-up 2 s later
+    expect(calls()).toEqual([3, 3]);
+    r.tracker.setWorld(WORLD_P);
+    r.at(3200);
+    expect(calls()).toEqual([4, 4]);
+    // Explorer restarted without a TaskbarCreated broadcast reaching us: a new primary window.
+    r.native.remove(100n);
+    r.native.add(200n, { rect: P_HIDDEN });
+    r.at(3300);
+    expect((r.tracker.debugInfo() as { lastDiscovery: { reason: string } }).lastDiscovery.reason).toBe('window-gone');
+    expect(calls()).toEqual([5, 5]);
+    // Repeated read failures force a rediscovery, which reuses the answer for the same window.
+    r.native.rectNull.add(200n);
+    for (const t of [3400, 3500, 4600]) r.at(t);
+    expect((r.tracker.debugInfo() as { lastDiscovery: { reason: string } }).lastDiscovery.reason).toBe('read-failure');
+    expect(calls()).toEqual([5, 5]);
   });
 
   it('detects auto-hide from the work area alone when ABM_GETSTATE is clear, and a docked taskbar as a floor', () => {
@@ -364,12 +394,37 @@ describe('taskbar tracker: motion, events and ledges', () => {
     expect(types(r.events)).toEqual(['taskbar.shown', 'taskbar.hidden']);
   });
 
-  it('bursts while the cat is near, and with the cursor at the scaled reveal edge', () => {
-    expect(r.at(1250, null, true)).toBe(16);
+  it('bursts with the cursor at the scaled reveal edge, not for the cat being near a still taskbar', () => {
+    expect(r.at(1250, null, true)).toBe(250);
     // 125 %: ceil(6 * 1.25) = 8 px from the bottom row (y = 1199).
     expect(r.at(1500, { x: 10, y: 1191 })).toBe(16);
     expect(r.at(1750, { x: 10, y: 1190 })).toBe(250);
     expect((r.tracker.debugInfo() as { cadence: { reason: string | null } }).cadence.reason).toBeNull();
+  });
+
+  it('samples a revealed taskbar held open for an hour at the idle rate, with the cat on or next to it', () => {
+    // E.g. a flashing taskbar button keeps it revealed until clicked (scripts/taskbar-probe.mjs).
+    let t = 1250;
+    for (let top = 1190; top >= 1140; top -= 10) step((t += 16), top);
+    let delay = step((t += 16), 1140);
+    const delays = new Map<number, number>();
+    const end = t + 3_600_000;
+    let samples = 0;
+    while (t < end) {
+      t += delay;
+      // The cat sleeps on it (catNear) and the user's cursor is parked over it.
+      delay = r.at(t, { x: 900, y: 1170 }, true);
+      delays.set(delay, (delays.get(delay) ?? 0) + 1);
+      samples++;
+    }
+    expect(r.tracker.taskbars()[0]!.phase).toBe('shown');
+    expect(r.tracker.surfaces()[0]).toMatchObject({ phase: 'stable', y: 1139 });
+    // Bursts only for the 300 ms after the slide; ~14 400 samples instead of ~225 000 at 60 Hz.
+    expect(delays.get(16) ?? 0).toBeLessThanOrEqual(Math.ceil(300 / 16));
+    expect(samples).toBeLessThan(3_600_000 / 250 + 20);
+    // The start of the hide is caught by the next idle sample and followed at 60 Hz.
+    expect(step(t + delay, 1150)).toBe(16);
+    expect(r.tracker.taskbars()[0]!.phase).toBe('hiding');
   });
 });
 
@@ -465,9 +520,9 @@ describe('taskbar tracker: multiple monitors and other edges', () => {
     expect(s).toHaveLength(1);
     expect(s[0]).toMatchObject({ id: 'taskbar:400', displayId: 'S', x0: 1920, x1: 3840, y: 1031, phase: 'stable' });
     expect(r.events).toEqual([{ type: 'taskbar.shown', surfaceId: 'taskbar:400', displayId: 'S', edge: 'bottom' }]);
-    // Revealed: the cursor over it (48 px + the 6 px band) keeps the bursts going.
-    expect(r.at(2300, { x: 2500, y: 1025 })).toBe(16);
-    expect(r.at(2600, { x: 2500, y: 1024 })).toBe(250);
+    // Revealed and still: idle, also with the cursor on it (it can hold the taskbar open for hours).
+    expect(r.at(2300, { x: 2500, y: 1075 })).toBe(250);
+    expect(r.at(2600, { x: 2500, y: 1040 })).toBe(250);
   });
 
   it('keeps a hidden secondary taskbar on its monitor when MonitorFromWindow picks the monitor below', () => {
@@ -549,7 +604,10 @@ describe('taskbar tracker: multiple monitors and other edges', () => {
     expect(rt.tracker.surfaces()).toEqual([]);
     expect(rt.events).toEqual([]);
     expect((rt.tracker.debugInfo() as { taskbars: Array<{ role: string }> }).taskbars[0]!.role).toBe('ceiling');
-    expect(rt.at(1600, { x: 500, y: 3 })).toBe(16); // auto-hide edge at the top
+    expect(rt.at(1600, { x: 500, y: 3 })).toBe(250); // shown and still: idle, also with the cursor on it
+    top.move(600n, { left: 0, top: -58, right: 1920, bottom: 2 });
+    rt.at(1616);
+    expect(rt.at(2000, { x: 500, y: 3 })).toBe(16); // hidden: the cursor at the top edge may reveal it
 
     for (const [edge, abe, rect] of [
       ['left', 0, { left: -58, top: 0, right: 2, bottom: 1200 }],
@@ -572,6 +630,56 @@ describe('taskbar tracker: multiple monitors and other edges', () => {
     expect(r.tracker.surfaces()[0]!.confidence).toBe(0.5);
     expect(r.log.entries.filter((e) => e.msg.startsWith('taskbar edge from geometry disagrees'))).toHaveLength(1);
     expect((r.tracker.debugInfo() as { taskbars: Array<{ thicknessSource: string }> }).taskbars[0]!.thicknessSource).toBe('window');
+  });
+});
+
+describe('taskbar tracker: click guard (areas the overlays never take the mouse over)', () => {
+  const rect = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+
+  it('guards the strip and the reveal band of a hidden auto-hide taskbar, then the whole taskbar as it slides in', () => {
+    const r = makeRig(primaryHidden());
+    // 125 %: the 2 px strip on screen (its window reaches below the monitor) and ceil(6 * 1.25) = 8 rows.
+    expect(r.tracker.clickGuardRects()).toEqual([rect(0, 1198, 1920, 60), rect(0, 1192, 1920, 8)]);
+    // Live geometry from the last sample, also while an unobserved jump is still eased.
+    r.native.move(100n, bottomAt(P_MON, 1170));
+    r.at(1016);
+    expect(r.tracker.clickGuardRects()).toEqual([rect(0, 1170, 1920, 60), rect(0, 1192, 1920, 8)]);
+    r.native.move(100n, P_SHOWN);
+    r.at(1032);
+    expect(r.tracker.taskbars()[0]!.phase).not.toBe('shown');
+    expect(r.tracker.clickGuardRects()).toEqual([rect(0, 1140, 1920, 60), rect(0, 1192, 1920, 8)]);
+    // An invisible window guards nothing but its reveal band.
+    r.native.bars.get(100n)!.visible = false;
+    r.at(1048);
+    expect(r.tracker.clickGuardRects()).toEqual([rect(0, 1192, 1920, 8)]);
+    r.tracker.stop();
+    expect(r.tracker.clickGuardRects()).toEqual([]);
+  });
+
+  it('guards a docked taskbar without a band, and the reveal band of other edges and DPI scales', () => {
+    const docked = new FakeTaskbarNative().add(100n, { rect: P_SHOWN });
+    docked.abmState = 0;
+    docked.monitors = [{ monitor: P_MON, work: { ...P_MON, bottom: 1140 } }];
+    const d = makeRig(docked, { version: 1, displays: [display('P', P_MON, 1.25, { ...P_MON, bottom: 1140 }, true)] });
+    expect(d.tracker.clickGuardRects()).toEqual([rect(0, 1140, 1920, 60)]);
+
+    const left = new FakeTaskbarNative().add(700n, { rect: { left: -58, top: 0, right: 2, bottom: 1200 } });
+    left.abmPos = { edge: 0, rect: { left: 0, top: 0, right: 60, bottom: 1200 } };
+    expect(makeRig(left).tracker.clickGuardRects()).toEqual([rect(-58, 0, 60, 1200), rect(0, 0, 8, 1200)]);
+
+    // A secondary at 150 % on the second monitor: ceil(6 * 1.5) = 9 rows along its span only.
+    const n = new FakeTaskbarNative().add(100n, { rect: P_HIDDEN }).add(301n, { className: 'Shell_SecondaryTrayWnd', rect: { left: 2000, top: 1078, right: 3800, bottom: 1126 } });
+    n.monitors.push({ monitor: S_MON, work: S_MON });
+    const world: WorldGeometry = { version: 1, displays: [display('P', P_MON, 1.25, P_MON, true), display('S', S_MON, 1.5)] };
+    const guard = makeRig(n, world).tracker.clickGuardRects();
+    expect(guard).toContainEqual(rect(2000, 1071, 1800, 9));
+    expect(guard).toContainEqual(rect(2000, 1078, 1800, 48));
+  });
+
+  it('is empty without Win32', () => {
+    const t = createTaskbarTracker(createTestLogger(), { native: null });
+    t.start();
+    expect(t.clickGuardRects()).toEqual([]);
   });
 });
 

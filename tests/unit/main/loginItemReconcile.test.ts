@@ -5,16 +5,19 @@ import { describe, expect, it } from 'vitest';
 import { formatCommandLine } from '../../../src/main/lifecycle/loginItemCommandLine';
 import {
   applyUserChoice,
+  describeState,
   evaluateWriteGate,
   interpretSnapshot,
+  liveLoginItem,
   loginItemStatus,
+  needsV1Evidence,
   reconcile,
   type LoginItemSettings,
   type ReconcileFlags,
   type WindowsLoginState,
 } from '../../../src/main/lifecycle/loginItemReconcile';
 import { defaultSettings } from '../../../src/shared/settings';
-import { FakeWindowsLogin, seededRandom, TASK_MANAGER_DISABLED, TASK_MANAGER_ENABLED } from './loginItemFakes';
+import { DISABLE_BYTES, FakeWindowsLogin, seededRandom, TASK_MANAGER_DISABLED, TASK_MANAGER_ENABLED } from './loginItemFakes';
 
 const EXE = 'C:\\Users\\Ada Lovelace\\AppData\\Local\\Programs\\Desktop Cat\\DesktopCat.exe';
 const ARGS = ['--launched-at-login'] as const;
@@ -23,11 +26,12 @@ const DEV_ENTRY = '"C:\\src\\cat\\node_modules\\electron\\dist\\electron.exe" "\
 
 type Pref = 'unset' | 'enabled' | 'disabled/user' | 'disabled/windows' | 'disabled/external';
 type Run = 'absent' | 'ours' | 'stale' | 'electron';
-type Sa = 'absent' | '00' | '02' | '03+FILETIME' | '06';
+/** '03' is Electron's own disabled record (03 + zeros), written by the in-app opt-out. */
+type Sa = 'absent' | '00' | '02' | '03' | '03+FILETIME' | '06';
 
 const PREFS: Pref[] = ['unset', 'enabled', 'disabled/user', 'disabled/windows', 'disabled/external'];
 const RUNS: Run[] = ['absent', 'ours', 'stale', 'electron'];
-const SAS: Sa[] = ['absent', '00', '02', '03+FILETIME', '06'];
+const SAS: Sa[] = ['absent', '00', '02', '03', '03+FILETIME', '06'];
 
 function loginItem(pref: Pref, registeredBefore: boolean): LoginItemSettings {
   const base = defaultSettings().loginItem;
@@ -52,6 +56,7 @@ function windowsState(run: Run, sa: Sa): WindowsLoginState {
   const bytes: Record<Exclude<Sa, 'absent'>, number[]> = {
     '00': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     '02': TASK_MANAGER_ENABLED,
+    '03': DISABLE_BYTES,
     '03+FILETIME': TASK_MANAGER_DISABLED,
     '06': [6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   };
@@ -75,12 +80,13 @@ function flagsFor(flag: Flag): ReconcileFlags {
   return { ...NORMAL, writable: gate.writable, launchedAtLogin: flag === 'launched-at-login', settingsTrusted: flag !== 'corrupt-settings' };
 }
 
-const SA_DISABLED = (sa: Sa): boolean => sa === '03+FILETIME' || sa === '06';
+const SA_DISABLED = (sa: Sa): boolean => sa === '03' || sa === '03+FILETIME' || sa === '06';
 
 interface Expected {
   pref: 'unset' | 'enabled' | 'disabled';
   disabledBy: LoginItemSettings['disabledBy'];
-  write: 'register' | 'remove' | null;
+  /** 'disable': our entry written disabled (the opt-out record), with removing it as the fallback. */
+  write: 'register' | 'disable' | 'remove' | null;
 }
 
 /** Declarative expectations for a writable, trusted boot not started at sign-in. */
@@ -88,7 +94,8 @@ function expected(pref: Pref, run: Run, sa: Sa, registeredBefore: boolean): Expe
   const li = loginItem(pref, registeredBefore);
   const keep = (write: Expected['write'] = null): Expected => ({ pref: li.preference, disabledBy: li.disabledBy, write });
   if (SA_DISABLED(sa)) {
-    if (run !== 'absent') return { pref: 'disabled', disabledBy: 'windows', write: null };
+    // The in-app opt-out's own record stays the user's; any other disable is Windows'.
+    if (run !== 'absent') return pref === 'disabled/user' && sa === '03' ? keep() : { pref: 'disabled', disabledBy: 'windows', write: null };
     return pref.startsWith('disabled') ? keep() : { pref: 'disabled', disabledBy: 'external', write: null };
   }
   if (run === 'absent') {
@@ -96,12 +103,16 @@ function expected(pref: Pref, run: Run, sa: Sa, registeredBefore: boolean): Expe
     return registeredBefore ? { pref: 'disabled', disabledBy: 'external', write: null } : keep('register');
   }
   const stale = run !== 'ours';
-  if (pref === 'disabled/user') return keep('remove');
-  if (pref === 'disabled/windows' || pref === 'disabled/external') return { pref: 'enabled', disabledBy: null, write: stale ? 'register' : null };
+  const adopted: Expected = { pref: 'enabled', disabledBy: null, write: stale ? 'register' : null };
+  // After an in-app opt-out an explicit "enabled" value is Startup apps switching it on; without one, the opt-out is applied again.
+  if (pref === 'disabled/user') return sa === 'absent' ? keep('disable') : adopted;
+  if (pref === 'disabled/windows' || pref === 'disabled/external') return adopted;
   return keep(stale ? 'register' : null);
 }
 
-const writeKind = (w: { openAtLogin: boolean } | null): Expected['write'] => (w === null ? null : w.openAtLogin ? 'register' : 'remove');
+const writeKind = (w: { openAtLogin: boolean; enabled: boolean } | null): Expected['write'] =>
+  w === null ? null : !w.openAtLogin ? 'remove' : w.enabled ? 'register' : 'disable';
+const REMOVE = { openAtLogin: false, enabled: true };
 
 describe('reconcile: preference × Run state × StartupApproved (writable boot)', () => {
   const rows = PREFS.flatMap((pref) => RUNS.flatMap((run) => SAS.flatMap((sa) => [false, true].map((reg) => [pref, run, sa, reg] as const))));
@@ -109,8 +120,8 @@ describe('reconcile: preference × Run state × StartupApproved (writable boot)'
     const r = reconcile(windowsState(run, sa), loginItem(pref, reg), NORMAL);
     const want = expected(pref, run, sa, reg);
     expect({ pref: r.next.preference, disabledBy: r.next.disabledBy, write: writeKind(r.write) }).toEqual(want);
-    if (r.write) expect(r.write.enabled).toBe(true);
-    if (r.write?.openAtLogin) expect(r.next.registeredPath).toBe(EXE);
+    expect(r.fallback).toEqual(writeKind(r.write) === 'disable' ? REMOVE : null);
+    if (writeKind(r.write) === 'register') expect(r.next.registeredPath).toBe(EXE);
   });
 });
 
@@ -136,11 +147,12 @@ describe('reconcile: invariants across every flag combination', () => {
         expect(r.write).toBeNull();
         if (run === 'absent' && !pref.startsWith('disabled')) expect(r.next.preference).toBe('disabled');
       }
-      // Registration only while the preference resolves to on.
-      if (r.write?.openAtLogin) expect(r.next.preference).not.toBe('disabled');
-      if (r.write && !r.write.openAtLogin) expect(r.next.preference).toBe('disabled');
+      // Registration only while the preference resolves to on; anything else written is an opt-out.
+      const registers = writeKind(r.write) === 'register';
+      if (registers) expect(r.next.preference).not.toBe('disabled');
+      if (r.write && !registers) expect(r.next.preference).toBe('disabled');
       // A failed write never records a registration.
-      if (r.write?.openAtLogin) expect(r.nextIfWriteFails.registeredPath).toBe(li.registeredPath);
+      if (registers) expect(r.nextIfWriteFails.registeredPath).toBe(li.registeredPath);
     }
   });
 });
@@ -154,14 +166,53 @@ describe('reconcile: specific rules', () => {
     expect(r.next.registeredPath).toBe(EXE);
   });
 
-  it('keeps an opt-out across a reinstall even with the marker', () => {
-    for (const disabledBy of ['user', 'windows', 'external'] as const) {
-      const li: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'user', disabledBy, registeredPath: EXE };
+  it('keeps an in-app opt-out across a reinstall even with the marker', () => {
+    const li: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'user', disabledBy: 'user', registeredPath: EXE };
+    const r = reconcile(windowsState('absent', 'absent'), li, { ...NORMAL, uninstallMarker: true });
+    expect(r).toMatchObject({ rule: 'off', write: null, consumeMarker: true, next: li });
+  });
+
+  it('a reinstall after an off from the Windows side that was undone there registers again (the marker proves the entry was approved)', () => {
+    for (const disabledBy of ['windows', 'external'] as const) {
+      const li: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'windows', disabledBy, registeredPath: EXE };
       const r = reconcile(windowsState('absent', 'absent'), li, { ...NORMAL, uninstallMarker: true });
-      expect(r.write).toBeNull();
-      expect(r.next.preference).toBe('disabled');
-      expect(r.consumeMarker).toBe(true);
+      expect(r).toMatchObject({ rule: 'register-after-uninstall', write: { openAtLogin: true, enabled: true }, consumeMarker: true });
+      expect(r.next).toMatchObject({ preference: 'enabled', decidedBy: 'windows', disabledBy: null, registeredPath: EXE });
+      // A registration that does not land keeps the recorded off (and the marker, see the service).
+      expect(r.nextIfWriteFails).toEqual(li);
+      // Without the marker the off stays.
+      expect(reconcile(windowsState('absent', 'absent'), li, NORMAL)).toMatchObject({ rule: 'off', write: null });
+      // Never written at sign-in.
+      expect(reconcile(windowsState('absent', 'absent'), li, { ...NORMAL, uninstallMarker: true, launchedAtLogin: true })).toMatchObject({
+        rule: 'register-skipped-launched-at-login',
+        write: null,
+        consumeMarker: false,
+      });
     }
+  });
+
+  it('the in-app opt-out record (Electron 03 + zeros) keeps disabled/user; a Task Manager disable over it is Windows', () => {
+    const optedOut: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'user', disabledBy: 'user', registeredPath: EXE };
+    expect(reconcile(windowsState('ours', '03'), optedOut, NORMAL)).toMatchObject({ rule: 'off', write: null, next: optedOut });
+    expect(reconcile(windowsState('ours', '03+FILETIME'), optedOut, NORMAL)).toMatchObject({ rule: 'windows-disabled', write: null, next: { disabledBy: 'windows' } });
+    // Enabled again in Task Manager (02 00…): adopted, not disabled again.
+    expect(reconcile(windowsState('ours', '02'), optedOut, NORMAL)).toMatchObject({ rule: 'windows-reenabled', write: null, next: { preference: 'enabled', decidedBy: 'windows' } });
+    // No StartupApproved value: the record did not land (or the entry was re-added outside): disabled again.
+    expect(reconcile(windowsState('ours', 'absent'), optedOut, NORMAL)).toMatchObject({ rule: 'opt-out', write: { openAtLogin: true, enabled: false }, fallback: REMOVE });
+    expect(reconcile(windowsState('ours', 'absent'), optedOut, { ...NORMAL, launchedAtLogin: true })).toMatchObject({ rule: 'opt-out-skipped-launched-at-login', write: null });
+    expect(describeState(windowsState('ours', '03'), { execPath: EXE, args: ARGS })).toEqual({ readable: true, run: 'ours', approved: 'disabled-by-app' });
+  });
+
+  it('an in-app opt-out survives settings that come back without it (v1.0 round trip, reset file): never registered again', () => {
+    // v1.0 drops the loginItem section and saves launchAtLogin:false; the migration then reads it as undecided.
+    const v1Shaped: LoginItemSettings = { ...base, v1Value: false };
+    expect(needsV1Evidence(v1Shaped)).toBe(true);
+    for (const li of [v1Shaped, base]) {
+      const r = reconcile(windowsState('ours', '03'), li, NORMAL);
+      expect(r).toMatchObject({ rule: 'windows-disabled', write: null, next: { preference: 'disabled', disabledBy: 'windows' } });
+    }
+    // Before the fix the opt-out deleted both values, leaving nothing to find: the boot registered.
+    expect(reconcile(windowsState('absent', 'absent'), v1Shaped, NORMAL).rule).toBe('register');
   });
 
   it('skips repairing a stale entry when started from it at sign-in, and repairs on the next manual start', () => {
@@ -225,16 +276,52 @@ describe('the user switch', () => {
     expect(r).toMatchObject({ outcome: 'windows-disabled-restored', write: { openAtLogin: true, enabled: false } });
   });
 
-  it('enable registers or repairs; disable removes; both record the user as the decider', () => {
+  it('enable registers or repairs; disable leaves the entry listed as disabled; both record the user as the decider', () => {
     expect(applyUserChoice(true, windowsState('absent', 'absent'), base, target)).toMatchObject({ outcome: 'registered', write: { openAtLogin: true, enabled: true } });
     expect(applyUserChoice(true, windowsState('stale', '02'), base, target)).toMatchObject({ outcome: 'registered' });
     expect(applyUserChoice(true, windowsState('ours', 'absent'), base, target)).toMatchObject({ outcome: 'unchanged', write: null });
-    expect(applyUserChoice(false, windowsState('ours', 'absent'), base, target)).toMatchObject({
-      outcome: 'removed',
-      write: { openAtLogin: false },
-      next: { preference: 'disabled', decidedBy: 'user', disabledBy: 'user' },
-    });
-    expect(applyUserChoice(false, windowsState('absent', '03+FILETIME'), base, target)).toMatchObject({ outcome: 'unchanged', write: null });
+    for (const run of ['ours', 'absent', 'stale'] as const) {
+      expect(applyUserChoice(false, windowsState(run, 'absent'), base, target)).toMatchObject({
+        outcome: 'opted-out',
+        write: { openAtLogin: true, enabled: false },
+        fallback: REMOVE,
+        next: { preference: 'disabled', decidedBy: 'user', disabledBy: 'user' },
+      });
+    }
+    // Already disabled in Startup apps: Windows' record is kept as it is.
+    for (const sa of ['03+FILETIME', '03'] as const) {
+      expect(applyUserChoice(false, windowsState('absent', sa), base, target)).toMatchObject({ outcome: 'unchanged', write: null });
+      expect(applyUserChoice(false, windowsState('ours', sa), base, target)).toMatchObject({ outcome: 'unchanged', write: null });
+    }
+  });
+
+  it('enable undoes the app’s own opt-out record, never a disable made in Task Manager', () => {
+    const optedOut: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'user', disabledBy: 'user', registeredPath: EXE };
+    for (const run of ['ours', 'absent'] as const) {
+      expect(applyUserChoice(true, windowsState(run, '03'), optedOut, target)).toMatchObject({ outcome: 'registered', write: { openAtLogin: true, enabled: true } });
+    }
+    expect(applyUserChoice(true, windowsState('ours', '03+FILETIME'), optedOut, target)).toMatchObject({ outcome: 'windows-disabled', write: null });
+    // The same bytes standing for a Windows disable (the restored entry) are not the user's to undo here.
+    const windowsOff: LoginItemSettings = { ...optedOut, decidedBy: 'windows', disabledBy: 'windows' };
+    expect(applyUserChoice(true, windowsState('ours', '03'), windowsOff, target)).toMatchObject({ outcome: 'windows-disabled', write: null });
+  });
+
+  it('an on saved without a registration that took effect records no registered path, so the next start registers', () => {
+    const previouslyRegistered: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'user', disabledBy: 'user', registeredPath: OLD_EXE };
+    const unread = interpretSnapshot({ run: { kind: 'error', code: 5 }, approved: { kind: 'error', code: 5 } });
+    const saved = [
+      applyUserChoice(true, windowsState('absent', 'absent'), previouslyRegistered, { ...target, writable: false }).next,
+      applyUserChoice(true, unread, previouslyRegistered, target).next,
+      applyUserChoice(true, windowsState('absent', 'absent'), previouslyRegistered, target).nextIfWriteFails,
+      applyUserChoice(true, windowsState('absent', '03+FILETIME'), previouslyRegistered, target).nextIfWriteFails,
+    ];
+    for (const li of saved) {
+      expect(li).toMatchObject({ preference: 'enabled', decidedBy: 'user', registeredPath: null });
+      // Rule 5 then registers instead of reading the missing entry as removed outside the app.
+      expect(reconcile(windowsState('absent', 'absent'), li, NORMAL)).toMatchObject({ rule: 'register', write: { openAtLogin: true, enabled: true } });
+    }
+    // With the old path kept (the defect) the same boot turned the explicit on into off.
+    expect(reconcile(windowsState('absent', 'absent'), { ...saved[0]!, registeredPath: OLD_EXE }, NORMAL).rule).toBe('external-removal');
   });
 
   it('saves the choice but writes nothing in a build that may not write', () => {
@@ -256,6 +343,39 @@ describe('status', () => {
     expect(loginItemStatus({ ...base, preference: 'enabled', decidedBy: 'migration' }, windowsState('ours', 'absent'), target).showNotice).toBe(false);
     expect(loginItemStatus(base, windowsState('stale', 'absent'), target)).toMatchObject({ active: false, reason: expect.stringMatching(/another location/) });
     expect(loginItemStatus(base, windowsState('ours', '03+FILETIME'), target)).toMatchObject({ active: false, reason: expect.stringMatching(/Task Manager/) });
+  });
+
+  it('follows the registry while the app runs: an off undone outside the app shows as on, matching the next start', () => {
+    for (const [disabledBy, sa] of [
+      ['windows', '02'],
+      ['external', 'absent'],
+      ['user', '02'],
+    ] as const) {
+      const li: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: disabledBy === 'user' ? 'user' : 'windows', disabledBy, registeredPath: EXE };
+      const s = loginItemStatus(li, windowsState('ours', sa), target);
+      expect(s).toEqual({ enabled: true, preference: 'enabled', disabledBy: null, active: true, writable: true, reason: null, showNotice: false });
+      // The next start records exactly that.
+      expect(reconcile(windowsState('ours', sa), li, NORMAL).next).toMatchObject({ preference: 'enabled', disabledBy: null });
+    }
+    // A build that may not write never reconciles, so it shows what is recorded.
+    const windowsOff: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'windows', disabledBy: 'windows', registeredPath: EXE };
+    expect(liveLoginItem(windowsOff, windowsState('ours', '02'), false)).toEqual(windowsOff);
+  });
+
+  it('an entry left after an in-app opt-out is explained as turned off at the next start by the user (not as removed)', () => {
+    const optedOut: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'user', disabledBy: 'user', registeredPath: EXE };
+    const s = loginItemStatus(optedOut, windowsState('ours', 'absent'), target);
+    expect(s).toMatchObject({ enabled: false, disabledBy: 'user', active: true, reason: expect.stringMatching(/next time you open it yourself/) });
+    expect(s.reason).not.toMatch(/removed/);
+    // The opt-out record itself is simply off.
+    expect(loginItemStatus(optedOut, windowsState('ours', '03'), target)).toMatchObject({ enabled: false, disabledBy: 'user', active: false, reason: null });
+  });
+
+  it('a Windows disable whose entry is gone no longer points to Task Manager', () => {
+    const windowsOff: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'windows', disabledBy: 'windows', registeredPath: EXE };
+    expect(loginItemStatus(windowsOff, windowsState('absent', 'absent'), target)).toMatchObject({ enabled: false, disabledBy: 'external', active: false });
+    expect(loginItemStatus(windowsOff, windowsState('absent', '03+FILETIME'), target)).toMatchObject({ disabledBy: 'external' });
+    expect(loginItemStatus(windowsOff, windowsState('ours', '03+FILETIME'), target)).toMatchObject({ disabledBy: 'windows', reason: null });
   });
 
   it('says a dev or portable build cannot manage it', () => {

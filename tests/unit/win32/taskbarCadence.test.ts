@@ -1,10 +1,10 @@
-// Cadence policy of the taskbar tracker: 250 ms idle, 16 ms bursts (pure).
+// Cadence policy of the taskbar tracker: 250 ms idle, 16 ms bursts bounded by motion (pure).
 import { describe, expect, it } from 'vitest';
 import { BURST_SAMPLE_MS, cursorAtAutoHideEdge, IDLE_SAMPLE_MS, nextSampleDelay, type CadenceTaskbar } from '../../../src/main/win32/taskbar/cadence';
 
 const MON = { left: 0, top: 0, right: 1920, bottom: 1200 };
-const bar = (over: Partial<CadenceTaskbar> = {}): CadenceTaskbar => ({ autoHide: true, edge: 'bottom', monitor: MON, scale: 1, revealedPx: 0, easing: false, ...over });
-const base = { now: 10_000, cursor: null, catNear: false, lastChangeAt: null, taskbars: [bar()] };
+const bar = (over: Partial<CadenceTaskbar> = {}): CadenceTaskbar => ({ autoHide: true, edge: 'bottom', monitor: MON, scale: 1, hidden: true, easing: false, ...over });
+const base = { now: 10_000, cursor: null, lastChangeAt: null, taskbars: [bar()] };
 
 describe('taskbar sampling cadence', () => {
   it('idles at 4 Hz with nothing going on', () => {
@@ -12,10 +12,6 @@ describe('taskbar sampling cadence', () => {
     expect(BURST_SAMPLE_MS).toBe(16);
     expect(nextSampleDelay(base)).toEqual({ delayMs: 250, reason: null });
     expect(nextSampleDelay({ ...base, cursor: { x: 900, y: 600 } })).toEqual({ delayMs: 250, reason: null });
-  });
-
-  it('bursts while the cat is on or near a taskbar', () => {
-    expect(nextSampleDelay({ ...base, catNear: true })).toEqual({ delayMs: 16, reason: 'cat-near' });
   });
 
   it('bursts for 300 ms after the last geometry change', () => {
@@ -42,16 +38,20 @@ describe('taskbar sampling cadence', () => {
     expect(nextSampleDelay({ ...base, cursor: { x: Number.NaN, y: 1199 } }).delayMs).toBe(250);
   });
 
-  it('keeps bursting while the cursor is over the revealed part of the taskbar', () => {
-    const revealed = bar({ revealedPx: 60 });
-    expect(cursorAtAutoHideEdge({ x: 900, y: 1150 }, revealed)).toBe(true);
-    expect(cursorAtAutoHideEdge({ x: 900, y: 1133 }, revealed)).toBe(true); // 66 px from the edge
-    expect(cursorAtAutoHideEdge({ x: 900, y: 1132 }, revealed)).toBe(false);
-    expect(cursorAtAutoHideEdge({ x: 900, y: 1150 }, bar())).toBe(false);
+  it('idles over a revealed, still taskbar: a parked cursor or a flashing button can hold it open for hours', () => {
+    const revealed = bar({ hidden: false });
+    for (const y of [1199, 1193, 1150]) {
+      expect(cursorAtAutoHideEdge({ x: 900, y }, revealed)).toBe(false);
+      expect(nextSampleDelay({ ...base, taskbars: [revealed], cursor: { x: 900, y } })).toEqual({ delayMs: 250, reason: null });
+    }
+    // Its slide (in or out) still bursts while the geometry changes or is eased.
+    expect(nextSampleDelay({ ...base, taskbars: [revealed], lastChangeAt: 9_900 }).reason).toBe('recent-change');
+    expect(nextSampleDelay({ ...base, taskbars: [bar({ hidden: false, easing: true })] }).reason).toBe('easing');
+    expect(cursorAtAutoHideEdge({ x: 900, y: 1199 }, bar())).toBe(true);
     expect(cursorAtAutoHideEdge({ x: 3, y: 600 }, bar({ edge: 'left' }))).toBe(true);
   });
 
   it('idles without taskbars, whatever the inputs', () => {
-    expect(nextSampleDelay({ ...base, taskbars: [], catNear: true, lastChangeAt: 10_000 })).toEqual({ delayMs: 250, reason: null });
+    expect(nextSampleDelay({ ...base, taskbars: [], cursor: { x: 900, y: 1199 }, lastChangeAt: 10_000 })).toEqual({ delayMs: 250, reason: null });
   });
 });

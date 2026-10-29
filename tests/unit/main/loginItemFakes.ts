@@ -4,10 +4,12 @@
 // The getter is ported only to pin why the app does not use it (v1's isActive bug).
 import { applySettingsPatch, migrateSettings, type PatchResult, type Settings, type SettingsPatch } from '../../../src/shared/settings';
 import { LOGIN_ITEM_NAME, type LoginItemFs, type LoginItemWriter } from '../../../src/main/lifecycle/loginItem';
-import { formatCommandLine, parseCommandLine, REG_BINARY, REG_SZ, samePath } from '../../../src/main/lifecycle/loginItemCommandLine';
+import { formatCommandLine, parseCommandLine, REG_BINARY, REG_SZ, samePath, startupApprovedEnabled } from '../../../src/main/lifecycle/loginItemCommandLine';
 import type { LoginItemRegistry, LoginRegistrySnapshot, RegistryRead } from '../../../src/main/win32/registry';
 
+/** What Electron's enabled:false writes (03 + zeros): the in-app opt-out's disabled entry. */
 export const DISABLE_BYTES = [0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+export const DISABLE_HEX = Buffer.from(DISABLE_BYTES).toString('hex');
 /** What Task Manager writes when the user disables an entry: 03 00 00 00 + FILETIME. */
 export const TASK_MANAGER_DISABLED = [0x03, 0, 0, 0, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0x01];
 /** What Task Manager writes when the user enables it again. */
@@ -29,6 +31,11 @@ export class FakeWindowsLogin implements LoginItemWriter {
   readonly writes: SetSettings[] = [];
   /** 'throw': setLoginItemSettings throws; 'ignore': it returns without changing anything. */
   failWrites: 'throw' | 'ignore' | null = null;
+  /**
+   * Electron writes the Run value first and the StartupApproved value after it, ignoring a
+   * failure of the second write: true makes that second write (03 + zeros) silently not happen.
+   */
+  failApprovedWrites = false;
   /** Win32 error code returned for every read (e.g. 5 = access denied), or null. */
   readError: number | null = null;
 
@@ -48,7 +55,7 @@ export class FakeWindowsLogin implements LoginItemWriter {
     if (s.openAtLogin) {
       this.run.set(name, { type: REG_SZ, data: utf16z(formatCommandLine(s.path ?? this.processExecPath, s.args ?? [])) });
       if (s.enabled ?? true) this.approved.delete(name);
-      else this.approved.set(name, { type: REG_BINARY, data: Buffer.from(DISABLE_BYTES) });
+      else if (!this.failApprovedWrites) this.approved.set(name, { type: REG_BINARY, data: Buffer.from(DISABLE_BYTES) });
     } else {
       this.approved.delete(name);
       this.run.delete(name);
@@ -135,10 +142,12 @@ export class FakeWindowsLogin implements LoginItemWriter {
 
   /**
    * build/installer.nsh customUnInstall on a real uninstall: the marker is written only for an
-   * entry that existed and that Startup apps never toggled; then both values are deleted.
+   * entry that existed and that Windows would have started (no StartupApproved value, or one whose
+   * bytes say enabled: 00, or 02 00 as Task Manager writes); then both values are deleted.
    */
   uninstall(name = LOGIN_ITEM_NAME): boolean {
-    const marker = this.run.has(name) && !this.approved.has(name);
+    const sa = this.approved.get(name);
+    const marker = this.run.has(name) && (sa === undefined || startupApprovedEnabled(sa.data));
     this.run.delete(name);
     this.approved.delete(name);
     return marker;

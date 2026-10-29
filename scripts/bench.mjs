@@ -57,7 +57,7 @@ try {
   await sleep(4000);
   await metrics(); // prime CPU counters
   const phases = [
-    ['awake', async () => {}],
+    ['awake', async () => hook('injectEvent', { type: 'command.wake' })],
     ['asleep', async () => hook('injectEvent', { type: 'command.sleep' })],
     ['hidden', async () => hook('runAction', 'hide')],
     ['paused', async () => { await hook('runAction', 'show'); await hook('runAction', 'pause'); }],
@@ -77,6 +77,11 @@ try {
       if (o && o.state === 'sleeping') asleepSamples++;
       // Keep the asleep phase asleep: the cat may wake on its own (or because the user is active).
       if (name === 'asleep' && o && o.state !== 'sleeping' && o.state !== 'fallingAsleep') await hook('injectEvent', { type: 'command.sleep' });
+      // Keep the awake phase awake and moving: on an idle machine the cat would otherwise nap.
+      if (name === 'awake' && o) {
+        if (o.state === 'sleeping' || o.state === 'fallingAsleep') await hook('injectEvent', { type: 'command.wake' });
+        else await hook('injectEvent', { type: 'command.play' });
+      }
     }
     const avg = (k) => Math.round((samples.reduce((s, x) => s + x[k], 0) / samples.length) * 100) / 100;
     report.phases[name] = {

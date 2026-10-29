@@ -190,10 +190,11 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
   };
 
+  /** Where the cat is and what it stands on; also while hidden (the sim keeps it on its surface). */
   function catPosition(): CatPosition | null {
     const out = lastOutput;
-    if (!out || hidden) return null;
-    return { x: out.x, y: out.y, surfaceId: out.support.kind === 'surface' ? out.support.surfaceId : null };
+    if (!out) return null;
+    return { x: out.x, y: out.y, surfaceId: out.support.kind === 'surface' ? out.support.surfaceId : null, hidden };
   }
 
   function readSurfaces(nowReal: number): readonly Surface[] {

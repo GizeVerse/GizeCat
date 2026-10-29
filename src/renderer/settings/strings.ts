@@ -163,7 +163,7 @@ export const S = {
     launchStatus: {
       active: 'On. Windows starts Desktop Cat when you sign in.',
       off: 'Off. Desktop Cat starts only when you open it.',
-      removedOutside: 'Off. The startup entry was removed outside Desktop Cat, so it stays off. Turn it on here to add it again.',
+      removedOutside: 'Off. Windows no longer has a startup entry for Desktop Cat (it was removed outside the app or by an uninstall), so it stays off. Turn it on here to add it again.',
       windowsDisabled: 'Disabled in Windows Startup apps. Desktop Cat never overrides that. To turn it back on, open Task Manager › Startup apps and enable Desktop Cat.',
       notAvailable: 'Not available in this build (development or portable). The installed app manages Start with Windows.',
       pending: 'On. Windows will start Desktop Cat once its startup entry is in place.',

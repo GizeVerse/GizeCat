@@ -1,6 +1,7 @@
 // Overlay manager with Electron mocked: cross-display drags, the renderer hang
-// watchdog, lost presses without Win32 button state, and the shell integration
-// (NonRudeHWND around show/destroy, TaskbarCreated forwarding; MOCKED shell).
+// watchdog, lost presses without Win32 button state, the shell integration
+// (NonRudeHWND around show/destroy, TaskbarCreated forwarding; MOCKED shell) and the
+// taskbar click guard (the real TaskbarTracker over a MOCKED Win32 taskbar).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Point } from '../../../src/shared/geometry';
 import type { OverlayPointerEvent } from '../../../src/shared/ipc';
@@ -11,6 +12,8 @@ import type { DisplayService } from '../../../src/main/contracts';
 import type { WindowRegistry } from '../../../src/main/security';
 import { createGestureRecognizer } from '../../../src/core/interaction/gestures';
 import { createOverlayManager, type OverlayManager, type OverlayManagerOptions } from '../../../src/main/overlay/overlayManager';
+import type { Hwnd, RawRect } from '../../../src/main/win32/native';
+import { createTaskbarTracker, type TaskbarNative } from '../../../src/main/win32/taskbar';
 import { memoryLogger } from './helpers';
 
 const fakes = vi.hoisted(() => {
@@ -56,6 +59,13 @@ const fakes = vi.hoisted(() => {
     }
     destroy(): void {
       calls.push(`destroy:${this.displayId}`);
+      this.destroyed = true;
+      this.emit('closed');
+    }
+    /** WM_CLOSE from outside: Electron emits 'close', destroys the window, then emits 'closed'. */
+    closeFromOutside(): void {
+      this.emit('close', { preventDefault: () => undefined });
+      calls.push(`closedFromOutside:${this.displayId}`);
       this.destroyed = true;
       this.emit('closed');
     }
@@ -132,21 +142,25 @@ function display(id: string, x: number): DisplayGeometry {
 
 const world: WorldGeometry = { version: 1, displays: [display('A', 0), display('B', 1600)] };
 
-const displayService: DisplayService = {
-  world,
-  onChange: () => () => undefined,
-  toLocalDip: (id, p) => {
-    const d = world.displays.find((x) => x.id === id)!;
-    return { x: (p.x - d.workAreaPx.x) / d.scaleFactor, y: (p.y - d.workAreaPx.y) / d.scaleFactor };
-  },
-  fromLocalDip: (id, p) => {
-    const d = world.displays.find((x) => x.id === id)!;
-    return { x: d.workAreaPx.x + p.x * d.scaleFactor, y: d.workAreaPx.y + p.y * d.scaleFactor };
-  },
-  displayAt: (p) => world.displays.find((d) => p.x >= d.boundsPx.x && p.x < d.boundsPx.x + d.boundsPx.width)?.id ?? null,
-  refresh: () => false,
-  dispose: () => undefined,
-};
+function serviceFor(w: WorldGeometry): DisplayService {
+  return {
+    world: w,
+    onChange: () => () => undefined,
+    toLocalDip: (id, p) => {
+      const d = w.displays.find((x) => x.id === id)!;
+      return { x: (p.x - d.workAreaPx.x) / d.scaleFactor, y: (p.y - d.workAreaPx.y) / d.scaleFactor };
+    },
+    fromLocalDip: (id, p) => {
+      const d = w.displays.find((x) => x.id === id)!;
+      return { x: d.workAreaPx.x + p.x * d.scaleFactor, y: d.workAreaPx.y + p.y * d.scaleFactor };
+    },
+    displayAt: (p) => w.displays.find((d) => p.x >= d.boundsPx.x && p.x < d.boundsPx.x + d.boundsPx.width)?.id ?? null,
+    refresh: () => false,
+    dispose: () => undefined,
+  };
+}
+
+const displayService = serviceFor(world);
 
 const registry: WindowRegistry = { register: () => undefined, unregister: () => undefined, kindOf: () => 'overlay', ids: () => [] };
 
@@ -217,7 +231,7 @@ function makeRig(extra: Partial<OverlayManagerOptions> = {}): Rig {
   });
   mgr.start();
   const win = (id: string): FakeWindow => [...fakes.windows].reverse().find((w) => w.displayId === id && !w.destroyed)!;
-  for (const id of ['A', 'B']) mgr.handleReady(win(id).webContents.id);
+  for (const d of (extra.display ?? displayService).world.displays) mgr.handleReady(win(d.id).webContents.id);
   return {
     mgr,
     events,
@@ -459,6 +473,23 @@ describe('overlay manager: shell integration (NonRudeHWND, TaskbarCreated)', () 
     expect(fakes.calls).toEqual(['clearNonRude:A', 'destroy:A', 'clearNonRude:B', 'destroy:B']);
   });
 
+  it('removes the property when the overlay is closed from outside, before Electron destroys it, and once only', () => {
+    const a = rig.win('A');
+    a.emit('ready-to-show');
+    fakes.calls.length = 0;
+    a.closeFromOutside(); // e.g. WM_CLOSE from another process: 'close', native destroy, 'closed'
+    expect(fakes.calls).toEqual(['clearNonRude:A', 'closedFromOutside:A']);
+    expect(rig.log.entries.some((e) => e.msg === 'overlay closed unexpectedly')).toBe(true);
+    // Recreated after the backoff; the new window gets (and later loses) its own property.
+    rig.advance(1000);
+    const fresh = rig.win('A');
+    expect(fresh).not.toBe(a);
+    fresh.emit('ready-to-show');
+    fakes.calls.length = 0;
+    rig.mgr.dispose();
+    expect(fakes.calls.filter((c) => c.endsWith(':A'))).toEqual(['clearNonRude:A', 'destroy:A']);
+  });
+
   it('removes the property before the window of a crashed renderer is destroyed', () => {
     const a = rig.win('A');
     a.emit('ready-to-show');
@@ -508,5 +539,175 @@ describe('overlay manager: shell integration (NonRudeHWND, TaskbarCreated)', () 
     });
     expect(() => fakes.shell.hooks[0]!.cb()).not.toThrow();
     expect(rig.log.entries.some((e) => e.level === 'error' && e.msg === 'TaskbarCreated handler failed')).toBe(true);
+  });
+});
+
+// The probe machine: one 1920x1200 display at 125 %, auto-hide taskbar at the bottom, so the
+// work area (and the overlay) is the whole screen and the overlay covers the taskbar.
+const MON: RawRect = { left: 0, top: 0, right: 1920, bottom: 1200 };
+const TB_HIDDEN: RawRect = { left: 0, top: 1198, right: 1920, bottom: 1258 };
+const TB_SHOWN: RawRect = { left: 0, top: 1140, right: 1920, bottom: 1200 };
+const P: DisplayGeometry = {
+  id: 'P',
+  primary: true,
+  scaleFactor: 1.25,
+  boundsDip: { x: 0, y: 0, width: 1536, height: 960 },
+  workAreaDip: { x: 0, y: 0, width: 1536, height: 960 },
+  boundsPx: { x: 0, y: 0, width: 1920, height: 1200 },
+  workAreaPx: { x: 0, y: 0, width: 1920, height: 1200 },
+};
+const autoHideWorld: WorldGeometry = { version: 1, displays: [P] };
+/** The floor on this display: 4 DIP (5 px) above the screen edge (simWorld). */
+const FLOOR_Y = 1195;
+/** How far the renderer's hit rects reach below the feet (DIP, measured): stand, sit, sleep, climb. */
+const REACHES = [4.6, 7.0, 8.2, 12.5];
+
+/** One primary Shell_TrayWnd whose live rect the test moves (MOCKED Win32). */
+function oneTaskbar(rect: RawRect): TaskbarNative & { rect: RawRect } {
+  const n = {
+    rect,
+    findWindow: (cls: string): Hwnd | null => (cls === 'Shell_TrayWnd' ? 100n : null),
+    findNextWindow: (): Hwnd | null => null,
+    isWindow: () => true,
+    isWindowVisible: () => true,
+    getWindowRect: (): RawRect => ({ ...n.rect }),
+    getMonitorRects: () => ({ monitor: MON, work: MON }),
+    appBarState: () => 1,
+    appBarTaskbarPos: () => ({ edge: 3, rect: TB_SHOWN }),
+    getExStyle: () => 0x88,
+  };
+  return n;
+}
+
+describe('overlay manager: taskbars always get the mouse (click guard)', () => {
+  let native: ReturnType<typeof oneTaskbar>;
+  let tracker: ReturnType<typeof createTaskbarTracker>;
+  /** false: the guard is not wired (the behaviour before it), to show what the cat's region covers. */
+  let guard = true;
+
+  beforeEach(() => {
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    native = oneTaskbar(TB_HIDDEN);
+    guard = true;
+    tracker = createTaskbarTracker(memoryLogger(), { native, world: autoHideWorld, now: () => rig.now });
+    rig = makeRig({ display: serviceFor(autoHideWorld), excludedRectsPx: () => (guard ? tracker.clickGuardRects() : []) });
+    tracker.start();
+  });
+
+  /** The taskbar window is moved to `rect` and sampled, as the host does on its poll. */
+  function taskbarAt(rect: RawRect): void {
+    native.rect = rect;
+    rig.advance(16);
+    tracker.sample(rig.now, null, true);
+  }
+
+  /** Fully revealed and settled (the jump from hidden is eased over 150 ms). */
+  function revealed(): void {
+    for (let i = 0; i < 12; i++) taskbarAt(TB_SHOWN);
+    expect(tracker.taskbars()[0]!.phase).toBe('shown');
+  }
+
+  /**
+   * Shows the cat with its feet at `feet` (px) and reports a region shaped like the renderer's:
+   * head and body, and the legs rect whose paws reach `reach` DIP below the feet.
+   */
+  function catAt(feet: Point, reach: number, support: SimOutput['support'] = { kind: 'floor', displayId: 'P' }): void {
+    rig.mgr.render(output(feet, { displayId: 'P', support, boundsPx: { x: feet.x - 52.5, y: feet.y - 80, width: 105, height: 80 } }), rig.now, false);
+    const x = feet.x / 1.25;
+    const y = feet.y / 1.25;
+    rig.mgr.handleHitRegion(rig.win('P').webContents.id, {
+      rects: [
+        { x: x - 34, y: y - 60, width: 68, height: 46 },
+        { x: x - 30, y: y - 14, width: 60, height: 14 + reach },
+      ],
+    });
+  }
+
+  /** One cursor poll at (x, y); true when the overlay takes the mouse. */
+  function poll(x: number, y: number): boolean {
+    rig.mgr.updateInteractivity({ x, y }, false);
+    return !rig.win('P').ignoreMouse;
+  }
+
+  it('keeps the reveal strip of a hidden auto-hide taskbar click-through under a cat standing on the floor', () => {
+    expect(tracker.taskbars()[0]).toMatchObject({ autoHide: true, phase: 'hidden' });
+    for (const reach of REACHES) {
+      catAt({ x: 960, y: FLOOR_Y }, reach);
+      // Unguarded, the paws own the 2 px strip (rows 1198-1199): the taskbar could not be revealed there.
+      guard = false;
+      expect(poll(960, 1199), `unguarded strip, reach ${reach}`).toBe(true);
+      guard = true;
+      // Guarded: the cursor coming down over the cat (interactive, hysteresis on) onto the strip.
+      expect(poll(960, 1150)).toBe(true);
+      for (let x = 930; x <= 990; x += 6) {
+        // The strip plus the 6 DIP (8 px at 125 %) margin above it.
+        for (let y = 1192; y <= 1199; y++) {
+          expect(poll(x, y), `${x},${y} reach ${reach}`).toBe(false);
+          expect(rig.mgr.isCursorOverCat({ x, y })).toBe(false);
+        }
+      }
+      // Just above the band the legs are the cat's again.
+      expect(poll(960, 1191)).toBe(true);
+      expect(poll(960, 1192)).toBe(false); // also within the 3 px hysteresis
+    }
+  });
+
+  it('lets clicks reach a revealed taskbar that slides in under a floor cat (taskbarPlay off: nothing lifts it)', () => {
+    catAt({ x: 960, y: FLOOR_Y }, 8.2);
+    expect(poll(960, 1150)).toBe(true);
+    // Halfway in: its rows are the taskbar's, the cat's rows above it still the cat's.
+    taskbarAt({ left: 0, top: 1170, right: 1920, bottom: 1230 });
+    expect(poll(960, 1169)).toBe(true);
+    expect(poll(960, 1170)).toBe(false);
+    revealed();
+    // Head and back stick out above the taskbar and stay the cat's.
+    expect(poll(960, 1130)).toBe(true);
+    for (let x = 920; x <= 1000; x += 8) {
+      for (let y = 1140; y < 1200; y += 3) {
+        expect(poll(x, y), `${x},${y}`).toBe(false);
+        expect(rig.mgr.isCursorOverCat({ x, y })).toBe(false);
+      }
+    }
+    // Hidden again: the whole cat is clickable except the reveal band.
+    taskbarAt(TB_HIDDEN);
+    expect(poll(960, 1185)).toBe(true);
+    expect(poll(960, 1195)).toBe(false);
+  });
+
+  it('cuts the taskbar out of the hit region of a cat riding it with its feet at top - 1', () => {
+    revealed();
+    const ledge = tracker.surfaces()[0]!;
+    expect(ledge.y).toBe(1139);
+    for (const reach of REACHES) {
+      catAt({ x: 960, y: ledge.y }, reach, { kind: 'surface', surfaceId: ledge.id, surfaceKind: 'taskbar', orientation: 'ledge' });
+      guard = false;
+      expect(poll(960, 1143), `unguarded: paws inside the taskbar, reach ${reach}`).toBe(true);
+      guard = true;
+      expect(poll(960, 1130)).toBe(true);
+      for (let x = 930; x <= 990; x += 6) {
+        // Every row the paws reach into (up to 1139 + 12.5 * 1.25), plus the 3 px hysteresis.
+        for (let y = 1140; y <= 1158; y++) {
+          expect(poll(x, y), `${x},${y} reach ${reach}`).toBe(false);
+          expect(rig.mgr.isCursorOverCat({ x, y })).toBe(false);
+        }
+      }
+      expect(poll(960, 1139)).toBe(true);
+    }
+  });
+
+  it('stays click-through while the exclusion source fails, and says so', () => {
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    rig = makeRig({
+      display: serviceFor(autoHideWorld),
+      excludedRectsPx: () => {
+        throw new Error('no taskbar state');
+      },
+    });
+    catAt({ x: 960, y: FLOOR_Y }, 4.6);
+    expect(poll(960, 1150)).toBe(false);
+    expect(rig.mgr.isCursorOverCat({ x: 960, y: 1150 })).toBe(false);
+    expect(rig.log.entries.some((e) => e.level === 'warn' && e.msg.startsWith('click-through exclusions failed'))).toBe(true);
   });
 });

@@ -6,7 +6,7 @@
 import { CAT_BASE_WIDTH_DIP, type Facing } from '../../shared/cat';
 import { heldScruffOffset, HELD_SETTLE_MS } from '../interaction/held';
 import type { Point, Rect } from '../../shared/geometry';
-import { clamp } from '../../shared/geometry';
+import { clamp, rectBottom, rectRight } from '../../shared/geometry';
 import type { SimSupport } from '../../shared/sim';
 import type { LedgeSurface, Surface as EnvSurface, SurfaceKind, WallSurface } from '../../shared/surfaces';
 import type { WorldGeometry } from '../../shared/world';
@@ -45,10 +45,8 @@ export interface MoverConfig {
   size: number;
   movementSpeed: number;
   allowMultiMonitor: boolean;
-  /** Window tops ('Sit on windows'). */
+  /** Window tops ('Sit on windows'). Taskbars are always supports: a shown one covers the floor ('taskbarPlay' is the sim's). */
   perchOnWindows: boolean;
-  /** Taskbars as moving ledges ('taskbarPlay'; default true). */
-  taskbars?: boolean;
   /** Climbing window sides ('climbWindows'; default true; also needs window tops). */
   walls?: boolean;
   /** Browser tab strips ('tabStrips'; default true). */
@@ -86,9 +84,11 @@ export type GoalStatus = 'none' | 'moving' | 'arrived' | 'unreachable';
 
 /**
  * Why the cat lost the surface it stood on or clung to:
- * gone       getSurface returned null (window closed/minimized/maximized, surface removed);
+ * gone       getSurface returned null and the window lists no surfaces any more (closed,
+ *            minimized, maximized, surface removed);
  * retracted  a taskbar slid away under it, or its ledge sank below the floor;
- * occluded   the surface stayed out of the usable list (covered, private) past the grace;
+ * occluded   its spot is covered while the window stays (a window in front), or the surface
+ *            stayed out of the usable list or from under its paws (private, cut short) past the grace;
  * headroom   the ledge moved too close to the top of the screen or off every display;
  * disabled   the user switched that kind of surface off.
  */
@@ -253,6 +253,8 @@ export class Mover {
   private cfg: MoverConfig;
   private geometry: WorldGeometry;
   private offLimits: ReadonlySet<string> = new Set<string>();
+  /** Owners (windows, taskbars) with any surface in this tick's list: a window that lists something is still there. */
+  private listedOwners: ReadonlySet<string> = new Set<string>();
 
   constructor(geometry: WorldGeometry, cfg: MoverConfig, start: { displayId: string | null; xFrac: number }) {
     this.cfg = { ...cfg };
@@ -461,17 +463,21 @@ export class Mover {
   sense(surfaces: readonly EnvSurface[]): void {
     const ledgesIn: LedgeSurface[] = [];
     const wallsIn: WallSurface[] = [];
+    const owners = new Set<string>();
     const walls = this.wallsEnabled();
     for (const s of surfaces) {
       if (!s || typeof s !== 'object') continue;
+      if (typeof s.ownerId === 'string' && s.ownerId.length > 0) owners.add(s.ownerId);
       if (s.orientation === 'ledge') {
         if (this.kindEnabled(s.kind)) ledgesIn.push(s);
       } else if (s.orientation === 'wall' && walls) {
         wallsIn.push(s);
       }
     }
-    let ledges = this.navWorld.ledgeSurfaces(ledgesIn);
-    let wallTracks = this.navWorld.wallTracks(wallsIn);
+    this.listedOwners = owners;
+    const keep = this.keptIds();
+    let ledges = this.navWorld.ledgeSurfaces(ledgesIn, keep.ledges);
+    let wallTracks = this.navWorld.wallTracks(wallsIn, keep.walls);
     if (this.offLimits.size > 0) {
       ledges = ledges.filter((l) => !l.displayIds.some((id) => this.isOffLimits(id)));
       wallTracks = wallTracks.filter((w) => !this.isOffLimits(w.displayId));
@@ -480,6 +486,32 @@ export class Mover {
     this.walls = wallTracks;
     this.graph.update(this.navWorld, ledges, wallTracks);
     if (this.attach && !this.kindEnabled(this.attach.surfaceKind)) this.attach.disabled = true;
+  }
+
+  /** The ledges and walls the cat is on or heading for: the per-kind list caps never drop them. */
+  private keptIds(): { ledges: Set<string>; walls: Set<string> } {
+    const ledges = new Set<string>();
+    const walls = new Set<string>();
+    const ledge = (s: Surface | null | undefined): void => {
+      if (s?.kind === 'ledge') ledges.add(s.key);
+    };
+    if (this.attach) ledges.add(this.attach.surfaceId);
+    const c = this.climbing;
+    if (c) {
+      walls.add(c.wall.key);
+      if (c.topKey) ledges.add(c.topKey);
+      ledge(c.exit?.surface);
+    }
+    ledge(this.crouch?.target);
+    ledge(this.flight?.target);
+    const leg = this.leg;
+    if (leg?.kind === 'jump') ledge(leg.target);
+    else if (leg?.kind === 'cross') ledge(leg.to);
+    else if (leg?.kind === 'climbUp') {
+      walls.add(leg.wall.key);
+      ledges.add(leg.ledgeKey);
+    } else if (leg?.kind === 'climbDown') walls.add(leg.wall.key);
+    return { ledges, walls };
   }
 
   // ---- goals -----------------------------------------------------------------
@@ -1073,18 +1105,49 @@ export class Mover {
   }
 
   /**
+   * Why a window surface whose live lookup came back null is lost: the window still lists
+   * surfaces, so it is there and only the cat's spot is covered (a window in front), or it
+   * lists nothing any more (closed, minimized, maximized).
+   */
+  private lostReason(ownerId: string): SupportLossReason {
+    return ownerId.length > 0 && this.listedOwners.has(ownerId) ? 'occluded' : 'gone';
+  }
+
+  /** x lies on a side edge of a work area on the row above y: an open span ending there is clipped there, not at its window's edge. */
+  private atWorkAreaSide(x: number, y: number): boolean {
+    for (const d of this.fullWorld.displays) {
+      const b = d.boundsPx;
+      if (y - 1 < b.y || y - 1 >= rectBottom(b)) continue;
+      const wa = d.workAreaPx;
+      if (Math.abs(x - wa.x) <= 0.5 || Math.abs(x - rectRight(wa)) <= 0.5) return true;
+    }
+    return false;
+  }
+
+  /**
+   * y lies on the top edge of a work area containing column x, or at or below its bottom (the
+   * sim's work areas end a few px above the real ones): a wall span ending there is cut there.
+   */
+  private atWorkAreaRow(y: number, x: number): boolean {
+    for (const d of this.fullWorld.displays) {
+      const wa = d.workAreaPx;
+      if (x < wa.x || x >= rectRight(wa)) continue;
+      if (Math.abs(y - wa.y) <= 0.5 || y >= rectBottom(wa) - 0.5) return true;
+    }
+    return false;
+  }
+
+  /**
    * Keeps the cat on a moving ledge; returns false when the ledge is lost (the cat then
    * falls, or is set down on the surface just below when a taskbar retracts under it).
    */
   private ride(input: MoverInput, out: MoverStep): boolean {
     const a = this.attach as Attachment;
     const live = this.liveLedge(input, a.surfaceId);
-    if (!live) return this.loseSupport(a.surfaceKind === 'taskbar' ? 'retracted' : 'gone', input, out);
-    // A window being dragged moves both ends of its top by the same amount; an occluder
-    // that uncovers or covers part of it moves only one end (no translation then).
-    const dx0 = live.x0 - a.x0;
-    const dx1 = live.x1 - a.x1;
-    const shift = Math.abs(dx0 - dx1) <= 1.5 ? (dx0 + dx1) / 2 : 0;
+    if (!live) return this.loseSupport(a.surfaceKind === 'taskbar' ? 'retracted' : this.lostReason(a.ownerId), input, out);
+    // The ledge's height is the window's top edge; how far it moved sideways only shows in
+    // the ends of its open span (see spanShift).
+    const shift = spanShift([a.x0, a.x1], [live.x0, live.x1], (x) => this.atWorkAreaSide(x, live.y), live.vx, input.dtMs, 2 * this.scale);
     const moved = shift !== 0 || live.y !== a.y;
     this.x += shift;
     a.x0 = live.x0;
@@ -1104,23 +1167,28 @@ export class Mover {
     }
     const d = this.navWorld.displayAt({ x: this.x, y: live.y });
     if (!d || live.y - this.bodyHeight * 0.8 < d.workAreaPx.y) return this.loseSupport('headroom', input, out);
-    const hw = this.bodyWidth / 2;
-    const onSegment = this.x >= live.x0 - hw * 0.25 && this.x <= live.x1 + hw * 0.25;
+    const tol = this.bodyWidth * 0.125;
+    const onSegment = this.x >= live.x0 - tol && this.x <= live.x1 + tol;
     const listed = this.ledges.find((l) => l.key === a.surfaceId) ?? null;
-    if (listed && onSegment && !a.disabled) {
+    // The listed ledge must be under its paws too: a tab strip that shrank away from the cat
+    // (tabs closed) or a list naming another part of a cut edge leaves it on the bare edge.
+    // While the window moves, the list may be a tick behind the live geometry.
+    const underPaws = listed !== null && this.x >= listed.landX0 - tol && this.x <= listed.landX1 + tol;
+    const moving = moved || (input.movingWindowIds ?? NO_MOVING).has(a.ownerId);
+    if (listed && (underPaws || moving) && onSegment && !a.disabled) {
       a.missingSince = null;
     } else {
       a.missingSince ??= input.now;
-      const moving = (input.movingWindowIds ?? NO_MOVING).has(a.ownerId);
-      const grace = moved || moving ? MOVEMENT.perchMovingGraceMs : MOVEMENT.perchGraceMs;
+      const grace = moving ? MOVEMENT.perchMovingGraceMs : MOVEMENT.perchGraceMs;
       // Switched off by the user: it leaves at once (no grace).
       if (a.disabled || input.now - a.missingSince > grace) return this.loseSupport(a.disabled ? 'disabled' : 'occluded', input, out);
     }
     if (onSegment) {
-      const s = listed && Math.abs(listed.y - live.y) <= 2 ? listed : this.navWorld.ledgeSurface(live, true);
+      const s = listed && underPaws && Math.abs(listed.y - live.y) <= 2 ? listed : this.navWorld.ledgeSurface(live, true);
       if (s) {
         this.surface = s;
-        // Kept over the edge, never snapped into the stand range (a crossing or a cut end leaves it in the end inset).
+        // Kept over the edge, never snapped into the stand range (a crossing or a cut end leaves
+        // it in the end inset): the cat is at most `tol` past either surface's edge here.
         this.x = clamp(this.x, Math.min(s.landX0, s.x0), Math.max(s.landX1, s.x1));
       }
     } else if (this.surface.kind === 'ledge') {
@@ -1259,14 +1327,17 @@ export class Mover {
     const live = this.liveWall(input, c.wall.key);
     const track = live ? this.navWorld.wallTrack(live) : null;
     if (!live || !track) {
-      // Gone (closed, minimized): a sudden loss. Still there but no longer climbable (moved
-      // against the screen edge, cut too short): the cat simply lets go.
-      this.letGoOfWall(input, out, live ? 'occluded' : 'gone');
+      // Gone (closed, minimized): a sudden loss, unless the window is still there with the
+      // cat's spot covered. Still there but no longer climbable (moved against the screen
+      // edge, cut too short): the cat simply lets go.
+      this.letGoOfWall(input, out, live ? 'occluded' : this.lostReason(c.wall.ownerId));
       return;
     }
-    // Ride the window: the wall line and its top move the cat with them.
+    // Ride the window: the wall line is its side; how far it moved up or down only shows in
+    // the ends of the open span (a window in front covering part of the side moves nothing).
     const dx = track.x - c.wall.x;
-    const dy = track.y0 - c.wall.y0;
+    const column = track.side === 'left' ? track.x - 1 : track.x + 1;
+    const dy = spanShift([c.wall.y0, c.wall.y1], [track.y0, track.y1], (y) => this.atWorkAreaRow(y, column), live.vy, input.dtMs, 2 * track.scale);
     if (dx !== 0 || dy !== 0) {
       this.x += dx;
       this.y += dy;
@@ -1275,7 +1346,11 @@ export class Mover {
       if (c.cornerX !== null) c.cornerX += dx;
     }
     c.wall = track;
-    if (this.walls.some((w) => w.key === track.key)) {
+    // Clinging, the grip must stay on the stretch of the side it can reach: a window in front
+    // covering that part leaves it holding still until the grace runs out, then it lets go.
+    const tol = this.bodyWidth * 0.125;
+    const holds = c.phase !== 'climb' || (this.y >= track.yTop - tol && this.y <= track.yBottom + tol);
+    if (holds && this.walls.some((w) => w.key === track.key)) {
       c.missingSince = null;
     } else {
       c.missingSince ??= input.now;
@@ -1314,15 +1389,20 @@ export class Mover {
       else if (this.goal.y < this.y - 1 && c.dir > 0 && c.topKey && this.ledgeById(c.topKey)) c.dir = -1;
     }
     this.x = track.x;
+    if (!holds) {
+      this.vy = 0;
+      return;
+    }
     if (c.dir < 0) {
       const speed = MOVEMENT.climbUpDip * this.cfg.movementSpeed * this.scale;
       this.vy = -speed;
       this.y = Math.max(track.yTop, this.y - speed * dt);
       if (this.y > track.yTop + 0.01) return;
       const top = c.topKey ? this.ledgeById(c.topKey) : null;
-      const cx = top ? this.graph.cornerX(this.navWorld, track, top) : null;
+      // Over the top only from the top corner: a side cut short by a window in front ends below the ledge.
+      const cx = top && track.y0 - top.y <= this.bodyWidth * 0.25 ? this.graph.cornerX(this.navWorld, track, top) : null;
       if (!top || cx === null) {
-        // No way over the top (the ledge is covered or gone): climb back down.
+        // No way over the top (the ledge or the top of the side is covered, or gone): climb back down.
         c.dir = 1;
         return;
       }
@@ -1365,7 +1445,8 @@ export class Mover {
     const live = top ? this.liveLedge(input, top.key) : null;
     out.climbEnded = true;
     if (!top || !live) {
-      this.letGoOfWall(input, out, 'gone');
+      // The ledge dropped out of the list (covered) or its window is gone.
+      this.letGoOfWall(input, out, top ? this.lostReason(c.wall.ownerId) : 'occluded');
       return;
     }
     this.climbing = null;
@@ -1495,7 +1576,9 @@ export class Mover {
   private kindEnabled(kind: SurfaceKind): boolean {
     switch (kind) {
       case 'taskbar':
-        return this.cfg.taskbars ?? true;
+        // Physics, not play: a shown taskbar covers the floor, so it lifts, carries and lowers
+        // the cat whatever 'taskbarPlay' says (that toggle only gates the sim's reactions).
+        return true;
       case 'windowTop':
         return this.cfg.perchOnWindows;
       case 'tabStrip':
@@ -1819,6 +1902,30 @@ function emptyStep(): MoverStep {
     climbStarted: false,
     climbEnded: false,
   };
+}
+
+/**
+ * How far a window moved along an edge this tick, judged from the ends of the open span of
+ * that edge the cat is on (the provider reports open spans, not the window's frame). Both
+ * ends moving together is the window moving; one end moving alone is a window in front
+ * covering or uncovering part of the edge, or a resize: nothing moves. An end clipped at the
+ * edge of a work area (`pinned`) stays put while the window slides under it, so then the
+ * other end alone counts, if the window's reported velocity `v` (px/s) says it moves that way
+ * and that fast (within 2.5x over `dtMs`, plus `slack` px): an end that jumps further or the
+ * other way is a window in front.
+ */
+function spanShift(prev: readonly [number, number], next: readonly [number, number], pinned: (v: number) => boolean, v: number, dtMs: number, slack: number): number {
+  const d0 = next[0] - prev[0];
+  const d1 = next[1] - prev[1];
+  if (d0 === 0 && d1 === 0) return 0;
+  const free0 = !pinned(prev[0]) && !pinned(next[0]);
+  const free1 = !pinned(prev[1]) && !pinned(next[1]);
+  if (free0 && free1) return Math.abs(d0 - d1) <= 1.5 ? (d0 + d1) / 2 : 0;
+  if (free0 === free1) return 0;
+  const d = free0 ? d0 : d1;
+  const vel = Number.isFinite(v) ? v : 0;
+  const reach = (2.5 * Math.abs(vel) * Math.max(0, dtMs)) / 1000 + slack;
+  return Math.sign(d) === Math.sign(vel) && Math.abs(d) <= reach ? d : 0;
 }
 
 function approach(v: number, target: number, maxDelta: number): number {

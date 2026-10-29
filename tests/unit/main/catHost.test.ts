@@ -449,7 +449,7 @@ describe('cat host: environment surfaces', () => {
     h.host.stop();
   });
 
-  it('tells the provider where the cat is and what it stands on (nothing while hidden)', () => {
+  it('tells the provider where the cat is and what it stands on, also while hidden (it stays on its surface)', () => {
     const surfaces = new FakeProvider();
     const h = harness({ surfaces });
     h.setOutput({ x: 640, y: 1020, support: { kind: 'surface', surfaceId: 'taskbar:1', surfaceKind: 'taskbar', orientation: 'ledge' } });
@@ -457,14 +457,18 @@ describe('cat host: environment surfaces', () => {
     h.timers.advance(0);
     expect(surfaces.cats[0]).toBeNull();
     h.timers.advance(33);
-    expect(surfaces.cats.at(-1)).toEqual({ x: 640, y: 1020, surfaceId: 'taskbar:1' });
+    expect(surfaces.cats.at(-1)).toEqual({ x: 640, y: 1020, surfaceId: 'taskbar:1', hidden: false });
     h.setOutput({ x: 10, y: 1040 });
     h.timers.advance(33);
     h.timers.advance(33);
-    expect(surfaces.cats.at(-1)).toEqual({ x: 10, y: 1040, surfaceId: null });
+    expect(surfaces.cats.at(-1)).toEqual({ x: 10, y: 1040, surfaceId: null, hidden: false });
+    h.setOutput({ x: 1000, y: 400, support: { kind: 'surface', surfaceId: 'windowTop:101', surfaceKind: 'windowTop', orientation: 'ledge' } });
+    h.timers.advance(33);
     h.host.setHidden(true);
     h.timers.advance(300);
-    expect(surfaces.cats.at(-1)).toBeNull();
+    // The attachment is kept (the provider serves the part of the edge the cat is on); only
+    // tab-strip interest stops.
+    expect(surfaces.cats.at(-1)).toEqual({ x: 1000, y: 400, surfaceId: 'windowTop:101', hidden: true });
     expect(surfaces.calls.at(-1)!.maxAgeMs).toBe(5000);
     h.host.stop();
   });

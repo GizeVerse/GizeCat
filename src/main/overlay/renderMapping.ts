@@ -36,6 +36,8 @@ export interface RenderMapContext {
   /** Cat hidden by the user: the renderer draws nothing. */
   hidden: boolean;
   simNow: number;
+  /** settings.behavior.movementSpeed (the renderer times its wall-transition fades with it); absent = 1. */
+  movementSpeed?: number;
 }
 
 /** Cat bounds plus emote/body margins, physical px. */
@@ -91,6 +93,7 @@ export function mapRenderState(out: SimOutput, appearance: Appearance, ctx: Rend
     shadow: appearance.shadow,
     animSpeed: appearance.animationSpeed,
     reaction: out.reaction ? { kind: out.reaction.kind, at: out.reaction.at } : null,
+    ...(ctx.movementSpeed !== undefined && Number.isFinite(ctx.movementSpeed) && ctx.movementSpeed > 0 ? { movementSpeed: ctx.movementSpeed } : {}),
   };
 }
 

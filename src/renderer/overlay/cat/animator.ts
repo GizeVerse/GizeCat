@@ -3,7 +3,7 @@
 // look-at, one-off reactions, mood on tail/ears/pupils, purr vibration, pendulum
 // swing while held).
 import type { AnimClip, CatReaction, CatReactionKind } from '../../../shared/cat';
-import { climbEngagement, crossFadeMs, gaitHz, isGait, sampleClip, type ClipContext } from './clips';
+import { climbEngagement, crossFadeMs, gaitHz, isGait, isWallManoeuvre, sampleClip, wallTimeScale, type ClipContext } from './clips';
 import { clamp, clamp01, damp, easeOut, lerp, noise1, pulse, smooth, sseg, TAU } from './math';
 import { blendPose, copyPose, createPose, sanitizePose, type Pose } from './pose';
 import { TORSO_T } from './rig';
@@ -24,6 +24,11 @@ export interface AnimInput {
   animSpeed: number;
   /** One-off body-language reaction from the snapshot; plays once per distinct `at`. */
   reaction?: CatReaction | null;
+  /**
+   * settings.behavior.movementSpeed (absent = 1): the mover's wall manoeuvres take 1/movementSpeed
+   * as long, and so do the fades onto and off the wall and the off-wall shadow delay.
+   */
+  movementSpeed?: number;
 }
 
 /** Length (s at animation speed 1) of each reaction layer. */
@@ -68,8 +73,8 @@ const CLIMB_DIR_DIP_S = 4;
 const CLIMB_DESCEND_RATE = 4;
 /**
  * After leaving the wall the anchor still travels for a while (pulling up onto the ledge, stepping
- * down to the floor): the ground shadow fades back in over this window (s after the clip changed),
- * so it does not appear under a cat that is still in the air beside the window.
+ * down to the floor): the ground shadow fades back in over this window (s after the clip changed, at
+ * movement speed 1), so it does not appear under a cat that is still in the air beside the window.
  */
 const OFF_WALL_SHADOW_S: readonly [number, number] = [0.15, 0.5];
 
@@ -131,7 +136,10 @@ export class CatAnimator {
   private climbDir = 1;
   /** Eased 0 (up or clinging) .. 1 (climbing down). */
   private climbDescend = 0;
+  /** Seconds since the clip left 'climb', in manoeuvre time (wall clock times offWallRate). */
   private offWallS = Number.POSITIVE_INFINITY;
+  /** Movement speed of the manoeuvre off the wall (1 for the quick ways off it). */
+  private offWallRate = 1;
 
   /** `at` of the newest reaction seen; each distinct one is considered once. */
   private reactionSeen = Number.NaN;
@@ -193,8 +201,11 @@ export class CatAnimator {
         this.climbDir = 1;
         this.climbDescend = 0;
       }
-      if (this.clip === 'climb' && input.clip !== 'climb') this.offWallS = 0;
-      this.fadeDur = first ? 0 : crossFadeMs(this.clip, input.clip) / 1000;
+      if (this.clip === 'climb' && input.clip !== 'climb') {
+        this.offWallS = 0;
+        this.offWallRate = isWallManoeuvre(this.clip, input.clip) ? wallTimeScale(input.movementSpeed) : 1;
+      }
+      this.fadeDur = first ? 0 : crossFadeMs(this.clip, input.clip, input.movementSpeed) / 1000;
       this.fadeElapsed = 0;
       this.clip = input.clip;
       this.clipStart = input.clipStartedAt;
@@ -222,7 +233,7 @@ export class CatAnimator {
       c.descend = this.climbDescend;
       this.offWallS = Number.POSITIVE_INFINITY;
     } else if (this.offWallS < OFF_WALL_SHADOW_S[1]) {
-      this.offWallS += dt;
+      this.offWallS += dt * this.offWallRate;
     }
     if (isGait(input.clip)) this.cycle += dir * gaitHz(input.clip, gaitSpeed) * dt * animSpeed;
     // Gait clips only use the cycle's fractional part; keep it finite and small (a backwards climb counts down).

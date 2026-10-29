@@ -63,6 +63,20 @@ export function redactString(input: string): string {
   return out;
 }
 
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Replaces the user's profile folder (C:\Users\<account>) with %USERPROFILE% wherever it appears
+ * in `input`: either slash style, doubled backslashes (JSON text), any letter case. A profile
+ * that is not at least two levels deep (a drive root) is left alone.
+ */
+export function scrubUserProfile(input: string, profile: string): string {
+  const parts = profile.split(/[\\/]+/).filter((p) => p.length > 0);
+  if (parts.length < 2) return input;
+  const pattern = new RegExp(`${parts.map(escapeRegExp).join('[\\\\/]+')}(?![\\w-])`, 'gi');
+  return input.replace(pattern, '%USERPROFILE%');
+}
+
 export function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEYS.has(key.toLowerCase());
 }

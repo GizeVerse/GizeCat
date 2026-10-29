@@ -9,6 +9,10 @@ import type { LedgeSurface, SurfaceKind, SurfacePhase, WallSurface } from '../..
 import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
 import { MOVEMENT } from './constants';
 
+/** Most ledges, and most walls, the cat considers per tick. */
+const MAX_PER_KIND = 64;
+const NO_IDS: ReadonlySet<string> = new Set<string>();
+
 /** One display's share of a floor. */
 export interface FloorPiece {
   displayId: string;
@@ -291,20 +295,11 @@ export class WorldModel {
    * area, leave head room for the cat and be wide enough. Window tops and tab strips must
    * also keep clear of the floor; a taskbar only has to be above it (a docked taskbar below
    * the work area is the floor already, and top or side taskbars are a ceiling or a wall).
-   * Duplicate ids keep their first entry.
+   * Duplicate ids keep their first entry. At most `maxCount` are kept, in list order; the
+   * ids in `keep` (what the cat stands on or is heading for) always make the cut.
    */
-  ledgeSurfaces(ledges: readonly LedgeSurface[], maxCount = 64): Surface[] {
-    const out: Surface[] = [];
-    const seen = new Set<string>();
-    for (const l of ledges) {
-      if (out.length >= maxCount) break;
-      if (!l || seen.has(l.id)) continue;
-      const s = this.ledgeSurface(l, false);
-      if (!s) continue;
-      seen.add(l.id);
-      out.push(s);
-    }
-    return out;
+  ledgeSurfaces(ledges: readonly LedgeSurface[], keep: ReadonlySet<string> = NO_IDS, maxCount = MAX_PER_KIND): Surface[] {
+    return capped(ledges, maxCount, keep, (l) => this.ledgeSurface(l, false));
   }
 
   /** One ledge as a walkable surface, or null. `relaxed` keeps a ledge the cat already stands on (geometry sanity only). */
@@ -371,20 +366,10 @@ export class WorldModel {
    * Converts window sides into climbable walls (duplicates keep their first entry). The cat
    * hangs outside the window, so there must be room for its body beside the edge on the
    * same display; the climbable stretch runs from just below the top corner (head over the
-   * edge) down to the bottom end or the floor, whichever is higher.
+   * edge) down to the bottom end or the floor, whichever is higher. Capped like ledgeSurfaces.
    */
-  wallTracks(walls: readonly WallSurface[], maxCount = 64): WallTrack[] {
-    const out: WallTrack[] = [];
-    const seen = new Set<string>();
-    for (const w of walls) {
-      if (out.length >= maxCount) break;
-      if (!w || seen.has(w.id)) continue;
-      const t = this.wallTrack(w);
-      if (!t) continue;
-      seen.add(w.id);
-      out.push(t);
-    }
-    return out;
+  wallTracks(walls: readonly WallSurface[], keep: ReadonlySet<string> = NO_IDS, maxCount = MAX_PER_KIND): WallTrack[] {
+    return capped(walls, maxCount, keep, (w) => this.wallTrack(w));
   }
 
   wallTrack(w: WallSurface): WallTrack | null {
@@ -478,6 +463,28 @@ export class WorldModel {
       vy: 0,
     };
   }
+}
+
+/**
+ * Converts surfaces in list order, skipping invalid ones and later duplicates of an id, and
+ * keeps at most `maxCount`: the ids in `keep` always, the others first come first served.
+ */
+function capped<T extends { id: string }, R>(items: readonly T[], maxCount: number, keep: ReadonlySet<string>, convert: (item: T) => R | null): R[] {
+  const out: R[] = [];
+  const seen = new Set<string>();
+  const room = Math.max(0, maxCount - keep.size);
+  let others = 0;
+  for (const item of items) {
+    if (!item || seen.has(item.id)) continue;
+    const kept = keep.has(item.id);
+    if (!kept && others >= room) continue;
+    const r = convert(item);
+    if (r === null) continue;
+    seen.add(item.id);
+    out.push(r);
+    if (!kept) others++;
+  }
+  return out;
 }
 
 function clampToWorkArea(d: DisplayGeometry, p: Point): Point {

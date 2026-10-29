@@ -12,7 +12,7 @@ import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
 import type { DisplayService, Logger, Unsubscribe } from '../contracts';
 import type { WindowRegistry } from '../security';
 import { crashBackoff, boundsDiffer, planOverlaySync } from './displayDiff';
-import { decideInteractive } from '../../core/interaction/clickThrough';
+import { clipRects, decideInteractive } from '../../core/interaction/clickThrough';
 import type { GestureRecognizer } from '../../core/interaction/gestures';
 import { createOverlayShell, createOverlayWindow, overlayUrl, type OverlayShell } from './overlayWindow';
 import { displaysShowingCat, hiddenRenderState, mapRenderState } from './renderMapping';
@@ -43,6 +43,9 @@ const HANG_RECREATE_MS = 5000;
 const WATCHDOG_MAX_STEP_MS = 250;
 /** Every overlay receives the TaskbarCreated broadcast: forward one notification per broadcast. */
 const TASKBAR_CREATED_DEDUPE_MS = 1000;
+const NO_RECTS: readonly Rect[] = Object.freeze([]);
+/** Excluded when the exclusion source fails: no hover anywhere (an ongoing drag keeps its captured pointer). */
+const EVERYWHERE: readonly Rect[] = Object.freeze([{ x: -1e9, y: -1e9, width: 2e9, height: 2e9 }]);
 
 export interface OverlayInfo {
   displayId: string;
@@ -88,6 +91,13 @@ export interface OverlayManagerOptions {
   shell?: OverlayShell;
   /** Explorer re-created the taskbar (TaskbarCreated broadcast): e.g. the taskbar tracker's rediscover. */
   onTaskbarCreated?: () => void;
+  /**
+   * Screen areas (px) the overlays never take the mouse over, whatever the cat does: the taskbar
+   * tracker's on-screen taskbars and auto-hide reveal bands. Read on every cursor poll, so it must
+   * be cheap (no OS call). A throwing source counts as the whole screen for that poll: no overlay
+   * takes the mouse (an ongoing drag keeps its captured pointer).
+   */
+  excludedRectsPx?: () => readonly Rect[];
 }
 
 export interface OverlayManager {
@@ -164,6 +174,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
   let disposed = false;
   let lastWatchdogAt: number | null = null;
   let lastTaskbarCreatedAt: number | null = null;
+  let excludedErrors = 0;
   const topmostReasserts: number[] = [];
   const shell = opts.shell ?? createOverlayShell(log.child('shell'));
 
@@ -293,6 +304,14 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     });
     win.on('query-session-end', () => opts.onSessionEnd());
     win.on('session-end', () => opts.onSessionEnd());
+    // Closed from outside (WM_CLOSE from another process): 'closed' only fires once the window is
+    // gone, so the property is removed here, before Electron destroys it. Our own paths go through
+    // destroyEntry, which calls destroy() and never emits 'close'.
+    win.on('close', () => {
+      if (!e.nonRude || win.isDestroyed()) return;
+      shell.beforeDestroy(win, e.displayId);
+      e.nonRude = false;
+    });
     win.on('closed', () => {
       byWc.delete(e.wcId);
       if (entries.get(e.displayId) === e) entries.delete(e.displayId);
@@ -555,10 +574,23 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     return distance(cursorPx, e.pointerPx) > LOST_PRESS_MOVE_DIP * e.geometry.scaleFactor;
   }
 
+  /** Screen areas no overlay takes the mouse over (taskbars); all of it when the source failed. */
+  function excludedRects(): readonly Rect[] {
+    if (!opts.excludedRectsPx) return NO_RECTS;
+    try {
+      return opts.excludedRectsPx();
+    } catch (err) {
+      excludedErrors++;
+      if (excludedErrors <= 3 || excludedErrors % 1000 === 0) log.warn('click-through exclusions failed; staying click-through', { error: err, count: excludedErrors });
+      return EVERYWHERE;
+    }
+  }
+
   function updateInteractivity(cursorPx: Point | null, blocked: boolean): void {
     const now = opts.clock();
     watchdog(now);
     const buttonDown = opts.isLeftButtonDown();
+    const excluded = forced === null ? excludedRects() : NO_RECTS;
     for (const e of entries.values()) {
       if (!alive(e)) continue;
       if (e.pressed && pressLost(e, buttonDown, cursorPx, now)) {
@@ -572,6 +604,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
         interactive = decideInteractive({
           cursor: cursorPx,
           hitRects: region.rects,
+          excludeRects: excluded,
           interactive: !e.ignoreMouse,
           interactionsEnabled: !blocked,
           visible: e.active,
@@ -617,8 +650,10 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     isCursorOverCat(cursorPx) {
       if (!cursorPx) return false;
       const now = opts.clock();
+      // Over a taskbar the pointer belongs to the taskbar, not to the cat's paws drawn over it.
+      const excluded = excludedRects();
       for (const e of entries.values()) {
-        for (const r of effectiveRegions(e, now).rects) {
+        for (const r of clipRects(effectiveRegions(e, now).rects, excluded)) {
           if (cursorPx.x >= r.x && cursorPx.x < r.x + r.width && cursorPx.y >= r.y && cursorPx.y < r.y + r.height) return true;
         }
       }

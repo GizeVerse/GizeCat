@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseInjectedSurfaces } from '../../../src/main/surfaces';
 import {
+  bareWindowSurface,
   buildWindowSurfaces,
   computeOpenSpans,
   coversWorkArea,
@@ -47,12 +48,11 @@ describe('span selection', () => {
     [0, 100],
     [150, 400],
   ] as const;
-  it('prefers the span holding the attachment, else the longest; strict mode reports a covered attachment', () => {
+  it('prefers the span holding the attachment, else the longest (a covered attachment is not an error)', () => {
     expect(pickSpan(spans, null, 12)).toEqual([150, 400]);
     expect(pickSpan(spans, 50, 12)).toEqual([0, 100]);
     expect(pickSpan(spans, 108, 12)).toEqual([0, 100]);
     expect(pickSpan(spans, 125, 12)).toEqual([150, 400]);
-    expect(pickSpan(spans, 125, 12, true)).toBeNull();
     expect(pickSpan([], null, 12)).toBeNull();
   });
 });
@@ -112,6 +112,51 @@ describe('built surfaces', () => {
     const b = buildWindowSurfaces('7', r, spans, displays, META, { source, y: 200, x0: 341, x1: 1250, rest: null, focusX: null, confidence: 1 }, null);
     expect(b.strip).toBeNull();
     expect(b.windowTop).toBeNull();
+    expect(b.top).toBeNull();
+  });
+
+  describe('with a tab strip', () => {
+    const r = rect(300, 200, 1100, 700);
+    const source = {
+      id: 'tabStrip:7', kind: 'tabStrip', orientation: 'ledge', ownerId: '7', displayId: '1', phase: 'stable', vx: 0, vy: 0, confidence: 1, validatedAt: 1, excluded: false, y: 200, x0: 341, x1: 1250, rest: null, focusX: null,
+    } as const;
+    const placed = { source, y: 200, x0: 341, x1: 1250, rest: null, focusX: null, confidence: 1 };
+
+    it('walls pull up onto the strip when the open edge runs from their corner to it (the sim judges the distance)', () => {
+      const b = buildWindowSurfaces('7', r, computeOpenSpans(r, [], displays, OPTS), displays, META, placed, null);
+      expect(b.top).toBe(b.strip);
+      expect([b.left?.topLedgeId, b.right?.topLedgeId]).toEqual(['tabStrip:7', 'tabStrip:7']);
+      // A window above cutting the edge between the left corner and the strip: no way up there.
+      const cut = buildWindowSurfaces('7', r, computeOpenSpans(r, [rect(320, 150, 15, 100)], displays, OPTS), displays, META, placed, null);
+      expect([cut.left?.topLedgeId, cut.right?.topLedgeId]).toEqual([null, 'tabStrip:7']);
+    });
+
+    it('keeps the plain top listed (and named by the walls) under a cat standing on it', () => {
+      const spans = computeOpenSpans(r, [], displays, OPTS);
+      const b = buildWindowSurfaces('7', r, spans, displays, META, placed, { surfaceId: 'windowTop:7', x: 1350, y: 200 });
+      expect(b.top).toBe(b.windowTop);
+      expect(b.top).toMatchObject({ id: 'windowTop:7', x0: 308, x1: 1392 });
+      expect(b.strip).toMatchObject({ id: 'tabStrip:7' });
+      expect([b.left?.topLedgeId, b.right?.topLedgeId]).toEqual(['windowTop:7', 'windowTop:7']);
+    });
+
+    it('carries a strip that vanished under the cat along the plain top edge, under the strip id', () => {
+      const spans = computeOpenSpans(r, [], displays, OPTS);
+      const b = buildWindowSurfaces('7', r, spans, displays, META, null, { surfaceId: 'tabStrip:7', x: 700, y: 200 });
+      expect(b.strip).toBeNull();
+      expect(b.top).toMatchObject({ id: 'tabStrip:7', kind: 'tabStrip', x0: 308, x1: 1392, confidence: 0.5 });
+      expect(b.left?.topLedgeId).toBe('tabStrip:7');
+      // Nobody on it: the plain top is listed again.
+      expect(buildWindowSurfaces('7', r, spans, displays, META, null, null).top).toMatchObject({ id: 'windowTop:7' });
+    });
+  });
+
+  it('the bare edge of a covered surface keeps the frame minus the corner insets', () => {
+    const r = rect(300, 400, 800, 500);
+    expect(bareWindowSurface('windowTop:7', r, 8, displays, META)).toMatchObject({ id: 'windowTop:7', kind: 'windowTop', ownerId: '7', y: 400, x0: 308, x1: 1092, displayId: '1' });
+    expect(bareWindowSurface('windowSide:7:right', r, 8, displays, { ...META, vxRight: 40 })).toMatchObject({ kind: 'windowSide', side: 'right', x: 1100, y0: 408, y1: 892, vx: 40, topLedgeId: null });
+    expect(bareWindowSurface('taskbar:7', r, 8, displays, META)).toBeNull();
+    expect(bareWindowSurface('windowTop:7', rect(0, 0, 10, 10), 8, displays, META)).toBeNull();
   });
 });
 

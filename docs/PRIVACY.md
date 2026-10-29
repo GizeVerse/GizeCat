@@ -12,6 +12,9 @@ Desktop Cat is a local desktop companion. It has **no accounts, no telemetry, no
 | App windows | Win32 window events and enumeration: window rectangle, minimised/maximised state and the executable file name (e.g. `code.exe`), to pick a coarse category (code, browser, video…), to know where the cat can stand, and to recognise private apps. Other shown windows (dialogs, pop-ups) are enumerated for the same purposes. | Nothing persisted |
 | Window titles | Read **only while screen analysis is on** (a mode chosen, consent given, not privacy-paused), **only in memory**, **only** to check privacy exclusions (e.g. "password", "bank"), for every shown window including dialogs and pop-ups. Never logged, persisted or transmitted. While analysis is off, titles are not read at all. | Nothing |
 | Displays | Monitor geometry and scale factors | Nothing persisted |
+| Taskbars (v1.1) | Position of the taskbar windows (`Shell_TrayWnd` / `Shell_SecondaryTrayWnd`, found by class name), their auto-hide state (`SHAppBarMessage`) and how far an auto-hide taskbar is slid in — so the cat can ride it. Sampled a few times per second, faster only while it moves or the pointer is at its edge. No screenshots. | Nothing persisted |
+| Browser tab strips (v1.1, Edge and Chrome only) | A small helper program shipped with the app (`resources\native\DesktopCatUia.exe`) reads, through Windows UI Automation, only the **rectangles** of the tab strip, its tabs, the new-tab button and the window buttons, which tab is selected and how many tabs there are, and listens for tab-switch events — so the cat can walk on the strip without covering controls. It **never reads tab names, titles, addresses or page content**, never clicks, and never queries private/excluded windows. On by default; turn off with Settings → Behavior → *Walk on browser tabs* (the helper then never starts). It runs only while a browser window near the cat is relevant and exits when idle. | Nothing persisted, nothing sent |
+| Your startup entry (v1.1) | The app reads and writes only its own value `io.github.enesiltas.desktopcat` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (and reads the matching `…\Explorer\StartupApproved\Run` value, i.e. whether you disabled it in Task Manager). | The entry itself, while launch at sign-in is on |
 
 The clipboard is never read. `GetAsyncKeyState` is used only for the **left mouse button**, to end a drag safely.
 
@@ -19,7 +22,7 @@ The clipboard is never read. `GetAsyncKeyState` is used only for the **left mous
 
 All in `%APPDATA%\Desktop Cat\` (removed by deleting that folder; kept on uninstall unless you delete it):
 
-- `settings.json` (+ `settings.json.bak`, the previous version) — your preferences.
+- `settings.json` (+ `settings.json.bak`, the previous version) — your preferences, including the launch-at-sign-in state (preference, who decided it, and the program path last registered — which contains your Windows user folder; the diagnostics export does not include that path).
 - `cat-state.json` (+ `cat-state.json.bak`) — the cat's personality numbers (e.g. curiosity 0.62), mood numbers, counters (how often it was petted), learned favourite resting spots (display + horizontal position) and a short list of recent cat events ("nap", "pet"). **No window titles, app names, screenshots or text.**
 - Up to 3 `*.corrupt-<time>.json` copies per file, kept only if a file was unreadable, for inspection.
 - `secrets.json` — only if you enter an AI API key: the key encrypted with Windows DPAPI via Electron `safeStorage` (readable only by your Windows account). **No backup or quarantine copy of this file is ever kept; removing a key deletes it from disk.**
@@ -58,4 +61,4 @@ There is no automatic update check. Installing a new version is a manual action.
 
 ## Your controls
 
-Hide the cat (tray / `Ctrl+Alt+Shift+C`), pause it, turn off interactions (fully click-through), privacy-pause or disable screen analysis, revoke consent, clear history, reset personality, export diagnostics (a JSON file you can inspect before sharing), uninstall.
+Hide the cat (tray / `Ctrl+Alt+Shift+C`), pause it, turn off interactions (fully click-through), privacy-pause or disable screen analysis, revoke consent, clear history, reset personality, turn off *Walk on browser tabs*, *Play with the taskbar* or *Climb windows* (Settings → Behavior), turn off launch at sign-in (Settings → General, or Task Manager → Startup apps — the app never overrides a Task Manager disable), export diagnostics (a JSON file you can inspect before sharing), uninstall (also removes the startup entry).

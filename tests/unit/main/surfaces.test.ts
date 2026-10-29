@@ -236,12 +236,30 @@ describe('window top ledges', () => {
     expect(ids(list)).toEqual(['windowSide:101:left', 'windowSide:101:right']);
   });
 
-  it('flags private windows instead of hiding them (the sim never climbs or rests on them)', () => {
-    const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500), { excluded: true, processName: 'keepass.exe' }));
+  it('are never offered for private windows, which still cut the windows below them', () => {
+    const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500), { excluded: true, processName: 'keepass.exe' })).add(win('102', rect(200, 300, 300, 300)), false);
     const s = setup({ api });
-    const list = s.tick();
-    expect(ledge(list, 'windowTop:101').excluded).toBe(true);
-    expect(wall(list, 'windowSide:101:left').excluded).toBe(true);
+    expect(ids(s.tick()).filter((id) => id.includes(':101'))).toEqual([]);
+    expect(ledge(s.tick(), 'windowTop:102')).toMatchObject({ x0: 208, x1: 492 });
+    for (const id of ['windowTop:101', 'windowSide:101:left', 'tabStrip:101']) expect(s.provider.getSurface(id, s.now()), id).toBeNull();
+  });
+
+  it('a window turning private under the cat is unlisted at once; the surface it is on is still served, flagged, until it leaves', () => {
+    const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500), { processName: 'keepass.exe' }));
+    const s = setup({ api });
+    s.tick();
+    s.provider.noteCat({ x: 700, y: 400, surfaceId: 'windowTop:101' });
+    expect(ids(s.tick())).toContain('windowTop:101');
+    // The user adds keepass.exe to the exclusions: the tracker re-lists every window.
+    api.update('101', { excluded: true });
+    s.tracker.setExclusions(['keepass.exe'], []);
+    expect(ids(s.run(100)).filter((id) => id.includes(':101'))).toEqual([]);
+    expect(s.provider.getSurface('windowTop:101', s.now())).toMatchObject({ id: 'windowTop:101', excluded: true, x0: 308, x1: 1092 });
+    // Not offered for anything else: no climbing it, no other ledge of it.
+    expect(s.provider.getSurface('windowSide:101:left', s.now())).toBeNull();
+    // Off it, nothing of it is served any more.
+    s.provider.noteCat({ x: 200, y: 1152, surfaceId: null });
+    expect(s.provider.getSurface('windowTop:101', s.now() + 5)).toBeNull();
   });
 
   it('keep the same array and objects while nothing changes', () => {
@@ -443,7 +461,7 @@ describe('getSurface (live re-read)', () => {
     expect(s.provider.getSurface('windowTop:101', s.now() + 40)).toBeNull();
   });
 
-  it('is null when the cat’s attachment point is covered, and for stale or malformed ids', () => {
+  it('a covered attachment point is not a loss: an open part that does not hold the spot (calm drop), the bare edge when none is left', () => {
     const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
     const s = setup({ api });
     s.tick();
@@ -452,10 +470,115 @@ describe('getSurface (live re-read)', () => {
     api.foregroundId = 'dlg';
     api.fire('foreground', 'dlg');
     s.run(200);
-    expect(s.provider.getSurface('windowTop:101', s.now())).toBeNull();
+    const covered = s.provider.getSurface('windowTop:101', s.now());
+    expect(covered).toMatchObject({ id: 'windowTop:101', y: 400, x0: 308, x1: 650 });
     s.provider.noteCat({ x: 655, y: 400, surfaceId: 'windowTop:101' });
     expect(s.provider.getSurface('windowTop:101', s.now() + 5)).toMatchObject({ x0: 308, x1: 650 });
+    // A window in front over the whole top edge: still there, unlisted, low confidence.
+    api.extras = [{ id: 'big', rect: rect(250, 300, 1000, 300) }];
+    api.foregroundId = 'big';
+    api.fire('foreground', 'big');
+    const list = s.run(200);
+    expect(byId(list, 'windowTop:101')).toBeUndefined();
+    expect(s.provider.getSurface('windowTop:101', s.now())).toMatchObject({ id: 'windowTop:101', y: 400, x0: 308, x1: 1092, confidence: 0.3 });
+    // ... but only for the cat standing on it.
+    s.provider.noteCat({ x: 100, y: 1152, surfaceId: null });
+    expect(s.provider.getSurface('windowTop:101', s.now() + 5)).toBeNull();
     for (const id of ['windowTop:999', 'windowTop', 'windowSide:101:up', 'windowTop:101:extra', 'nope:101', '']) expect(s.provider.getSurface(id, s.now())).toBeNull();
+  });
+
+  describe('follows the riding cat however far the window moved since the last tick', () => {
+    // The host notes the cat from the previous tick's output (old frame), then reads the surfaces.
+    const hostTick = (s: ReturnType<typeof setup>, cat: { x: number; y: number; surfaceId: string }, ms = 33): void => {
+      s.provider.noteCat(cat);
+      s.tick(ms);
+    };
+
+    it('a fast drag with the cat near the trailing end, and a same-size jump (snap, Win+Arrow)', () => {
+      const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
+      const s = setup({ api });
+      s.tick();
+      const cat = { x: 338, y: 400, surfaceId: 'windowTop:101' };
+      api.fire('moveStart', '101');
+      hostTick(s, cat, 16);
+      for (let i = 1; i <= 6; i++) {
+        // 50 px per 33 ms tick (about 1500 px/s), 30 px from the trailing end of the span.
+        api.update('101', { rect: rect(300 + 50 * i, 400, 800, 500) });
+        hostTick(s, cat);
+        expect(s.provider.getSurface('windowTop:101', s.now()), `tick ${i}`).toMatchObject({ id: 'windowTop:101', y: 400, x0: 308 + 50 * i, x1: 1092 + 50 * i });
+        // The sim carries the cat with its ledge.
+        cat.x += 50;
+      }
+      api.fire('moveEnd', '101');
+      s.run(300);
+      hostTick(s, cat);
+      // A 400 px jump between two ticks (no move events).
+      api.update('101', { rect: rect(1000, 400, 800, 500) });
+      expect(s.provider.getSurface('windowTop:101', s.now() + 5)).toMatchObject({ x0: 1008, x1: 1792 });
+      expect(ledge(s.tick(), 'windowTop:101')).toMatchObject({ x0: 1008, x1: 1792 });
+    });
+
+    it('picks the part the cat was carried onto when the edge moved as a whole', () => {
+      const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
+      // A palette above 101 splits its top: [308, 650) and [700, 1092). It moves with 101.
+      api.extras = [{ id: 'palette', rect: rect(650, 350, 50, 150) }];
+      const s = setup({ api });
+      s.tick();
+      hostTick(s, { x: 720, y: 400, surfaceId: 'windowTop:101' });
+      expect(ledge(s.tick(), 'windowTop:101')).toMatchObject({ x0: 700, x1: 1092 });
+      // Both jump 300 px right before the next read: carried to x=1020, the cat is on the right
+      // part ([1000, 1392)), although its old spot now lies on the left one ([608, 950)).
+      api.update('101', { rect: rect(600, 400, 800, 500) });
+      api.extras = [{ id: 'palette', rect: rect(950, 350, 50, 150) }];
+      api.foregroundId = 'palette';
+      api.fire('foreground', 'palette');
+      expect(ledge(s.run(300), 'windowTop:101')).toMatchObject({ x0: 1000, x1: 1392 });
+      expect(s.provider.getSurface('windowTop:101', s.now() + 5)).toMatchObject({ x0: 1000, x1: 1392 });
+    });
+
+    it('keeps the cat where it was on a part bounded by a window that stayed put', () => {
+      const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
+      // A window above 101 (not moving) splits its top: [308, 650) and [850, 1092).
+      api.extras = [{ id: 'dlg', rect: rect(650, 350, 200, 150) }];
+      const s = setup({ api });
+      s.tick();
+      hostTick(s, { x: 640, y: 400, surfaceId: 'windowTop:101' });
+      // 101 slides 60 px right under the cat: its left part shrinks to [368, 650) and the right
+      // one, now longer, is [850, 1152). The carried spot (700) is covered; the cat stays at 640.
+      api.update('101', { rect: rect(360, 400, 800, 500) });
+      s.provider.noteCat({ x: 640, y: 400, surfaceId: 'windowTop:101' });
+      expect(s.provider.getSurface('windowTop:101', s.now() + 5)).toMatchObject({ x0: 368, x1: 650 });
+    });
+
+    it('a window resized from the edge the cat stands near keeps serving its top', () => {
+      const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
+      const s = setup({ api });
+      s.tick();
+      hostTick(s, { x: 320, y: 400, surfaceId: 'windowTop:101' });
+      api.fire('moveStart', '101');
+      // Resized from the left edge, past the cat: the cat stays where it was (now off the edge).
+      api.update('101', { rect: rect(400, 400, 700, 500) });
+      expect(s.provider.getSurface('windowTop:101', s.now() + 5)).toMatchObject({ x0: 408, x1: 1092 });
+    });
+
+    it('a wall dragged vertically under a climbing cat', () => {
+      const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
+      // A tool window beside the right side splits it: [408, 600) and [700, 892).
+      api.extras = [{ id: 'tool', rect: rect(1090, 600, 100, 100) }];
+      const s = setup({ api });
+      s.tick();
+      hostTick(s, { x: 1100, y: 860, surfaceId: 'windowSide:101:right' });
+      expect(wall(s.tick(), 'windowSide:101:right')).toMatchObject({ y0: 700, y1: 892 });
+      api.fire('moveStart', '101');
+      hostTick(s, { x: 1100, y: 860, surfaceId: 'windowSide:101:right' });
+      api.update('101', { rect: rect(300, 340, 800, 500) });
+      // Carried up 60 px with the window: still on the lower part, whose bottom moved up too.
+      expect(s.provider.getSurface('windowSide:101:right', s.now() + 5)).toMatchObject({ x: 1100, y0: 700, y1: 832 });
+      api.update('101', { rect: rect(300, 100, 800, 500) });
+      s.provider.noteCat({ x: 1100, y: 800, surfaceId: 'windowSide:101:right' });
+      // Dragged 240 px further up: the whole side is now above the tool window.
+      expect(s.provider.getSurface('windowSide:101:right', s.now() + 10)).toMatchObject({ y0: 108, y1: 592 });
+    });
   });
 
   it('shares one OS read between sim sub-steps of the same moment', () => {
@@ -478,8 +601,9 @@ describe('tab strips', () => {
     let list = s.tick();
     expect(byId(list, 'windowTop:102')).toBeUndefined();
     expect(ledge(list, 'tabStrip:102')).toMatchObject({ y: 200, x0: 341, x1: 1250, rest: { x0: 341, x1: 1250 }, focusX: 500 });
-    // Walls cannot pull up onto a strip that stops short of the corners.
-    expect(wall(list, 'windowSide:102:left').topLedgeId).toBeNull();
+    // The walls pull up onto the strip that replaces the top (the open edge runs from each
+    // corner to it); whether a corner is close enough is the sim's call.
+    expect([wall(list, 'windowSide:102:left').topLedgeId, wall(list, 'windowSide:102:right').topLedgeId]).toEqual(['tabStrip:102', 'tabStrip:102']);
     // The window moves; the cached strip moves with it.
     api.update('102', { rect: rect(350, 230, 1100, 700) });
     api.fire('moveStart', '102');
@@ -494,18 +618,38 @@ describe('tab strips', () => {
     expect(ledge(s.run(200), 'tabStrip:102')).toMatchObject({ x0: 391, x1: 900, rest: { x0: 391, x1: 900 }, focusX: 550 });
   });
 
-  it('keep a riding cat supported across strip discovery and loss', () => {
+  it('never swap the ledge under the cat: a strip found while it is on the top waits until it leaves; a lost one goes on along the edge', () => {
     const api = new SurfaceApi().add(browser('102'));
     const s = setup({ api });
     s.tick();
-    s.tabs!.ledges = [stripLedge('102')];
+    // On the plain top, right of where the strip will end (over the caption buttons).
+    s.provider.noteCat({ x: 1350, y: 200, surfaceId: 'windowTop:102' });
     s.tick();
-    // The plain top edge is still physically there for a cat that was standing on it.
+    s.tabs!.ledges = [stripLedge('102')];
+    let list = s.tick();
+    expect(ledge(list, 'windowTop:102')).toMatchObject({ y: 200, x0: 308, x1: 1392 });
+    expect(byId(list, 'tabStrip:102')).toBeUndefined();
+    expect([wall(list, 'windowSide:102:left').topLedgeId, wall(list, 'windowSide:102:right').topLedgeId]).toEqual(['windowTop:102', 'windowTop:102']);
     expect(s.provider.getSurface('windowTop:102', s.now())).toMatchObject({ kind: 'windowTop', x0: 308, x1: 1392, y: 200 });
+    // It jumps off: the strip takes over.
+    s.provider.noteCat({ x: 1500, y: 1152, surfaceId: null });
+    list = s.tick();
+    expect(byId(list, 'windowTop:102')).toBeUndefined();
+    expect(ledge(list, 'tabStrip:102')).toMatchObject({ x0: 341, x1: 1250 });
+    expect(wall(list, 'windowSide:102:left').topLedgeId).toBe('tabStrip:102');
+    // On the strip, the strip is lost (helper restarted): the ledge goes on along the top edge.
+    s.provider.noteCat({ x: 700, y: 200, surfaceId: 'tabStrip:102' });
+    s.tick();
     s.tabs!.ledges = [];
-    const list = s.tick();
-    expect(ledge(list, 'windowTop:102')).toBeTruthy();
+    list = s.tick();
+    expect(ledge(list, 'tabStrip:102')).toMatchObject({ kind: 'tabStrip', y: 200, x0: 308, x1: 1392, confidence: 0.5 });
+    expect(byId(list, 'windowTop:102')).toBeUndefined();
     expect(s.provider.getSurface('tabStrip:102', s.now() + 5)).toMatchObject({ id: 'tabStrip:102', kind: 'tabStrip', y: 200, x0: 308, confidence: 0.5 });
+    // Off it, the plain top is back.
+    s.provider.noteCat({ x: 1500, y: 1152, surfaceId: null });
+    list = s.tick();
+    expect(ledge(list, 'windowTop:102')).toMatchObject({ x0: 308, x1: 1392 });
+    expect(byId(list, 'tabStrip:102')).toBeUndefined();
   });
 
   it('keep their objects when the service returns a new list with the same content', () => {
@@ -558,7 +702,7 @@ describe('tab strips', () => {
     expect(ids(s.tick())).toContain('tabStrip:102');
   });
 
-  it('get interest for browser windows near the cat and the foreground one, never private ones', () => {
+  it('get interest only for browser windows within reach of the cat (the foreground one is no exception), never private ones', () => {
     const api = new SurfaceApi()
       .add(browser('104', rect(300, 400, 800, 400)))
       .add(browser('105', rect(1300, 100, 500, 400)))
@@ -569,20 +713,40 @@ describe('tab strips', () => {
     s.provider.noteCat({ x: 420, y: 395, surfaceId: null });
     s.tick();
     const first = s.tabs!.interest.at(-1)!;
-    expect(first.ids).toEqual(['105', '104']);
+    // The foreground browser is far from the cat: it is not polled.
+    expect(first.ids).toEqual(['104']);
     // Rate-limited.
     const n = s.tabs!.interest.length;
     s.tick(100);
     expect(s.tabs!.interest.length).toBe(n);
     s.run(600);
-    expect(s.tabs!.interest.every((c) => !c.ids.includes('106') && !c.ids.includes('107'))).toBe(true);
-    // Hidden cat: interest is withdrawn once, then nothing more is sent.
-    s.provider.noteCat(null);
+    expect(s.tabs!.interest.every((c) => !c.ids.includes('105') && !c.ids.includes('106') && !c.ids.includes('107'))).toBe(true);
+    // The cat comes over to it.
+    s.provider.noteCat({ x: 1500, y: 120, surfaceId: null });
+    s.run(600);
+    expect(s.tabs!.interest.at(-1)!.ids).toEqual(['105']);
+    // Hidden cat (still on its surface): interest is withdrawn once, then nothing more is sent.
+    s.provider.noteCat({ x: 1500, y: 100, surfaceId: 'windowTop:105', hidden: true });
     s.run(600);
     expect(s.tabs!.interest.at(-1)!.ids).toEqual([]);
     const sent = s.tabs!.interest.length;
     s.run(2000);
     expect(s.tabs!.interest.length).toBe(sent);
+  });
+
+  it('a hidden cat keeps its attachment: the part of a split top it is on is still served', () => {
+    const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
+    api.extras = [{ id: 'dlg', rect: rect(650, 350, 200, 150) }];
+    const s = setup({ api });
+    s.tick();
+    s.provider.noteCat({ x: 1000, y: 400, surfaceId: 'windowTop:101' });
+    expect(ledge(s.tick(), 'windowTop:101')).toMatchObject({ x0: 850, x1: 1092 });
+    for (let i = 0; i < 8; i++) {
+      s.provider.noteCat({ x: 1000, y: 400, surfaceId: 'windowTop:101', hidden: true });
+      s.tick(500);
+    }
+    expect(ledge(s.tick(), 'windowTop:101')).toMatchObject({ x0: 850, x1: 1092 });
+    expect(s.provider.getSurface('windowTop:101', s.now())).toMatchObject({ x0: 850, x1: 1092 });
   });
 });
 

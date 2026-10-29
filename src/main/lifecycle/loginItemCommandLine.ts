@@ -130,6 +130,17 @@ export function startupApprovedEnabled(bytes: Uint8Array): boolean {
   return bytes[0] === 0x02 && (bytes.length === 1 || bytes[1] === 0x00);
 }
 
+/** What Electron's `enabled: false` writes as StartupApproved data: 03 and eleven zero bytes (no FILETIME). */
+export const ELECTRON_DISABLED_RECORD: readonly number[] = [0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+/**
+ * The bytes are exactly Electron's disabled record, so the app wrote them. Task Manager and
+ * Settings › Apps › Startup write 03 00 00 00 followed by the FILETIME of the disable.
+ */
+export function isElectronDisabledRecord(bytes: Uint8Array): boolean {
+  return bytes.length === ELECTRON_DISABLED_RECORD.length && ELECTRON_DISABLED_RECORD.every((b, i) => bytes[i] === b);
+}
+
 /** Windows paths compare case-insensitively (ordinal, invariant). */
 export function samePath(a: string, b: string): boolean {
   return a.toUpperCase() === b.toUpperCase();

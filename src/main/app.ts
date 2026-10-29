@@ -24,6 +24,7 @@ import { applyViewState, createViewStateMemory, startupPlan } from './ipc/startu
 import { appRootFrom, appVersion } from './lifecycle/appInfo';
 import type { CrashGuard } from './lifecycle/crashGuard';
 import { createLoginItemService, LOGIN_ITEM_NAME } from './lifecycle/loginItem';
+import { announceLaunchAtLogin } from './lifecycle/loginItemNotice';
 import { catContextMenuModel, type MenuContext } from './lifecycle/menuModel';
 import { createQuitSequence } from './lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndWindow } from './lifecycle/sessionEnd';
@@ -298,6 +299,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       os: { platform: process.platform, release: os.release(), arch: os.arch(), totalMemoryMB: Math.round(os.totalmem() / 1048576), locale: app.getLocale() },
       world: display.world,
       settings: settings.get(),
+      userProfile: os.homedir(),
       apiKeysStored: { anthropic: secrets.has('anthropic'), openaiCompatible: secrets.has('openai-compatible') },
       status: status(),
       cat: sim.debugInfo(),
@@ -374,6 +376,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
     onSessionEnd: () => sessionEnd.notify('overlay'),
     // Explorer restarted: new taskbar window handles.
     onTaskbarCreated: () => taskbars.rediscover('taskbar-created'),
+    // Taskbars and auto-hide reveal bands always get the mouse, whatever the cat does there.
+    excludedRectsPx: () => taskbars.clickGuardRects(),
     isLeftButtonDown: () => (win32.available ? win32.isLeftButtonDown() : null),
     clock: () => performance.now(),
   });
@@ -624,11 +628,25 @@ export function startApp(boot: AppBootstrap): RunningApp {
 
   // Opened by the app itself, not by the user: never request the foreground (see OpenOptions.activate).
   if (plan.openWelcome) settingsWindow.open('welcome', { activate: false });
+  // Startup turned on by default is announced once outside Settings too (loginItemNotice.ts).
+  attempt(log, 'launch at sign-in notice', () => {
+    announceLaunchAtLogin({
+      status: loginItem.status(),
+      test: boot.flags.test,
+      launchedAtLogin: boot.flags.launchedAtLogin,
+      surface: tray,
+      markShown: () => void loginItem.dismissNotice(),
+      openSettings: () => settingsWindow.open('general'),
+      logger: logger.child('login-item'),
+    });
+  });
 
   return {
     onSecondInstance() {
       const h = requireHost();
       log.info('second instance launched; surfacing the cat');
+      // A start by the user: work a sign-in boot skipped is done now (loginItem.ts).
+      attempt(log, 'login item reconcile', () => void loginItem.reconcileOnUserLaunch());
       if (h.hidden) h.setHidden(false);
       h.callCat();
       settingsWindow.open();

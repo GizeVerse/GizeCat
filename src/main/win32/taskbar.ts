@@ -3,7 +3,10 @@
 // Discovers the taskbars (Shell_TrayWnd and every Shell_SecondaryTrayWnd, by class name only),
 // follows their live window rects with cheap adaptive sampling (GetWindowRect ~0.6 µs) and turns
 // a BOTTOM AUTO-HIDE taskbar into a ledge surface while at least half of it is on screen.
-// SHAppBarMessage (cross-process, ~160 µs) is only a cross-check, called once per discovery.
+// SHAppBarMessage (cross-process, ~160 µs, INFERRED to stall while Explorer hangs) is only a
+// cross-check, queried on the discoveries that can change its answer (start, TaskbarCreated, display
+// changes, an edge move, a new primary window), never on the periodic reconcile.
+// It also reports the screen areas the overlays must never take the mouse over (clickGuardRects).
 //
 // Roles by edge: bottom auto-hide = ledge (surfaces()); bottom always-shown = floor (the work-area
 // floor already sits on its top, so it is not a ledge); top = ceiling, left/right = walls (out of
@@ -11,7 +14,7 @@
 //
 // Physical px, on Electron's per-monitor-v2 main thread. Every public method is guarded and never
 // throws; without Win32 the tracker is inert with available = false.
-import type { Point } from '../../shared/geometry';
+import type { Point, Rect } from '../../shared/geometry';
 import type { SimEvent } from '../../shared/sim';
 import type { LedgeSurface, SurfacePhase, TaskbarEdge } from '../../shared/surfaces';
 import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
@@ -21,6 +24,7 @@ import { BURST_SAMPLE_MS, IDLE_SAMPLE_MS, nextSampleDelay, type CadenceDecision,
 import {
   ABS_AUTOHIDE,
   dockedRectFor,
+  edgeBand,
   edgeFromAbe,
   edgeSign,
   fromRect,
@@ -30,6 +34,7 @@ import {
   rawContains,
   rawEqual,
   rawHeight,
+  rawIntersect,
   rawOverlapArea,
   rawWidth,
   spanOnMonitor,
@@ -74,6 +79,13 @@ export interface TaskbarTrackerHandle extends TaskbarTracker {
   rediscover(reason: TaskbarRediscoverReason): void;
   /** New display topology: taskbars are re-attributed to displays and rediscovered on the next sample. */
   setWorld(world: WorldGeometry): void;
+  /**
+   * Screen areas (px) the overlays must never take the mouse over, whatever the cat does: the
+   * live rect of every visible taskbar window (shown, sliding, or the strip of a hidden one) and,
+   * for auto-hide taskbars, the TASKBAR_CLICK_GUARD_DIP band along their monitor edge (also while
+   * hidden). From the last sample: no OS call, cheap enough for every cursor poll.
+   */
+  clickGuardRects(): Rect[];
 }
 
 export const TASKBAR_RECONCILE_MS = 10_000;
@@ -85,6 +97,12 @@ export const TASKBAR_RECONCILE_MS = 10_000;
 export const TASKBAR_EVENT_DEBOUNCE_MS = 250;
 /** A ledge exists while at least this share of the taskbar's thickness is on screen. */
 export const TASKBAR_LEDGE_MIN_FRACTION = 0.5;
+/**
+ * Depth (DIP, DPI-scaled) of the band along an auto-hide taskbar's monitor edge where the overlays
+ * stay click-through: the 1-2 px reveal strip plus a margin, so the overlay already ignores the
+ * mouse when the cursor reaches the strip (the cursor poll runs every 16 ms near the cat).
+ */
+export const TASKBAR_CLICK_GUARD_DIP = 6;
 /** After TaskbarCreated / a display change, discover once more after this delay (Explorer creates secondary taskbars late). */
 const FOLLOW_UP_MS = 2000;
 /** Rediscoveries forced by sampling (window gone, read failures, moved edge) are at most this frequent. */
@@ -97,7 +115,23 @@ const MONITOR_MATCH_TOLERANCE_PX = 2;
 
 type Role = 'ledge' | 'floor' | 'ceiling' | 'wall';
 
+/**
+ * Discoveries that query SHAppBarMessage: the ones whose cause can change its answer (auto-hide
+ * toggles and taskbar moves change the work area, which is a display change). The 10 s reconcile,
+ * read failures and a vanished secondary window reuse the cached answer.
+ */
+const APPBAR_QUERY_REASONS: ReadonlySet<TaskbarRediscoverReason> = new Set<TaskbarRediscoverReason>([
+  'start',
+  'taskbar-created',
+  'display-change',
+  'follow-up',
+  'geometry-changed',
+  'manual',
+]);
+
 interface AppBarInfo {
+  /** Primary taskbar window the answer was read for: a new window (Explorer restarted) is queried again. */
+  primary: Hwnd | null;
   state: number | null;
   pos: { edge: number; rect: RawRect } | null;
   at: number;
@@ -168,6 +202,7 @@ export function createUnavailableTaskbarTracker(reason: string): TaskbarTrackerH
     stop: () => undefined,
     sample: () => IDLE_SAMPLE_MS,
     taskbars: () => [],
+    clickGuardRects: () => [],
     surfaces: () => [],
     drainEvents: () => [],
     debugInfo: () => ({ available: false, reason }),
@@ -418,11 +453,15 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
       found.push({ hwnd: h, primary: false });
       prev = h;
     }
-    const info: AppBarInfo = {
-      state: found.length > 0 ? guard('SHAppBarMessage(ABM_GETSTATE)', null, () => native.appBarState()) : null,
-      pos: primary !== null ? guard('SHAppBarMessage(ABM_GETTASKBARPOS)', null, () => native.appBarTaskbarPos()) : null,
-      at: now,
-    };
+    const info: AppBarInfo =
+      appBar !== null && appBar.primary === primary && !APPBAR_QUERY_REASONS.has(reason)
+        ? appBar
+        : {
+            primary,
+            state: found.length > 0 ? guard('SHAppBarMessage(ABM_GETSTATE)', null, () => native.appBarState()) : null,
+            pos: primary !== null ? guard('SHAppBarMessage(ABM_GETTASKBARPOS)', null, () => native.appBarTaskbarPos()) : null,
+            at: now,
+          };
     appBar = info;
     const next = new Map<string, Entry>();
     for (const f of found) {
@@ -522,7 +561,7 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
     return reason === 'window-gone' || lastForcedAt === null || now - lastForcedAt >= MIN_FORCED_REDISCOVERY_GAP_MS;
   }
 
-  function sampleImpl(now: number, cursor: Point | null, catNear: boolean): number {
+  function sampleImpl(now: number, cursor: Point | null): number {
     if (!started || !Number.isFinite(now)) return IDLE_SAMPLE_MS;
     samples++;
     lastSampleAt = now;
@@ -550,10 +589,10 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
     const cadence: CadenceTaskbar[] = [];
     for (const e of entries.values()) {
       const m = e.motion.snapshot();
-      cadence.push({ autoHide: e.autoHide, edge: e.edge, monitor: e.monitor, scale: e.scale, revealedPx: m.phase === 'hidden' ? 0 : m.extent, easing: m.inferred });
+      cadence.push({ autoHide: e.autoHide, edge: e.edge, monitor: e.monitor, scale: e.scale, hidden: m.phase === 'hidden', easing: m.inferred });
     }
     const c = cursor !== null && Number.isFinite(cursor.x) && Number.isFinite(cursor.y) ? cursor : null;
-    lastDecision = nextSampleDelay({ now, cursor: c, catNear, lastChangeAt, taskbars: cadence });
+    lastDecision = nextSampleDelay({ now, cursor: c, lastChangeAt, taskbars: cadence });
     return lastDecision.delayMs;
   }
 
@@ -605,7 +644,10 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
       confidence: confidenceOf(e, m),
       validatedAt: e.validatedAt,
       excluded: false,
-      // Feet one px above the visible top edge: the cat never overlaps the taskbar, whichever wins z-order.
+      // Feet one px above the visible top edge. The cat's paws and shadow are still drawn up to
+      // ~4-10 DIP below its feet, over the taskbar's top rows when the overlay is above it in
+      // z-order (auto-hide: the overlay covers the taskbar); clicks there reach the taskbar
+      // through clickGuardRects, which the overlays cut out of the cat's hit region.
       y: visibleEdgeAt(e.monitor, e.edge, m.extent) - 1,
       x0,
       x1,
@@ -613,6 +655,18 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
       focusX: null,
       edge: e.edge,
     };
+  }
+
+  /** See TaskbarTrackerHandle.clickGuardRects. */
+  function guardRectsOf(e: Entry): Rect[] {
+    const out: Rect[] = [];
+    if (e.visible) out.push(toRect(e.rect));
+    if (e.autoHide) {
+      const span = spanOnMonitor(e.rect, e.monitor, e.edge);
+      const band = rawIntersect(edgeBand(e.monitor, e.edge, span, Math.ceil(TASKBAR_CLICK_GUARD_DIP * e.scale)), e.monitor);
+      if (band) out.push(toRect(band));
+    }
+    return out;
   }
 
   function debugOf(e: Entry): Record<string, unknown> {
@@ -668,11 +722,16 @@ function createLiveTaskbarTracker(native: TaskbarNative, log: Logger, opts: Task
       lastChangeAt = null;
       signature = null;
     },
-    sample(now, cursor, catNear) {
-      return guard('sample', IDLE_SAMPLE_MS, () => sampleImpl(now, cursor, catNear === true));
+    // The host's catNear hint does not change the cadence: a still taskbar is sampled at the idle
+    // rate wherever the cat is, and any slide is followed by the recent-change burst.
+    sample(now, cursor) {
+      return guard('sample', IDLE_SAMPLE_MS, () => sampleImpl(now, cursor));
     },
     taskbars() {
       return guard('taskbars', [], () => [...entries.values()].map(stateOf));
+    },
+    clickGuardRects() {
+      return guard('clickGuardRects', [], () => [...entries.values()].flatMap(guardRectsOf));
     },
     surfaces() {
       return guard('surfaces', [], () => {

@@ -135,6 +135,12 @@ export interface CatRenderState {
   shadow: boolean;
   /** Animation playback speed multiplier (settings.appearance.animationSpeed). */
   animSpeed: number;
+  /**
+   * Movement speed multiplier (settings.behavior.movementSpeed); absent = 1. The sim's wall
+   * manoeuvres (mount, swing down, pull-up, step-off) take 1/movementSpeed as long, and the
+   * renderer times its fades onto and off the wall to match.
+   */
+  movementSpeed?: number;
   /** One-off reaction to play on top of the clip (once per distinct `at`). */
   reaction?: CatReaction | null;
 }

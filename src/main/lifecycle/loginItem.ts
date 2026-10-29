@@ -12,6 +12,7 @@ import type { JsonReadStatus } from '../store/jsonStore';
 import type { SettingsStore } from '../store/settingsStore';
 import type { LoginItemRegistry } from '../win32/registry';
 import { LAUNCHED_AT_LOGIN_FLAG } from './launchArgs';
+import { samePath } from './loginItemCommandLine';
 import { findV1OptOutInLogs, type EvidenceFs } from './loginItemEvidence';
 import {
   applyUserChoice,
@@ -83,7 +84,7 @@ export interface LoginItemServiceOptions {
 export interface ReconcileReport {
   rule: ReconcileRule;
   write: LoginItemWrite | null;
-  /** The write took effect (true when there was none). */
+  /** The write, or its fallback, took effect (true when there was none). */
   ok: boolean;
   markerConsumed: boolean;
   durationMs: number;
@@ -93,6 +94,12 @@ export interface LoginItemService {
   readonly gate: WriteGate;
   /** Boot-time reconcile (once, before the cat host starts). Never throws. */
   reconcileAtStartup(): ReconcileReport;
+  /**
+   * The user started Desktop Cat again while it runs (second instance): reconciled as a start
+   * by the user, so work a sign-in boot had to skip (repair, register, disable a leftover
+   * entry) is done now instead of waiting for a cold start that may never come. Never throws.
+   */
+  reconcileOnUserLaunch(): ReconcileReport;
   status(): LoginItemStatus;
   /** The enable/disableLaunchAtLogin actions: the only way the preference changes. */
   setLaunchAtLogin(on: boolean): ActionResult;
@@ -103,7 +110,7 @@ export interface LoginItemService {
 const MESSAGES: Record<UserChoiceOutcome, (on: boolean) => string> = {
   unchanged: (on) => (on ? 'Desktop Cat starts when you sign in to Windows.' : 'Desktop Cat no longer starts when you sign in.'),
   registered: () => 'Desktop Cat starts when you sign in to Windows.',
-  removed: () => 'Desktop Cat no longer starts when you sign in.',
+  'opted-out': () => 'Desktop Cat no longer starts when you sign in.',
   'not-writable': () => 'Saved. This build cannot change Windows startup (development or portable build); the installed app does.',
   'registry-unreadable': () => 'Saved, but the Windows startup entry could not be read, so it was left as it is. It is checked again the next time Desktop Cat starts.',
   'windows-disabled': () =>
@@ -149,7 +156,7 @@ export function createLoginItemService(opts: LoginItemServiceOptions): LoginItem
     try {
       state = interpretSnapshot(opts.registry.read());
     } catch (err) {
-      state = { readable: false, run: null, approved: 'absent', error: err instanceof Error ? err.message : String(err) };
+      state = { readable: false, run: null, approved: 'absent', disabledByApp: false, error: err instanceof Error ? err.message : String(err) };
     }
     cached = { state, at: now };
     return state;
@@ -181,6 +188,15 @@ export function createLoginItemService(opts: LoginItemServiceOptions): LoginItem
     return ok;
   }
 
+  /** The planned write, then its fallback when the write did not take effect. True when one of them did (or there was none). */
+  function performPlanned(write: LoginItemWrite | null, fallback: LoginItemWrite | null): boolean {
+    if (!write) return true;
+    if (performWrite(write)) return true;
+    if (!fallback) return false;
+    log.warn('falling back after a login item write that did not take effect', { openAtLogin: fallback.openAtLogin, enabled: fallback.enabled });
+    return performWrite(fallback);
+  }
+
   function persist(next: LoginItemSettings): boolean {
     const r = opts.settings.patch({ loginItem: next });
     if (!r.ok) log.error('saving the login item state failed', { error: r.error });
@@ -197,42 +213,52 @@ export function createLoginItemService(opts: LoginItemServiceOptions): LoginItem
     }
   }
 
+  /**
+   * One reconcile. `launchedAtLogin` is this start's: the boot of a process Windows started from
+   * the Run entry, or false for a start by the user (a cold start, or a second instance).
+   */
+  function reconcileNow(trigger: 'boot' | 'user-launch', launchedAtLogin: boolean): ReconcileReport {
+    const t0 = opts.clock();
+    try {
+      const li = opts.settings.get().loginItem;
+      const state = readState(true);
+      const settingsTrusted = TRUSTED_LOADS.has(opts.settingsLoadStatus);
+      const marker = exists(markerPath);
+      const v1OptOutLogged = gate.writable && state.readable && settingsTrusted && needsV1Evidence(li) ? findV1OptOutInLogs(opts.logDir, fsApi) : false;
+      const r = reconcile(state, li, { ...target, writable: gate.writable, settingsTrusted, launchedAtLogin, uninstallMarker: marker, v1OptOutLogged });
+      const ok = performPlanned(r.write, r.fallback);
+      const next = ok ? r.next : r.nextIfWriteFails;
+      if (JSON.stringify(next) !== JSON.stringify(li)) persist(next);
+      // A marker is only spent once its reinstall registration actually landed.
+      const markerConsumed = r.consumeMarker && marker && ok ? consumeMarker() : false;
+      lastReport = { rule: r.rule, write: r.write, ok, markerConsumed, durationMs: opts.clock() - t0 };
+      log.info('login item reconciled', {
+        trigger,
+        rule: r.rule,
+        write: r.write,
+        ok,
+        state: describeState(state, target),
+        gate: gate.blockedBy,
+        launchedAtLogin,
+        settings: opts.settingsLoadStatus,
+        marker,
+        v1Evidence: v1OptOutLogged,
+        ms: lastReport.durationMs,
+      });
+      return lastReport;
+    } catch (err) {
+      log.error('login item reconcile failed', { error: err, trigger });
+      lastReport = { rule: 'registry-unreadable', write: null, ok: false, markerConsumed: false, durationMs: opts.clock() - t0 };
+      return lastReport;
+    }
+  }
+
   return {
     gate,
-    reconcileAtStartup() {
-      const t0 = opts.clock();
-      try {
-        const li = opts.settings.get().loginItem;
-        const state = readState(true);
-        const settingsTrusted = TRUSTED_LOADS.has(opts.settingsLoadStatus);
-        const marker = exists(markerPath);
-        const v1OptOutLogged = gate.writable && state.readable && settingsTrusted && needsV1Evidence(li) ? findV1OptOutInLogs(opts.logDir, fsApi) : false;
-        const r = reconcile(state, li, { ...target, writable: gate.writable, settingsTrusted, launchedAtLogin: opts.launchedAtLogin, uninstallMarker: marker, v1OptOutLogged });
-        const ok = r.write ? performWrite(r.write) : true;
-        const next = ok ? r.next : r.nextIfWriteFails;
-        if (JSON.stringify(next) !== JSON.stringify(li)) persist(next);
-        // A marker is only spent once its reinstall registration actually landed.
-        const markerConsumed = r.consumeMarker && marker && ok ? consumeMarker() : false;
-        lastReport = { rule: r.rule, write: r.write, ok, markerConsumed, durationMs: opts.clock() - t0 };
-        log.info('login item reconciled', {
-          rule: r.rule,
-          write: r.write,
-          ok,
-          state: describeState(state, target),
-          gate: gate.blockedBy,
-          launchedAtLogin: opts.launchedAtLogin,
-          settings: opts.settingsLoadStatus,
-          marker,
-          v1Evidence: v1OptOutLogged,
-          ms: lastReport.durationMs,
-        });
-        return lastReport;
-      } catch (err) {
-        log.error('login item reconcile failed', { error: err });
-        lastReport = { rule: 'registry-unreadable', write: null, ok: false, markerConsumed: false, durationMs: opts.clock() - t0 };
-        return lastReport;
-      }
-    },
+    reconcileAtStartup: () => reconcileNow('boot', opts.launchedAtLogin),
+    // Written as at a cold start by the user. A process Windows started from the Run entry is
+    // past the point where Explorer read that entry, so the write no longer races sign-in.
+    reconcileOnUserLaunch: () => reconcileNow('user-launch', false),
     status() {
       return loginItemStatus(opts.settings.get().loginItem, readState(false), writeTarget);
     },
@@ -240,7 +266,7 @@ export function createLoginItemService(opts: LoginItemServiceOptions): LoginItem
       const li = opts.settings.get().loginItem;
       const state = readState(true);
       const r = applyUserChoice(on, state, li, writeTarget);
-      const ok = r.write ? performWrite(r.write) : true;
+      const ok = performPlanned(r.write, r.fallback);
       if (!persist(ok ? r.next : r.nextIfWriteFails)) return { ok: false, message: 'Could not save the setting; details are in the log.' };
       // An explicit choice supersedes a pending reinstall marker: a later missing entry is the user's or another tool's doing.
       if (gate.writable && exists(markerPath)) consumeMarker();
@@ -253,8 +279,11 @@ export function createLoginItemService(opts: LoginItemServiceOptions): LoginItem
       return persist({ ...li, noticeShown: true }) ? { ok: true } : { ok: false, message: 'Could not save the setting; details are in the log.' };
     },
     debugInfo() {
+      const registered = opts.settings.get().loginItem.registeredPath;
       return {
         registryAvailable: opts.registry.available,
+        // Never the path itself: it contains the Windows account name.
+        registeredPath: registered === null ? 'none' : samePath(registered, opts.execPath) ? 'this-exe' : 'other',
         writable: gate.writable,
         blockedBy: gate.blockedBy,
         launchedAtLogin: opts.launchedAtLogin,

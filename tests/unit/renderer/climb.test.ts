@@ -5,6 +5,7 @@
 // rect all follow the vertical pose.
 import { describe, expect, it } from 'vitest';
 import { CAT_BASE_HEIGHT_DIP, CAT_BASE_WIDTH_DIP, type AnimClip, type CatRenderState, type Emote, type RenderStyle } from '../../../src/shared/cat';
+import type { Rect } from '../../../src/shared/geometry';
 import { defaultSettings } from '../../../src/shared/settings';
 import type { SimOutput } from '../../../src/shared/sim';
 import { presenceRectPx } from '../../../src/main/overlay/renderMapping';
@@ -27,7 +28,7 @@ import { CatPuppet } from '../../../src/renderer/overlay/cat/puppet';
 import { applyMatX, applyMatY, PAW_RX } from '../../../src/renderer/overlay/cat/rig';
 import { TAIL_RADIUS_TIP } from '../../../src/renderer/overlay/cat/tail';
 import { CatScene, type DeviceRect, type Layer } from '../../../src/renderer/overlay/scene';
-import { boxInside, createExtentCtx, emptyBox, type Box } from './extentCtx';
+import { boxInside, createExtentCtx, emptyBox, paintDistance, type Box } from './extentCtx';
 
 const DT = 1000 / 60;
 const BL = CAT_BASE_WIDTH_DIP;
@@ -247,6 +248,21 @@ describe('climb clip: transitions', () => {
     }
   });
 
+  it('times the fades onto and off the wall to the manoeuvres, which take 1/movementSpeed as long', () => {
+    for (const speed of [0.5, 2]) {
+      for (const c of ['walk', 'stand'] as AnimClip[]) {
+        // Mount / swing down, pull-up / step-off.
+        expect(crossFadeMs(c, 'climb', speed), `${c} ${speed}`).toBeCloseTo(CLIMB_FADE_MS / speed, 9);
+        expect(crossFadeMs('climb', c, speed), `${c} ${speed}`).toBeCloseTo(CLIMB_OFF_FADE_MS / speed, 9);
+      }
+      // Letting go, leaping off, being picked up and every other change keep their fades.
+      for (const c of ['jump', 'fall', 'held'] as AnimClip[]) expect(crossFadeMs('climb', c, speed), c).toBe(crossFadeMs('climb', c));
+      expect(crossFadeMs('walk', 'stand', speed)).toBe(crossFadeMs('walk', 'stand'));
+    }
+    // A missing or broken value plays the fades at movement speed 1.
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) expect(crossFadeMs('climb', 'walk', bad)).toBe(CLIMB_OFF_FADE_MS);
+  });
+
   it('gets onto the wall clinging, then the climbing motion develops without a pop', () => {
     const anim = new CatAnimator(() => 0.99);
     let t = 0;
@@ -302,7 +318,7 @@ describe('climb clip: transitions', () => {
    * Plays the legs on a scene facing `facing` (+1: wall to the right); returns the fastest move in one
    * frame (overlay DIP) of a body point (head, body, paws) and of the tail tip.
    */
-  function worstFrameMove(start: { x: number; y: number }, legs: readonly Leg[], facing: 1 | -1): { body: number; tail: number; at: string } {
+  function worstFrameMove(start: { x: number; y: number }, legs: readonly Leg[], facing: 1 | -1, movementSpeed = 1): { body: number; tail: number; at: string } {
     const scene = new CatScene(() => 0.99);
     let { x, y } = start;
     let t = 0;
@@ -325,7 +341,7 @@ describe('climb clip: transitions', () => {
         const k = leg.ease ? k0 * k0 * (3 - 2 * k0) : k0;
         x = x0 + (leg.x - x0) * k;
         y = y0 + (leg.y - y0) * k;
-        const s = state(t, { x, y, facing, clip, clipStartedAt: clipStart, speed: leg.speed });
+        const s = state(t, { x, y, facing, clip, clipStartedAt: clipStart, speed: leg.speed, movementSpeed });
         scene.update({ x, y, state: s, simTime: t, dtMs: frame === 0 ? 0 : DT, snapped: frame === 0 });
         const rig = scene.puppet.rig;
         const tail = scene.puppet.tail;
@@ -355,47 +371,131 @@ describe('climb clip: transitions', () => {
     return { body, tail: tailTip, at };
   }
 
-  // Window side and top as the mover sees them (world.ts wallTrack, surfaceGraph cornerX), size 1.
+  // Window side and top as the mover sees them (world.ts wallTrack: the highest anchor on the wall is
+  // 0.73 body lengths below the top; surfaceGraph cornerX), size 1.
   const WALL_X = 400;
   const FLOOR = 520;
   const TOP = 300;
-  const Y_TOP = TOP + BL * 0.55;
+  const Y_TOP = TOP + BL * 0.73;
   const STAND_OUT = BL * 0.55;
   const CORNER_IN = BL * 0.5;
+  const MOVEMENT_SPEEDS = [0.5, 1, 2] as const;
+
+  /**
+   * The mover's path from the floor beside a window up onto its top at movement speed `v` (durations
+   * and the climbing speed scale with it). The sim plays 'climb' at speed 0 while mounting, 'walk' at
+   * speed 0 for the whole pull-up (src/core/behavior/sim.ts computeClip) and 'stand' on the ledge.
+   */
+  const upLegs = (f: 1 | -1, v: number): Leg[] => [
+    { clip: 'walk', ms: 900, x: WALL_X - f * STAND_OUT, y: FLOOR, speed: 0.7 * v },
+    { clip: 'climb', ms: MOVEMENT.mountMs / v, x: WALL_X, y: FLOOR, speed: 0, ease: true },
+    { clip: 'climb', ms: ((FLOOR - Y_TOP) / (MOVEMENT.climbUpDip * v)) * 1000, x: WALL_X, y: Y_TOP, speed: UP_SPEED * v },
+    { clip: 'climb', ms: 600, x: WALL_X, y: Y_TOP, speed: 0 },
+    // The clip leaves the wall as the pull-up starts, so the fade runs while the anchor rises.
+    { clip: 'walk', ms: MOVEMENT.pullUpMs / v, x: WALL_X + f * CORNER_IN, y: TOP, speed: 0, ease: true },
+    { clip: 'stand', ms: 800, x: WALL_X + f * CORNER_IN, y: TOP, speed: 0 },
+  ];
+  /** The reverse: swinging down from the top, climbing down and stepping off ('walk' while stepping off). */
+  const downLegs = (f: 1 | -1, v: number): Leg[] => [
+    { clip: 'stand', ms: 900, x: WALL_X + f * CORNER_IN, y: TOP, speed: 0 },
+    { clip: 'climb', ms: MOVEMENT.swingMs / v, x: WALL_X, y: Y_TOP, speed: 0, ease: true },
+    { clip: 'climb', ms: ((FLOOR - Y_TOP) / (MOVEMENT.climbDownDip * v)) * 1000, x: WALL_X, y: FLOOR, speed: DOWN_SPEED * v },
+    { clip: 'walk', ms: MOVEMENT.dismountMs / v, x: WALL_X - f * STAND_OUT, y: FLOOR, speed: 0, ease: true },
+    { clip: 'stand', ms: 800, x: WALL_X - f * STAND_OUT, y: FLOOR, speed: 0 },
+  ];
 
   it('walking up to a window, climbing it and pulling up onto its top moves every body part smoothly', () => {
-    for (const f of [1, -1] as const) {
-      const legs: Leg[] = [
-        { clip: 'walk', ms: 900, x: WALL_X - f * STAND_OUT, y: FLOOR, speed: 0.7 },
-        { clip: 'climb', ms: MOVEMENT.mountMs, x: WALL_X, y: FLOOR, speed: UP_SPEED, ease: true },
-        { clip: 'climb', ms: ((FLOOR - Y_TOP) / MOVEMENT.climbUpDip) * 1000, x: WALL_X, y: Y_TOP, speed: UP_SPEED },
-        { clip: 'climb', ms: 600, x: WALL_X, y: Y_TOP, speed: 0 },
-        // The clip leaves the wall as the pull-up starts, so the fade runs while the anchor rises.
-        { clip: 'stand', ms: MOVEMENT.pullUpMs, x: WALL_X + f * CORNER_IN, y: TOP, speed: 0, ease: true },
-        { clip: 'stand', ms: 800, x: WALL_X + f * CORNER_IN, y: TOP, speed: 0 },
-      ];
-      const r = worstFrameMove({ x: WALL_X - f * (STAND_OUT + 63), y: FLOOR }, legs, f);
-      // Rearing up onto the wall and pulling up onto the top turn the whole cat 90 degrees in 280 ms
-      // (the front paws travel ~60 DIP, the head ~45); a pop would be tens of DIP in one frame.
-      expect(r.body, `f${f} ${r.at}`).toBeLessThan(9);
-      // The tail whips round at the chain's free-motion cap (10 DIP per frame relative to the cat)
-      // plus the anchor's own motion; a snap would be up to its length (37 DIP).
-      expect(r.tail, `f${f} tail`).toBeLessThan(14);
+    for (const v of MOVEMENT_SPEEDS) {
+      for (const f of [1, -1] as const) {
+        const r = worstFrameMove({ x: WALL_X - f * (STAND_OUT + 63), y: FLOOR }, upLegs(f, v), f, v);
+        // Rearing up onto the wall and pulling up onto the top turn the whole cat 90 degrees in 280 ms
+        // at movement speed 1 (the front paws travel ~60 DIP, the head ~45); a pop would be tens of DIP
+        // in one frame. Faster movement turns it faster.
+        expect(r.body, `v${v} f${f} ${r.at}`).toBeLessThan(9 * Math.max(1, v));
+        // The tail whips round at the chain's free-motion cap (10 DIP per frame relative to the cat)
+        // plus the anchor's own motion; a snap would be up to its length (37 DIP).
+        expect(r.tail, `v${v} f${f} tail`).toBeLessThan(14 * Math.max(1, v));
+      }
     }
   });
 
   it('swinging down from a window top, climbing down and stepping off moves every body part smoothly', () => {
-    for (const f of [1, -1] as const) {
-      const legs: Leg[] = [
-        { clip: 'stand', ms: 900, x: WALL_X + f * CORNER_IN, y: TOP, speed: 0 },
-        { clip: 'climb', ms: MOVEMENT.swingMs, x: WALL_X, y: Y_TOP, speed: 0, ease: true },
-        { clip: 'climb', ms: ((FLOOR - Y_TOP) / MOVEMENT.climbDownDip) * 1000, x: WALL_X, y: FLOOR, speed: DOWN_SPEED },
-        { clip: 'stand', ms: MOVEMENT.dismountMs, x: WALL_X - f * STAND_OUT, y: FLOOR, speed: 0, ease: true },
-        { clip: 'stand', ms: 800, x: WALL_X - f * STAND_OUT, y: FLOOR, speed: 0 },
-      ];
-      const r = worstFrameMove({ x: WALL_X + f * CORNER_IN, y: TOP }, legs, f);
-      expect(r.body, `f${f} ${r.at}`).toBeLessThan(9);
-      expect(r.tail, `f${f} tail`).toBeLessThan(14);
+    for (const v of MOVEMENT_SPEEDS) {
+      for (const f of [1, -1] as const) {
+        const r = worstFrameMove({ x: WALL_X + f * CORNER_IN, y: TOP }, downLegs(f, v), f, v);
+        expect(r.body, `v${v} f${f} ${r.at}`).toBeLessThan(9 * Math.max(1, v));
+        expect(r.tail, `v${v} f${f} tail`).toBeLessThan(14 * Math.max(1, v));
+      }
+    }
+  });
+
+  /**
+   * Plays `legs` and samples the body's tilt (0 level, ~1.5 along the wall) and the ground shadow
+   * during the leg at `index`, at the given fractions of its duration (> 1: after it ended).
+   */
+  function poseDuring(legs: readonly Leg[], index: number, fractions: readonly number[], f: 1 | -1, v: number): { tilt: number; shadow: number }[] {
+    const scene = new CatScene(() => 0.99);
+    const samples: { tilt: number; shadow: number }[] = [];
+    let x = legs[0]!.x;
+    let y = legs[0]!.y;
+    let t = 0;
+    let frame = 0;
+    let clip: AnimClip = legs[0]!.clip;
+    let clipStart = 0;
+    const play = (leg: Leg, ms: number, sample: number[]): void => {
+      const x0 = x;
+      const y0 = y;
+      if (leg.clip !== clip) {
+        clip = leg.clip;
+        clipStart = t;
+      }
+      for (let lt = 0; lt < ms; lt += DT, t += DT, frame++) {
+        const k0 = Math.min(1, (lt + DT) / leg.ms);
+        const k = leg.ease ? k0 * k0 * (3 - 2 * k0) : k0;
+        x = x0 + (leg.x - x0) * k;
+        y = y0 + (leg.y - y0) * k;
+        const s = state(t, { x, y, facing: f, clip, clipStartedAt: clipStart, speed: leg.speed, movementSpeed: v });
+        scene.update({ x, y, state: s, simTime: t, dtMs: frame === 0 ? 0 : DT, snapped: frame === 0 });
+        while (sample.length > 0 && lt + DT >= sample[0]! * leg.ms - 1e-6) {
+          sample.shift();
+          samples.push({ tilt: scene.puppet.pose.tilt, shadow: scene.puppet.pose.shadow });
+        }
+      }
+    };
+    for (let i = 0; i <= index; i++) {
+      const leg = legs[i]!;
+      play(leg, i < index ? leg.ms : leg.ms * Math.max(1, ...fractions) + DT, i < index ? [] : [...fractions]);
+    }
+    return samples;
+  }
+
+  it('turns onto and off the wall in step with the mover at every movement speed', () => {
+    // At the same fraction of a manoeuvre the pose and the ground shadow must be as far along as at
+    // movement speed 1. (At 0.5 the pull-up takes 1040 ms; with fades of fixed length the cat stood
+    // level, with its full ground shadow, in front of the window's title bar for ~0.6 s of it.)
+    const at = [0.25, 0.5, 0.75, 1, 1.5];
+    // Mounting from a standstill (walking up to it, the gait phase at the mount would differ by speed).
+    const fromStand = (f: 1 | -1, v: number): Leg[] => [{ clip: 'stand', ms: 900, x: WALL_X - f * STAND_OUT, y: FLOOR, speed: 0 }, ...upLegs(f, v).slice(1)];
+    const cases: { name: string; legs: (f: 1 | -1, v: number) => Leg[]; index: number }[] = [
+      { name: 'mount', legs: fromStand, index: 1 },
+      { name: 'pull-up', legs: upLegs, index: 4 },
+      { name: 'swing down', legs: downLegs, index: 1 },
+      { name: 'step-off', legs: downLegs, index: 3 },
+    ];
+    for (const c of cases) {
+      for (const f of [1, -1] as const) {
+        const ref = poseDuring(c.legs(f, 1), c.index, at, f, 1);
+        expect(ref).toHaveLength(at.length);
+        for (const v of [0.5, 2]) {
+          const got = poseDuring(c.legs(f, v), c.index, at, f, v);
+          got.forEach((p, i) => {
+            const r = ref[i]!;
+            const tag = `${c.name} v${v} f${f} at ${at[i]}`;
+            expect(Math.abs(p.tilt - r.tilt), `${tag}: tilt ${p.tilt.toFixed(3)} vs ${r.tilt.toFixed(3)}`).toBeLessThan(0.08);
+            expect(Math.abs(p.shadow - r.shadow), `${tag}: shadow ${p.shadow.toFixed(3)} vs ${r.shadow.toFixed(3)}`).toBeLessThan(0.08);
+          });
+        }
+      }
     }
   });
 });
@@ -505,18 +605,20 @@ describe('climb clip: drawn geometry', () => {
       for (const speed of [0, 0.5]) {
         const scene = climbScene(1800, speed, { facing });
         const y = 300 - speed * BL * 1.8;
-        expect(scene.hitCount).toBe(4);
-        const head = scene.hitRects[0]!;
-        const body = scene.hitRects[1]!;
-        const legs = scene.hitRects[2]!;
-        const tailBase = scene.hitRects[3]!;
+        expect(scene.hitCount).toBe(7);
+        const [head, body, frontLegs, tailBase, hindLegs, frontPaws, hindPaws] = scene.hitRects as [Rect, Rect, Rect, Rect, Rect, Rect, Rect];
         expect(head.y, 'head above the body').toBeLessThan(body.y);
         expect(body.height, 'body upright').toBeGreaterThan(body.width);
-        // Legs reach from the hind-paw grip up to the front paws on the wall.
-        expect(legs.y + legs.height).toBeGreaterThan(y - 2);
-        expect(legs.y).toBeLessThan(y - 55);
-        const nearWall = facing > 0 ? legs.x + legs.width : legs.x;
-        expect(Math.abs(nearWall - 400)).toBeLessThan(PAW_RX + 6);
+        // The legs reach from the hind-paw grip up to the front paws on the wall, each pair on its own.
+        expect(hindPaws.y + hindPaws.height).toBeGreaterThan(y - 2);
+        expect(frontPaws.y).toBeLessThan(y - 55);
+        expect(frontLegs.y + frontLegs.height, 'front legs clear of the hind paws').toBeLessThan(hindPaws.y);
+        expect(hindLegs.y, 'hind legs below the front paws').toBeGreaterThan(frontPaws.y + frontPaws.height);
+        // Only knees and paws reach a little past the wall line.
+        for (const r of [frontLegs, hindLegs, frontPaws, hindPaws]) {
+          const nearWall = facing > 0 ? r.x + r.width : r.x;
+          expect((nearWall - 400) * facing).toBeLessThan(PAW_RX + 1);
+        }
         expect(tailBase.height).toBeGreaterThan(2);
         const tail = scene.puppet.tail;
         const tipX = 400 + facing * tail.x[tail.count - 1]!;
@@ -534,6 +636,49 @@ describe('climb clip: drawn geometry', () => {
         }
         expect(area).toBeGreaterThan(1500);
         expect(area).toBeLessThan(CAT_BASE_WIDTH_DIP * CAT_BASE_HEIGHT_DIP * 2.5);
+      }
+    }
+  });
+
+  it('is interactive past the wall line only where paws are drawn: no band between them reaches into the window', () => {
+    const inHit = (scene: CatScene, px: number, py: number): boolean => {
+      for (let i = 0; i < scene.hitCount; i++) {
+        const r = scene.hitRects[i]!;
+        if (px >= r.x && px <= r.x + r.width && py >= r.y && py <= r.y + r.height) return true;
+      }
+      return false;
+    };
+    for (const scale of [1, 2.5]) {
+      for (const facing of [1, -1] as const) {
+        for (const speed of [0, 0.5, -0.5]) {
+          for (const ms of [1500, 2500, 3010]) {
+            const scene = climbScene(ms, speed, { facing, scale });
+            const painted = createExtentCtx(4096, 4096, { record: true });
+            scene.draw(painted.ctx, 1, null);
+            const tag = `size ${scale} f${facing} v${speed} t=${ms}`;
+            // Interactive but nothing drawn there (beyond the outline's anti-aliasing): the press would
+            // reach the cat instead of the window under it (e.g. its scrollbar).
+            const bare = (px: number, py: number): boolean => inHit(scene, px, py) && paintDistance(painted.shapes, px, py) > 0.5 * scale;
+            const b = scene.bounds;
+            // Along the wall line just inside the window. One box over all four legs left 15-34 DIP
+            // (size 1) between the front and the hind paws; what remains is the gap between the two
+            // paws of a pair.
+            const lx = 400 + facing * 0.5 * scale;
+            let run = 0;
+            let longest = 0;
+            for (let py = b.y; py < b.y + b.height; py += 0.25) {
+              run = bare(lx, py) ? run + 0.25 : 0;
+              longest = Math.max(longest, run);
+            }
+            expect(longest, `${tag}: bare run along the wall line`).toBeLessThan(6 * scale);
+            let area = 0;
+            for (let d = 0.125; d < 20 * scale; d += 0.25) {
+              for (let py = b.y; py < b.y + b.height; py += 0.25) if (bare(400 + facing * d, py)) area += 0.0625;
+            }
+            // It was 60-160 DIP² at size 1.
+            expect(area, `${tag}: bare area inside the window`).toBeLessThan(30 * scale * scale);
+          }
+        }
       }
     }
   });

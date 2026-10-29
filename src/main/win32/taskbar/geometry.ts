@@ -147,6 +147,26 @@ export function distanceFromEdge(p: Point, monitor: RawRect, edge: TaskbarEdge):
   }
 }
 
+/** The overlap of two rects, null when they do not overlap. */
+export function rawIntersect(a: RawRect, b: RawRect): RawRect | null {
+  const r = { left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) };
+  return r.right > r.left && r.bottom > r.top ? r : null;
+}
+
+/** The outermost `depth` px of the monitor along its `edge` side, over the span [s0, s1) along that side. */
+export function edgeBand(monitor: RawRect, edge: TaskbarEdge, [s0, s1]: readonly [number, number], depth: number): RawRect {
+  switch (edge) {
+    case 'bottom':
+      return { left: s0, top: monitor.bottom - depth, right: s1, bottom: monitor.bottom };
+    case 'top':
+      return { left: s0, top: monitor.top, right: s1, bottom: monitor.top + depth };
+    case 'left':
+      return { left: monitor.left, top: s0, right: monitor.left + depth, bottom: s1 };
+    case 'right':
+      return { left: monitor.right - depth, top: s0, right: monitor.right, bottom: s1 };
+  }
+}
+
 /** The taskbar's span along its edge, clipped to the monitor: [x0, x1) for top/bottom, [y0, y1) for left/right. */
 export function spanOnMonitor(rect: RawRect, monitor: RawRect, edge: TaskbarEdge): [number, number] {
   return isHorizontalEdge(edge)

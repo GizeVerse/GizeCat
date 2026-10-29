@@ -3,10 +3,11 @@
 import path from 'node:path';
 import { Menu, nativeImage, Tray, type MenuItemConstructorOptions, type NativeImage } from 'electron';
 import type { Logger } from './contracts';
+import type { NoticeHandlers, NoticeSurface } from './lifecycle/loginItemNotice';
 import { trayMenuModel, trayTooltip, trayIconVariant, type MenuAction, type MenuContext, type MenuItemModel, type TrayIconVariant } from './lifecycle/menuModel';
 import { drawTrayBitmap } from './lifecycle/trayIcon';
 
-export interface TrayController {
+export interface TrayController extends NoticeSurface {
   update(ctx: MenuContext): void;
   dispose(): void;
 }
@@ -59,6 +60,20 @@ export function createTrayController(opts: TrayOptions): TrayController {
   let variant: TrayIconVariant = 'tray';
   let disposed = false;
 
+  // Windows shows a tray balloon as a toast; its events reach the handlers of the latest one.
+  let balloon: NoticeHandlers | null = null;
+  const onBalloon = (what: string, fn: (h: NoticeHandlers) => void) => () => {
+    const h = balloon;
+    if (!h) return;
+    try {
+      fn(h);
+    } catch (err) {
+      log.error(`tray notification ${what} handler failed`, { error: err });
+    }
+  };
+  tray.on('balloon-show', onBalloon('show', (h) => h.onShown()));
+  tray.on('balloon-click', onBalloon('click', (h) => h.onClick()));
+
   return {
     update(ctx) {
       if (disposed || tray.isDestroyed()) return;
@@ -80,8 +95,16 @@ export function createTrayController(opts: TrayOptions): TrayController {
         tray.setImage(icon(v));
       }
     },
+    notify(notice, handlers) {
+      if (disposed || tray.isDestroyed()) return false;
+      balloon = handlers;
+      // Quiet time and Do not disturb suppress it; the handlers then never run.
+      tray.displayBalloon({ title: notice.title, content: notice.body, icon: icon('tray'), respectQuietTime: true });
+      return true;
+    },
     dispose() {
       disposed = true;
+      balloon = null;
       if (!tray.isDestroyed()) tray.destroy();
     },
   };

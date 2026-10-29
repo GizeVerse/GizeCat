@@ -6,7 +6,7 @@ import type { Rect } from '../../shared/geometry';
 import { drawCat, drawShadow, type Ctx2D } from './cat/draw';
 import { drawEmote, EMOTE_RADIUS, EMOTE_SIZE, emoteFrame, type EmoteFrame } from './cat/emotes';
 import { clamp, smooth } from './cat/math';
-import { LEG_COUNT, LEG_FN } from './cat/pose';
+import { LEG_COUNT, LEG_FF, LEG_FN } from './cat/pose';
 import { CatPuppet } from './cat/puppet';
 import { applyMatX, applyMatY, HEAD_RX, HEAD_RY, OUTLINE_W, PAW_RX, TORSO_POINTS } from './cat/rig';
 import { getSkin, type Skin } from './cat/skins';
@@ -17,6 +17,8 @@ const TURN_MS = 170;
 const DRAW_MARGIN = 5;
 /** Pixel style: device pixels per low-res pixel at scale 1 and DPR 1. */
 const PIXEL_BLOCK = 3;
+/** Hit rects per frame (main accepts up to 8). */
+const HIT_RECTS = 7;
 
 export interface SceneInput {
   /** Interpolated ground anchor, overlay-local DIP. */
@@ -58,7 +60,7 @@ export class CatScene {
   readonly puppet: CatPuppet;
   /** Overlay-local DIP bounds of everything drawn this frame. */
   readonly bounds: Rect = { x: 0, y: 0, width: 0, height: 0 };
-  /** Hit rects (overlay-local DIP): head, body, legs, tail base. */
+  /** Hit rects (overlay-local DIP): head, body, front legs, tail base, hind legs, front paws, hind paws. */
   readonly hitRects: Rect[] = [];
   hitCount = 0;
 
@@ -107,7 +109,7 @@ export class CatScene {
 
   constructor(random: () => number) {
     this.puppet = new CatPuppet(random);
-    for (let i = 0; i < 4; i++) this.hitRects.push({ x: 0, y: 0, width: 0, height: 0 });
+    for (let i = 0; i < HIT_RECTS; i++) this.hitRects.push({ x: 0, y: 0, width: 0, height: 0 });
   }
 
   /** Behaviour state and clip of the last update (debug overlay). */
@@ -216,6 +218,7 @@ export class CatScene {
         contentment: s.contentment,
         animSpeed: s.animSpeed,
         reaction,
+        movementSpeed: s.movementSpeed,
       },
       input.simTime,
       dt,
@@ -352,10 +355,16 @@ export class CatScene {
       const ly = (i & 2 ? 18.7 : -5.3) * hf;
       this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 0.5, -1);
     }
+    // Legs per pair (front, hind): knees and legs down to the paw centres, and the paws in a rect of
+    // their own. One box over all four legs would span the gap between the pairs at the full width of
+    // a knee or paw: on a wall the paws grip the wall line, so it reached into the window the cat
+    // clings to over a band where nothing is drawn.
     for (let i = 0; i < LEG_COUNT; i++) {
       const g = rig.legs[i]!;
-      this.acc(g.kx, g.ky, 4.5, 2);
-      this.acc(g.fx, g.fy, PAW_RX, 2);
+      const front = i === LEG_FN || i === LEG_FF;
+      this.acc(g.kx, g.ky, 4.5, front ? 2 : 4);
+      this.acc(g.fx, g.fy, 0, front ? 2 : 4);
+      this.acc(g.fx, g.fy, PAW_RX, front ? 5 : 6);
     }
     const n = tail.count;
     for (let i = 0; i < n; i++) this.acc(tail.x[i]!, tail.y[i]!, tail.radius(i) + 1, i <= n * 0.5 ? 3 : -1);

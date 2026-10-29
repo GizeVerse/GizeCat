@@ -2,6 +2,8 @@
 // would paint: path geometry is transformed by the current matrix, curves are
 // sampled, strokes are widened by half the (transformed) line width. Clips are
 // ignored, so the box is an upper bound of the painted pixels (before anti-aliasing).
+// With `record`, every fill and stroke is also kept as device-space subpaths, so a test can ask
+// how far a point is from anything painted (paintDistance; again an upper bound of the paint).
 import type { Ctx2D } from '../../../src/renderer/overlay/cat/draw';
 
 export interface Box {
@@ -17,7 +19,19 @@ export interface ExtentCtx {
   readonly box: Box;
   /** drawImage destination rects (device space). */
   readonly images: Box[];
+  /** Every visible fill and stroke since the last reset (only with `record`). */
+  readonly shapes: PaintedShape[];
   reset(): void;
+}
+
+/** One painted path, device space: subpaths as flat [x, y, ...] lists. */
+export interface PaintedShape {
+  fill: boolean;
+  /** Half the stroke width (0 for fills). */
+  r: number;
+  subs: number[][];
+  /** Per subpath: closed (closePath, rect; fills are always closed). */
+  closed: boolean[];
 }
 
 type Mat = [number, number, number, number, number, number];
@@ -37,7 +51,53 @@ export function boxInside(inner: Box, outer: { x: number; y: number; w: number; 
   return inner.x0 >= outer.x - slack && inner.y0 >= outer.y - slack && inner.x1 <= outer.x + outer.w + slack && inner.y1 <= outer.y + outer.h + slack;
 }
 
-export function createExtentCtx(width = 4096, height = 4096): ExtentCtx {
+function segmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.min(1, Math.max(0, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** Crossing-number test of one closed polygon. */
+function insidePolygon(px: number, py: number, pts: readonly number[]): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 2; i < pts.length; j = i, i += 2) {
+    const xi = pts[i]!;
+    const yi = pts[i + 1]!;
+    const xj = pts[j]!;
+    const yj = pts[j + 1]!;
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Device-space distance from (px, py) to the nearest painted pixel of `shapes` (0 inside a fill
+ * or a stroke). A point inside any subpath of a fill counts as painted (holes are ignored), so
+ * this is an upper bound of the paint, like the box.
+ */
+export function paintDistance(shapes: readonly PaintedShape[], px: number, py: number): number {
+  let best = Infinity;
+  for (const s of shapes) {
+    for (let k = 0; k < s.subs.length; k++) {
+      const pts = s.subs[k]!;
+      const n = pts.length;
+      if (n < 2) continue;
+      if (s.fill && n >= 6 && insidePolygon(px, py, pts)) return 0;
+      const closed = s.fill || s.closed[k] === true;
+      let d = n === 2 ? Math.hypot(px - pts[0]!, py - pts[1]!) : Infinity;
+      for (let i = 0; i + 3 < n; i += 2) d = Math.min(d, segmentDistance(px, py, pts[i]!, pts[i + 1]!, pts[i + 2]!, pts[i + 3]!));
+      if (closed && n >= 4) d = Math.min(d, segmentDistance(px, py, pts[n - 2]!, pts[n - 1]!, pts[0]!, pts[1]!));
+      d -= s.r;
+      if (d <= 0) return 0;
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+export function createExtentCtx(width = 4096, height = 4096, opts: { record?: boolean } = {}): ExtentCtx {
   let m: Mat = [1, 0, 0, 1, 0, 0];
   let props: Record<string, unknown> = {
     globalAlpha: 1,
@@ -51,17 +111,25 @@ export function createExtentCtx(width = 4096, height = 4096): ExtentCtx {
     imageSmoothingEnabled: true,
   };
   const stack: Saved[] = [];
-  /** Current path, device space. */
+  /** Current path, device space; subpaths start at these indices of `path`. */
   let path: number[] = [];
+  let subStarts: number[] = [];
+  let subClosed: boolean[] = [];
   let curX = 0;
   let curY = 0;
   let startX = 0;
   let startY = 0;
   const box = emptyBox();
   const images: Box[] = [];
+  const shapes: PaintedShape[] = [];
+  const record = opts.record === true;
 
   const tx = (x: number, y: number): [number, number] => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
   const addPoint = (x: number, y: number): void => {
+    if (subStarts.length === 0) {
+      subStarts.push(0);
+      subClosed.push(false);
+    }
     const [X, Y] = tx(x, y);
     path.push(X, Y);
     curX = x;
@@ -71,6 +139,16 @@ export function createExtentCtx(width = 4096, height = 4096): ExtentCtx {
     m = [m[0] * a + m[2] * b, m[1] * a + m[3] * b, m[0] * c + m[2] * d, m[1] * c + m[3] * d, m[0] * e + m[2] * f + m[4], m[1] * e + m[3] * f + m[5]];
   };
   const visible = (): boolean => Number(props.globalAlpha) > 0.001;
+  const newSubpath = (): void => {
+    subStarts.push(path.length);
+    subClosed.push(false);
+  };
+  const keep = (fill: boolean, r: number): void => {
+    if (!record) return;
+    const subs: number[][] = [];
+    for (let k = 0; k < subStarts.length; k++) subs.push(path.slice(subStarts[k], subStarts[k + 1] ?? path.length));
+    shapes.push({ fill, r, subs, closed: [...subClosed] });
+  };
   const grow = (x: number, y: number, r: number): void => {
     if (x - r < box.x0) box.x0 = x - r;
     if (y - r < box.y0) box.y0 = y - r;
@@ -126,8 +204,11 @@ export function createExtentCtx(width = 4096, height = 4096): ExtentCtx {
     },
     beginPath() {
       path = [];
+      subStarts = [];
+      subClosed = [];
     },
     moveTo(x, y) {
+      newSubpath();
       addPoint(x, y);
       startX = x;
       startY = y;
@@ -136,6 +217,7 @@ export function createExtentCtx(width = 4096, height = 4096): ExtentCtx {
       addPoint(x, y);
     },
     closePath() {
+      if (subClosed.length > 0) subClosed[subClosed.length - 1] = true;
       curX = startX;
       curY = startY;
     },
@@ -167,14 +249,17 @@ export function createExtentCtx(width = 4096, height = 4096): ExtentCtx {
       arcPoints(x, y, rx, ry, rot, a0, a1, Boolean(ccw));
     },
     rect(x, y, w, h) {
+      newSubpath();
       addPoint(x, y);
       addPoint(x + w, y);
       addPoint(x + w, y + h);
       addPoint(x, y + h);
+      subClosed[subClosed.length - 1] = true;
     },
     fill() {
       if (!visible()) return;
       for (let i = 0; i < path.length; i += 2) grow(path[i]!, path[i + 1]!, 0);
+      keep(true, 0);
     },
     stroke() {
       if (!visible()) return;
@@ -182,18 +267,22 @@ export function createExtentCtx(width = 4096, height = 4096): ExtentCtx {
       const k = Math.max(Math.hypot(m[0], m[1]), Math.hypot(m[2], m[3]));
       const r = (Number(props.lineWidth) / 2) * k;
       for (let i = 0; i < path.length; i += 2) grow(path[i]!, path[i + 1]!, r);
+      keep(false, r);
     },
     fillRect(x, y, w, h) {
       if (!visible()) return;
+      const corners: number[] = [];
       for (const [px, py] of [
         [x, y],
         [x + w, y],
-        [x, y + h],
         [x + w, y + h],
+        [x, y + h],
       ] as const) {
         const [X, Y] = tx(px, py);
         grow(X, Y, 0);
+        corners.push(X, Y);
       }
+      if (record) shapes.push({ fill: true, r: 0, subs: [corners], closed: [true] });
     },
     strokeRect() {
       // Debug overlay only.
@@ -248,13 +337,17 @@ export function createExtentCtx(width = 4096, height = 4096): ExtentCtx {
     ctx,
     box,
     images,
+    shapes,
     reset() {
       box.x0 = Infinity;
       box.y0 = Infinity;
       box.x1 = -Infinity;
       box.y1 = -Infinity;
       images.length = 0;
+      shapes.length = 0;
       path = [];
+      subStarts = [];
+      subClosed = [];
       m = [1, 0, 0, 1, 0, 0];
       stack.length = 0;
     },

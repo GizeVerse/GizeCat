@@ -19,8 +19,8 @@ function isReaction(v: unknown): v is CatReaction {
 }
 
 /**
- * True for a usable snapshot. A malformed optional `reaction` never costs the frame: it is
- * replaced with null on the snapshot (a copy IPC made for this renderer).
+ * True for a usable snapshot. A malformed optional field never costs the frame: a bad `reaction`
+ * becomes null and a bad `movementSpeed` is dropped, on the snapshot (a copy IPC made for this renderer).
  */
 export function isRenderState(v: unknown): v is CatRenderState {
   if (typeof v !== 'object' || v === null) return false;
@@ -41,6 +41,7 @@ export function isRenderState(v: unknown): v is CatRenderState {
     if (!isNum(l.x) || !isNum(l.y)) return false;
   }
   if (s.reaction !== undefined && s.reaction !== null && !isReaction(s.reaction)) s.reaction = null;
+  if (s.movementSpeed !== undefined && !(isNum(s.movementSpeed) && s.movementSpeed > 0)) delete s.movementSpeed;
   return true;
 }
 

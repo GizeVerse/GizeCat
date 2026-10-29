@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ClickThroughGate, decideInteractive, suggestPollIntervalMs } from '../../../../src/core/interaction/clickThrough';
+import { ClickThroughGate, clipRects, decideInteractive, suggestPollIntervalMs } from '../../../../src/core/interaction/clickThrough';
 import type { ClickThroughInput } from '../../../../src/core/interaction/clickThrough';
 
 const cat = { x: 100, y: 100, width: 80, height: 60 };
@@ -56,6 +56,64 @@ describe('decideInteractive', () => {
     expect(decideInteractive({ ...base, cursor: { x: NaN, y: 0 } })).toBe(false);
     expect(decideInteractive({ ...base, hitRects: [] })).toBe(false);
     expect(decideInteractive({ ...base, hitRects: [{ x: 100, y: 100, width: 0, height: 60 }] })).toBe(false);
+  });
+});
+
+describe('decideInteractive: excluded areas (taskbars)', () => {
+  // A taskbar whose top edge is at y = 150: it covers the cat's lower 10 rows.
+  const taskbar = { x: 0, y: 150, width: 1920, height: 60 };
+
+  it('never takes the mouse inside an excluded area, also within the hysteresis margin', () => {
+    const over = { ...base, excludeRects: [taskbar] };
+    expect(decideInteractive({ ...over, cursor: { x: 120, y: 149 } })).toBe(true);
+    for (const interactive of [false, true]) {
+      for (const y of [150, 155, 159, 161]) expect(decideInteractive({ ...over, interactive, cursor: { x: 120, y } }), `y=${y}`).toBe(false);
+    }
+    // Without the exclusion the same rows belong to the cat (and the margin reaches 3 px further).
+    expect(decideInteractive({ ...base, cursor: { x: 120, y: 155 } })).toBe(true);
+    expect(decideInteractive({ ...base, interactive: true, cursor: { x: 120, y: 161 } })).toBe(true);
+  });
+
+  it('stays click-through when nothing of the region is left once the excluded areas are cut out', () => {
+    const covered = { ...base, excludeRects: [{ x: 0, y: 0, width: 300, height: 130 }, { x: 0, y: 130, width: 300, height: 100 }] };
+    for (const cursor of [{ x: 120, y: 120 }, { x: 179, y: 159 }, { x: 100, y: 100 }]) {
+      expect(decideInteractive({ ...covered, cursor })).toBe(false);
+      expect(decideInteractive({ ...covered, cursor, interactive: true })).toBe(false);
+    }
+  });
+
+  it('keeps an ongoing drag (the press started outside) and ignores empty or non-finite areas', () => {
+    expect(decideInteractive({ ...base, excludeRects: [taskbar], dragging: true, cursor: { x: 120, y: 170 } })).toBe(true);
+    const junk = [{ x: 0, y: 0, width: 0, height: 500 }, { x: Number.NaN, y: 0, width: 500, height: 500 }, { x: 0, y: 0, width: Infinity, height: 500 }];
+    expect(decideInteractive({ ...base, excludeRects: junk })).toBe(true);
+  });
+});
+
+describe('clipRects', () => {
+  const area = (rs: readonly { width: number; height: number }[]): number => rs.reduce((a, r) => a + r.width * r.height, 0);
+  const covers = (rs: readonly { x: number; y: number; width: number; height: number }[], x: number, y: number): number =>
+    rs.filter((r) => x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height).length;
+
+  it('cuts holes out exactly, without overlapping pieces', () => {
+    const holes = [
+      { x: 110, y: 90, width: 20, height: 30 }, // notch at the top
+      { x: 150, y: 140, width: 100, height: 100 }, // bottom-right corner
+      { x: 0, y: 0, width: 10, height: 10 }, // elsewhere
+    ];
+    const out = clipRects([cat], holes);
+    expect(area(out)).toBe(80 * 60 - 20 * 20 - 30 * 20);
+    for (let x = 95; x < 185; x += 1) {
+      for (let y = 95; y < 165; y += 1) {
+        const inCat = x >= 100 && x < 180 && y >= 100 && y < 160;
+        const inHole = holes.some((h) => x >= h.x && x < h.x + h.width && y >= h.y && y < h.y + h.height);
+        expect(covers(out, x, y), `${x},${y}`).toBe(inCat && !inHole ? 1 : 0);
+      }
+    }
+  });
+
+  it('returns nothing for a fully covered rect and drops empty input rects', () => {
+    expect(clipRects([cat], [{ x: 0, y: 0, width: 500, height: 500 }])).toEqual([]);
+    expect(clipRects([{ x: 0, y: 0, width: 0, height: 5 }, cat], [])).toEqual([cat]);
   });
 });
 
