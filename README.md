@@ -1,6 +1,6 @@
 # Desktop Cat
 
-A living desktop companion for Windows: **one** animated, persistent cat that lives on top of your desktop, wanders along the bottom of your screen and the tops of your windows, naps when you're away, watches you work, reacts to windows opening and closing, and can be petted, picked up and thrown — without ever getting in the way of your clicks.
+A living desktop companion for Windows: **one** animated, persistent cat that lives on top of your desktop, wanders along the bottom of your screen, climbs the sides of windows and walks along their tops and along browser tab strips, rides an auto-hiding taskbar as it slides in, naps when you're away, watches you work, reacts to windows opening and closing, and can be petted, picked up and thrown — without ever getting in the way of your clicks. It starts with Windows (you can turn that off).
 
 ![The cat's coats and poses, rendered by the app's own renderer](docs/images/skins.png)
 
@@ -8,11 +8,11 @@ A living desktop companion for Windows: **one** animated, persistent cat that li
 - **Click-through by design** — only the cat's body catches the mouse; everything else goes to the windows underneath. No global mouse or keyboard hooks.
 - **Works offline, no AI required.** Optional, opt-in screen perception (local statistics, or an AI vision model you configure) with privacy enforced in code.
 
-> Status: v1.0.0, built and validated on Windows 11 (see [Tested environments](#tested-environments)). The installer is **not code-signed**.
+> Status: v1.1.0, built and validated on Windows 11 (see [Tested environments](#tested-environments)). The installer is **not code-signed**.
 
 ## Install
 
-Build the installer with `npm run package` (see [Build, run, test](#build-run-test)) — no release is published yet — then run `release/Desktop-Cat-Setup-1.0.0.exe` (per-user install, no admin). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. Uninstall from Windows Settings → Apps.
+Build the installer with `npm run package` (see [Build, run, test](#build-run-test)) — no release is published yet — then run `release/Desktop-Cat-Setup-1.1.0.exe` (per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`, no admin). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. From then on Desktop Cat starts when you sign in to Windows (one-time notification; turn it off in Settings → General or Task Manager → Startup apps — an opt-out is never overridden). Upgrading from 1.0 keeps your cat and settings. Uninstall from Windows Settings → Apps (removes the startup entry too).
 
 ## Controls
 
@@ -29,7 +29,7 @@ Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## What is implemented
 
-**Overlay & Windows integration.** Rendering adapts its frame rate (display rate while moving, ~30 fps when calm, ~20 fps asleep). One transparent, frameless, non-focusable, topmost overlay per display (sized to the work area), never moved or hidden (works around Electron's transparent-window bugs); main-process cursor polling decides click-through against the cat's reported hit region; hung/crashed renderers are forced click-through and recreated. Multi-monitor and mixed-DPI coordinates (physical px world, per-display DIP rendering), display add/remove/re-layout, auto-hide taskbars. Tray, global shortcut, single-instance lock (second launch surfaces the running cat), launch at sign-in (opt-in), graceful quit (the cat falls asleep, state saved), session-end/suspend saves, crash guard.
+**Overlay & Windows integration.** Rendering adapts its frame rate (display rate while moving, ~30 fps when calm, ~20 fps asleep). One transparent, frameless, non-focusable, topmost overlay per display (sized to the work area), never moved or hidden (works around Electron's transparent-window bugs); main-process cursor polling decides click-through against the cat's reported hit region; hung/crashed renderers are forced click-through and recreated. Multi-monitor and mixed-DPI coordinates (physical px world, per-display DIP rendering), display add/remove/re-layout, auto-hide taskbars. Tray, global shortcut, single-instance lock (second launch surfaces the running cat), launch at sign-in (v1.1: on by default through the standard per-user Run entry; opt-outs in the app or in Task Manager are kept; registered only by the installed app; removed by the uninstaller), graceful quit (the cat falls asleep, state saved), session-end/suspend saves, crash guard.
 
 **The cat.** A 24-state behaviour machine (sleeping, waking, idle, walking, running, chasing/watching the cursor, curious, inspecting/perching on windows, watching you work, playing, petted, startled, annoyed, seeking attention, resting, grooming, hiding, falling asleep, held, jumping, falling, landing, away) with an explicit transition table, priorities, dwell times, cooldowns and anti-thrash rules; utility-scored autonomous choices with bounded seeded randomness; physics (gravity, ballistic jumps onto window tops, riding moving windows, drag and throw). Persistent personality (traits), needs (energy, boredom, bond, annoyance, fear), favourite spots, learned preferences and a small memory, in a versioned schema with migration and corrupt-file recovery.
 
@@ -47,11 +47,13 @@ Screenshots are of the real settings window driven by the real main process (`sc
 
 **Security.** Sandboxed renderers, context isolation, custom scheme + strict CSP, validated IPC with sender checks, DPAPI-encrypted keys never exposed to renderers, Electron fuses on packaged builds. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
+**Environment surfaces (v1.1).** One physics model for every surface: the floor, window tops (DWM visual frame, Windows 11 rounded corners inset, z-order occlusion aware), window sides the cat climbs (with corner pull-up and climbing down), browser tab strips, and the auto-hiding taskbar as a **moving** ledge (the cat may hop on, rides it up and down, and is set down calmly when it hides; never stuck on a vanished surface). Riding follows dragged windows; covered or closed surfaces end in a calm drop or a short start. Taskbars are tracked with cheap adaptive geometry sampling (no screenshots); overlays carry `NonRudeHWND` so Windows no longer strips the taskbar's always-on-top flag, and a click guard keeps taskbar clicks and auto-hide reveals working under the cat. Tab strips of Edge and Chrome come from a small bundled UI Automation helper (`DesktopCatUia.exe`): geometry only, never tab names or page content, never clicks, scoped so the browser's web accessibility is not switched on. Each behaviour has its own switch (*Play with the taskbar*, *Climb windows*, *Walk on browser tabs*).
+
 ## Not implemented / future possibilities
 
-- UI Automation (accessibility tree) awareness — not implemented; window metadata is used instead.
+- Top, left and right taskbars as surfaces (they are tracked, but only bottom auto-hide taskbars are ledges); Firefox and vertical-tab layouts for tab strips.
 - Sounds (meows/purrs) — not implemented.
-- Climbing window sides, multiple skins per cat at once, localisation beyond English.
+- Multiple skins per cat at once, localisation beyond English.
 - Code signing and auto-update — not configured (no signing identity available).
 
 ## Build, run, test
@@ -78,7 +80,8 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 
 | Environment | What ran | Result |
 |---|---|---|
-| Windows 11 Home 10.0.26200, x64, one 1920×1200 display at 125 %, auto-hide taskbar | typecheck, lint, 1128 unit/integration tests (88 files), 22 Playwright E2E tests (6 spec files) against the real app, Win32 probe (31 checks), desktop compositing QA, packaged-exe smoke, silent install/uninstall, resource benchmark | all pass — see [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
+| Windows 11 Home 10.0.26200, x64, one 1920×1200 display at 125 %, auto-hide bottom taskbar, Edge 156, Chrome 155 | v1.1: typecheck, lint, 2834 unit/integration tests, 30 Playwright E2E tests against the real app (28 passed + 2 environment skips in the final run, all 30 passed earlier), silent install with startup registration/repair/Task-Manager-disable/upgrade/uninstall checks, a real 1.0 → 1.1 upgrade with settings migration, taskbar/z-order probe with control, UI Automation probe with own Edge/Chrome instances, packaged smoke, resource benchmark | all pass — see [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
+| Reboot / sign-in start, a physically revealed taskbar with the cat riding it | registration verified on a real install; riding SIMULATED through the real app | **not observed** |
 | Windows 10 | — | **not tested** (Win32 APIs used exist since 1903; expected to work) |
 | Multi-monitor / mixed DPI hardware | unit-tested with synthetic layouts only | **not tested on hardware** |
 | Real Ollama / LM Studio / Anthropic endpoints | adapters tested against local mock servers | **not tested against real providers** |

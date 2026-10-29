@@ -1,6 +1,63 @@
-# Test report — Desktop Cat 1.0.0
+# Test report — Desktop Cat
 
-Date: 2026-10-28. Code: branch `feat/desktop-cat-v1`, installer built from commit `6ca2bec`. Labels: **REAL** = executed and observed on the machine below; **MOCKED** = executed against fakes/mock servers; **UNVERIFIED** = not executed.
+Labels: **REAL** = executed and observed on the machine below; **MOCKED** = executed against fakes/mock servers; **SIMULATED** = real code driven with synthetic geometry/events; **UNVERIFIED** = not executed.
+
+# v1.1.0 (2026-10-29)
+
+Code: branch `feat/v1.1-surfaces`, installer built from commit `9b5314c`. Same machine as v1.0 (below): Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide **bottom** taskbar, Edge 156.0.4314.50, Chrome 155.0.8059.79. During the final runs the user had a full-monitor Chrome window in front (this strips the taskbar's topmost flag — a Windows behaviour, see below).
+
+## Automated suites
+
+| Tier | Result |
+|---|---|
+| `node .claude/scripts/verify.mjs full` | **PASS** — typecheck 0 errors (node + web), lint 0 problems, unit, build, e2e |
+| Vitest (unit + integration) | **2834 passed, 2 skipped** (118 files). The 2 skipped are real-browser tests gated by `DESKTOP_CAT_REAL_BROWSER=1`; run with the flag they passed (REAL, Edge + Chrome) |
+| Playwright E2E (real app) | **28 passed, 2 skipped** of 30 (6 + 1 new spec files). The 2 skips are environment preconditions that held during the final run: *taskbar topmost before start* and *probe window really topmost* — both were false because of the user's full-monitor Chrome window (verified with a read-only check: taskbar `WS_EX_TOPMOST` already cleared with Desktop Cat not running; Windows' hit-test at the probe's edge returned another window). Both tests passed REAL earlier in the session (30/30 at `0413285`) when no fullscreen window was in front |
+
+New coverage (all deterministic): login-item reconcile tables, a FakeWindowsLogin mirroring Electron's quoting/StartupApproved rules, migration v1→v2 (true/false/missing/corrupt, opt-out evidence), property test "no automatic re-enable after an opt-out"; taskbar discovery/state machine/cadence/click guard (incl. hidden secondary taskbars, Explorer restart, flapping); surface provider (occlusion, rounded-corner insets at 100/125/150 %, riding through fast drags/resizes, calm drops when covered, private windows, tab-strip replacement); surface graph, climbing, pull-up, lifting/lowering ledges, retraction without fear, 50 taskbar flaps in 10 s, fuzz with dynamic taskbars/walls/tab strips (invariant: a visible cat never stays inside a shown taskbar); UIA protocol client (timeouts, malformed/oversized lines, crash/stall budgets, per-window quarantine), segment math; climb clip poses, hit rects (paws only past the wall line), presence margins.
+
+## Real-Windows checks (REAL)
+
+| Area | Check | Result |
+|---|---|---|
+| Launch at sign-in | `scripts/install-test.ps1` with the 1.1.0 installer, installed into `%TEMP%\dcat install <rand>` (path with a space) | exit 0, `ok: true`: first start registered exactly `"…\dcat install ad852307\DesktopCat.exe" --launched-at-login` and no StartupApproved value; a stale path was **repaired**; a Task Manager disable (`03`+FILETIME) was **left untouched** (rule `windows-disabled`); upgrade kept both values; uninstall (`Uninstall DesktopCat.exe`) removed both and wrote the reinstall marker; cleanup left nothing |
+| Upgrade 1.0 → 1.1 | `scripts/upgrade-test.ps1 -OldInstaller …1.0.0.exe` with a v1-shaped `settings.json` (`launchAtLogin:false`) | exit 0, `ok: true`: both installers exit 0, one uninstall entry (1.1.0); settings migrated to schema 2 (name and coat kept, `launchAtLogin` removed, `loginItem` = unset/default with `v1Value:false`); startup registered with the exact installed path; uninstall removed Run + StartupApproved |
+| Registry/quoting | `scripts/login-item-probe.mjs`, `tests/integration/win32/registry.real.test.ts`, NSIS `customUnInstall` harness (makensis 3.0.4.1) | all pass: byte-exact match with Electron's quoting incl. spaces/non-ASCII (149-char golden string); StartupApproved rule agrees with Electron on 6 byte patterns; 7 registry and 11 uninstaller cases; unique test value names, cleanup confirmed |
+| Packaged app | `npm run package`, fuses, `smoke-packaged.mjs` | `release/Desktop-Cat-Setup-1.1.0.exe` (115.8 MB, unsigned); fuses as v1.0; `resources/native/DesktopCatUia.exe --version` → protocol 1, per-monitor-v2; smoke: 0 errors/warnings, second launch exits 0, login item gate closed (`DESKTOP_CAT_LOGIN_ITEM=off`, no uninstaller next to win-unpacked) |
+| Taskbar vs overlay | `scripts/taskbar-probe.mjs` (earlier in the session, no fullscreen window in front) | with `NonRudeHWND` the taskbar kept `WS_EX_TOPMOST` in 41/41 samples and the bottom reveal row hit-tested as the taskbar; **control** without the fix: topmost lost after 63 ms and the reveal strip stopped hit-testing — the v1.0 overlay had this defect |
+| Taskbar transition | observed passively (no synthetic input): a first-run Welcome window started from a background process revealed the auto-hide taskbar | Explorer slid it in over ~190 ms in ~9 visible steps and out over ~400 ms; the real tracker followed showing → shown → hiding → hidden, the ledge appeared at 54 % shown, one `taskbar.shown` and one `taskbar.hidden` event. The reveal was caused by a refused focus request and pinned the taskbar open (36/38 samples); fixed — the app-initiated Welcome window opens inactive: 0/38 (`scripts/qa-taskbar-firstrun.mjs`) |
+| Window surfaces | own throwaway topmost window (separate Electron process) | `windowTop` at the DWM frame top (rounded corners inset ≥ 10 px), left/right walls; a programmatic move followed within 5 s; minimize removed its surfaces |
+| Tab strips | `scripts/uia-probe.mjs --browsers edge,chrome` with own throwaway instances (temp profiles) | Edge 156 and Chrome 155: strip, 3 tabs, new-tab/caption buttons located; walkable segment excludes them; `tabs.changed added` ~180 ms after a new tab; helper 22 MB private / 31 MB working set; **no web-accessibility activation** (browser growth +0.1–0.3 MB) while a positive control with a naive query was detected (+75–78 MB); maximize removes the strip; instances closed gracefully, profiles deleted. A suspended (hung) own Edge for 45 s: 2 timeouts, feature stayed available, strip back after resume |
+| Climbing art | preview sheets (`render-preview.cjs --only=climb*`) | all skins, both facings, smooth/pixel, transitions walk → climb → pull-up → stand reviewed visually |
+
+## Resource benchmark (REAL, `scripts/bench.mjs --phase-sec=90`)
+
+Code at `0413285` (before the review fixes, which only lowered taskbar sampling further). CPU in % of one core summed over all processes. Raw data: `docs/bench/bench-2026-10-29T04-41-25-454Z.json`.
+
+| Phase | CPU avg (max) | Private MB | Timers / handles |
+|---|---|---|---|
+| Awake, kept active (grooming, resting; 44 % of samples napping on this idle machine) | 0.95 % (1.06 %) | 338 → 383 | 4 → 4 / 6 → 6 |
+| Asleep | 0.58 % (0.79 %) | 388 → 369 | 4 → 4 / 6 → 6 |
+| Hidden | **0.02 %** (0.04 %) | 314 → 312 | 4 → 4 / 6 → 6 |
+| Paused | 0.54 % (0.56 %) | 323 → 329 | 4 → 4 / 6 → 6 |
+
+Compared with v1.0 (asleep 0.55 %, hidden 0.03 %, paused 0.53 %), the new observers cost ≈ 0.03 % of a core at rest. 0 warnings/errors, 0 tick errors. Main heap 12 → 15 MB over ~7 min (within GC noise for this duration; longer runs UNVERIFIED).
+
+## Adversarial review (REAL)
+
+7 dimensions over the v1.1 diff with an independent verifier each: **57 findings, 48 confirmed, 9 refuted, 0 critical/high**. All 36 code findings fixed with regression tests (mutation-checked by the fix agents); 12 documentation findings corrected. Notable: the cat on the auto-hide floor made the reveal strip interactive; a perched cat fell when its window was dragged fast or covered, or when the browser's tab strip was discovered; one hung browser disabled tab strips for the session; the diagnostics export leaked the Windows user name through the registered path; status stayed wrong after re-enabling in Task Manager.
+
+## Not verified in v1.1 (UNVERIFIED)
+
+- An actual **reboot / sign-in** that starts the app from the Run key (registration, quoting and repair were verified on a real install; the start by Windows was not observed).
+- The cat **riding a physically revealed taskbar** under a real mouse (the reveal itself was observed; riding was SIMULATED through the real app with injected geometry).
+- The one-time tray notification actually appearing (its delivery is tested against a mocked Electron; `noticeShown` stayed false in the upgrade run).
+- Standard-user (non-elevated) token: this session ran with a high-integrity token; no step requires elevation by design (`asInvoker`, HKCU only).
+- Multiple monitors, secondary taskbars, top/left/right taskbars (not ledges by design), mixed DPI hardware, Windows 10, Firefox (not supported), vertical tabs, long runs beyond ~7 minutes.
+
+# v1.0.0 (2026-10-28)
+
+Code: branch `feat/desktop-cat-v1`, installer built from commit `6ca2bec`.
 
 ## Environment
 
