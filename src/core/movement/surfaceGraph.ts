@@ -17,6 +17,7 @@
 import { clamp } from '../../shared/geometry';
 import { MOVEMENT, ROUTE_EFFORT } from './constants';
 import type { Surface, WallTrack, WorldModel } from './world';
+import { setDownX } from './world';
 
 export type GraphNodeKind = 'floor' | 'ledge' | 'wallUp' | 'wallDown';
 export type GraphEdgeKind = 'walk' | 'jump' | 'drop' | 'mount' | 'leap' | 'pullUp' | 'swing' | 'dismount';
@@ -521,12 +522,16 @@ export class SurfaceGraph {
     return out;
   }
 
-  /** Where climbing down a wall ends: the first support beside its foot (possibly below it, then the cat hops down). */
+  /**
+   * Where climbing down a wall ends: the first support beside its foot (possibly below it, then
+   * the cat hops down). On a tab strip's window top beside the strip (landWide) it steps off
+   * beside the wall and walks in, never glides along the top into the stand range.
+   */
   dismountTarget(world: WorldModel, w: WallTrack): { surface: Surface; x: number; y: number } | null {
     const bw = world.bodyWidth(w.scale);
     const top = w.topLedgeId;
     const below = world.surfaceBelow(w.standX, w.yTop + bw * 0.3, top ? this.ledgeList.filter((l) => l.key !== top) : this.ledgeList);
-    return below ? { surface: below.surface, x: below.x, y: below.y } : null;
+    return below ? { surface: below.surface, x: setDownX(below.surface, w.standX), y: below.y } : null;
   }
 
   private dismountEdge(world: WorldModel, w: WallTrack): GraphEdge | null {

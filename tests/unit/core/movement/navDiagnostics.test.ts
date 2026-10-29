@@ -57,6 +57,44 @@ describe('Mover.navDiagnostics', () => {
     expect(off.m.navDiagnostics().reachable).toEqual({ taskbar: 0, windowTop: 1, windowSide: 0, tabStrip: 0 });
   });
 
+  it('counts a side as reachable only when it leads over a usable top (v1.1.1 review BEH-1)', () => {
+    // Each side can be leapt onto from the floor (it ends 240 px up) but leads nowhere: the cat
+    // could never get up, so neither the counts nor the outlines may call it reachable.
+    const cases: Array<[string, Surface[]]> = [
+      ['its top is not listed (a window snapped to the screen top)', [wall('n', 'left', 1000, 300, 800, { topLedgeId: null })]],
+      ['its top is turned down (no headroom)', [ledge(topId('n'), 'windowTop', 'n', 40, 1000, 1400), wall('n', 'left', 1000, 40, 800)]],
+      ['its top is not at its corner', [H, wall('n', 'left', 1000, 300, 800, { topLedgeId: H.id })]],
+    ];
+    for (const [why, surfaces] of cases) {
+      const d = make();
+      d.extra = surfaces;
+      d.step();
+      const n = d.m.navDiagnostics();
+      expect(n.accepted.windowSide, why).toBe(1);
+      expect(n.reachable, why).toEqual({ taskbar: 0, windowTop: 0, windowSide: 0, tabStrip: 0 });
+      expect(d.m.climbOptions(), why).toEqual([]);
+      expect(d.m.debugLines().find((l) => l.kind === 'windowSide')?.role, why).toBe('valid');
+    }
+  });
+
+  it('counts a side it can only climb down from its top as reachable', () => {
+    // The side ends 590 px above the floor (out of leap reach from below); the cat stands on its top.
+    const T = ledge(topId('t'), 'windowTop', 't', 300, 1000, 1400);
+    const d = make();
+    d.extra = [T, wall('t', 'left', 1000, 300, 450)];
+    d.step();
+    d.m.startDrag({ x: d.m.x, y: d.m.y });
+    d.dragCursor = { x: 1200, y: 200 };
+    d.until(() => false, 400);
+    d.m.endDrag(null, { x: 0, y: 0 }, d.now, false);
+    d.dragCursor = null;
+    expect(d.until((r) => r.landed !== null, 3000)).toBe(true);
+    expect(d.m.support).toMatchObject({ surfaceId: T.id });
+    d.step(600);
+    expect(d.m.navDiagnostics().reachable.windowSide).toBe(1);
+    expect(d.m.debugLines().find((l) => l.kind === 'windowSide')?.role).toBe('reachable');
+  });
+
   it('recomputes reachability at most every 500 ms of sim time', () => {
     const d = make();
     d.extra = [A, H, H_LEFT, K];
@@ -148,6 +186,24 @@ describe('Mover.debugLines', () => {
     expect(lines[0]?.role).toBe('support');
     // Everything accepted is drawn (64 tops, 64 sides, the floor); rejected ones are cut first.
     expect(lines.filter((l) => l.role !== 'rejected').length).toBe(1 + 64 + 64);
+  });
+
+  it('draws nothing on an off-limits display (a fullscreen app in front), all of it again once open (v1.1.1 review SEC-1)', () => {
+    const d = make(DUAL_FLAT);
+    d.m.setOffLimitsDisplays(['2']);
+    d.extra = [A, ledge(topId('b'), 'windowTop', 'b', 800, 2400, 2900), wall('b', 'left', 2400, 800, 1040)];
+    d.step();
+    expect(d.m.navDiagnostics().rejected).toEqual({ offDisplay: 2 });
+    const lines = d.m.debugLines();
+    expect(lines).toContainEqual({ kind: 'floor', role: 'support', x0: 0, y0: 1040, x1: 1920, y1: 1040 });
+    expect(lines).toContainEqual({ kind: 'windowTop', role: 'reachable', x0: 400, y0: 800, x1: 900, y1: 800 });
+    expect(lines.filter((l) => Math.max(l.x0, l.x1) > 1920)).toEqual([]);
+    d.m.setOffLimitsDisplays([]);
+    d.step(600);
+    const open = d.m.debugLines();
+    expect(open).toContainEqual({ kind: 'floor', role: 'support', x0: 1920, y0: 1040, x1: 3840, y1: 1040 });
+    expect(open.filter((l) => l.kind === 'windowTop' && l.x0 === 2400)).toHaveLength(1);
+    expect(open.filter((l) => l.kind === 'windowSide' && l.x0 === 2400)).toHaveLength(1);
   });
 
   it('lists a side it can only leap onto among its climb options', () => {

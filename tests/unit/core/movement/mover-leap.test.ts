@@ -376,8 +376,8 @@ describe('Mover: onto a tab strip via its window top (v1.1.1 RC6)', () => {
   const STRIP = tabStrip('w', 400, 1000, 1150, { x0: 1020, x1: 1130 }, 1080, { land: { x0: 800, x1: 1300 } });
   const sides: Surface[] = [wall('w', 'left', 800, 400, 1040, { topLedgeId: STRIP.id }), wall('w', 'right', 1300, 400, 1040, { topLedgeId: STRIP.id })];
 
-  function pulledUp(cfg: Partial<MoverConfig> = {}): Driver {
-    const d = make(SINGLE, 0.25, cfg);
+  function pulledUp(cfg: Partial<MoverConfig> = {}, xFrac = 0.25): Driver {
+    const d = make(SINGLE, xFrac, cfg);
     d.extra = [STRIP, ...sides];
     d.step();
     d.goal({ x: 1100, y: 400, route: 'climb' });
@@ -445,5 +445,168 @@ describe('Mover: onto a tab strip via its window top (v1.1.1 RC6)', () => {
     expect(d.log.some((r) => r.perchLost)).toBe(false);
     expect(d.until((r) => r.goal === 'arrived', 30_000, DT)).toBe(true);
     expect(d.m.support.kind).toBe('floor');
+  });
+
+  /**
+   * A floor goal while the cat stands beside the strip (its quickest way down is the strip's drop):
+   * it steps off within a few seconds, moving no more than a walk per tick on the way, then gets
+   * to the floor. (v1.1.1 review MC-1: it walked to strip.x0 - bodyWidth and stalled there, or
+   * was snapped to the strip's end before falling.)
+   */
+  function stepsOffToFloor(d: Driver, goalX: number): void {
+    d.goal({ x: goalX, y: 1040 });
+    const maxStep = (MOVEMENT.walkDip * DT) / 1000 + 1e-9;
+    let prev = d.m.x;
+    expect(
+      d.until((r) => {
+        expect(Math.abs(d.m.x - prev)).toBeLessThanOrEqual(maxStep);
+        prev = d.m.x;
+        return r.steppedOff;
+      }, 3000, DT),
+    ).toBe(true);
+    expect(d.until((r) => r.goal === 'arrived', 30_000, DT)).toBe(true);
+    expect(d.m.support.kind).toBe('floor');
+  }
+
+  it('a floor goal right after the pull-up at the left corner: steps off from beside the strip', () => {
+    const d = pulledUp();
+    expect(d.m.x).toBeLessThan(1000 - d.m.bodyWidth);
+    stepsOffToFloor(d, 300);
+  });
+
+  it('a floor goal right after the pull-up at the right corner: steps off from beside the strip', () => {
+    const d = pulledUp({}, 0.75);
+    expect(d.m.support).toEqual({ kind: 'surface', surfaceId: STRIP.id, surfaceKind: 'tabStrip', orientation: 'ledge' });
+    expect(d.m.x).toBeGreaterThan(1150 + d.m.bodyWidth);
+    stepsOffToFloor(d, 1700);
+  });
+
+  it('a floor goal while walking in, within a body width of the strip: no snap to the strip end', () => {
+    const d = pulledUp();
+    d.m.setGoal(null);
+    expect(d.until(() => d.m.x > 1000 - d.m.bodyWidth / 2, 10_000, DT)).toBe(true);
+    expect(d.m.x).toBeLessThan(1000);
+    stepsOffToFloor(d, 300);
+  });
+
+  it('a floor goal right after being dropped onto the window top beside the strip: steps off from there', () => {
+    const d = make();
+    d.extra = [STRIP, ...sides];
+    d.step();
+    d.m.startDrag({ x: d.m.x, y: d.m.y });
+    d.dragCursor = { x: 870, y: 300 };
+    d.until(() => false, 400, DT);
+    d.m.endDrag(null, { x: 0, y: 0 }, d.now, false);
+    d.dragCursor = null;
+    expect(d.until((r) => r.landed !== null, 3000, DT)).toBe(true);
+    expect(d.m.support).toEqual({ kind: 'surface', surfaceId: STRIP.id, surfaceKind: 'tabStrip', orientation: 'ledge' });
+    expect(d.m.x).toBeLessThan(1000 - d.m.bodyWidth);
+    stepsOffToFloor(d, 300);
+  });
+});
+
+describe('Mover: set down on a tab strip\'s window top beside the strip (v1.1.1 review MC-2, MC-3)', () => {
+  const maxStep = (MOVEMENT.walkDip * DT) / 1000 + 1e-9;
+
+  /** Drags the cat from the floor and lets go above (x, y): it lands on what is below. */
+  function dropAt(d: Driver, x: number, y: number): void {
+    d.m.startDrag({ x: d.m.x, y: d.m.y });
+    d.dragCursor = { x, y };
+    d.until(() => false, 400, DT);
+    d.m.endDrag(null, { x: 0, y: 0 }, d.now, false);
+    d.dragCursor = null;
+    expect(d.until((r) => r.landed !== null, 3000, DT)).toBe(true);
+  }
+
+  /** It walks onto the strip's stand range [x0, ...] at walking speed, staying on the strip. */
+  function walksInTo(d: Driver, x0: number, surfaceId: string): void {
+    let prev = d.m.x;
+    expect(
+      d.until((r) => {
+        expect(Math.abs(d.m.x - prev)).toBeLessThanOrEqual(maxStep);
+        prev = d.m.x;
+        expect(r.perchLost).toBe(false);
+        return d.m.x >= x0 - 1e-6;
+      }, 10_000, DT),
+    ).toBe(true);
+    expect(d.m.support).toMatchObject({ surfaceId });
+  }
+
+  it('climbing down a side whose foot ends on a browser\'s top beside its strip: steps off beside the side, no glide', () => {
+    // Window B (behind) 900..1400, top 200; its left side is cut at y = 500 by browser A in front
+    // (A 800..1500, top 500, strip 1100..1300 on A's open top edge).
+    const B_TOP = ledge(topId('b'), 'windowTop', 'b', 200, 900, 1400);
+    const B_LEFT = wall('b', 'left', 900, 200, 500);
+    const A_STRIP = tabStrip('a', 500, 1100, 1300, null, null, { land: { x0: 800, x1: 1500 } });
+    const d = make(SINGLE, 0.25, { jumpEffort: 5 });
+    d.extra = [B_TOP, B_LEFT, A_STRIP];
+    d.step();
+    dropAt(d, 1000, 60);
+    expect(d.m.support).toMatchObject({ surfaceId: B_TOP.id });
+    d.goal({ x: 1200, y: 500, route: 'climb' });
+    // The dismount eases from the wall line to beside it (0.55 body widths): at most 1.5x its mean speed.
+    const standX = 900 - 0.55 * d.m.bodyWidth;
+    const maxDismountStep = (1.5 * (900 - standX) * DT) / MOVEMENT.dismountMs + 1e-6;
+    let prev = d.m.x;
+    let sawDismount = false;
+    expect(
+      d.until((r) => {
+        if (d.m.climbPhase === 'dismount') {
+          sawDismount = true;
+          expect(Math.abs(d.m.x - prev)).toBeLessThanOrEqual(maxDismountStep);
+        }
+        prev = d.m.x;
+        return r.climbEnded && sawDismount;
+      }, 60_000, DT),
+    ).toBe(true);
+    expect(d.m.support).toMatchObject({ surfaceId: A_STRIP.id });
+    expect(d.m.x).toBeCloseTo(standX, 6);
+    walksInTo(d, 1100, A_STRIP.id);
+    expect(d.until((r) => r.goal === 'arrived', 20_000, DT)).toBe(true);
+    expect(d.m.x).toBeCloseTo(1200, 0);
+  });
+
+  it('set down calmly from a window top switched off onto a browser\'s top beside its strip: stays where it is', () => {
+    const C_TOP = ledge(topId('c'), 'windowTop', 'c', 480, 700, 1000);
+    const A_STRIP = tabStrip('a', 500, 1100, 1300, null, null, { land: { x0: 800, x1: 1500 } });
+    const d = make();
+    d.extra = [C_TOP, A_STRIP];
+    d.step();
+    dropAt(d, 850, 380);
+    expect(d.m.support).toMatchObject({ surfaceId: C_TOP.id });
+    const x = d.m.x;
+    d.m.setConfig({ ...CFG, perchOnWindows: false });
+    const r = d.step(DT);
+    expect(r.lowered).toBe(true);
+    expect(r.supportLost).toMatchObject({ reason: 'disabled', fell: false });
+    expect(d.m.support).toMatchObject({ surfaceId: A_STRIP.id });
+    expect(d.m.x).toBeCloseTo(x, 6);
+    walksInTo(d, 1100, A_STRIP.id);
+  });
+
+  it('a browser top dragged up under a perched cat lifts it where it is, then it walks onto the strip', () => {
+    const A_TOP = ledge(topId('a'), 'windowTop', 'a', 600, 200, 900);
+    const strip = (y: number): Surface => tabStrip('b', y, 700, 900, null, null, { land: { x0: 300, x1: 1200 } });
+    const d = make();
+    d.extra = [A_TOP, strip(640)];
+    d.step();
+    dropAt(d, 400, 450);
+    expect(d.m.support).toMatchObject({ surfaceId: A_TOP.id });
+    d.until(() => false, 200, DT);
+    // B (a browser) dragged up 10 px per tick through A's top under the cat.
+    let lifted = false;
+    for (let y = 630; y >= 590 && !lifted; y -= 10) {
+      d.extra = [A_TOP, strip(y)];
+      d.moving.add('b');
+      const x = d.m.x;
+      lifted = d.step(DT).lifted !== null;
+      // Lifted where it is: no sideways jump into the strip's stand range (700..900).
+      expect(Math.abs(d.m.x - x)).toBeLessThanOrEqual(maxStep);
+    }
+    expect(d.m.x).toBeLessThan(700);
+    expect(lifted).toBe(true);
+    expect(d.m.support).toMatchObject({ surfaceId: stripId('b') });
+    d.moving.clear();
+    walksInTo(d, 700, stripId('b'));
   });
 });

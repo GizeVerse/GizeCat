@@ -540,3 +540,12 @@ function clampToWorkArea(d: DisplayGeometry, p: Point): Point {
 export function sameSurface(a: Surface, b: Surface): boolean {
   return a.kind === b.kind && a.key === b.key;
 }
+
+/**
+ * Where a cat set down at x on `s` (landed, lifted, pulled up, climbed down onto it) stands: in
+ * the stand range, or on a widened landing range (a tab strip's window top, landWide) where it
+ * was set down, never snapped into the stand range; it walks in from there (Mover walkIn).
+ */
+export function setDownX(s: Surface, x: number): number {
+  return s.kind === 'ledge' && s.landWide === true ? clamp(x, Math.min(s.landX0, s.x0), Math.max(s.landX1, s.x1)) : clamp(x, s.x0, s.x1);
+}

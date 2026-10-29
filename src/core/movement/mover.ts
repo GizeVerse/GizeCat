@@ -19,7 +19,7 @@ import { ballistic, clearanceFor, descendingCrossing, jumpAt, sampleArc, solveJu
 import type { GraphNode, Route, RouteParams } from './surfaceGraph';
 import { edgeId, SurfaceGraph } from './surfaceGraph';
 import type { FloorPiece, Surface, SurfacePoint, WallTrack } from './world';
-import { sameSurface, WorldModel } from './world';
+import { sameSurface, setDownX, WorldModel } from './world';
 
 export type Pace = 'slow' | 'walk' | 'run' | 'chase';
 
@@ -440,7 +440,7 @@ export class Mover {
     }
     for (const w of this.walls) {
       accepted.windowSide++;
-      if (keys.has(`up:${w.key}`) || keys.has(`down:${w.key}`)) reachable.windowSide++;
+      if (this.sideReachable(w, keys)) reachable.windowSide++;
     }
     return {
       received: { ...this.navIn.received },
@@ -455,7 +455,9 @@ export class Mover {
   /**
    * v1.1.1 on-desktop visualization (physical px, no ids, at most MAX_DEBUG_LINES): floors,
    * ledges and walls as segments by role, most important first: what the cat is on, where its
-   * route goes, what it can reach, the rest it accepted, then what it turned down.
+   * route goes, what it can reach, the rest it accepted, then what it turned down. Nothing is
+   * drawn on an off-limits display (a fullscreen app in front): its floor is left out, and the
+   * surfaces turned down for lying there ('offDisplay') carry no line (see sense).
    */
   debugLines(): SurfaceDebugLine[] {
     const keys = this.reachableKeys();
@@ -466,18 +468,34 @@ export class Mover {
     const role = (key: string, reach: boolean): DebugLineRole => (key === on ? 'support' : target.has(key) ? 'target' : reach ? 'reachable' : 'valid');
     for (const f of this.navWorld.floors) {
       const r = role(f.key, keys.has(f.key));
-      for (const p of f.pieces) byRole[r].push({ kind: 'floor', role: r, x0: p.left, y0: p.y, x1: p.right, y1: p.y });
+      for (const p of f.pieces) if (!this.isOffLimits(p.displayId)) byRole[r].push({ kind: 'floor', role: r, x0: p.left, y0: p.y, x1: p.right, y1: p.y });
     }
     for (const l of this.ledges) {
       const r = role(l.key, keys.has(l.key));
       byRole[r].push({ kind: l.surfaceKind ?? 'windowTop', role: r, x0: l.landX0, y0: l.y, x1: l.landX1, y1: l.y });
     }
     for (const w of this.walls) {
-      const r = role(w.key, keys.has(`up:${w.key}`) || keys.has(`down:${w.key}`));
+      const r = role(w.key, this.sideReachable(w, keys));
       byRole[r].push({ kind: 'windowSide', role: r, x0: w.x, y0: w.y0, x1: w.x, y1: w.yBottom });
     }
     byRole.rejected.push(...this.navIn.rejectedLines);
     return [...byRole.support, ...byRole.target, ...byRole.reachable, ...byRole.valid, ...byRole.rejected].slice(0, MAX_DEBUG_LINES);
+  }
+
+  /**
+   * A side counts as reachable only when it leads somewhere: the cat can get onto it from below
+   * and pull up over its top (climbOptions' condition), or reach it from its top to climb down.
+   * A side whose top is not listed or not usable (no headroom), or not at its corner, leads nowhere.
+   */
+  private sideReachable(w: WallTrack, keys: ReadonlySet<string>): boolean {
+    return (keys.has(`up:${w.key}`) && this.pullUpOnto(w) !== null) || keys.has(`down:${w.key}`);
+  }
+
+  /** The usable top a side leads up to and the corner x where the cat pulls up onto it, or null. */
+  private pullUpOnto(w: WallTrack): { top: Surface; cornerX: number } | null {
+    const top = w.topLedgeId ? this.ledgeById(w.topLedgeId) : null;
+    const cornerX = top ? this.graph.cornerX(this.navWorld, w, top) : null;
+    return top && cornerX !== null ? { top, cornerX } : null;
   }
 
   /** Surfaces and walls the cat is heading for: the current leg's and the route's final one. */
@@ -543,10 +561,9 @@ export class Mover {
       const node = this.graph.node(e.to);
       const w = node?.wall;
       if (!node || !w || this.nodeBlocked(node)) continue;
-      if ((e.kind === 'mount' || e.kind === 'leap') && w.topLedgeId) {
-        const top = this.ledgeById(w.topLedgeId);
-        const cx = top ? this.graph.cornerX(this.navWorld, w, top) : null;
-        if (top && cx !== null) out.push({ dir: 'up', wallId: w.key, ownerId: w.ownerId, target: { x: cx, y: top.y }, startX: e.fromLo });
+      if (e.kind === 'mount' || e.kind === 'leap') {
+        const up = this.pullUpOnto(w);
+        if (up) out.push({ dir: 'up', wallId: w.key, ownerId: w.ownerId, target: { x: up.cornerX, y: up.top.y }, startX: e.fromLo });
       } else if (e.kind === 'swing') {
         const t = this.graph.dismountTarget(this.navWorld, w);
         if (t && !this.offLimitsAt(t.surface, t.x)) out.push({ dir: 'down', wallId: w.key, ownerId: w.ownerId, target: { x: t.x, y: t.y }, startX: e.fromLo });
@@ -626,15 +643,16 @@ export class Mover {
     let ledges = this.navWorld.ledgeSurfaces(ledgesIn, keep.ledges, undefined, reject);
     let wallTracks = this.navWorld.wallTracks(wallsIn, keep.walls, undefined, reject);
     if (this.offLimits.size > 0) {
-      // A display with a fullscreen app in front counts as off the cat's displays.
+      // A display with a fullscreen app in front counts as off the cat's displays. Counted, but
+      // never drawn: debug lines stay off that display (they would show over the fullscreen app).
       ledges = ledges.filter((l) => {
         const off = l.displayIds.some((id) => this.isOffLimits(id));
-        if (off) count('offDisplay', { kind: l.surfaceKind ?? 'windowTop', role: 'rejected', x0: l.landX0, y0: l.y, x1: l.landX1, y1: l.y });
+        if (off) count('offDisplay', null);
         return !off;
       });
       wallTracks = wallTracks.filter((w) => {
         const off = this.isOffLimits(w.displayId);
-        if (off) count('offDisplay', { kind: 'windowSide', role: 'rejected', x0: w.x, y0: w.y0, x1: w.x, y1: w.yBottom });
+        if (off) count('offDisplay', null);
         return !off;
       });
     }
@@ -977,8 +995,10 @@ export class Mover {
           range = { x0: Math.min(range.x0, targetX), x1: Math.max(range.x1, targetX) };
           break;
         case 'drop':
+          // Step off past the stand range's end, or past where the cat is when it stands beyond
+          // that end (a tab strip's window top beside the strip, walking in): never stall there.
           stepOffDir = leg.dir;
-          targetX = leg.dir > 0 ? s.x1 + this.bodyWidth : s.x0 - this.bodyWidth;
+          targetX = leg.dir > 0 ? Math.max(this.x, s.x1) + this.bodyWidth : Math.min(this.x, s.x0) - this.bodyWidth;
           break;
       }
     } else if (this.walkIn) {
@@ -1002,7 +1022,8 @@ export class Mover {
     if (nx > range.x1 || nx < range.x0) {
       const dir: 1 | -1 = nx > range.x1 ? 1 : -1;
       if (stepOffDir === dir) {
-        this.x = dir > 0 ? s.x1 : s.x0;
+        // From the end of where it may walk (no snap back to the stand range from beside it).
+        this.x = dir > 0 ? range.x1 : range.x0;
         const vx = dir * Math.max(Math.abs(this.vx), this.paceSpeedPx('walk') * 0.8);
         this.startFlight(vx, 0, input.now, { thrown: false, intentional: true, ignoreKey: this.attach?.surfaceId ?? null });
         out.steppedOff = true;
@@ -1389,7 +1410,8 @@ export class Mover {
     if (calm && below && below.y - p.y <= MOVEMENT.settleMaxBodyHeights * this.bodyHeight) {
       const live = below.surface.kind === 'ledge' ? this.liveLedge(input, below.surface.key) : null;
       if (below.surface.kind === 'floor' || live) {
-        this.setGrounded(below.surface, below.x, live, true);
+        // Where it is (setGrounded clamps it like surfaceBelow, except on a tab strip's window top: it walks in).
+        this.setGrounded(below.surface, p.x, live, true);
         this.easeRate = MOVEMENT.settleDip * this.scale;
         out.lowered = true;
         out.supportLost = { reason, surfaceId: a.surfaceId, surfaceKind: a.surfaceKind, fell: false };
@@ -1423,8 +1445,9 @@ export class Mover {
       if (!live) continue;
       this.attach = this.attachmentFrom(live);
       this.surface = l;
-      this.x = clamp(this.x, l.x0, l.x1);
-      this.walkIn = false;
+      // Lifted by a tab strip's window top beside the strip: it stays where it is and walks in (like setGrounded).
+      this.x = setDownX(l, this.x);
+      this.walkIn = l.landWide === true && (this.x < l.x0 || this.x > l.x1);
       this.easeRate = Math.max(MOVEMENT.liftDip * this.scale, 1.5 * Math.abs(l.vy));
       this.leg = null;
       out.lifted = { surfaceId: l.key, surfaceKind: l.surfaceKind ?? 'taskbar' };
@@ -1892,9 +1915,8 @@ export class Mover {
     const s = this.surface;
     // On a ledge's widened landing range (a tab strip's window top) the cat stays where it was
     // set down, never snapped into the stand range: it walks in (stepGround).
-    const wide = s.kind === 'ledge' && s.landWide === true;
-    this.x = wide ? clamp(x, Math.min(s.landX0, s.x0), Math.max(s.landX1, s.x1)) : clamp(x, s.x0, s.x1);
-    this.walkIn = wide && (this.x < s.x0 || this.x > s.x1);
+    this.x = setDownX(s, x);
+    this.walkIn = s.kind === 'ledge' && s.landWide === true && (this.x < s.x0 || this.x > s.x1);
     if (!keepY) this.y = this.attach ? this.attach.y : this.navWorld.yAt(this.surface, this.x);
     this.vx = 0;
     this.vy = 0;
