@@ -612,7 +612,7 @@ UNVERIFIED unless run here: multi-monitor, Windows 10, Notepad, a REAL occlusion
 ### 16.1 Order and integration
 
 ```
-C1+C2  CONTRACT (this branch; the lead commits it: SHA = <filled in by the lead at commit>)
+C1+C2  CONTRACT (this branch; committed by the lead: SHA = ec690a5)
 │
 ├─ Wave 1 (parallel) ───────────────────────────────────────────────────────────
 │   MOV  movement               PRV  provider / UIA / native / main input / click guard
@@ -628,7 +628,7 @@ C1+C2  CONTRACT (this branch; the lead commits it: SHA = <filled in by the lead 
 ```
 
 - **Contract commit.** Every package worktree is created from the single contract commit (C1+C2) the lead makes after `verify fast` passes on this exact tree; its SHA goes in the line above.
-- **Integration.** The lead integrates packages in the order MOV → PRV → SET → REN → BEH-a → BEH-b → INT, each after its `verify fast` passes, by **cherry-picking** the package's commits onto `feat/v1.2-lively` (linear history, no merge commits). Whether a local `git merge --no-ff` is acceptable under the standard's "never merge" is Q11 for the user. Nothing goes to main.
+- **Integration (lead decision, Q7).** Packages run as parallel agents **in the same worktree** on their disjoint file sets (the model that worked for v1.1.1); nobody commits but the lead, who commits each wave with explicit paths after `verify fast` passes on the combined tree. No package worktrees, no cherry-picks, no merges; nothing goes to main.
 - **Amendments.** Any change to `src/shared/**` outside SET's settings files, to `src/main/app.ts`, or to a seam signature is a contract amendment by the lead, announced to every package.
 - **Rules.** MOV never edits `sim.ts` (BEH maps settings to `MoverConfig`). PRV's guard merges before BEH-b turns screen edges on. Six parallel packages queue on the verify lock; nobody runs E2E before wave 3.
 
@@ -766,6 +766,8 @@ C1+C2  CONTRACT (this branch; the lead commits it: SHA = <filled in by the lead 
 6. **B10 denominator** (new): the brief's "per hour of climbing" is read as "per awake hour in layouts with reachable elevated surfaces" (0.3–3/h). Confirm, or give the intended denominator.
 7. **Package integration** (new): cherry-pick (proposed) or a local `git merge --no-ff` into `feat/v1.2-lively`? The standard says "never merge"; the user decides whether that covers local feature-branch integration.
 8. **Explorer soak gate** (new): if the 2 h soak fails or is not run, v1.2.0 ships with Explorer tab strips off (Terminal on). Acceptable?
+
+**Lead decisions (2026-10-29; the brief asks for autonomous decisions):** Q1 accepted as specified (covered-band peeks only, click-through; full climbs only over clear bands). Q2 accepted (mouse buttons only, never keys; PRIVACY.md updated by the lead). Q3 accepted (mischief 0.4, work disruption 0.25). Q4 sound stays in scope at the lowest priority, off by default; REN may descope it if it risks the overlay. Q5 Notepad stays never-queried in v1.2 (UNVERIFIED; the user's saved session must not be touched). Q6 accepted (per awake hour with reachable surfaces). Q7 same-worktree packages on disjoint files, lead commits per wave (§16.1). Q8 a shorter REAL Explorer soak (own windows) if time allows; otherwise Explorer tab strips ship off and Terminal on.
 
 Resolved in this revision: P1's active share (recalibrated, band kept), `startleSensitivity` for new cats (separate stream from `bornAt`), persisted moods (persist with decay; needs frozen across downtime), profile scope (session-only; the log lines persist dwell).
 
