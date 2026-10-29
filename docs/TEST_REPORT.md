@@ -4,7 +4,7 @@ Labels: **REAL** = executed and observed on the machine below; **MOCKED** = exec
 
 # v1.1.0 (2026-10-29)
 
-Code: branch `feat/v1.1-surfaces`, installer built from commit `9b5314c`. Same machine as v1.0 (below): Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide **bottom** taskbar, Edge 156.0.4314.50, Chrome 155.0.8059.79. During the final runs the user had a full-monitor Chrome window in front (this strips the taskbar's topmost flag — a Windows behaviour, see below).
+Code: branch `feat/v1.1-surfaces`. The install, upgrade and probe runs below used an installer built from `9b5314c`; the final `release/Desktop-Cat-Setup-1.1.0.exe` was rebuilt from `b4a339b` (identical application code — that commit only changed documentation and the shipped `THIRD_PARTY_NOTICES.md`) and passed the packaged smoke test again. SHA-256 `73D24CB942912A018D82AD2EDFE216EC29C93999B714FD5C0455E9F85926F870`, 115.8 MB, unsigned. Same machine as v1.0 (below): Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide **bottom** taskbar, Edge 156.0.4314.50, Chrome 155.0.8059.79. During the final runs the user had a full-monitor Chrome window in front (this strips the taskbar's topmost flag — a Windows behaviour, see below).
 
 ## Automated suites
 
