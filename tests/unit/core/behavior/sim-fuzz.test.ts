@@ -286,9 +286,10 @@ function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {})
     // v1.1 surfaces.
     if (out.support.kind === 'surface') onSurface[out.support.surfaceKind] = (onSurface[out.support.surfaceKind] ?? 0) + 1;
     const onWall = out.support.kind === 'surface' && out.support.orientation === 'wall';
-    // climb only on a wall; on a wall the clip is climb, or walk while pulling up / stepping off.
+    // climb only on a wall; on a wall the clip is climb, or walk while pulling up / stepping off,
+    // or (v1.1.1) jump while leaping onto the side: the jumping state until it clings.
     check(out.clip !== 'climb' || onWall, 'climb clip off a wall');
-    check(!onWall || out.clip === 'climb' || out.clip === 'walk', 'unexpected clip on a wall');
+    check(!onWall || out.clip === 'climb' || out.clip === 'walk' || (out.clip === 'jump' && out.state === 'jumping'), 'unexpected clip on a wall');
     if (out.support.kind === 'surface') {
       // Never attached to a surface the provider says is gone ...
       check(live.has(out.support.surfaceId), 'attached to a vanished surface');

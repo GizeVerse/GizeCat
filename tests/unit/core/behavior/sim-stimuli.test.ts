@@ -287,7 +287,8 @@ describe('multi-monitor in the simulation', () => {
     const o = h.step();
     expect(o.snap).toBe(true);
     expect(o.displayId).toBe('1');
-    expect(o.y).toBe(1040);
+    // The new display's floor as the app's sim sees it (work-area bottom less the floor inset).
+    expect(o.y).toBe(h.floorY('1'));
     expect(o.x).toBeGreaterThanOrEqual(42);
     h.run(5000);
     expect(h.last!.displayId).toBe('1');
@@ -299,7 +300,7 @@ describe('multi-monitor in the simulation', () => {
     callCat(h, { x: -2000, y: 1250 });
     h.runUntil((o) => o.state === 'idle' && o.displayId === '2', 60_000);
     expect(h.last!.x).toBeLessThan(0);
-    expect(h.last!.y).toBe(1260);
+    expect(h.last!.y).toBe(h.floorY('2'));
     expect(h.last!.boundsPx.width).toBeCloseTo(84 * 1.5, 6);
     expect(h.last!.support).toEqual({ kind: 'floor', displayId: '2' });
   });

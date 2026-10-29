@@ -41,7 +41,9 @@ export type Variant =
   /** Hopping onto (or off) the taskbar. */
   | 'taskbar'
   /** A short start after the surface under the cat suddenly vanished. */
-  | 'lostFooting';
+  | 'lostFooting'
+  /** v1.1.1: walking along the window top or tab strip it just got onto, before anything else. */
+  | 'patrol';
 
 export interface Candidate {
   state: BehaviorState;
@@ -49,6 +51,8 @@ export interface Candidate {
   target: Point | null;
   windowId: string | null;
   then: BehaviorState | null;
+  /** Variant of the follow-up (`then`), e.g. a patrol along the top a climb ends on. */
+  thenVariant: Variant | null;
 }
 
 export interface DecisionView {
@@ -93,6 +97,17 @@ export interface DecisionView {
   edgeLook: { windowId: string; point: Point } | null;
   /** The long cooldown of an occasional surprise startle has elapsed. */
   surpriseReady: boolean;
+  /**
+   * v1.1.1, 0..1: grows while the cat is on the floor (or a taskbar) and some window top, side or
+   * tab strip is within reach; resets when it gets up onto one. Raises the odds of a trip up.
+   */
+  exploreUrge: number;
+  /**
+   * v1.1.1: up on a window top or tab strip it has explored, the floor below to head back down to
+   * (null: not up there, or still exploring it), and how long it has been up there, ms.
+   */
+  downTarget: Point | null;
+  elevatedMs: number;
   /** Most recent first, the activities chosen lately. */
   recentStates: readonly BehaviorState[];
   /** The state being left. */
@@ -116,7 +131,41 @@ export function userIdleForSleep(v: Pick<DecisionView, 'userIdleMs' | 'behavior'
 }
 
 function cand(state: BehaviorState, extra: Partial<Candidate> = {}): Candidate {
-  return { state, variant: null, target: null, windowId: null, then: null, ...extra };
+  return { state, variant: null, target: null, windowId: null, then: null, thenVariant: null, ...extra };
+}
+
+/** Up on a top it explored, the pull to come back down starts after this long up there and is full this much later. */
+export const DOWN_PULL_AFTER_MS = 20_000;
+export const DOWN_PULL_RAMP_MS = 120_000;
+
+/** Share of a trip up's own utility left right after the last trip (urge 0); all of it at urge 1. */
+export const EXCURSION_RHYTHM_MIN = 0.35;
+
+/** Weight of the exploration urge at urge 1, autonomy 1 (see excursionBoost). */
+export const EXPLORE_URGE_WEIGHT = 0.8;
+
+/**
+ * v1.1.1: utility added to each trip up (exploring a window top, climbing a side, visiting a tab
+ * strip) by the exploration urge. Cubic in the urge, so a cat that just came down stays
+ * down for a while; at urge 1 a trip up beats sitting, wandering and grooming for a calm,
+ * rested cat at the default autonomy (scaled by autonomy, never to nothing). Fear, annoyance,
+ * low energy, typing, fast app switching, video and the night damp it. Sleep still wins (a
+ * tired cat's nap outscores it; with nobody around only rest options exist), and switched-off
+ * behaviours never get it (their options do not exist).
+ */
+export function excursionBoost(v: Pick<DecisionView, 'exploreUrge' | 'behavior' | 'stats' | 'typing' | 'typingIntensity' | 'busySwitching' | 'mediaForeground' | 'screen' | 'localHour'>): number {
+  const urge = Number.isFinite(v.exploreUrge) ? clamp01(v.exploreUrge) : 0;
+  if (!(urge > 0)) return 0;
+  const s = v.stats;
+  const autonomy = clamp01(v.behavior.autonomy);
+  const typing = v.typing && v.behavior.reactToTyping;
+  const intensity = v.behavior.reactToTyping && Number.isFinite(v.typingIntensity) ? clamp01(v.typingIntensity) : 0;
+  const energyGate = clamp01((s.energy - 0.15) / 0.35);
+  const calm = (1 - clamp01((s.fear - 0.2) / 0.3)) * (1 - clamp01((s.annoyance - 0.3) / 0.4));
+  const night = v.localHour >= 23 || v.localHour < 6;
+  const video = v.mediaForeground || v.screen === 'video';
+  const context = (typing ? 0.5 : 1) * (1 - 0.4 * intensity) * (v.busySwitching ? 0.5 : 1) * (night ? 0.75 : 1) * (video ? 0.5 : 1);
+  return urge * urge * urge * EXPLORE_URGE_WEIGHT * (0.35 + 0.65 * autonomy) * energyGate * calm * context;
 }
 
 /** All candidates with their utility. Cooling-down states are excluded. */
@@ -199,9 +248,13 @@ export function scoreCandidates(v: DecisionView): Scored<Candidate>[] {
   if (v.surpriseReady && !typing) add(cand('startled', { variant: 'surprise' }), 0.02 * (0.5 + t.curiosity) * energyGate * activeMul);
   // Trips onto surfaces (window tops, sides, tab strips) get rarer while the user types hard.
   const excursion = (1 - 0.85 * clamp01(v.typingIntensity)) * (typing ? 0.3 : 1);
+  // ... and likelier the longer the cat has stayed down with somewhere to go (v1.1.1).
+  const urge = excursionBoost(v);
+  // Right after a trip (urge reset) another one is less likely: trips up come in a rhythm, not back to back.
+  const rhythm = EXCURSION_RHYTHM_MIN + (1 - EXCURSION_RHYTHM_MIN) * (Number.isFinite(v.exploreUrge) ? clamp01(v.exploreUrge) : 0);
   // Jumping up to explore a window top is 'Sit on windows', independent of 'Inspect windows'.
   if (v.perchTarget && !v.disabled.has('perchOnWindows')) {
-    const score = (0.04 + 0.32 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * (0.6 + 0.4 * t.confidence) * excursion;
+    const score = (0.04 + 0.32 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * (0.6 + 0.4 * t.confidence) * excursion * rhythm + urge;
     add(cand('inspectingWindow', { variant: 'explore', windowId: v.perchTarget.windowId, target: v.perchTarget.point }), score);
   }
   // On a window top: sit at its edge and look down into the window ('Sit on windows' and 'Inspect windows').
@@ -211,15 +264,21 @@ export function scoreCandidates(v: DecisionView): Scored<Candidate>[] {
   // Climbing a window side is 'Climb windows' (and needs 'Sit on windows' for the top it leads to).
   if (v.climbTarget && !v.disabled.has('climbWindows') && !v.disabled.has('perchOnWindows')) {
     // About as attractive as jumping up to explore a window top (climbing is the way up a tall one); the
-    // climb cooldown (1.5-4 min) keeps it occasional.
+    // climb cooldown (1.5-4 min) keeps it occasional. Up on the top it first walks along it (patrol).
     const up = v.climbTarget.dir === 'up';
-    const score = (0.06 + 0.3 * t.curiosity * (0.3 + s.boredom) * (0.5 + t.energyLevel)) * energyGate * activeMul * excursion * (up ? 0.6 + 0.4 * t.confidence : 1);
-    add(cand('walking', { variant: 'climb', target: v.climbTarget.point, then: up ? 'idle' : null }), score);
+    const score = (0.06 + 0.3 * t.curiosity * (0.3 + s.boredom) * (0.5 + t.energyLevel)) * energyGate * activeMul * excursion * (up ? (0.6 + 0.4 * t.confidence) * rhythm : 1) + (up ? urge : 0);
+    add(cand('walking', { variant: 'climb', target: v.climbTarget.point, then: up ? 'walking' : null, thenVariant: up ? 'patrol' : null }), score);
   }
   if (v.tabStripTarget && !v.disabled.has('tabStrips')) {
     const onStrip = v.standingOn === 'tabStrip';
-    const score = (onStrip ? 0.06 + 0.1 * t.curiosity : 0.02 + 0.1 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * excursion;
+    const score = (onStrip ? 0.06 + 0.1 * t.curiosity : (0.02 + 0.1 * t.curiosity * (0.3 + s.boredom)) * rhythm) * energyGate * activeMul * excursion + (onStrip ? 0 : urge);
     add(cand('walking', { variant: 'tabStrip', target: v.tabStripTarget, then: onStrip ? null : 'resting' }), score);
+  }
+  // Up there a while (v1.1.1): the longer it has been up on the top it explored, the likelier it heads
+  // back down; a tired or resting-minded cat (low autonomy, the user typing) stays put longer.
+  if (v.downTarget) {
+    const up = clamp01((v.elevatedMs - DOWN_PULL_AFTER_MS) / DOWN_PULL_RAMP_MS);
+    add(cand('walking', { variant: 'wander', target: v.downTarget }), (0.06 + 0.4 * up) * (1.2 - 0.4 * t.curiosity) * energyGate * activeMul);
   }
   const lookAt = v.foreground?.center ?? v.wanderTarget;
   if (lookAt) add(cand('curious', { target: lookAt, variant: 'look' }), (0.06 + 0.22 * t.curiosity * s.boredom) * activeMul);

@@ -91,7 +91,8 @@ describe('persistence round-trip', () => {
     expect(o.displayId).toBe('1');
     expect(o.support).toEqual({ kind: 'floor', displayId: '1' });
     expect(o.x).toBeCloseTo(0.25 * 1920, 0);
-    expect(o.y).toBe(1040);
+    // On the floor as the app's sim sees it (the work-area bottom less the floor inset).
+    expect(o.y).toBe(h.floorY());
   });
 
   it('summarizes without sensitive data', () => {

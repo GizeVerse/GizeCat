@@ -12,6 +12,8 @@ import type { DecisionView } from '../../../../src/core/behavior/decide';
 import { scoreCandidates } from '../../../../src/core/behavior/decide';
 import type { TransitionRecord } from '../../../../src/core/behavior';
 import type { CatSimImpl } from '../../../../src/core/behavior/sim';
+import { simWorld } from '../../../../src/core/display/simWorld';
+import { buildWindowSurfaces, computeOpenSpans, coversWorkArea, type StripPlacement, type SurfaceMeta, type WindowSurfaceOptions } from '../../../../src/main/surfaces/windowSurfaces';
 
 export function display(id: string, x: number, y: number, w: number, h: number, opts: { scale?: number; primary?: boolean; taskbar?: number } = {}): DisplayGeometry {
   const scale = opts.scale ?? 1;
@@ -42,12 +44,16 @@ export const DUAL_MIXED = world(
 export const DUAL_FLAT = world(display('1', 0, 0, 1920, 1080, { primary: true, taskbar: 40 }), display('2', 1920, 0, 1920, 1080, { taskbar: 40 }));
 
 export interface EnvOverrides extends Partial<Omit<SimEnv, 'now' | 'dt'>> {
-  /** Plain app windows: the fixture's provider turns them into window-top ledges and side walls. */
+  /** Plain app windows, front first: the fixture's provider turns them into window-top ledges and side walls. */
   windows?: Record<string, Rect | null>;
+  /** Tab strips measured on some of those windows (browsers): listed in place of their tops, as the provider does. */
+  tabStrips?: Record<string, StripSpec>;
   /** More surfaces (taskbars, tab strips) listed after the windows' and returned by getSurface. */
   extraSurfaces?: Surface[];
   /** Window sides are offered (the host only lists them while climbing is allowed). Default true. */
   walls?: boolean;
+  /** The v1.1 bare-edge fixture for `windows` instead of the provider-shaped one (see surfacesFromWindows). */
+  rawSurfaces?: boolean;
 }
 
 export class Harness {
@@ -59,15 +65,24 @@ export class Harness {
   keepOutputs = false;
   private worldGeometry: WorldGeometry;
 
-  constructor(opts: { seed?: number; settings?: Settings; world?: WorldGeometry; persisted?: PersistedCat | null; now?: number; wall?: number } = {}) {
+  /** The sim sees the world shortened by the app's floor inset (simWorld), unless a test opts out. */
+  readonly floorInset: boolean;
+
+  /**
+   * `floorInset` (default true): the sim gets simWorld(world) as in the app (src/main/app.ts,
+   * catHost.ts), so floors sit FLOOR_INSET_DIP above the work-area bottom; surfaces are still built
+   * in the real display space, as the provider builds them. false: the raw world.
+   */
+  constructor(opts: { seed?: number; settings?: Settings; world?: WorldGeometry; persisted?: PersistedCat | null; now?: number; wall?: number; floorInset?: boolean } = {}) {
     this.now = opts.now ?? 1000;
     this.worldGeometry = opts.world ?? SINGLE;
+    this.floorInset = opts.floorInset ?? true;
     let wall = opts.wall ?? 1_800_000_000_000;
     this.sim = createInstrumentedCatSim(
       {
         persisted: opts.persisted ?? null,
         settings: opts.settings ?? defaultSettings(),
-        world: this.worldGeometry,
+        world: this.simGeometry(this.worldGeometry),
         now: this.now,
         random: mulberry32(opts.seed ?? 1),
         wallClock: () => (wall += 1),
@@ -76,19 +91,33 @@ export class Harness {
     );
   }
 
+  /** The real display layout (what the overlays cover and the provider measures in). */
   get world(): WorldGeometry {
     return this.worldGeometry;
   }
 
+  /** What the sim sees of a world: shortened by the floor inset unless the test opted out. */
+  simGeometry(w: WorldGeometry): WorldGeometry {
+    return this.floorInset ? simWorld(w) : w;
+  }
+
+  /** The floor height on a display as the sim sees it (px). */
+  floorY(displayId = '1'): number {
+    const d = this.simGeometry(this.worldGeometry).displays.find((x) => x.id === displayId) ?? this.simGeometry(this.worldGeometry).displays[0]!;
+    return d.workAreaPx.y + d.workAreaPx.height;
+  }
+
   setWorld(w: WorldGeometry): void {
     this.worldGeometry = w;
-    this.sim.setWorld(w);
+    this.sim.setWorld(this.simGeometry(w));
   }
 
   buildEnv(dt: number): SimEnv {
     const e = this.env;
     const windows = e.windows ?? {};
-    const surfaces = e.surfaces ?? [...surfacesFromWindows(windows, this.worldGeometry, { walls: e.walls ?? true, now: this.now }), ...(e.extraSurfaces ?? [])];
+    const surfaces =
+      e.surfaces ??
+      [...surfacesFromWindows(windows, this.worldGeometry, { walls: e.walls ?? true, now: this.now, provider: e.rawSurfaces !== true, tabStrips: e.tabStrips }), ...(e.extraSurfaces ?? [])];
     const byId = new Map(surfaces.map((s) => [s.id, s] as const));
     return {
       now: this.now,
@@ -197,12 +226,70 @@ export function tabStrip(windowId: string, y: number, x0: number, x1: number, re
   return ledge(stripId(windowId), 'tabStrip', windowId, y, x0, x1, { rest, focusX, ...extra });
 }
 
+/** src/main/surfaces/provider.ts defaults on Windows 11 (the fixture's provider uses the app's geometry code). */
+export const PROVIDER_OPTS: WindowSurfaceOptions = { cornerRadiusDip: 8, minLedgeWidthPx: 80, minWallHeightDip: 96, wallClearanceDip: 40, climbWindows: true };
+
+/** A tab strip measured on a browser window (px): its walkable span, resting span and active tab. */
+export interface StripSpec {
+  x0: number;
+  x1: number;
+  rest: { x0: number; x1: number } | null;
+  focusX: number | null;
+}
+
 /**
- * What the host's surface provider reports for plain app windows (no occlusion): each
- * window's top edge and, while climbing is allowed, its two sides (pulling up onto the top).
- * A window covering a whole work area (maximized) offers nothing.
+ * Surfaces for plain app windows given front first. `provider: true` (what the Harness uses
+ * unless a test opts out): as the host's provider reports them, see providerSurfacesFromWindows.
+ * Otherwise the v1.1 fixture: each window's bare top edge and sides (no corners, no occlusion);
+ * the movement tests' driver and the fuzz use that for exact edges.
  */
-export function surfacesFromWindows(windows: Record<string, Rect | null>, geometry: WorldGeometry, opts: { walls?: boolean; now?: number } = {}): Surface[] {
+export function surfacesFromWindows(
+  windows: Record<string, Rect | null>,
+  geometry: WorldGeometry,
+  opts: { walls?: boolean; now?: number; provider?: boolean; tabStrips?: Record<string, StripSpec> | undefined } = {},
+): Surface[] {
+  return opts.provider ? providerSurfacesFromWindows(windows, geometry, opts) : rawSurfacesFromWindows(windows, geometry, opts);
+}
+
+/**
+ * What the host's surface provider reports for app windows given front first, built with the
+ * app's own geometry code (src/main/surfaces/windowSurfaces.ts) in the real display space:
+ * rounded-corner insets, every edge cut by the windows in front of it, sides only with room
+ * beside them (and only while climbing is allowed), and a measured tab strip listed in place of
+ * its window's top (with `land`, the open edge it lies on). A window covering a whole work area
+ * (maximized) offers nothing and covers the windows behind it.
+ */
+export function providerSurfacesFromWindows(
+  windows: Record<string, Rect | null>,
+  geometry: WorldGeometry,
+  opts: { walls?: boolean; now?: number; tabStrips?: Record<string, StripSpec> | undefined } = {},
+): Surface[] {
+  const displays = geometry.displays;
+  const walls = opts.walls ?? true;
+  const meta: SurfaceMeta = { phase: 'stable', confidence: 1, validatedAt: opts.now ?? 0, excluded: false, vx: 0, vy: 0, vxRight: 0 };
+  const out: Surface[] = [];
+  const above: Rect[] = [];
+  for (const [id, r] of Object.entries(windows)) {
+    if (!r) continue;
+    if (coversWorkArea(r, displays)) {
+      above.push(r);
+      continue;
+    }
+    const spans = computeOpenSpans(r, above, displays, { ...PROVIDER_OPTS, climbWindows: walls });
+    const spec = opts.tabStrips?.[id];
+    let strip: StripPlacement | null = null;
+    if (spec) {
+      const source = ledge(stripId(id), 'tabStrip', id, r.y, spec.x0, spec.x1, { rest: spec.rest, focusX: spec.focusX, validatedAt: meta.validatedAt });
+      strip = { source, y: r.y, x0: spec.x0, x1: spec.x1, rest: spec.rest, focusX: spec.focusX, confidence: 1 };
+    }
+    const b = buildWindowSurfaces(id, r, spans, displays, meta, strip, null);
+    for (const s of [b.top, b.left, b.right]) if (s) out.push(s);
+    above.push(r);
+  }
+  return out;
+}
+
+function rawSurfacesFromWindows(windows: Record<string, Rect | null>, geometry: WorldGeometry, opts: { walls?: boolean; now?: number }): Surface[] {
   const out: Surface[] = [];
   for (const [id, r] of Object.entries(windows)) {
     if (!r) continue;
@@ -268,6 +355,9 @@ export function decisionView(o: Partial<DecisionView> = {}): DecisionView {
     tabStripTarget: null,
     edgeLook: null,
     surpriseReady: false,
+    exploreUrge: 0,
+    downTarget: null,
+    elevatedMs: 0,
     recentStates: [],
     current: 'idle',
     isCoolingDown: () => false,

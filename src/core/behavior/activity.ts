@@ -49,6 +49,8 @@ export interface Activity {
   answered: boolean;
   lastPetAt: number;
   landing: LandingInfo | null;
+  /** Longest the approach to a destination may take, ms (0: the state's fixed default). */
+  approachMs: number;
 }
 
 export function makeActivity(state: BehaviorState, cause: TransitionCause, now: number, dwellMs: number, init: ActivityInit): Activity {
@@ -73,5 +75,6 @@ export function makeActivity(state: BehaviorState, cause: TransitionCause, now: 
     answered: false,
     lastPetAt: now,
     landing: init.landing ?? null,
+    approachMs: 0,
   };
 }

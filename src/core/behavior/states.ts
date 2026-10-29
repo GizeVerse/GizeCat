@@ -76,7 +76,8 @@ export const TRANSITIONS: Readonly<Record<BehaviorState, readonly BehaviorState[
   grooming: ['idle', 'resting', 'fallingAsleep', 'walking', 'watchingUser', 'watchingCursor', 'curious', 'beingPetted', 'startled', 'annoyed', ...ESCAPE],
   hiding: ['idle', 'walking', 'running', 'resting', 'grooming', 'watchingCursor', 'curious', 'startled', 'beingPetted', 'jumping', ...ESCAPE],
   held: ['falling', 'landing', 'away'],
-  jumping: ['falling', 'landing', 'held', 'away'],
+  // A leap onto a window side ends clinging to it (v1.1.1): the activity that started the climb resumes there.
+  jumping: ['falling', 'landing', 'held', 'away', ...AWAKE],
   falling: ['landing', 'held', 'away'],
   landing: [...AWAKE, 'fallingAsleep', 'jumping', ...ESCAPE],
   away: ['idle', 'wakingUp', 'sleeping', 'fallingAsleep', 'resting'],

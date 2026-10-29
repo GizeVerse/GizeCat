@@ -116,7 +116,8 @@ describe('F6: pouncing at the pointer', () => {
         if (o.state === 'landing' && jumpFrom !== null) {
           // A pounce, not a leap: at most pounceMaxBodyLengths.
           expect(Math.abs(o.x - jumpFrom)).toBeLessThanOrEqual(MOVEMENT.pounceMaxBodyLengths * BL + 2);
-          expect(o.y).toBe(FLOOR);
+          // Back on the floor (the work-area bottom less the app's floor inset).
+          expect(o.y).toBe(hh.floorY());
           jumpFrom = null;
         }
         return play(hh, i);

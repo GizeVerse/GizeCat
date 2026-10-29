@@ -7,11 +7,11 @@ import type { Point, Rect } from '../../shared/geometry';
 import { clamp, isFiniteRect, rectCenter } from '../../shared/geometry';
 import type { Settings, ToggleableBehavior } from '../../shared/settings';
 import type { CatSim, CatSimOptions, SimEnv, SimEvent, SimOutput, SimRequest } from '../../shared/sim';
-import type { DecisionDiagnostics, NavDiagnostics, SurfaceDebugLine } from '../../shared/surfaceDiagnostics';
+import type { DecisionDiagnostics, DecisionTarget, NavDiagnostics, SurfaceDebugLine, TargetAvailability } from '../../shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface as EnvSurface, WallSurface } from '../../shared/surfaces';
 import type { WindowInfo, WorldGeometry } from '../../shared/world';
 import type { LandingInfo, MoverConfig, MoverStep, Pace, RoutePreference, SupportLoss } from '../movement';
-import { Mover } from '../movement';
+import { MOVEMENT, Mover } from '../movement';
 import type { Activity, ActivityInit, FollowUp } from './activity';
 import { makeActivity } from './activity';
 import type { Phase } from './clips';
@@ -117,6 +117,25 @@ const TASKBAR_WAKE_COOLDOWN_MS = 10 * 60_000;
 const CLIMB_COOLDOWN_MS: readonly [number, number] = [90_000, 240_000];
 const TAB_VISIT_COOLDOWN_MS = 120_000;
 const TAB_INVESTIGATE_COOLDOWN_MS = 60_000;
+/**
+ * v1.1.1: a trip up that failed (unreachable when tried, timed out, turned back on the side, let
+ * go, target lost) is retried after this instead of the full climb / tab-strip visit cooldown.
+ */
+const EXCURSION_RETRY_MS: readonly [number, number] = [15_000, 40_000];
+/** An approach to a window top may take as long as its route needs (walk, leap, climb), within these bounds. */
+const APPROACH_MIN_MS = 15_000;
+const APPROACH_MAX_MS = 60_000;
+/** Window tops / tab strips checked for a way up per decision, nearest first (bounded planner cost). */
+const PERCH_CANDIDATES = 6;
+const STRIP_CANDIDATES = 4;
+/** What the exploration urge counts as within reach is refreshed at most this often. */
+const URGE_SCAN_MS = 2000;
+/** Up on a top, the cat explores it before it heads back down: at least this long, ... */
+const TOP_MIN_STAY_MS = 20_000;
+/** ... having walked this many body lengths along it (a short top: its length), ... */
+const TOP_PATROL_BL = 2;
+/** ... or this long at the most. */
+const TOP_MAX_EXPLORE_MS = 60_000;
 /** Longest tick the simulation integrates; the host clamps dt to the same 250 ms. */
 export const MAX_SIM_DT_MS = 250;
 /** How far the paws of a cat on a wall reach past the wall line into the window, body lengths (~5.5 DIP). */
@@ -185,6 +204,33 @@ const CONTENTMENT_BIAS: Partial<Record<BehaviorState, number>> = {
 };
 
 const ZERO: Point = { x: 0, y: 0 };
+
+/** Where the cat can go up from where it stands, and why not (v1.1.1; reachability ignores cooldowns). */
+interface TargetScan {
+  at: number;
+  perch: { windowId: string; point: Point } | null;
+  climb: { point: Point; dir: 'up' | 'down' } | null;
+  /** A tab strip to visit: its height and resting span. */
+  strip: { y: number; rest: { x0: number; x1: number } } | null;
+  status: Record<DecisionTarget, TargetAvailability>;
+}
+
+const NO_TARGETS: Record<DecisionTarget, TargetAvailability> = { perch: 'noSurfaces', climb: 'noSurfaces', tabStrip: 'noSurfaces' };
+const EMPTY_SCAN: TargetScan = { at: -Infinity, perch: null, climb: null, strip: null, status: NO_TARGETS };
+
+/** One trip up the cat set out on (exploring a top, climbing a side, visiting a tab strip). */
+interface Excursion {
+  kind: DecisionTarget;
+  act: Activity;
+  /** The surface it set out from (null: the floor), and whether that was already up on a window. */
+  from: string | null;
+  fromElevated: boolean;
+  /** Got onto a window side (leaping or stepping on) on the way. */
+  leftGround: boolean;
+  arrived: boolean;
+}
+
+const isElevatedKind = (k: string | null | undefined): boolean => k === 'windowTop' || k === 'tabStrip';
 const isFinitePoint = (p: Point | null | undefined): p is Point => !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
 
 export class CatSimImpl implements CatSim {
@@ -263,6 +309,15 @@ export class CatSimImpl implements CatSim {
   private nextDecisionAt = -Infinity;
   private nextAdvanceAt = -Infinity;
   private nextDriveAt = -Infinity;
+  /** v1.1.1 exploration: the urge (DecisionView.exploreUrge), what is reachable, the trip under way, the top being explored. */
+  private exploreUrge = 0;
+  private scan: TargetScan = EMPTY_SCAN;
+  private decisionTargets: Record<DecisionTarget, TargetAvailability> = { ...NO_TARGETS };
+  private excursion: Excursion | null = null;
+  private wasElevated = false;
+  private topVisit: { surfaceId: string; since: number; x0: number; walked: number } | null = null;
+  private lastElevatedAt = 0;
+  private excursionCount = 0;
   private invalidRequests = 0;
   private readonly invalidSamples: string[] = [];
   private eventErrors = 0;
@@ -353,6 +408,8 @@ export class CatSimImpl implements CatSim {
       snap = true;
     }
     this.reconcilePhysical();
+    this.trackElevation();
+    this.updateUrge(dt);
     this.drives();
     if (this.act.done) this.advance();
     else if (!SELF_TIMED.has(this.act.state) && this.now - this.act.startedAt >= this.act.dwellMs) this.reconsider();
@@ -411,21 +468,39 @@ export class CatSimImpl implements CatSim {
     this.markDirty(true);
   }
 
-  /** v1.1.1 surface diagnostics (kinds, counts, reasons; no ids or titles). CONTRACT STUB: the behaviour work fills `decision`. */
+  /** v1.1.1 surface diagnostics (kinds, counts, reasons; no ids or titles). */
   surfaceDiagnostics(): { nav: NavDiagnostics; decision: DecisionDiagnostics } {
-    const attached = this.mover.attachedSurface?.surfaceKind ?? null;
     return {
       nav: this.mover.navDiagnostics(),
       decision: {
         state: this.act.state,
-        support: attached ?? 'floor',
-        targetKind: null,
-        targets: { perch: 'noSurfaces', climb: 'noSurfaces', tabStrip: 'noSurfaces' },
-        exploreUrge: 0,
-        lastElevatedAt: 0,
-        excursions: 0,
+        support: this.supportKind(),
+        targetKind: this.targetKind(),
+        targets: { ...this.decisionTargets },
+        exploreUrge: clamp(this.exploreUrge, 0, 1),
+        lastElevatedAt: this.lastElevatedAt,
+        excursions: this.excursionCount,
       },
     };
+  }
+
+  /** What the cat stands on or clings to right now (diagnostics); in mid-leap it is in the air. */
+  private supportKind(): DecisionDiagnostics['support'] {
+    if (this.mode === 'away') return 'none';
+    const m = this.mover;
+    if (m.held) return 'held';
+    if (m.onWall) return m.climbPhase === 'leap' ? 'air' : 'windowSide';
+    if (m.airborne) return 'air';
+    return m.attachedSurface?.surfaceKind ?? 'floor';
+  }
+
+  /** Kind of surface the current activity (the one a jump interrupted) is heading for, or null. */
+  private targetKind(): DecisionDiagnostics['targetKind'] {
+    const a = PHYSICAL_STATES.has(this.act.state) && this.suspended ? this.suspended : this.act;
+    const t = a.target;
+    if (!isFinitePoint(t) || a.done) return null;
+    const p = this.mover.surfacePointFor(t);
+    return p.surface.kind === 'floor' ? 'floor' : (p.surface.surfaceKind ?? null);
   }
 
   /** v1.1.1 on-desktop surface visualization segments (physical px). */
@@ -566,15 +641,19 @@ export class CatSimImpl implements CatSim {
     let top: LedgeSurface | null = null;
     let left: WallSurface | null = null;
     let right: WallSurface | null = null;
+    let strip: LedgeSurface | null = null;
     for (const s of this.ownerIndex.get(id) ?? []) {
       const g = live ? this.safeSurface(s.id) : s;
       if (!g) continue;
       if (g.orientation === 'ledge' && g.kind === 'windowTop') top = g;
+      else if (g.orientation === 'ledge' && g.kind === 'tabStrip') strip = g;
       else if (g.orientation === 'wall' && g.kind === 'windowSide') {
         if (g.side === 'left') left = g;
         else right = g;
       }
     }
+    // A browser listed with its tab strip instead of its top: the open edge the strip lies on is the top (v1.1.1).
+    if (!top && strip) top = strip.land ? { ...strip, x0: strip.land.x0, x1: strip.land.x1 } : strip;
     const cached = this.windowRects.get(id) ?? null;
     if (top || left || right) {
       const x0 = left?.x ?? top?.x0 ?? cached?.rect.x;
@@ -929,7 +1008,7 @@ export class CatSimImpl implements CatSim {
   }
 
   private requestCandidate(c: Candidate, cause: TransitionCause): RequestStatus {
-    const then: FollowUp | null = c.then ? { state: c.then, init: {} } : null;
+    const then: FollowUp | null = c.then ? { state: c.then, init: c.thenVariant ? { variant: c.thenVariant } : {} } : null;
     const r = this.request(c.state, cause, { variant: c.variant, target: c.target, windowId: c.windowId, then });
     if (r === 'ok') {
       // Surface excursions are occasional: each kind has its own cooldown.
@@ -1104,11 +1183,31 @@ export class CatSimImpl implements CatSim {
       }
     }
     if (step.lifted || step.lowered) this.onCarried(step.lifted !== null);
+    if (step.clung) this.resumeAfterLeap();
     if (step.landed) {
       this.request('landing', 'physical', { landing: step.landed });
       return;
     }
     if (!PHYSICAL_STATES.has(this.act.state)) this.act.goalStatus = step.goal;
+  }
+
+  /**
+   * A leap onto a window side ended with the cat clinging to it (v1.1.1): the activity that
+   * started the climb (suspended by the jump) carries on from there, so the climb, the pull-up
+   * and the walk on top happen as that activity. Without one it simply climbs on (idle).
+   */
+  private resumeAfterLeap(): void {
+    if (this.act.state !== 'jumping') return;
+    this.fallReason = null;
+    const s = this.suspended;
+    if (s && this.mode === 'normal' && canTransition('jumping', s.state) && this.allowedByToggles(s.state, s.variant)) {
+      if (this.go(s.state, 'physical', {}, s) === 'ok') {
+        this.suspended = null;
+        return;
+      }
+    }
+    this.discardSuspended();
+    this.go('idle', 'physical', {});
   }
 
   /** Only a window (top, side or tab strip) that suddenly vanished under the cat startles it. */
@@ -1140,6 +1239,9 @@ export class CatSimImpl implements CatSim {
     } else if (m.airborne && !PHYSICAL_STATES.has(s)) {
       this.fallReason ??= 'perch';
       this.request('falling', 'physical');
+    } else if (s === 'jumping' && m.onWall && m.climbPhase !== 'leap') {
+      // Clinging to a side after a leap whose catch was not reported this tick.
+      this.resumeAfterLeap();
     } else if (m.grounded && (s === 'jumping' || s === 'falling')) {
       this.request('landing', 'physical', { landing: null });
     }
@@ -1218,7 +1320,17 @@ export class CatSimImpl implements CatSim {
         break;
       case 'walking':
       case 'running':
+        if (a.variant === 'patrol') {
+          // Along the top it just got onto, then a sit up there.
+          a.target ??= this.patrolTarget();
+          a.then ??= { state: 'idle', init: {} };
+        }
         this.phase(a, 'approach');
+        // A tab-strip visit may need a climb: it may take as long as its route needs.
+        if (a.variant === 'tabStrip' && a.target && this.mover.attachedSurface?.surfaceKind !== 'tabStrip') {
+          a.approachMs = Math.max(TRAVEL_TIMEOUT_MS, this.approachTimeoutMs(a.target, 'walk', 0));
+        }
+        this.beginExcursion(a);
         break;
       case 'chasingCursor': {
         const stalk = chance(this.random, 0.35);
@@ -1241,6 +1353,8 @@ export class CatSimImpl implements CatSim {
       }
       case 'inspectingWindow':
         this.phase(a, 'approach');
+        if (a.variant !== 'edge') a.approachMs = this.inspectApproachMs(a);
+        this.beginExcursion(a);
         break;
       case 'watchingUser':
         if (a.variant === 'nearby') this.phase(a, 'approach');
@@ -1293,6 +1407,7 @@ export class CatSimImpl implements CatSim {
   }
 
   private exitActivity(a: Activity): void {
+    this.settleExcursion(a);
     switch (a.state) {
       case 'chasingCursor':
         if (a.observedMs >= 1200) {
@@ -1459,8 +1574,11 @@ export class CatSimImpl implements CatSim {
       this.finish();
       return;
     }
-    const timeout = a.variant === 'climb' ? CLIMB_TIMEOUT_MS : TRAVEL_TIMEOUT_MS;
+    const timeout = a.variant === 'climb' ? CLIMB_TIMEOUT_MS : a.approachMs > 0 ? a.approachMs : TRAVEL_TIMEOUT_MS;
     if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.startedAt > timeout) {
+      // A trip up that did not get there (a goal whose top vanished ends on the floor below it): no
+      // patrol along a top it never reached.
+      if (a.then?.init.variant === 'patrol' && !(this.excursion?.act === a && this.excursion.arrived)) a.then = null;
       this.finish(a.then);
       if (a.variant === 'called') this.emotes.show('heart', this.now);
       return;
@@ -1470,13 +1588,20 @@ export class CatSimImpl implements CatSim {
         // Up a window side to its top corner (then a pull-up), or down from the corner of the top it stands on.
         this.goTo(a.target, 'walk', true, undefined, { route: 'climb' });
         return;
+      case 'patrol':
+        // Along the top it is on, never off it.
+        this.goTo(a.target, 'walk', false);
+        return;
       case 'taskbar':
         // Onto the taskbar, or down off it to the floor it covers: exactly the surface named.
         this.goTo(a.target, 'walk', true, undefined, { literal: true });
         return;
-      case 'tabStrip':
-        this.goTo(a.target, 'slow', true, undefined, { route: 'noClimb' });
+      case 'tabStrip': {
+        // Along the strip it is on, slowly; to a strip elsewhere by any way up (climbing too, v1.1.1).
+        const onStrip = this.mover.attachedSurface?.surfaceKind === 'tabStrip';
+        this.goTo(a.target, onStrip ? 'slow' : 'walk', true, undefined, { route: this.climbAllowed() ? 'any' : 'noClimb' });
         return;
+      }
       default: {
         const pace: Pace = a.state === 'running' ? 'run' : a.variant === 'favorite' || a.variant === 'nearby' ? 'slow' : 'walk';
         this.goTo(a.target, pace, a.variant !== 'retreat' && a.variant !== 'playful');
@@ -1592,13 +1717,19 @@ export class CatSimImpl implements CatSim {
     }
     const center = rectCenter(rect);
     if (a.phase === 'approach') {
-      if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 15_000) {
+      // As long as the way there takes (walk, leap, climb), not a fixed 15 s (v1.1.1).
+      if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > (a.approachMs > 0 ? a.approachMs : APPROACH_MIN_MS)) {
         this.stop();
-        this.phase(a, 'look', range(this.random, 4000, 9000));
+        const look = range(this.random, 4000, 9000);
+        this.phase(a, 'look', look);
+        // Having got up to explore, it looks around before anything else comes to mind.
+        if (a.variant === 'explore') a.dwellMs = Math.max(a.dwellMs, this.now - a.startedAt + look + 500);
         return;
       }
       const top = this.mover.ledgeSurfaces.find((l) => l.ownerId === a.windowId && (l.surfaceKind === 'windowTop' || l.surfaceKind === 'tabStrip'));
       if (top) {
+        // On its way up the cat is not distracted by its next decision: the approach's own timeout ends it.
+        a.dwellMs = Math.max(a.dwellMs, this.now - a.startedAt + 1000);
         this.goTo({ x: clamp(this.mover.x, top.x0, top.x1), y: top.y }, 'walk', true);
       } else {
         const side = Math.sign(center.x - this.mover.x) || 1;
@@ -1609,6 +1740,11 @@ export class CatSimImpl implements CatSim {
     this.stop();
     this.mover.faceToward(center.x, this.now);
     if (!this.phaseElapsed(a)) return;
+    // Up on the top it came to explore: a walk along it first (then a sit up there).
+    if (a.phase === 'look' && a.variant === 'explore' && this.mover.perchWindowId === a.windowId && this.topVisit && this.topVisit.walked < TOP_PATROL_BL * this.bl) {
+      this.finish({ state: 'walking', init: { variant: 'patrol' } });
+      return;
+    }
     if (a.phase === 'look' && this.mover.perchWindowId === a.windowId && chance(this.random, 0.5)) this.phase(a, 'loaf', range(this.random, 4000, 9000));
     else this.finish();
   }
@@ -2631,6 +2767,9 @@ export class CatSimImpl implements CatSim {
   private decisionView(): DecisionView {
     const env = this.env as SimEnv;
     const cur = this.cursorInfo();
+    const scan = this.scanTargets();
+    this.scan = scan;
+    this.decisionTargets = { ...scan.status };
     const fg = env.foreground && !env.foreground.minimized && isFiniteRect(env.foreground.rect) ? env.foreground : null;
     const media = fg !== null && (fg.category === 'video' || fg.category === 'game' || fg.category === 'media');
     return {
@@ -2652,15 +2791,18 @@ export class CatSimImpl implements CatSim {
       cursor: cur,
       foreground: fg ? { center: rectCenter(fg.rect), distBodyLengths: Math.abs(rectCenter(fg.rect).x - this.mover.x) / this.bl } : null,
       favoriteSpot: this.favoriteSpotTarget(),
-      perchTarget: this.perchTarget(),
+      perchTarget: scan.status.perch === 'available' ? scan.perch : null,
       wanderTarget: this.wanderTarget(),
       cornerTarget: this.cornerTarget(),
       typingIntensity: this.settings.behavior.reactToTyping && Number.isFinite(env.typingIntensity) ? clamp(env.typingIntensity, 0, 1) : 0,
       standingOn: this.mover.attachedSurface?.surfaceKind ?? 'floor',
-      climbTarget: this.climbTarget(),
-      tabStripTarget: this.tabStripTarget(),
+      climbTarget: scan.status.climb === 'available' ? scan.climb : null,
+      tabStripTarget: this.tabStripTarget(scan),
       edgeLook: this.edgeLookTarget(),
       surpriseReady: this.reactions.ready('surprise', this.now),
+      exploreUrge: this.exploreUrge,
+      downTarget: this.downTarget(),
+      elevatedMs: this.topVisit ? this.now - this.topVisit.since : 0,
       recentStates: this.recentStates,
       current: this.act.state,
       isCoolingDown: (s) => this.coolingDown(s),
@@ -2672,8 +2814,9 @@ export class CatSimImpl implements CatSim {
     const s = m.currentSurface;
     const r = m.walkRange;
     if (!s || !r) return null;
-    // From a window top or tab strip the cat often wanders back down; a taskbar is walked along like a floor.
-    if (s.kind === 'ledge' && s.surfaceKind !== 'taskbar' && chance(this.random, 0.5)) {
+    // From a window top or tab strip the cat often wanders back down once it has explored it (v1.1.1);
+    // a taskbar is walked along like a floor.
+    if (s.kind === 'ledge' && s.surfaceKind !== 'taskbar' && this.topExplored() && chance(this.random, 0.5)) {
       const fp = m.world.nearestFloorPoint({ x: m.x, y: m.y + 1 });
       return { x: fp.x, y: fp.y };
     }
@@ -2703,27 +2846,127 @@ export class CatSimImpl implements CatSim {
     return Math.abs(x - m.x) >= (floor ? 3 : 1.5) * this.bl ? { x, y: m.y } : null;
   }
 
-  /** The nearest climb that can start from where the cat stands (up a window side, or down from the top it is on). */
-  private climbTarget(): { point: Point; dir: 'up' | 'down' } | null {
+  // ---- v1.1.1: where the cat can go up, and the urge to go --------------------------------
+
+  /** Window tops, sides and tab strips the cat could go up to from where it stands, with why it cannot for each. */
+  private scanTargets(): TargetScan {
+    const perch = this.scanPerch();
+    const climb = this.scanClimb();
+    const strip = this.scanStrip();
+    return { at: this.now, perch: perch.target, climb: climb.target, strip: strip.target, status: { perch: perch.status, climb: climb.status, tabStrip: strip.status } };
+  }
+
+  /** Some way up is within reach, whether or not its cooldown allows it now. */
+  private canGoUp(scan: TargetScan): boolean {
+    return scan.perch !== null || scan.climb?.dir === 'up' || scan.strip !== null;
+  }
+
+  /** Nothing usable of these kinds: is that because every one listed belongs to a private window? */
+  private noneOrExcluded(kinds: readonly string[]): TargetAvailability {
+    for (const s of this.surfaceIndex.values()) {
+      if (kinds.includes(s.kind) && (s.excluded === true || this.excludedWindows.has(s.ownerId))) return 'excluded';
+    }
+    return 'noSurfaces';
+  }
+
+  private climbAllowed(): boolean {
+    return !this.disabled.has('climbWindows') && !this.disabled.has('perchOnWindows');
+  }
+
+  /**
+   * A window top or tab strip to jump or climb up to and explore ('Sit on windows'): not the
+   * window the cat is on, not one that is leaving or private; the nearest few are checked for a route.
+   */
+  private scanPerch(): { target: TargetScan['perch']; status: TargetAvailability } {
     const m = this.mover;
-    if (!m.grounded || this.disabled.has('climbWindows') || this.disabled.has('perchOnWindows') || !this.reactions.ready('climb', this.now)) return null;
+    if (this.disabled.has('perchOnWindows')) return { target: null, status: 'disabled' };
+    if (!m.grounded) return { target: null, status: 'notGrounded' };
+    const here = m.perchWindowId;
+    const tops = m.ledgeSurfaces.filter((l) => isElevatedKind(l.surfaceKind) && l.ownerId !== null && l.ownerId !== here && l.phase !== 'leaving');
+    if (tops.length === 0) return { target: null, status: this.noneOrExcluded(['windowTop', 'tabStrip']) };
+    const open = tops.filter((l) => !this.excludedWindows.has(l.ownerId as string));
+    if (open.length === 0) return { target: null, status: 'excluded' };
+    const options = open
+      .map((l) => {
+        // On a tab strip it heads for the resting span (the tabs), not the controls beside them.
+        const span = l.surfaceKind === 'tabStrip' && l.rest ? l.rest : l;
+        const point = { x: clamp(m.x, span.x0, span.x1), y: l.y };
+        return { l, point, d: Math.hypot(point.x - m.x, point.y - m.y) };
+      })
+      .sort((a, b) => a.d - b.d)
+      .slice(0, PERCH_CANDIDATES);
+    for (const o of options) {
+      if (!m.canReach(o.point)) continue;
+      return { target: { windowId: o.l.ownerId as string, point: o.point }, status: this.coolingDown('inspectingWindow') ? 'cooldown' : 'available' };
+    }
+    return { target: null, status: 'unreachable' };
+  }
+
+  /**
+   * The nearest climb that can start from where the cat stands: up a window side (stepping or
+   * leaping onto it), or down from the top it is on once it has explored that top.
+   */
+  private scanClimb(): { target: TargetScan['climb']; status: TargetAvailability } {
+    const m = this.mover;
+    if (!this.climbAllowed()) return { target: null, status: 'disabled' };
+    if (!m.grounded) return { target: null, status: 'notGrounded' };
+    if (m.wallTracks.length === 0) return { target: null, status: this.noneOrExcluded(['windowSide']) };
     let best: { point: Point; dir: 'up' | 'down' } | null = null;
     let bestDist = Infinity;
+    let options = 0;
+    let excluded = 0;
     for (const o of m.climbOptions()) {
-      if (this.excludedWindows.has(o.ownerId)) continue;
+      if (o.dir === 'down' && !this.topExplored()) continue;
+      options++;
+      if (this.excludedWindows.has(o.ownerId)) {
+        excluded++;
+        continue;
+      }
       const dist = Math.abs(o.startX - m.x) / this.bl;
       if (dist > 15 || dist >= bestDist) continue;
       best = { point: { x: o.target.x, y: o.target.y }, dir: o.dir };
       bestDist = dist;
     }
-    return best;
+    if (!best) return { target: null, status: options > 0 && excluded === options ? 'excluded' : 'unreachable' };
+    return { target: best, status: this.reactions.ready('climb', this.now) ? 'available' : 'cooldown' };
+  }
+
+  /**
+   * A tab strip worth a visit ('Tab strips'): the nearest few reachable by any way up the cat may
+   * take (climbing too, while climbing is on). Standing on a strip: walking along it.
+   */
+  private scanStrip(): { target: TargetScan['strip']; status: TargetAvailability } {
+    const m = this.mover;
+    if (this.disabled.has('tabStrips')) return { target: null, status: 'disabled' };
+    if (!m.grounded) return { target: null, status: 'notGrounded' };
+    const on = m.attachedSurface;
+    if (on?.surfaceKind === 'tabStrip') {
+      const strip = m.ledgeById(on.surfaceId) ?? m.currentSurface;
+      const rest = strip ? (strip.rest ?? { x0: strip.x0, x1: strip.x1 }) : null;
+      return { target: null, status: rest && rest.x1 - rest.x0 >= 1.5 * this.bl ? 'available' : 'unreachable' };
+    }
+    const strips = m.ledgeSurfaces.filter((l) => l.surfaceKind === 'tabStrip' && l.phase !== 'leaving');
+    if (strips.length === 0) return { target: null, status: this.noneOrExcluded(['tabStrip']) };
+    const open = strips.filter((l) => !(l.ownerId !== null && this.excludedWindows.has(l.ownerId)));
+    if (open.length === 0) return { target: null, status: 'excluded' };
+    const route = this.climbAllowed() ? 'any' : 'noClimb';
+    const nearest = open
+      .map((l) => ({ l, d: Math.hypot(clamp(m.x, l.x0, l.x1) - m.x, l.y - m.y) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, STRIP_CANDIDATES);
+    for (const { l } of nearest) {
+      const rest = l.rest ?? { x0: l.x0, x1: l.x1 };
+      if (!m.canReach({ x: (rest.x0 + rest.x1) / 2, y: l.y }, route)) continue;
+      return { target: { y: l.y, rest: { x0: rest.x0, x1: rest.x1 } }, status: this.reactions.ready('tabStripVisit', this.now) ? 'available' : 'cooldown' };
+    }
+    return { target: null, status: 'unreachable' };
   }
 
   /**
    * On a tab strip: another point of its resting span to walk to. Elsewhere (when the visit
    * cooldown allows): a resting point on the nearest reachable tab strip.
    */
-  private tabStripTarget(): Point | null {
+  private tabStripTarget(scan: TargetScan): Point | null {
     const m = this.mover;
     if (!m.grounded || this.disabled.has('tabStrips')) return null;
     const on = m.attachedSurface;
@@ -2738,18 +2981,152 @@ export class CatSimImpl implements CatSim {
       }
       return null;
     }
-    if (!this.reactions.ready('tabStripVisit', this.now)) return null;
-    const strips = m.ledgeSurfaces
-      .filter((l) => l.surfaceKind === 'tabStrip' && l.phase !== 'leaving' && !(l.ownerId !== null && this.excludedWindows.has(l.ownerId)))
-      .map((l) => ({ l, d: Math.hypot(clamp(m.x, l.x0, l.x1) - m.x, l.y - m.y) }))
-      .sort((a, b) => a.d - b.d)
-      .slice(0, 2);
-    for (const { l } of strips) {
-      const rest = l.rest ?? { x0: l.x0, x1: l.x1 };
-      const point = { x: rest.x0 + (rest.x1 - rest.x0) * range(this.random, 0.2, 0.8), y: l.y };
-      if (m.canReach(point, 'noClimb')) return point;
+    const strip = scan.status.tabStrip === 'available' ? scan.strip : null;
+    if (!strip) return null;
+    return { x: strip.rest.x0 + (strip.rest.x1 - strip.rest.x0) * range(this.random, 0.2, 0.8), y: strip.y };
+  }
+
+  /**
+   * 0..1 urge to go up (DecisionView.exploreUrge). It grows while the cat is awake on the floor
+   * or a taskbar (not held, not in the air) and some way up is within reach: faster for a
+   * curious, playful cat, slower for a lazy one (0 to 1 in 3-8 min), half as fast while the user
+   * types. With nothing within reach it does not grow. Getting up onto a top resets it.
+   */
+  private updateUrge(dt: number): void {
+    if (this.mode !== 'normal' || !(dt > 0)) return;
+    const m = this.mover;
+    const s = this.act.state;
+    const on = m.attachedSurface;
+    const low = m.grounded && (on === null || on.surfaceKind === 'taskbar');
+    if (!low || ASLEEP_STATES.has(s) || PHYSICAL_STATES.has(s)) return;
+    if (this.now - this.scan.at >= URGE_SCAN_MS) this.scan = this.scanTargets();
+    if (!this.canGoUp(this.scan)) return;
+    this.exploreUrge = Math.min(1, this.exploreUrge + ((this.typing ? 0.5 : 1) * dt) / this.urgeTauMs());
+  }
+
+  /** Time for the urge to grow from 0 to 1, ms: personality-aware, within 3-8 min. */
+  private urgeTauMs(): number {
+    const t = this.cat.traits;
+    const c = (v: number): number => (Number.isFinite(v) ? clamp(v, 0, 1) : 0.5);
+    const minutes = (5.5 * (0.75 + 0.5 * c(t.laziness))) / (0.7 + 0.4 * c(t.curiosity) + 0.2 * c(t.playfulness));
+    return clamp(minutes, 3, 8) * 60_000;
+  }
+
+  /**
+   * Arrivals on window tops and tab strips (from the floor, a taskbar or a side): the excursion
+   * count, the urge reset and the top being explored. A trip up that got onto a side and ended
+   * back down without getting there (turned back, let go, missed the leap) has failed.
+   */
+  private trackElevation(): void {
+    if (this.mode === 'away') return;
+    const m = this.mover;
+    const e = this.excursion;
+    if (!m.grounded) {
+      if (m.onWall && e) e.leftGround = true;
+      return;
     }
-    return null;
+    const on = m.attachedSurface;
+    const elevated = on !== null && isElevatedKind(on.surfaceKind);
+    if (on && elevated) {
+      if (!this.wasElevated) {
+        this.excursionCount++;
+        this.lastElevatedAt = this.now;
+        this.exploreUrge = 0;
+      }
+      const v = this.topVisit;
+      if (!v || v.surfaceId !== on.surfaceId) this.topVisit = { surfaceId: on.surfaceId, since: this.now, x0: m.x, walked: 0 };
+      else v.walked = Math.max(v.walked, Math.abs(m.x - v.x0));
+      if (e && on.surfaceId !== e.from) e.arrived = true;
+    } else {
+      this.topVisit = null;
+      if (e && e.leftGround && !e.arrived && !e.fromElevated && this.act === e.act) {
+        if (e.act.then?.init.variant === 'patrol') e.act.then = null;
+        this.finish();
+      }
+    }
+    this.wasElevated = elevated;
+  }
+
+  /** Up on a top, it has explored it (stayed a while and walked along it) and may head back down. */
+  private topExplored(): boolean {
+    const v = this.topVisit;
+    if (!v) return true;
+    const stay = this.now - v.since;
+    if (stay >= TOP_MAX_EXPLORE_MS) return true;
+    if (stay < TOP_MIN_STAY_MS) return false;
+    if (v.walked >= TOP_PATROL_BL * this.bl) return true;
+    const r = this.mover.walkRange;
+    return !r || r.x1 - r.x0 < (TOP_PATROL_BL + 0.5) * this.bl;
+  }
+
+  /** Up on a top it has explored: the floor below, to head back down to. */
+  private downTarget(): Point | null {
+    const m = this.mover;
+    if (!this.topVisit || !m.grounded || !isElevatedKind(m.attachedSurface?.surfaceKind) || !this.topExplored()) return null;
+    const fp = m.world.nearestFloorPoint({ x: m.x, y: m.y + 1 });
+    return { x: fp.x, y: fp.y };
+  }
+
+  /** A point a few body lengths along the top the cat stands on, toward the side with more room. */
+  private patrolTarget(): Point | null {
+    const m = this.mover;
+    const r = m.walkRange;
+    if (!r || !m.grounded || !isElevatedKind(m.attachedSurface?.surfaceKind)) return null;
+    const inset = 0.1 * this.bl;
+    const roomLeft = m.x - (r.x0 + inset);
+    const roomRight = r.x1 - inset - m.x;
+    const room = Math.max(roomLeft, roomRight);
+    if (room < 0.75 * this.bl) return null;
+    const dir = roomRight >= roomLeft ? 1 : -1;
+    return { x: m.x + dir * Math.min(room, range(this.random, 2.5, 6) * this.bl), y: m.y };
+  }
+
+  /** Starts tracking a trip up: exploring a top, climbing up a side, or visiting a tab strip from elsewhere. */
+  private beginExcursion(a: Activity): void {
+    const m = this.mover;
+    const on = m.attachedSurface;
+    let kind: DecisionTarget | null = null;
+    if (a.state === 'inspectingWindow' && a.variant === 'explore') kind = 'perch';
+    else if (a.state === 'walking' && a.variant === 'climb' && a.target && a.target.y < m.y - m.bodyHeight) kind = 'climb';
+    else if (a.state === 'walking' && a.variant === 'tabStrip' && on?.surfaceKind !== 'tabStrip') kind = 'tabStrip';
+    if (!kind) return;
+    this.excursion = { kind, act: a, from: on?.surfaceId ?? null, fromElevated: on !== null && isElevatedKind(on.surfaceKind), leftGround: false, arrived: false };
+  }
+
+  /** A trip up ended: a failed one is retried after a short cooldown; a successful one keeps the full cooldown. */
+  private settleExcursion(a: Activity): void {
+    const e = this.excursion;
+    if (!e || e.act !== a) return;
+    this.excursion = null;
+    if (e.arrived) return;
+    const retry = range(this.random, EXCURSION_RETRY_MS[0], EXCURSION_RETRY_MS[1]);
+    // Exploring a top keeps the inspect cooldown (30 s): already a short retry.
+    if (e.kind === 'climb') this.reactions.set('climb', this.now, retry);
+    else if (e.kind === 'tabStrip') this.reactions.set('tabStripVisit', this.now, retry);
+  }
+
+  /**
+   * How long the way up to `target` may take: the walk there (plus, when it climbs, the length of
+   * the top: it may climb the far side and walk back along it), the climb at climbing speed, the
+   * leap and the pull-up, and a margin; within APPROACH_MIN_MS..APPROACH_MAX_MS.
+   */
+  private approachTimeoutMs(target: Point, pace: Pace, ledgeWidth: number): number {
+    const m = this.mover;
+    const speed = Math.max(1, m.paceSpeedPx(pace));
+    const ms = this.settings.behavior.movementSpeed;
+    const climbSpeed = Math.max(1, MOVEMENT.climbUpDip * (Number.isFinite(ms) && ms > 0 ? ms : 1) * m.scale);
+    const rise = Math.max(0, m.y - target.y);
+    const walk = Math.abs(target.x - m.x) + (rise > m.bodyHeight ? clamp(ledgeWidth, 0, 20 * this.bl) : 0);
+    const sec = walk / speed + rise / climbSpeed + 1.5 + 1 + 5;
+    return Number.isFinite(sec) ? clamp(sec * 1000, APPROACH_MIN_MS, APPROACH_MAX_MS) : APPROACH_MIN_MS;
+  }
+
+  /** Approach timeout of an inspection: the way up onto the window's top, when it has one. */
+  private inspectApproachMs(a: Activity): number {
+    const m = this.mover;
+    const top = a.windowId ? m.ledgeSurfaces.find((l) => l.ownerId === a.windowId && isElevatedKind(l.surfaceKind)) : undefined;
+    if (!top) return APPROACH_MIN_MS;
+    return this.approachTimeoutMs({ x: clamp(m.x, top.x0, top.x1), y: top.y }, 'walk', top.x1 - top.x0);
   }
 
   /** Standing on a window top: a spot along it where the cat may sit at the edge and look down into the window. */
@@ -2771,22 +3148,6 @@ export class CatSimImpl implements CatSim {
     const dir = threat < m.x ? 1 : -1;
     const x = clamp(m.x + dir * range(this.random, 3, 6) * this.bl, r.x0, r.x1);
     return Math.abs(x - m.x) >= this.bl ? { x, y: m.y } : null;
-  }
-
-  private perchTarget(): { windowId: string; point: Point } | null {
-    const m = this.mover;
-    if (!m.grounded) return null;
-    const here = m.perchWindowId;
-    const options = m.ledgeSurfaces
-      .filter((l) => l.surfaceKind === 'windowTop' && l.ownerId !== null && l.ownerId !== here && l.phase !== 'leaving')
-      .map((l) => ({ l, x: clamp(m.x, l.x0, l.x1) }))
-      .sort((a, b) => Math.hypot(a.x - m.x, a.l.y - m.y) - Math.hypot(b.x - m.x, b.l.y - m.y))
-      .slice(0, 3);
-    for (const o of options) {
-      const point = { x: o.x, y: o.l.y };
-      if (m.canReach(point)) return { windowId: o.l.ownerId as string, point };
-    }
-    return null;
   }
 
   private favoriteSpotTarget(): { point: Point; distBodyLengths: number } | null {
@@ -2917,6 +3278,8 @@ export class CatSimImpl implements CatSim {
     // off-wall fade is tuned to the pull-up duration), so the cat does not glide rigidly.
     if (m.onWall) {
       const phase = m.climbPhase;
+      // Leaping onto the side (v1.1.1): the jump pose (the renderer shapes it by vy), then onto the wall.
+      if (phase === 'leap') return 'jump';
       return phase === 'pullUp' || phase === 'dismount' ? 'walk' : 'climb';
     }
     if (this.oneShot && CALM_STATES.has(a.state)) return this.oneShot.clip;
@@ -2943,7 +3306,8 @@ export class CatSimImpl implements CatSim {
     const bw = m.bodyWidth;
     const bh = m.bodyHeight;
     const upright = { x0: m.x - bw / 2, y0: m.y - bh, x1: m.x + bw / 2, y1: m.y };
-    const wall = m.onWall ? m.wall : null;
+    // In mid-leap it is airborne, in the upright jump pose: the hanging pose starts at the catch.
+    const wall = m.onWall && m.climbPhase !== 'leap' ? m.wall : null;
     if (!wall) return { x: upright.x0, y: upright.y0, width: bw, height: bh };
     const out = wall.side === 'left' ? -1 : 1;
     const outer = m.x + out * 0.95 * bh;
@@ -3027,7 +3391,7 @@ export class CatSimImpl implements CatSim {
       clip: this.clip,
       clipStartedAt: this.clipStartedAt,
       speed: speedBl < 0.02 ? 0 : speedBl,
-      vy: m.airborne ? m.vy : 0,
+      vy: m.airborne || m.climbPhase === 'leap' ? m.vy : 0,
       look,
       arousal: clamp(this.arousal, 0, 1),
       contentment: clamp(this.contentment, 0, 1),

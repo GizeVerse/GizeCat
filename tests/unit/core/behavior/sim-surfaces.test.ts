@@ -78,7 +78,8 @@ describe('taskbar: physics as seen by the cat', () => {
     h.run(3000);
     expect(h.last!.state).toBe('sleeping');
     expect(h.last!.support).toEqual({ kind: 'floor', displayId: '1' });
-    expect(h.last!.y).toBe(1200);
+    // The floor as the app's sim sees it: the screen bottom less the floor inset.
+    expect(h.last!.y).toBe(h.floorY());
     expect(h.transitions.slice(from).map((t) => t.to)).toEqual([]);
   });
 
@@ -130,7 +131,7 @@ describe('taskbar: physics as seen by the cat', () => {
       h.run(8000);
       expect(PHYSICAL_STATES.has(h.last!.state)).toBe(false);
       expect(h.last!.support.kind).toBe('floor');
-      expect(h.last!.y).toBe(1200);
+      expect(h.last!.y).toBe(h.floorY());
       expect(h.sim.debugInfo().invalidSamples).toEqual([]);
     }
   });
@@ -153,8 +154,8 @@ describe('taskbar: physics as seen by the cat', () => {
     expect(stimulusTo(h, from)).toEqual([]);
     expect(h.runUntil((x) => x.state === 'landing', 5000)).toBe(true);
     // A taskbar is solid: the thrown cat lands on it, not inside it.
-    expect(h.last!.y === TB_TOP - 1 || h.last!.y === 1200).toBe(true);
-    if (h.last!.y === 1200) expect(h.last!.support.kind).toBe('floor');
+    expect(h.last!.y === TB_TOP - 1 || h.last!.y === h.floorY()).toBe(true);
+    if (h.last!.y === h.floorY()) expect(h.last!.support.kind).toBe('floor');
   });
 
   it('awake on a window top, a curious cat may hop down onto a taskbar that appears; a placid one only looks', () => {
@@ -605,7 +606,7 @@ describe('output and persistence', () => {
     const again = new Harness({ seed: 13, persisted: saved });
     const o = again.step();
     expect(o.support).toEqual({ kind: 'floor', displayId: '1' });
-    expect(o.y).toBe(1040);
+    expect(o.y).toBe(again.floorY());
     expect(o.x).toBeCloseTo(h.last!.x, 0);
   });
 
