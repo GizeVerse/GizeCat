@@ -14,8 +14,6 @@ function env(now: number, over: Partial<SimEnv> = {}): SimEnv {
     typing: false,
     typingIntensity: 0,
     foreground: null,
-    platforms: [],
-    getWindowRect: () => null,
     surfaces: [],
     getSurface: () => null,
     fullscreenDisplayIds: [],
@@ -58,10 +56,13 @@ describe('robustness against bad host input', () => {
           cursor: { x: Number.NaN, y: 5, speed: Number.NaN },
           userIdleMs: Number.NaN,
           localHour: Number.NaN,
-          getWindowRect: () => {
+          getSurface: () => {
             throw new Error('boom');
           },
-          platforms: [{ windowId: 'p', y: Number.NaN, x0: 0, x1: 100 }],
+          surfaces: [
+            { id: 'windowTop:p', kind: 'windowTop', ownerId: 'p', displayId: null, orientation: 'ledge', y: Number.NaN, x0: 0, x1: 100, rest: null, focusX: null, phase: 'stable', vx: Number.NaN, vy: 0, confidence: 1, validatedAt: 0, excluded: false },
+            { id: 'windowSide:p:left', kind: 'windowSide', ownerId: 'p', displayId: null, orientation: 'wall', x: Number.POSITIVE_INFINITY, y0: 5, y1: -5, side: 'left', topLedgeId: null, phase: 'stable', vx: 0, vy: 0, confidence: 1, validatedAt: 0, excluded: false },
+          ],
         }),
         i % 10 === 0 ? garbage : [],
       );

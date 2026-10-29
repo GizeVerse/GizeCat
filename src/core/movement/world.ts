@@ -329,9 +329,12 @@ export class WorldModel {
     }
     const lx0 = Math.max(l.x0, wa.x);
     const lx1 = Math.min(l.x1, rectRight(wa));
-    if (lx1 - lx0 < (relaxed ? 1 : bw * 0.9)) return null;
+    // Tab strips arrive as ANCHOR spans already clear of the browser controls and inset by half the
+    // cat (src/main/uia/segment.ts), so they are not narrowed again and may be shorter than a body.
+    const anchorSpan = l.kind === 'tabStrip';
+    if (lx1 - lx0 < (relaxed ? 1 : anchorSpan ? bw * 0.25 : bw * 0.9)) return null;
     // A taskbar spans its display: like on a floor, the cat keeps its whole body on screen.
-    const inset = l.kind === 'taskbar' ? bw / 2 : bw * 0.25;
+    const inset = l.kind === 'taskbar' ? bw / 2 : anchorSpan ? 0 : bw * 0.25;
     let x0 = lx0 + inset;
     let x1 = lx1 - inset;
     if (x1 < x0) {
@@ -399,7 +402,9 @@ export class WorldModel {
     if (outer < wa.x || outer > rectRight(wa)) return null;
     const standX = w.x + outward * bw * 0.55;
     const floorY = this.floorYAt(standX) ?? rectBottom(wa);
-    const yTop = Math.max(w.y0 + bw * 0.55, wa.y + bw);
+    // Highest anchor on the wall: the front paws (about 0.73 body lengths above the anchor) rest
+    // on the top edge instead of poking over it.
+    const yTop = Math.max(w.y0 + bw * 0.73, wa.y + bw);
     const yBottom = Math.min(w.y1, floorY);
     if (yBottom - yTop < bw * 0.25) return null;
     return {

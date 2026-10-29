@@ -305,6 +305,10 @@ export class Mover {
   get onWall(): boolean {
     return this.modeValue === 'climb' && this.climbing !== null;
   }
+  /** Phase of the current wall manoeuvre, or null when not on a wall. */
+  get climbPhase(): Climb['phase'] | null {
+    return this.modeValue === 'climb' ? (this.climbing?.phase ?? null) : null;
+  }
   /** The wall the cat clings to, or null. */
   get wall(): WallTrack | null {
     return this.modeValue === 'climb' ? (this.climbing?.wall ?? null) : null;

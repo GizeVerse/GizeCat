@@ -180,14 +180,6 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   const surfaces = opts.surfaces ?? null;
   const taskbars = opts.taskbars ?? null;
 
-  const getWindowRect = (id: string): Rect | null => {
-    try {
-      return tracker.getWindowRect(id);
-    } catch {
-      return null;
-    }
-  };
-
   /** Live geometry of one surface (the sim calls it for the surface it rides). */
   const getSurface = (id: string): Surface | null => {
     if (!surfaces) return null;
@@ -406,7 +398,6 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       fullscreenIds = safe(() => tracker.getFullscreenDisplayIds(world), [], 'fullscreen check');
       fullscreenAt = nowReal;
     }
-    const platforms = safe(() => tracker.getPlatforms(PLATFORM_MAX_AGE_MS), [], 'platforms');
     const envSurfaces = readSurfaces(nowReal);
     const foreground = safe(() => tracker.getForeground(), null, 'foreground');
     const wall = wallClock();
@@ -417,9 +408,6 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       typing: activity.typing,
       typingIntensity: activity.typingIntensity,
       foreground,
-      // Deprecated v1 fields, kept populated until the sim reads surfaces only.
-      platforms,
-      getWindowRect,
       surfaces: envSurfaces,
       getSurface,
       fullscreenDisplayIds: fullscreenIds,

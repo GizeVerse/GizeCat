@@ -6,7 +6,7 @@ import type { Point, Rect } from './geometry';
 import type { SceneReport, VisualSummary } from './perception';
 import type { Settings } from './settings';
 import type { Surface, TaskbarEdge } from './surfaces';
-import type { AppCategory, Platform, WindowInfo, WorldGeometry } from './world';
+import type { AppCategory, WindowInfo, WorldGeometry } from './world';
 
 /** Discrete stimuli delivered to the simulation since the previous tick. */
 export type SimEvent =
@@ -74,10 +74,6 @@ export interface SimEnv {
   /** 0..1 share of the last ~30 s with keyboard-like activity. */
   typingIntensity: number;
   foreground: WindowInfo | null;
-  /** @deprecated v1 window top edges; superseded by `surfaces` (removed once the sim uses surfaces only). */
-  platforms: readonly Platform[];
-  /** Fresh rectangle of a window (px), null if gone/minimized/hidden. */
-  getWindowRect: (id: string) => Rect | null;
   /**
    * Every currently usable environmental surface (taskbars, window tops and sides, tab strips),
    * z-order/occlusion aware, refreshed by the host (taskbars every host tick).

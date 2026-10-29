@@ -2887,9 +2887,13 @@ export class CatSimImpl implements CatSim {
     const a = this.act;
     const m = this.mover;
     if (this.oneShot && this.now >= this.oneShot.until) this.oneShot = null;
-    // On a wall the body is in the vertical climbing pose whatever the activity (getting on,
-    // climbing, pulling up over the corner, stepping off).
-    if (m.onWall) return 'climb';
+    // On a wall the body is in the vertical climbing pose while getting on and climbing. During
+    // the corner pull-up and the step-off the renderer cross-fades back to a ground clip (its
+    // off-wall fade is tuned to the pull-up duration), so the cat does not glide rigidly.
+    if (m.onWall) {
+      const phase = m.climbPhase;
+      return phase === 'pullUp' || phase === 'dismount' ? 'walk' : 'climb';
+    }
     if (this.oneShot && CALM_STATES.has(a.state)) return this.oneShot.clip;
     const scale = m.scale;
     return clipFor(a.state, a.phase, {

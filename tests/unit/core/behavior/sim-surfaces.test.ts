@@ -362,7 +362,8 @@ describe('window tops and sides', () => {
       h.run(40 * MIN, 66, (hh) => {
         const o = hh.last!;
         const wallSupport = o.support.kind === 'surface' && o.support.orientation === 'wall';
-        expect(o.clip === 'climb').toBe(wallSupport);
+        if (o.clip === 'climb') expect(wallSupport).toBe(true);
+        if (wallSupport) expect(['climb', 'walk']).toContain(o.clip);
         if (wallSupport) {
           onWall = true;
           // Vertical pose: about a body length tall, hanging outside the window.

@@ -622,7 +622,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
     test: boot.flags.test,
   });
 
-  if (plan.openWelcome) settingsWindow.open('welcome');
+  // Opened by the app itself, not by the user: never request the foreground (see OpenOptions.activate).
+  if (plan.openWelcome) settingsWindow.open('welcome', { activate: false });
 
   return {
     onSecondInstance() {

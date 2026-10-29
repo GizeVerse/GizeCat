@@ -18,8 +18,18 @@ export type SettingsPage =
   | 'diagnostics'
   | 'about';
 
+export interface OpenOptions {
+  /**
+   * false = show without asking for the foreground. Use it when the app opens the window on its own
+   * (first-run Welcome): if Windows refuses a focus request from a process the user did not just
+   * interact with, it flashes the taskbar button and keeps an auto-hide taskbar revealed until the
+   * window is clicked (observed on Windows 11 26200). Default true for user-initiated opens.
+   */
+  activate?: boolean;
+}
+
 export interface SettingsWindowController {
-  open(page?: SettingsPage): void;
+  open(page?: SettingsPage, opts?: OpenOptions): void;
   close(): void;
   readonly isOpen: boolean;
   readonly webContents: WebContents | null;
@@ -51,13 +61,22 @@ export function createSettingsWindowController(opts: SettingsWindowOptions): Set
     return page ? `${SETTINGS_URL}#${page}` : SETTINGS_URL;
   }
 
-  function open(page?: SettingsPage): void {
+  function reveal(target: BrowserWindow, activate: boolean): void {
+    if (activate) {
+      target.show();
+      target.focus();
+    } else {
+      target.showInactive();
+    }
+  }
+
+  function open(page?: SettingsPage, openOpts: OpenOptions = {}): void {
+    const activate = openOpts.activate !== false;
     if (win && !win.isDestroyed()) {
       // Same-document (fragment) navigation: the page sees a hashchange, no reload.
       if (page) win.loadURL(urlFor(page)).catch((err: unknown) => log.warn('settings page navigation failed', { error: err }));
       if (win.isMinimized()) win.restore();
-      win.show();
-      win.focus();
+      reveal(win, activate);
       return;
     }
     loaded = false;
@@ -86,10 +105,7 @@ export function createSettingsWindowController(opts: SettingsWindowOptions): Set
     w.setMenu(null);
     opts.registry.register(w.webContents, 'settings');
     w.once('ready-to-show', () => {
-      if (!w.isDestroyed()) {
-        w.show();
-        w.focus();
-      }
+      if (!w.isDestroyed()) reveal(w, activate);
     });
     w.webContents.on('did-finish-load', () => {
       loaded = true;

@@ -48,6 +48,15 @@ describe('WorldModel', () => {
     expect(w.clampInside({ x: 500, y: 1070 })).toEqual({ x: 500, y: 1040 });
   });
 
+  it('uses tab-strip spans as given (they are already safe anchor spans, never narrowed twice)', () => {
+    const w = new WorldModel(SINGLE, 1, true);
+    // 40 px anchor span: shorter than a body, but valid because the provider already inset it by half the cat.
+    const [strip] = w.ledgeSurfaces([ledge('tabStrip:b', 'tabStrip', 'b', 600, 400, 440)]);
+    expect(strip).toMatchObject({ surfaceKind: 'tabStrip', x0: 400, x1: 440 });
+    // A window top with the same span is too narrow to stand on.
+    expect(w.ledgeSurfaces([ledge(topId('c'), 'windowTop', 'c', 600, 400, 440)])).toEqual([]);
+  });
+
   it('finds the first surface below a point, preferring window tops above the floor', () => {
     const w = new WorldModel(SINGLE, 1, true);
     const ledges = w.ledgeSurfaces([ledge(topId('a'), 'windowTop', 'a', 600, 400, 900)]);

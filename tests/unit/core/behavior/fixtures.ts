@@ -99,8 +99,6 @@ export class Harness {
       typing: e.typing ?? false,
       typingIntensity: e.typingIntensity ?? 0,
       foreground: e.foreground ?? null,
-      platforms: e.platforms ?? platformsFrom(windows),
-      getWindowRect: e.getWindowRect ?? ((id: string) => windows[id] ?? null),
       surfaces,
       getSurface: e.getSurface ?? ((id: string) => byId.get(id) ?? null),
       fullscreenDisplayIds: e.fullscreenDisplayIds ?? [],

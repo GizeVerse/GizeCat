@@ -441,8 +441,6 @@ describe('cat host: environment surfaces', () => {
     const env = h.ticks[0]!.env;
     expect(env.surfaces).toBe(surfaces.list);
     expect(surfaces.calls[0]).toEqual({ now: 0, maxAgeMs: 1000 });
-    expect(h.platformCalls).toBe(1);
-    expect(env.getWindowRect('1')).toBeNull();
     h.timers.advance(20);
     expect(env.getSurface('taskbar:1')).toMatchObject({ y: 1020 });
     expect(surfaces.live.at(-1)).toEqual({ id: 'taskbar:1', now: 20 });
