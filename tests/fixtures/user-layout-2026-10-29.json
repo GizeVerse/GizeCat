@@ -1,0 +1,359 @@
+{
+  "description": "Top-level window layout of the reporting user's desktop (2026-10-29 13:10 local), geometry only: z-order (top first), DWM frames and window rects [x, y, width, height] in physical px, maximized/topmost/tool/no-activate flags. No titles were captured. Process names other than chrome.exe are replaced by generic names; own = a window of the Desktop Cat app itself (its overlay and its Settings window).",
+  "screen": {
+    "boundsPx": [
+      0,
+      0,
+      1920,
+      1200
+    ],
+    "workAreaPx": [
+      0,
+      0,
+      1920,
+      1200
+    ],
+    "scale": 1.25,
+    "taskbar": "bottom, auto-hide (hidden: 2 px on screen)"
+  },
+  "windows": [
+    {
+      "z": 0,
+      "hwnd": "196650",
+      "exe": "app1.exe",
+      "cls": "AppWindow",
+      "own": false,
+      "rect": [
+        0,
+        0,
+        1,
+        1
+      ],
+      "frame": [
+        0,
+        0,
+        1,
+        1
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": true,
+      "tool": true,
+      "noact": true,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 4,
+      "hwnd": "65868",
+      "exe": "shell.exe",
+      "cls": "Shell_TrayWnd",
+      "own": false,
+      "rect": [
+        0,
+        1198,
+        1920,
+        60
+      ],
+      "frame": [
+        0,
+        1198,
+        1920,
+        60
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": true,
+      "tool": true,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 5,
+      "hwnd": "24449594",
+      "exe": "self.exe",
+      "cls": "Chrome_WidgetWin_1",
+      "own": true,
+      "rect": [
+        0,
+        0,
+        1920,
+        1200
+      ],
+      "frame": [
+        0,
+        0,
+        1920,
+        1200
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": true,
+      "tool": true,
+      "noact": true,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 6,
+      "hwnd": "264320",
+      "exe": "app2.exe",
+      "cls": "AppWindow",
+      "own": false,
+      "rect": [
+        -9,
+        -9,
+        1938,
+        1218
+      ],
+      "frame": [
+        0,
+        0,
+        1920,
+        1200
+      ],
+      "zoomed": true,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": true,
+      "cloaked": 0
+    },
+    {
+      "z": 7,
+      "hwnd": "15928198",
+      "exe": "app3.exe",
+      "cls": "AppWindow",
+      "own": false,
+      "rect": [
+        314,
+        122,
+        1324,
+        1009
+      ],
+      "frame": [
+        322,
+        122,
+        1308,
+        1001
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 8,
+      "hwnd": "7934576",
+      "exe": "self.exe",
+      "cls": "Chrome_WidgetWin_1",
+      "own": true,
+      "rect": [
+        419,
+        213,
+        1126,
+        800
+      ],
+      "frame": [
+        427,
+        213,
+        1110,
+        792
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 11,
+      "hwnd": "6029376",
+      "exe": "chrome.exe",
+      "cls": "Chrome_WidgetWin_1",
+      "own": false,
+      "rect": [
+        -9,
+        -9,
+        1938,
+        1218
+      ],
+      "frame": [
+        0,
+        0,
+        1920,
+        1200
+      ],
+      "zoomed": true,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 14,
+      "hwnd": "4916128",
+      "exe": "app2.exe",
+      "cls": "AppWindow",
+      "own": false,
+      "rect": [
+        -9,
+        -9,
+        1938,
+        1218
+      ],
+      "frame": [
+        0,
+        0,
+        1920,
+        1200
+      ],
+      "zoomed": true,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 15,
+      "hwnd": "380307516",
+      "exe": "app4.exe",
+      "cls": "AppWindow",
+      "own": false,
+      "rect": [
+        320,
+        100,
+        1280,
+        1000
+      ],
+      "frame": [
+        320,
+        100,
+        1280,
+        1000
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 18,
+      "hwnd": "135056",
+      "exe": "app5.exe",
+      "cls": "AppWindow",
+      "own": false,
+      "rect": [
+        288,
+        288,
+        420,
+        440
+      ],
+      "frame": [
+        296,
+        288,
+        404,
+        432
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 19,
+      "hwnd": "36045802",
+      "exe": "chrome.exe",
+      "cls": "Chrome_WidgetWin_1",
+      "own": false,
+      "rect": [
+        1115,
+        113,
+        788,
+        1056
+      ],
+      "frame": [
+        1123,
+        113,
+        772,
+        1048
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 22,
+      "hwnd": "42468388",
+      "exe": "app6.exe",
+      "cls": "AppWindow",
+      "own": false,
+      "rect": [
+        166,
+        150,
+        1613,
+        910
+      ],
+      "frame": [
+        174,
+        150,
+        1597,
+        902
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": false,
+      "tool": false,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    },
+    {
+      "z": 31,
+      "hwnd": "65940",
+      "exe": "shell.exe",
+      "cls": "Progman",
+      "own": false,
+      "rect": [
+        0,
+        0,
+        1920,
+        1200
+      ],
+      "frame": [
+        0,
+        0,
+        1920,
+        1200
+      ],
+      "zoomed": false,
+      "iconic": false,
+      "topmost": false,
+      "tool": true,
+      "noact": false,
+      "fg": false,
+      "cloaked": 0
+    }
+  ]
+}
