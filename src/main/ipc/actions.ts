@@ -25,6 +25,8 @@ export interface ActionTargets {
   /** v1.1: the only path that changes the launch-at-sign-in preference (main-owned). */
   setLaunchAtLogin(on: boolean): ActionResult;
   dismissLaunchNotice(): ActionResult;
+  /** v1.1.1 on-desktop surface outlines (session-only, never persisted). */
+  setSurfaceOutlines?(on: boolean): void;
   quit(): void;
 }
 
@@ -100,6 +102,12 @@ export function createActionRunner(deps: {
         return targets.setLaunchAtLogin(false);
       case 'dismissLaunchNotice':
         return targets.dismissLaunchNotice();
+      case 'showSurfaceOutlines':
+      case 'hideSurfaceOutlines':
+        // Session state in main only: never a settings patch, so a restart always starts with it off.
+        if (!targets.setSurfaceOutlines) return { ok: false, message: 'Surface outlines are not available.' };
+        targets.setSurfaceOutlines(action === 'showSurfaceOutlines');
+        return { ok: true };
       case 'quit':
         // Let the IPC reply reach the renderer before windows start closing.
         defer(() => targets.quit());

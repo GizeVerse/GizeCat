@@ -7,6 +7,7 @@ import type { Point } from '../../../src/shared/geometry';
 import { IPC, type OverlayPointerEvent } from '../../../src/shared/ipc';
 import { defaultSettings } from '../../../src/shared/settings';
 import type { SimEvent, SimOutput } from '../../../src/shared/sim';
+import type { SurfaceDebugLine } from '../../../src/shared/surfaceDiagnostics';
 import type { DisplayGeometry, WorldGeometry } from '../../../src/shared/world';
 import type { DisplayService } from '../../../src/main/contracts';
 import type { WindowRegistry } from '../../../src/main/security';
@@ -722,5 +723,62 @@ describe('overlay manager: taskbars always get the mouse (click guard)', () => {
     expect(poll(960, 1150)).toBe(false);
     expect(rig.mgr.isCursorOverCat({ x: 960, y: 1150 })).toBe(false);
     expect(rig.log.entries.some((e) => e.level === 'warn' && e.msg.startsWith('click-through exclusions failed'))).toBe(true);
+  });
+});
+
+describe('overlay manager: surface outlines (v1.1.1 debug aid)', () => {
+  const seg = (x0: number, y0: number, x1: number, y1: number, role: SurfaceDebugLine['role'] = 'valid'): SurfaceDebugLine => ({ kind: 'windowTop', role, x0, y0, x1, y1 });
+  const outlineFrames = (id: string) =>
+    rig
+      .win(id)
+      .webContents.sent.filter((m) => m.channel === IPC.overlaySurfaceLines)
+      .map((m) => (m.payload as { lines: SurfaceDebugLine[] }).lines);
+
+  it('sends each ready overlay only the outlines on its display, in its local DIP', () => {
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400, 'reachable'), seg(1700, 300, 1900, 300, 'target')]);
+    expect(outlineFrames('A')).toEqual([[{ kind: 'windowTop', role: 'reachable', x0: 100, y0: 400, x1: 500, y1: 400 }]]);
+    expect(outlineFrames('B')).toEqual([[{ kind: 'windowTop', role: 'target', x0: 100, y0: 300, x1: 300, y1: 300 }]]);
+  });
+
+  it('leaves click-through and the hit region alone: a cursor on an outline stays click-through', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    rig.report('A', 800, 860);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400), seg(780, 830, 820, 830, 'support')]);
+    rig.mgr.updateInteractivity({ x: 300, y: 400 }, false);
+    expect(rig.win('A').ignoreMouse).toBe(true);
+    expect(rig.mgr.isCursorOverCat({ x: 300, y: 400 })).toBe(false);
+    // The cat itself is still interactive where it is drawn.
+    rig.mgr.updateInteractivity({ x: 800, y: 840 }, false);
+    expect(rig.win('A').ignoreMouse).toBe(false);
+  });
+
+  it('sends a display without outlines nothing, an emptied one a single clearing frame, and clearing only where outlines show', () => {
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    expect(outlineFrames('A')).toHaveLength(2);
+    expect(outlineFrames('B')).toEqual([]);
+    rig.mgr.renderSurfaceLines([]);
+    rig.mgr.renderSurfaceLines([]);
+    expect(outlineFrames('A').at(-1)).toEqual([]);
+    expect(outlineFrames('A')).toHaveLength(3);
+    rig.mgr.clearSurfaceLines();
+    expect(outlineFrames('A')).toHaveLength(3);
+    rig.mgr.renderSurfaceLines([seg(1700, 300, 1900, 300)]);
+    rig.mgr.clearSurfaceLines();
+    expect(outlineFrames('B')).toEqual([[{ kind: 'windowTop', role: 'valid', x0: 100, y0: 300, x1: 300, y1: 300 }], []]);
+    expect(outlineFrames('A')).toHaveLength(3);
+  });
+
+  it('a recreated overlay gets outlines once its new renderer is ready', () => {
+    const old = rig.win('A');
+    old.closeFromOutside();
+    rig.advance(5000);
+    const fresh = rig.win('A');
+    expect(fresh).not.toBe(old);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    expect(outlineFrames('A')).toEqual([]);
+    rig.mgr.handleReady(fresh.webContents.id);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    expect(outlineFrames('A')).toEqual([[{ kind: 'windowTop', role: 'valid', x0: 100, y0: 400, x1: 500, y1: 400 }]]);
   });
 });

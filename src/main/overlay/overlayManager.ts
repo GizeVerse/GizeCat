@@ -8,6 +8,7 @@ import { distance, type Point, type Rect } from '../../shared/geometry';
 import { IPC, type OverlayConfig, type OverlayPointerEvent } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import type { SimEvent, SimOutput } from '../../shared/sim';
+import type { SurfaceLinesPayload } from '../../shared/surfaceDiagnosticsSchema';
 import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
 import type { DisplayService, Logger, Unsubscribe } from '../contracts';
 import type { WindowRegistry } from '../security';
@@ -16,6 +17,7 @@ import { clipRects, decideInteractive } from '../../core/interaction/clickThroug
 import type { GestureRecognizer } from '../../core/interaction/gestures';
 import { createOverlayShell, createOverlayWindow, overlayUrl, type OverlayShell } from './overlayWindow';
 import { displaysShowingCat, hiddenRenderState, mapRenderState } from './renderMapping';
+import { surfaceLinesForDisplay, type SurfaceLinesSink } from './surfaceLines';
 
 const DISPLAY_DEBOUNCE_MS = 300;
 const TOPMOST_CHECK_MS = 10_000;
@@ -100,7 +102,7 @@ export interface OverlayManagerOptions {
   excludedRectsPx?: () => readonly Rect[];
 }
 
-export interface OverlayManager {
+export interface OverlayManager extends SurfaceLinesSink {
   start(): void;
   render(out: SimOutput, simNow: number, hidden: boolean): void;
   /** Click-through routing for one cursor sample. */
@@ -154,6 +156,8 @@ interface Entry {
   disposing: boolean;
   nonRude: boolean;
   taskbarHooked: boolean;
+  /** Surface outline segments the renderer currently shows (0 = none: an empty frame need not be sent). */
+  outlineLines: number;
 }
 
 export function createOverlayManager(opts: OverlayManagerOptions): OverlayManager {
@@ -279,6 +283,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       disposing: false,
       nonRude: false,
       taskbarHooked: false,
+      outlineLines: 0,
     };
     entries.set(d.id, e);
     byWc.set(e.wcId, e);
@@ -734,6 +739,27 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       e.hitRectsPx = rects;
       e.hitAt = opts.clock();
       e.hitAnchor = lastOutput ? { x: lastOutput.x, y: lastOutput.y } : null;
+    },
+    renderSurfaceLines(lines) {
+      const world = opts.display.world;
+      for (const e of entries.values()) {
+        if (!alive(e) || !e.ready) continue;
+        const geo = world.displays.find((d) => d.id === e.displayId) ?? e.geometry;
+        // The cat's render state uses this same mapping (render() above).
+        const local = surfaceLinesForDisplay(lines, geo.workAreaPx, (p) => opts.display.toLocalDip(e.displayId, p));
+        if (local.length === 0 && e.outlineLines === 0) continue;
+        const payload: SurfaceLinesPayload = { lines: local };
+        send(e, IPC.overlaySurfaceLines, payload);
+        e.outlineLines = local.length;
+      }
+    },
+    clearSurfaceLines() {
+      for (const e of entries.values()) {
+        if (!alive(e) || e.outlineLines === 0) continue;
+        const payload: SurfaceLinesPayload = { lines: [] };
+        send(e, IPC.overlaySurfaceLines, payload);
+        e.outlineLines = 0;
+      }
     },
     handleRendererError(wcId, message) {
       const e = byWc.get(wcId);

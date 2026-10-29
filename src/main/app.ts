@@ -10,12 +10,15 @@ import type { AppStatus, SettingsViewState } from '../shared/ipc';
 import { IPC } from '../shared/ipc';
 import type { PerceptionStatus } from '../shared/perception';
 import type { Settings } from '../shared/settings';
+import { parseSurfaceDiagnostics } from '../shared/surfaceDiagnosticsSchema';
 import { createCatHost, type CatHost } from './catHost';
 import type { Logger, PerceptionHost, PerceptionService } from './contracts';
 import { buildDiagnosticsReport } from './diagnostics/diagnosticsReport';
+import { watchDpiAwareness } from './diagnostics/dpiAwareness';
 import { exportDiagnosticsToFile } from './diagnostics/exportDiagnostics';
 import type { RootLogger } from './diagnostics/logger';
 import { createResourceMonitor } from './diagnostics/resourceMonitor';
+import { assembleSurfaceDiagnostics, createSurfaceDiagnosticsSource, createSurfaceSummaryLog, surfaceSummary } from './diagnostics/surfaceDiagnostics';
 import { createDisplayService } from './display/displayService';
 import { createActionRunner, type ActionTargets, type AppAction } from './ipc/actions';
 import { registerIpcHandlers } from './ipc/handlers';
@@ -30,6 +33,7 @@ import { createQuitSequence } from './lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndWindow } from './lifecycle/sessionEnd';
 import { createShortcutManager } from './lifecycle/shortcuts';
 import { createOverlayManager } from './overlay/overlayManager';
+import { createSurfaceOutlines } from './overlay/surfaceLines';
 import { createPerceptionService } from './perception';
 import { installAppProtocol } from './protocol';
 import { createWindowRegistry, installSecurity } from './security';
@@ -66,6 +70,8 @@ const VIEW_STATE_INTERVAL_MS = 250;
 const QUIT_ANIMATION_MS = 1500;
 /** Longest the quit waits for the UIA helper to exit. */
 const TAB_STRIP_DISPOSE_MS = 2500;
+/** How often the 'surfaces summary' log line checks for a change (it logs at most once a minute). */
+const SURFACE_SUMMARY_CHECK_MS = 10_000;
 
 function offStatus(settings: Settings, reason: string): PerceptionStatus {
   return {
@@ -116,8 +122,11 @@ export function startApp(boot: AppBootstrap): RunningApp {
     logger: logger.child('secrets'),
   });
 
-  // Platform services
-  const win32 = createWin32Api(logger);
+  // Platform services. The DPI awareness line win32 logs at boot also feeds the surface
+  // diagnostics (dpiAwareness.ts): the facade does not expose the value itself.
+  let dpiAwareness = 'unknown';
+  const win32 = createWin32Api(watchDpiAwareness(logger, (a) => (dpiAwareness = a)));
+  if (!win32.available) dpiAwareness = 'unavailable';
   const display = createDisplayService(logger);
   const tracker = createWindowTracker(win32, logger);
   const activity = createActivityMonitor(win32, logger);
@@ -169,6 +178,24 @@ export function startApp(boot: AppBootstrap): RunningApp {
   } catch (err) {
     log.error('perception unavailable', { error: err });
   }
+
+  // v1.1.1 surface diagnostics: why the cat can or cannot leave the floor. Built on demand
+  // (Diagnostics page, export, summary log line) and cached briefly; counts and geometry only.
+  const surfaceDiagnostics = createSurfaceDiagnosticsSource({
+    clock: surfaceClock,
+    build: (at) =>
+      assembleSurfaceDiagnostics({
+        at,
+        dpiAwareness,
+        world: display.world,
+        output: host?.lastOutput ?? null,
+        observers: surfaces.status.windowSurfaces,
+        provider: () => surfaces.diagnostics(),
+        sim: () => sim.surfaceDiagnostics(),
+      }),
+  });
+  const surfaceSummaryLog = createSurfaceSummaryLog({ logger: logger.child('surfaces') });
+  let surfaceSummaryTimer: ReturnType<typeof setInterval> | null = null;
 
   const cursorFallback = () => screen.dipToScreenPoint(screen.getCursorScreenPoint());
   const settingsWindow = createSettingsWindowController({
@@ -222,6 +249,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       perception: perception ? perception.status : offStatus(s, 'Screen analysis is unavailable.'),
       windowAwareness: tracker.mode,
       surfaces: surfaces.status,
+      surfaceOutlines: outlines.enabled,
       loginItem: loginItem.status(),
       shortcutRegistered: shortcuts.registered,
       startedAt: boot.startedAt,
@@ -303,6 +331,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       apiKeysStored: { anthropic: secrets.has('anthropic'), openaiCompatible: secrets.has('openai-compatible') },
       status: status(),
       cat: sim.debugInfo(),
+      surfaces: surfaceDiagnostics.get().diagnostics,
       services: {
         host: h.debug(),
         overlays: overlays.info().map(({ hwnd: _hwnd, ...o }) => o),
@@ -323,6 +352,10 @@ export function startApp(boot: AppBootstrap): RunningApp {
     // The only paths that change the main-owned loginItem section after boot.
     setLaunchAtLogin: (on) => loginItem.setLaunchAtLogin(on),
     dismissLaunchNotice: () => loginItem.dismissNotice(),
+    setSurfaceOutlines: (on) => {
+      outlines.setEnabled(on);
+      refreshUi();
+    },
     setPaused: (p) => requireHost().setPaused(p),
     setHidden: (h) => requireHost().setHidden(h),
     callCat: () => requireHost().callCat(),
@@ -381,6 +414,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
     isLeftButtonDown: () => (win32.available ? win32.isLeftButtonDown() : null),
     clock: () => performance.now(),
   });
+  // v1.1.1 on-desktop surface outlines: session-only debug aid, off at every start (never a setting).
+  const outlines = createSurfaceOutlines({ getLines: () => sim.surfaceDebugLines(), sink: overlays, logger: logger.child('surface-outlines') });
 
   const tray = (() => {
     try {
@@ -486,6 +521,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       attempt(log, 'perception credentials', () => perception?.onCredentialsChanged());
       refreshUi();
     },
+    getSurfaceDiagnostics: () => surfaceDiagnostics.get().diagnostics,
     clock: () => performance.now(),
   });
 
@@ -513,6 +549,14 @@ export function startApp(boot: AppBootstrap): RunningApp {
   async function disposeAll(): Promise<void> {
     const steps: Array<[string, () => void]> = [
       ['host', () => host?.stop()],
+      ['surface outlines', () => outlines.dispose()],
+      [
+        'surfaces summary',
+        () => {
+          if (surfaceSummaryTimer) clearInterval(surfaceSummaryTimer);
+          surfaceSummaryTimer = null;
+        },
+      ],
       ['taskbar tracker', () => taskbars.stop()],
       ['surface provider', () => void surfaces.dispose()],
       ['resource monitor', () => resources.stop()],
@@ -591,6 +635,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
     getSurfaces: () => requireHost().lastSurfaces,
     getSurfaceStatus: () => surfaces.status,
     injectSurfaces: (list) => surfaces.injectSurfaces(list, surfaceClock()),
+    getSurfaceDiagnostics: () => parseSurfaceDiagnostics(surfaceDiagnostics.get().diagnostics),
+    getSurfaceDebugLines: () => sim.surfaceDebugLines(),
     forceInteractive: (v) => overlays.forceInteractive(v),
     setTimeScale: (s) => requireHost().setTimeScale(s),
     runAction: (a) => actions.run(a),
@@ -613,6 +659,12 @@ export function startApp(boot: AppBootstrap): RunningApp {
   overlays.start();
   host.start();
   resources.start();
+  // The cat's world in main.log from now on: counts by kind and a verdict code, on change, at most once a minute.
+  surfaceSummaryTimer = setInterval(() => {
+    attempt(log, 'surfaces summary', () => {
+      surfaceSummaryLog.note(surfaceSummary(surfaceDiagnostics.get()), surfaceClock());
+    });
+  }, SURFACE_SUMMARY_CHECK_MS);
   applyShortcuts(initial);
   refreshUi();
   log.info('started', {

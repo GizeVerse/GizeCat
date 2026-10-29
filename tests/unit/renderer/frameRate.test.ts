@@ -245,6 +245,7 @@ describe('overlay runtime frame rate', () => {
         return () => undefined;
       },
       onConfig: () => () => undefined,
+      onSurfaceLines: () => () => undefined,
       ready: () => undefined,
       sendPointer: () => undefined,
       sendHitRegion: () => undefined,

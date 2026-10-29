@@ -2,6 +2,7 @@
 import type { CatSummary } from '../../../../../src/shared/catState';
 import type { ResourceSample, SettingsViewState } from '../../../../../src/shared/ipc';
 import { defaultSettings } from '../../../../../src/shared/settings';
+import type { SurfaceDiagnostics } from '../../../../../src/shared/surfaceDiagnostics';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -85,6 +86,7 @@ export function previewView(now: number, versions: FixtureVersions): SettingsVie
       },
       windowAwareness: 'event-hooks',
       loginItem: { enabled: true, preference: 'unset', disabledBy: null, active: true, writable: true, reason: null, showNotice: false },
+      surfaceOutlines: false,
       shortcutRegistered: true,
       startedAt: now - 3 * HOUR - 12 * MIN,
     },
@@ -93,5 +95,54 @@ export function previewView(now: number, versions: FixtureVersions): SettingsVie
     resources: resources(now),
     versions: { app: '1.0.0', electron: versions.electron, chrome: versions.chrome, node: versions.node, os: 'Windows 11 (preview fixture)' },
     paths: { userData: 'C:\\Users\\preview\\AppData\\Roaming\\Desktop Cat', logs: 'C:\\Users\\preview\\AppData\\Roaming\\Desktop Cat\\logs' },
+  };
+}
+
+/** v1.1.1 Surfaces section: the user-reported layout (maximized window in front, nothing to climb). */
+export function previewSurfaceDiagnostics(at: number): SurfaceDiagnostics {
+  return {
+    at,
+    coordinates: {
+      dpiAwareness: 'per-monitor',
+      displays: [
+        {
+          id: '2528732444',
+          primary: true,
+          scale: 1.25,
+          boundsPx: { x: 0, y: 0, width: 1920, height: 1200 },
+          workAreaPx: { x: 0, y: 0, width: 1920, height: 1200 },
+          workAreaDip: { x: 0, y: 0, width: 1536, height: 960 },
+        },
+      ],
+      cat: { displayId: '2528732444', xPx: 812, yPx: 1195, floorYPx: 1195 },
+    },
+    provider: {
+      windowsConsidered: 8,
+      windowsWithSurfaces: 0,
+      skipped: { maximized: 3, covered: 5 },
+      listed: { taskbar: 1, windowTop: 0, windowSide: 0, tabStrip: 0 },
+      lastRefreshAt: at - 400,
+      frontMaximized: true,
+      tabStrips: { state: 'idle', helperRunning: false, interest: 0, strips: 0, reads: 0, errors: 0, lastReadAt: 0, lastRejection: 'maximized' },
+      recentErrors: [],
+    },
+    nav: {
+      received: { taskbar: 1, windowTop: 0, windowSide: 0, tabStrip: 0 },
+      accepted: { taskbar: 1, windowTop: 0, windowSide: 0, tabStrip: 0 },
+      rejected: {},
+      reachable: { taskbar: 1, windowTop: 0, windowSide: 0, tabStrip: 0 },
+      graph: { nodes: 3, edges: 4, updates: 12, rebuilds: 1 },
+      climbs: { leaps: 0, mounts: 0, pulledUp: 0, reversed: 0, letGo: 0, topReResolved: 0 },
+    },
+    decision: {
+      state: 'walking',
+      support: 'floor',
+      targetKind: null,
+      targets: { perch: 'noSurfaces', climb: 'noSurfaces', tabStrip: 'noSurfaces' },
+      exploreUrge: 0.2,
+      lastElevatedAt: 0,
+      excursions: 0,
+    },
+    verdict: 'The window in front is maximized, so there is no window edge to climb. Restore it to a normal window and the cat can explore it.',
   };
 }

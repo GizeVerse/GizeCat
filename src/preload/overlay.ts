@@ -1,19 +1,22 @@
 // Sandboxed preload for overlay windows: exposes exactly the OverlayApi as
-// `window.desktopCat`. Only 'electron' is imported at runtime; the channel names are
-// checked against the shared IPC table at compile time (import type keeps zod out of
-// this bundle).
+// `window.desktopCat`. Besides 'electron', only the zod/mini surface-outline schema is
+// bundled (~23 KB minified). The shared IPC table is imported as types only, which keeps
+// the full zod build out of this bundle; the channel names are checked against it at
+// compile time.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { CatRenderState, HitRegion } from '../shared/cat';
 import type { IPC, OverlayApi, OverlayConfig, OverlayPointerEvent } from '../shared/ipc';
+import { parseSurfaceLinesPayload, type SurfaceLinesPayload } from '../shared/surfaceDiagnosticsSchema';
 
 type OverlayChannels = Pick<
   typeof IPC,
-  'overlayRender' | 'overlayConfig' | 'overlayReady' | 'overlayPointer' | 'overlayHitRegion' | 'overlayError'
+  'overlayRender' | 'overlayConfig' | 'overlaySurfaceLines' | 'overlayReady' | 'overlayPointer' | 'overlayHitRegion' | 'overlayError'
 >;
 
 const CH: OverlayChannels = {
   overlayRender: 'overlay:render',
   overlayConfig: 'overlay:config',
+  overlaySurfaceLines: 'overlay:surface-lines',
   overlayReady: 'overlay:ready',
   overlayPointer: 'overlay:pointer',
   overlayHitRegion: 'overlay:hit-region',
@@ -47,6 +50,12 @@ const num = (v: unknown): number => (typeof v === 'number' ? v : Number.NaN);
 const api: OverlayApi = {
   onRender: (cb: (state: CatRenderState) => void) => subscribe<CatRenderState>(CH.overlayRender, cb),
   onConfig: (cb: (config: OverlayConfig) => void) => subscribe<OverlayConfig>(CH.overlayConfig, cb),
+  onSurfaceLines: (cb: (payload: SurfaceLinesPayload) => void) =>
+    subscribe<unknown>(CH.overlaySurfaceLines, (value) => {
+      // Validated here, before the page sees it: a malformed frame is dropped.
+      const payload = parseSurfaceLinesPayload(value);
+      if (payload && typeof cb === 'function') cb(payload);
+    }),
   ready(): void {
     ipcRenderer.send(CH.overlayReady);
   },

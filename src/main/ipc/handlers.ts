@@ -20,6 +20,8 @@ import {
   type SettingsViewState,
 } from '../../shared/ipc';
 import { rejectConsentBypass, rejectMainOwnedPatch, type PatchResult } from '../../shared/settings';
+import type { SurfaceDiagnostics } from '../../shared/surfaceDiagnostics';
+import { parseSurfaceDiagnostics } from '../../shared/surfaceDiagnosticsSchema';
 import type { Logger, PerceptionService } from '../contracts';
 import { redactString } from '../diagnostics/redact';
 import { verifyIpcSender, type WindowRegistry } from '../security';
@@ -66,6 +68,8 @@ export interface IpcDeps {
   perception: PerceptionService | null;
   /** Called after an API key was stored or removed. */
   onSecretsChanged: () => void;
+  /** v1.1.1 surface diagnostics for the Diagnostics page (built and cached in main). */
+  getSurfaceDiagnostics?: () => SurfaceDiagnostics;
   clock: () => number;
 }
 
@@ -74,6 +78,7 @@ export interface IpcRegistration {
 }
 
 const unavailable = 'Screen analysis is not available in this build.';
+const surfacesUnavailable = 'Surface details are not available right now.';
 const errorText = (err: unknown): string => redactString(err instanceof Error ? err.message : String(err)).slice(0, 300);
 
 export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
@@ -224,6 +229,25 @@ export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
     } catch (err) {
       return { ok: false, blockedReason: errorText(err) };
     }
+  });
+
+  // Parsed with the strict contract schema on the way out: only counts, kinds, reasons and
+  // geometry reach the renderer, whatever a producer put in (no titles, ids or process names).
+  onSettings(IPC.settingsGetSurfaceDiagnostics, (): SurfaceDiagnostics => {
+    if (!deps.getSurfaceDiagnostics) throw new Error(surfacesUnavailable);
+    let parsed: SurfaceDiagnostics | null;
+    try {
+      parsed = parseSurfaceDiagnostics(deps.getSurfaceDiagnostics());
+    } catch (err) {
+      warnThrottled('surfaces:failed', 'building surface diagnostics failed', { error: err });
+      // Only the message reaches the renderer (Electron serialises invoke errors as text).
+      throw new Error(surfacesUnavailable, { cause: err });
+    }
+    if (!parsed) {
+      warnThrottled('surfaces:invalid', 'surface diagnostics failed validation; not sent');
+      throw new Error(surfacesUnavailable);
+    }
+    return parsed;
   });
 
   return {

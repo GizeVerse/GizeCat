@@ -4,6 +4,7 @@ import type { AppStatus } from '../shared/ipc';
 import type { Settings, PatchResult } from '../shared/settings';
 import type { SimEvent, SimOutput } from '../shared/sim';
 import type { PerceptionStatus } from '../shared/perception';
+import type { SurfaceDebugLine, SurfaceDiagnostics } from '../shared/surfaceDiagnostics';
 import type { Surface, SurfaceStatus } from '../shared/surfaces';
 import type { CatHostDebug } from './catHost';
 import type { LogEntry } from './diagnostics/logger';
@@ -42,6 +43,10 @@ export interface TestHookContext {
    * restores the real observers with null. Injected taskbar ledges raise taskbar.shown/hidden.
    */
   injectSurfaces(list: readonly Surface[] | null): void;
+  /** v1.1.1: the Surfaces section's object, validated exactly as the settings window receives it. */
+  getSurfaceDiagnostics(): SurfaceDiagnostics | null;
+  /** v1.1.1: the sim's surface-outline segments (physical px), whether or not the outlines are shown. */
+  getSurfaceDebugLines(): SurfaceDebugLine[];
   forceInteractive(value: boolean | null): void;
   setTimeScale(scale: number): void;
   runAction(action: AppAction): Promise<unknown>;

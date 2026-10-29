@@ -1618,6 +1618,39 @@ p.row-desc {
   overflow-wrap: anywhere;
 }
 
+/* Surfaces (v1.1.1): the verdict on top, then one card per topic. */
+.surface-verdict {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  border-color: var(--info-stroke);
+  background: var(--info-bg);
+}
+
+.surface-verdict-icon {
+  margin-top: 2px;
+  font-size: 18px;
+  color: var(--accent-text);
+}
+
+.surface-verdict-label {
+  font-weight: 600;
+}
+
+.surface-verdict-text {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.surface-card-title {
+  font: 600 13px/20px var(--font);
+  margin: 0 0 8px;
+}
+
+.surface-card-body .table-wrap {
+  margin-bottom: 10px;
+}
+
 /* ---------- about ---------- */
 
 .about-head {

@@ -4,6 +4,7 @@
 // passed through redaction once more. Pure.
 import type { AppStatus, ResourceSample } from '../../shared/ipc';
 import { DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS, type Settings } from '../../shared/settings';
+import type { SurfaceDiagnostics } from '../../shared/surfaceDiagnostics';
 import type { WorldGeometry } from '../../shared/world';
 import { formatEntry, type LogEntry } from './logger';
 import { redactString, redactValue, scrubUserProfile } from './redact';
@@ -21,6 +22,8 @@ export interface DiagnosticsInput {
   apiKeysStored: { anthropic: boolean; openaiCompatible: boolean };
   status: AppStatus;
   cat: Record<string, unknown>;
+  /** v1.1.1: why the cat can or cannot leave the floor (counts, kinds, reasons, geometry; no titles or ids). */
+  surfaces?: SurfaceDiagnostics | null;
   services: Record<string, unknown>;
   resources: readonly ResourceSample[];
   logs: readonly LogEntry[];
@@ -89,6 +92,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): Record<string, 
     apiKeysStored: input.apiKeysStored,
     status: input.status,
     cat: input.cat,
+    surfaces: input.surfaces ?? null,
     services: input.services,
   };
   // Resource samples are plain numbers and would be truncated by the generic redactor.

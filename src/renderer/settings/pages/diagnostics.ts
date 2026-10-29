@@ -1,14 +1,20 @@
-import type { LoginItemStatus, ResourceSample, SettingsViewState } from '../../../shared/ipc';
+import type { LoginItemStatus, ResourceSample, SettingsAction, SettingsApi, SettingsViewState } from '../../../shared/ipc';
+import type { SurfaceDiagnostics } from '../../../shared/surfaceDiagnostics';
 import type { PageContext, PageView } from '../context';
-import { button, group, keyValues, page, row, runAction, segmentedRow, toggleRow } from '../controls';
-import { h, svg, uid } from '../dom';
+import { bullets, button, group, keyValues, page, row, runAction, segmentedRow, setNote, toggleRow, toggleSwitch } from '../controls';
+import { h, icon, svg, uid } from '../dom';
 import { behaviorStateLabel, formatCount, formatDuration, formatElapsed, formatMegabytes, formatPercentValue, formatRelativeTime, formatSampleAge } from '../format';
-import { pagePoll } from '../livePoll';
+import { livePoll, pagePoll, type LivePoll } from '../livePoll';
 import { pauseModel } from '../privacyView';
 import { niceCeil, sparkline } from '../sparkline';
+import { errorText, type Timers } from '../store';
 import { S } from '../strings';
+import { catEntries, coordinateEntries, countRows, errorItems, seenEntries, tabStripEntries } from '../surfacesView';
 
 const D = S.diagnostics;
+const V = D.surfaces;
+/** The Surfaces section re-reads main at most this often, only while the page is shown. */
+export const SURFACES_REFRESH_MS = 1000;
 const SPARK_W = 240;
 const SPARK_H = 48;
 const TABLE_ROWS = 6;
@@ -110,6 +116,132 @@ export function statusEntries(view: SettingsViewState, now: number): Array<reado
   return entries;
 }
 
+/** The 1 Hz poll of the Surfaces section: reads only while `element` is shown and the window is not minimised. */
+export function surfacesPoll(
+  api: Pick<SettingsApi, 'getSurfaceDiagnostics'>,
+  timers: Timers,
+  element: Pick<HTMLElement, 'hidden'>,
+  onResult: (d: SurfaceDiagnostics | null) => void,
+  doc: Pick<Document, 'visibilityState'> = document,
+): LivePoll {
+  return livePoll({
+    timers,
+    intervalMs: SURFACES_REFRESH_MS,
+    isVisible: () => !element.hidden && doc.visibilityState !== 'hidden',
+    refresh: async () => {
+      try {
+        onResult(await api.getSurfaceDiagnostics());
+      } catch {
+        onResult(null);
+      }
+    },
+  });
+}
+
+/** The action behind the outline switch (session-only state in main, never a setting). */
+export function outlineAction(on: boolean): SettingsAction {
+  return on ? 'showSurfaceOutlines' : 'hideSurfaceOutlines';
+}
+
+function countTable(d: SurfaceDiagnostics): HTMLElement {
+  return h('table', { class: 'table' }, [
+    h('caption', { text: V.tableCaption }),
+    h('thead', {}, [
+      h('tr', {}, [
+        h('th', { scope: 'col', text: V.colKind }),
+        h('th', { scope: 'col', text: V.colListed }),
+        h('th', { scope: 'col', text: V.colAccepted }),
+        h('th', { scope: 'col', text: V.colReachable }),
+      ]),
+    ]),
+    h(
+      'tbody',
+      {},
+      countRows(d).map((r) =>
+        h('tr', {}, [
+          h('th', { scope: 'row', text: r.label }),
+          h('td', { class: 'num', text: r.listed }),
+          h('td', { class: 'num', text: r.accepted }),
+          h('td', { class: 'num', text: r.reachable }),
+        ]),
+      ),
+    ),
+  ]);
+}
+
+interface SurfacesSection {
+  rows: HTMLElement[];
+  render(d: SurfaceDiagnostics | null): void;
+  sync(view: SettingsViewState): void;
+}
+
+function surfacesSection(ctx: PageContext): SurfacesSection {
+  const verdictText = h('span', { text: V.loading });
+  const verdict = h('div', { class: 'row row-block surface-verdict' }, [
+    icon('info', 'surface-verdict-icon'),
+    h('div', {}, [h('div', { class: 'surface-verdict-label', text: V.verdictLabel }), h('p', { class: 'surface-verdict-text', role: 'status' }, [verdictText])]),
+  ]);
+  const card = (title: string): { root: HTMLElement; body: HTMLElement } => {
+    const body = h('div', { class: 'surface-card-body' });
+    return { root: h('div', { class: 'row row-block', hidden: true }, [h('h3', { class: 'surface-card-title', text: title }), body]), body };
+  };
+  const seen = card(V.seenTitle);
+  const tabs = card(V.tabTitle);
+  const cat = card(V.catTitle);
+  const coords = card(V.coordsTitle);
+  const problems = card(V.errorsTitle);
+  const cards = [seen, tabs, cat, coords, problems];
+
+  const outlines = row({ title: V.outlinesTitle, desc: V.outlinesDesc, icon: 'layers' });
+  const sw = toggleSwitch(outlines.titleId, outlines.describedBy);
+  outlines.control.append(sw.root);
+  let switching = false;
+  sw.input.addEventListener('change', () => {
+    const on = sw.input.checked;
+    switching = true;
+    sw.input.disabled = true;
+    setNote(outlines.error, null, 'error');
+    const fail = (detail: string): void => {
+      sw.input.checked = !on;
+      setNote(outlines.error, S.errors.actionFailed(detail), 'error');
+    };
+    void ctx.api
+      .action(outlineAction(on))
+      .then((res) => {
+        if (!res.ok) fail(res.message ?? S.errors.unexpected);
+      })
+      .catch((e: unknown) => fail(errorText(e)))
+      .finally(() => {
+        switching = false;
+        sw.input.disabled = false;
+        sw.refresh();
+        void ctx.refresh().catch(() => undefined);
+      });
+  });
+
+  return {
+    rows: [verdict, ...cards.map((c) => c.root), outlines.row],
+    render(d) {
+      const next = d ? d.verdict : V.unavailable;
+      // Only a changed sentence is announced (the section refreshes every second).
+      if (verdictText.textContent !== next) verdictText.textContent = next;
+      for (const c of cards) c.root.hidden = d === null;
+      if (!d) return;
+      seen.body.replaceChildren(h('div', { class: 'table-wrap' }, [countTable(d)]), keyValues(seenEntries(d)));
+      tabs.body.replaceChildren(keyValues(tabStripEntries(d)));
+      cat.body.replaceChildren(keyValues(catEntries(d)));
+      coords.body.replaceChildren(keyValues(coordinateEntries(d)));
+      const errs = errorItems(d);
+      problems.body.replaceChildren(errs.length === 0 ? h('p', { class: 'muted', text: V.noErrors }) : bullets(errs));
+    },
+    sync(view) {
+      if (switching) return;
+      sw.input.checked = view.status.surfaceOutlines === true;
+      sw.refresh();
+    },
+  };
+}
+
 export function diagnosticsPage(ctx: PageContext): PageView {
   const statusCard = h('div', { class: 'row row-block' });
   const resources = h('div', { class: 'spark-row' });
@@ -135,9 +267,11 @@ export function diagnosticsPage(ctx: PageContext): PageView {
   logs.control.append(logsBtn);
   logsBtn.addEventListener('click', () => void runAction(ctx, 'openLogsFolder', logsBtn, logs.note));
   const versions = h('div', { class: 'row row-block' });
+  const surfaces = surfacesSection(ctx);
 
   const element = page(D.title, [
     group(D.groupStatus, [statusCard]),
+    group(V.group, surfaces.rows, V.groupDesc),
     group(D.groupResources, [resourcesCard]),
     group(D.groupLogging, [logLevel.parts.row, hw.parts.row, exp.row, logs.row]),
     group(D.groupVersions, [versions]),
@@ -153,6 +287,7 @@ export function diagnosticsPage(ctx: PageContext): PageView {
     const t = sampleTable(view.resources);
     table.replaceChildren(...(t ? [t] : []));
     logsPath.textContent = view.paths.logs;
+    surfaces.sync(view);
     const v = view.versions;
     versions.replaceChildren(
       keyValues([
@@ -168,6 +303,7 @@ export function diagnosticsPage(ctx: PageContext): PageView {
   ctx.store.subscribe(render);
   // Main broadcasts only on state changes, so uptime and resource samples are re-read while this page is open.
   const poll = pagePoll(ctx, element);
+  const surfacePoll = surfacesPoll(ctx.api, ctx.timers, element, (d) => surfaces.render(d));
   return {
     id: 'diagnostics',
     title: D.title,
@@ -175,7 +311,11 @@ export function diagnosticsPage(ctx: PageContext): PageView {
     onShow() {
       render(ctx.store.view);
       poll.start();
+      surfacePoll.start();
     },
-    onHide: () => poll.stop(),
+    onHide: () => {
+      poll.stop();
+      surfacePoll.stop();
+    },
   };
 }

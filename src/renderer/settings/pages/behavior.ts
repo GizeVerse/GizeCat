@@ -2,6 +2,7 @@ import type { ToggleableBehavior } from '../../../shared/settings';
 import { BEHAVIOR_IDS } from '../catalog';
 import type { PageContext, PageView } from '../context';
 import { group, page, row, segmentedRow, setNote, sliderRow, toggleRow, toggleSwitch } from '../controls';
+import { h, icon } from '../dom';
 import { NUMERIC_FIELDS } from '../fields';
 import { fieldId, setBehaviorEnabled } from '../patch';
 import type { FieldBinding } from '../store';
@@ -58,6 +59,8 @@ export function behaviorPage(ctx: PageContext): PageView {
     group(B.groupActivity, activity.map((s) => s.parts.row)),
     group(B.groupAwareness, awareness),
     group(B.groupBehaviors, BEHAVIOR_IDS.map((b) => behaviorToggle(ctx, b)), B.groupBehaviorsDesc),
+    // Right under the window-climbing and tab-strip toggles, which end the list.
+    h('p', { class: 'page-note' }, [icon('info'), h('span', { text: B.maximizedNote })]),
   ]);
   return { id: 'behavior', title: B.title, element };
 }

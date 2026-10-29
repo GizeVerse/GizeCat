@@ -5,6 +5,8 @@ import { z } from 'zod';
 import type { BehaviorState, CatRenderState, HitRegion } from './cat';
 import type { CatSummary } from './catState';
 import type { PerceptionStatus, SceneReport, VisualEventKind, VisualFeatures } from './perception';
+import type { SurfaceDiagnostics } from './surfaceDiagnostics';
+import type { SurfaceLinesPayload } from './surfaceDiagnosticsSchema';
 import type { SurfaceStatus } from './surfaces';
 import type { PatchResult, Settings, SettingsPatch } from './settings';
 
@@ -17,6 +19,8 @@ export const IPC = {
   // main -> overlay
   overlayRender: 'overlay:render',
   overlayConfig: 'overlay:config',
+  /** v1.1.1 surface outlines (debug aid; only while the session toggle is on). */
+  overlaySurfaceLines: 'overlay:surface-lines',
   // overlay -> main (send, fire-and-forget)
   overlayReady: 'overlay:ready',
   overlayPointer: 'overlay:pointer',
@@ -30,6 +34,7 @@ export const IPC = {
   settingsTestAi: 'settings:test-ai',
   settingsListModels: 'settings:list-models',
   settingsPreviewPerception: 'settings:preview-perception',
+  settingsGetSurfaceDiagnostics: 'settings:get-surface-diagnostics',
   // main -> settings
   settingsStateChanged: 'settings:state-changed',
 } as const;
@@ -95,6 +100,9 @@ export const SETTINGS_ACTIONS = [
   'enableLaunchAtLogin',
   'disableLaunchAtLogin',
   'dismissLaunchNotice',
+  /** v1.1.1 on-desktop surface outlines: session-only, never persisted (off after a restart). */
+  'showSurfaceOutlines',
+  'hideSurfaceOutlines',
   'quit',
 ] as const;
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number];
@@ -140,6 +148,8 @@ export interface AppStatus {
   loginItem: LoginItemStatus;
   /** v1.1 environment observers (taskbar, window surfaces, tab strips). */
   surfaces?: SurfaceStatus;
+  /** v1.1.1 surface outlines are drawn on the desktop (session-only debug aid). */
+  surfaceOutlines?: boolean;
   shortcutRegistered: boolean;
   startedAt: number;
 }
@@ -191,6 +201,8 @@ export interface PerceptionPreview {
 export interface OverlayApi {
   onRender(cb: (state: CatRenderState) => void): () => void;
   onConfig(cb: (config: OverlayConfig) => void): () => void;
+  /** v1.1.1 surface outline frames (validated in the preload; overlay-local DIP). */
+  onSurfaceLines(cb: (payload: SurfaceLinesPayload) => void): () => void;
   ready(): void;
   sendPointer(e: OverlayPointerEvent): void;
   sendHitRegion(region: HitRegion): void;
@@ -206,5 +218,7 @@ export interface SettingsApi {
   testAi(): Promise<AiTestResult>;
   listModels(): Promise<ModelListResult>;
   previewPerception(): Promise<PerceptionPreview>;
+  /** v1.1.1: why the cat can or cannot get off the floor (validated in main; no titles or ids). */
+  getSurfaceDiagnostics(): Promise<SurfaceDiagnostics>;
   onStateChanged(cb: (state: SettingsViewState) => void): () => void;
 }

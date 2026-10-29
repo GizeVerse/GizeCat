@@ -16,7 +16,7 @@
 import type { SettingsAction, SettingsViewState } from '../../../../../src/shared/ipc';
 import { IPC } from '../../../../../src/shared/ipc';
 import { applySettingsPatch } from '../../../../../src/shared/settings';
-import { previewView } from './fixture';
+import { previewSurfaceDiagnostics, previewView } from './fixture';
 
 // ---------------------------------------------------------------------------
 // Minimal local typings
@@ -178,6 +178,10 @@ function act(action: SettingsAction): { ok: boolean; message?: string } {
       break;
     case 'exportDiagnostics':
       return { ok: true, message: 'Saved to C:\\Users\\preview\\Desktop\\desktop-cat-diagnostics.zip' };
+    case 'showSurfaceOutlines':
+    case 'hideSurfaceOutlines':
+      st.surfaceOutlines = action === 'showSurfaceOutlines';
+      break;
     case 'resetPersonality':
     case 'clearHistory':
     case 'openLogsFolder':
@@ -216,6 +220,7 @@ function installIpc(): void {
     report: { scene: 'code', energy: 'calm', interest: 0.4, reaction: 'sit_nearby', caption: 'A code editor with a dark theme' },
   }));
   ipcMain.handle(IPC.settingsListModels, () => ({ ok: true, models: ['example-vision-a', 'example-vision-b:small'] }));
+  ipcMain.handle(IPC.settingsGetSurfaceDiagnostics, () => previewSurfaceDiagnostics(NOW));
   ipcMain.handle(IPC.settingsPreviewPerception, () => ({
     ok: true,
     imageDataUrl: previewImage(),

@@ -41,4 +41,35 @@ test.describe('secrets and diagnostics', () => {
     expect(logText).not.toContain(FAKE_KEY);
     expect(logText).not.toContain('NOT-A-REAL-KEY');
   });
+
+  // v1.1.1: the floor-only bug was invisible; the Surfaces section says why the cat stays down.
+  test('the Diagnostics page shows the Surfaces section with its verdict, and outlines start off', async ({ userData }) => {
+    const app = await launchApp(userData);
+    try {
+      await waitForCat(app);
+      const page = await settingsPage(app);
+      await page.evaluate(() => {
+        (globalThis as unknown as { location: { hash: string } }).location.hash = '#diagnostics';
+      });
+      await expect(page.getByRole('heading', { name: 'Surfaces', level: 2 })).toBeVisible();
+      const verdict = page.locator('.surface-verdict-text');
+      await expect(verdict).not.toHaveText(/^(Checking what the cat can reach…|Surface details are not available right now\.)?$/, { timeout: 10_000 });
+      const shown = (await verdict.textContent()) ?? '';
+      expect(shown.length).toBeGreaterThan(20);
+      await expect(page.getByRole('table', { name: 'Surfaces by kind' })).toBeVisible();
+      await expect(page.getByRole('switch', { name: 'Show surface outlines on the desktop' })).not.toBeChecked();
+
+      const diag = await hook(app, 'getSurfaceDiagnostics');
+      expect(diag).not.toBeNull();
+      expect(diag!.verdict.length).toBeGreaterThan(20);
+      expect((await hook(app, 'getStatus')).surfaceOutlines).toBe(false);
+      const report = (await hook(app, 'getDiagnosticsReport')) as { surfaces?: { verdict?: string } | null };
+      expect(typeof report.surfaces?.verdict).toBe('string');
+    } finally {
+      await quitApp(app);
+    }
+    // main.log shows the cat's world: counts by kind and a verdict code (first check ~10 s after start).
+    const summaries = readLogLines(userData).filter((l) => l.m === 'surfaces summary');
+    for (const l of summaries) expect(Object.keys(l.d as Record<string, unknown>).sort()).toEqual(['accepted', 'frontMaximized', 'listed', 'reachable', 'tabStrips', 'verdict']);
+  });
 });

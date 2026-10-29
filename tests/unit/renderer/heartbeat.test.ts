@@ -78,6 +78,7 @@ describe('overlay runtime heartbeat', () => {
         return () => undefined;
       },
       onConfig: () => () => undefined,
+      onSurfaceLines: () => () => undefined,
       ready: () => undefined,
       sendPointer: () => undefined,
       sendHitRegion: () => sentAt.push(performance.now()),
