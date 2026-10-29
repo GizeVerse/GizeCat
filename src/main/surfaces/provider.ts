@@ -34,6 +34,8 @@ import os from 'node:os';
 import type { Rect } from '../../shared/geometry';
 import type { Settings } from '../../shared/settings';
 import type { SimEvent } from '../../shared/sim';
+import type { ProviderDiagnostics } from '../../shared/surfaceDiagnostics';
+import { emptySurfaceCounts } from '../../shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface, SurfacePhase, SurfaceStatus } from '../../shared/surfaces';
 import type { WindowInfo } from '../../shared/world';
 import type { DisplayService, Logger, SurfaceProvider, TabStripService, TaskbarTracker, Unsubscribe, Win32Api, WindowTracker } from '../contracts';
@@ -1066,6 +1068,22 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       injectedTaskbarEvents(prev, copy);
       injected = { list: Object.freeze(copy), byId: new Map(copy.map((s) => [s.id, s])) };
       log.info('surfaces injected (test mode)', { count: copy.length });
+    },
+
+    // CONTRACT STUB (v1.1.1): counts and reasons are filled in by the provider work.
+    diagnostics(): ProviderDiagnostics {
+      const listed = emptySurfaceCounts();
+      for (const s of composed?.list ?? []) listed[s.kind] += 1;
+      return {
+        windowsConsidered: entries.size,
+        windowsWithSurfaces: 0,
+        skipped: {},
+        listed,
+        lastRefreshAt: Number.isFinite(snapshotAt) ? snapshotAt : 0,
+        frontMaximized: false,
+        tabStrips: { state: this.status.tabStrips, helperRunning: false, interest: interest.length, strips: 0, reads: 0, errors: 0, lastReadAt: 0, lastRejection: null },
+        recentErrors: [],
+      };
     },
 
     debugInfo(): SurfaceProviderDebug {

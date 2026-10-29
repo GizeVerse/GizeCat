@@ -4,6 +4,7 @@ import type { Point, Rect } from '../shared/geometry';
 import type { VisualSummary, SceneReport, PerceptionStatus } from '../shared/perception';
 import type { Settings } from '../shared/settings';
 import type { SimEvent } from '../shared/sim';
+import type { ProviderDiagnostics } from '../shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface, SurfaceStatus, TaskbarEdge } from '../shared/surfaces';
 import type { Platform, WindowInfo, WorldGeometry } from '../shared/world';
 
@@ -219,5 +220,7 @@ export interface SurfaceProvider {
   drainEvents(): SimEvent[];
   updateSettings(settings: Settings): void;
   debugInfo(): Record<string, unknown>;
+  /** v1.1.1: counts and reasons for the Diagnostics page (no titles, ids or process names). */
+  diagnostics(): ProviderDiagnostics;
   dispose(): Promise<void>;
 }

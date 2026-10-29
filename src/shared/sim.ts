@@ -5,6 +5,7 @@ import type { PersistedCat } from './catState';
 import type { Point, Rect } from './geometry';
 import type { SceneReport, VisualSummary } from './perception';
 import type { Settings } from './settings';
+import type { DecisionDiagnostics, NavDiagnostics, SurfaceDebugLine } from './surfaceDiagnostics';
 import type { Surface, TaskbarEdge } from './surfaces';
 import type { AppCategory, WindowInfo, WorldGeometry } from './world';
 
@@ -162,6 +163,10 @@ export interface CatSim {
   readonly state: BehaviorState;
   /** Non-sensitive debug info for diagnostics export. */
   debugInfo(): Record<string, unknown>;
+  /** v1.1.1: why the cat can or cannot get off the floor (kinds, counts, reasons; no ids or titles). */
+  surfaceDiagnostics(): { nav: NavDiagnostics; decision: DecisionDiagnostics };
+  /** v1.1.1: segments for the optional on-desktop surface visualization (physical px). */
+  surfaceDebugLines(): SurfaceDebugLine[];
 }
 
 export type CreateCatSim = (opts: CatSimOptions) => CatSim;

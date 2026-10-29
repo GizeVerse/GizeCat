@@ -46,6 +46,12 @@ export interface LedgeSurface extends SurfaceBase {
   x1: number;
   /** Preferred resting span inside [x0, x1] (e.g. a tab strip minus its controls), or null for anywhere. */
   rest: { x0: number; x1: number } | null;
+  /**
+   * v1.1.1: the open edge the cat may land on or pull up onto, when wider than [x0, x1]
+   * (a tab strip's window top, so a climb up the window's side can end at the corner and
+   * walk onto the strip). Omitted: landing is limited to [x0, x1].
+   */
+  land?: { x0: number; x1: number };
   /** Something worth looking at on/under this ledge (e.g. the active tab's centre x), or null. */
   focusX: number | null;
   /** For taskbars: the screen edge it is docked to. */

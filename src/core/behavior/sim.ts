@@ -7,6 +7,7 @@ import type { Point, Rect } from '../../shared/geometry';
 import { clamp, isFiniteRect, rectCenter } from '../../shared/geometry';
 import type { Settings, ToggleableBehavior } from '../../shared/settings';
 import type { CatSim, CatSimOptions, SimEnv, SimEvent, SimOutput, SimRequest } from '../../shared/sim';
+import type { DecisionDiagnostics, NavDiagnostics, SurfaceDebugLine } from '../../shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface as EnvSurface, WallSurface } from '../../shared/surfaces';
 import type { WindowInfo, WorldGeometry } from '../../shared/world';
 import type { LandingInfo, MoverConfig, MoverStep, Pace, RoutePreference, SupportLoss } from '../movement';
@@ -408,6 +409,28 @@ export class CatSimImpl implements CatSim {
     this.cat.memory.counters.sessions = 1;
     this.restAccumMs = 0;
     this.markDirty(true);
+  }
+
+  /** v1.1.1 surface diagnostics (kinds, counts, reasons; no ids or titles). CONTRACT STUB: the behaviour work fills `decision`. */
+  surfaceDiagnostics(): { nav: NavDiagnostics; decision: DecisionDiagnostics } {
+    const attached = this.mover.attachedSurface?.surfaceKind ?? null;
+    return {
+      nav: this.mover.navDiagnostics(),
+      decision: {
+        state: this.act.state,
+        support: attached ?? 'floor',
+        targetKind: null,
+        targets: { perch: 'noSurfaces', climb: 'noSurfaces', tabStrip: 'noSurfaces' },
+        exploreUrge: 0,
+        lastElevatedAt: 0,
+        excursions: 0,
+      },
+    };
+  }
+
+  /** v1.1.1 on-desktop surface visualization segments (physical px). */
+  surfaceDebugLines(): SurfaceDebugLine[] {
+    return this.mover.debugLines();
   }
 
   debugInfo(): Record<string, unknown> {

@@ -8,6 +8,8 @@ import { heldScruffOffset, HELD_SETTLE_MS } from '../interaction/held';
 import type { Point, Rect } from '../../shared/geometry';
 import { clamp, rectBottom, rectRight } from '../../shared/geometry';
 import type { SimSupport } from '../../shared/sim';
+import type { NavDiagnostics, SurfaceDebugLine } from '../../shared/surfaceDiagnostics';
+import { emptySurfaceCounts } from '../../shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface as EnvSurface, SurfaceKind, WallSurface } from '../../shared/surfaces';
 import type { WorldGeometry } from '../../shared/world';
 import { ARRIVE_RADIUS_DIP, MOVEMENT } from './constants';
@@ -175,7 +177,8 @@ interface Attachment {
 
 interface Climb {
   wall: WallTrack;
-  phase: 'mount' | 'swing' | 'climb' | 'pullUp' | 'dismount';
+  /** 'leap': v1.1.1 ballistic jump from a support onto a side whose foot is out of step reach. */
+  phase: 'leap' | 'mount' | 'swing' | 'climb' | 'pullUp' | 'dismount';
   /** -1 = up, +1 = down. */
   dir: -1 | 1;
   t0: number;
@@ -387,6 +390,24 @@ export class Mover {
   ledgeById(id: string): Surface | null {
     return this.ledges.find((l) => l.key === id) ?? null;
   }
+  /** v1.1.1 surface diagnostics (kinds, counts, reasons; no ids). CONTRACT STUB: filled in by the movement work. */
+  navDiagnostics(): NavDiagnostics {
+    const g = this.graphInfo();
+    return {
+      received: emptySurfaceCounts(),
+      accepted: emptySurfaceCounts(),
+      rejected: {},
+      reachable: emptySurfaceCounts(),
+      graph: { nodes: g.nodes, edges: g.edges, updates: g.updates, rebuilds: g.rebuilds },
+      climbs: { leaps: 0, mounts: 0, pulledUp: 0, reversed: 0, letGo: 0, topReResolved: 0 },
+    };
+  }
+
+  /** v1.1.1 on-desktop visualization segments (physical px, at most MAX_DEBUG_LINES). CONTRACT STUB. */
+  debugLines(): SurfaceDebugLine[] {
+    return [];
+  }
+
   /** Non-sensitive graph statistics for diagnostics. */
   graphInfo(): { nodes: number; edges: number; ledges: number; walls: number; updates: number; rebuilds: number; lastChanged: number } {
     return {

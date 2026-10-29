@@ -6,6 +6,7 @@ import type { Point } from '../../../src/shared/geometry';
 import type { PersistedCat } from '../../../src/shared/catState';
 import { defaultSettings } from '../../../src/shared/settings';
 import type { CatSim, SimEnv, SimEvent, SimOutput, SimRequest } from '../../../src/shared/sim';
+import type { ProviderDiagnostics } from '../../../src/shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface, SurfaceStatus } from '../../../src/shared/surfaces';
 import type { WorldGeometry } from '../../../src/shared/world';
 import { manualTimers, memoryLogger } from './helpers';
@@ -84,6 +85,10 @@ function harness(opts: HarnessOptions = {}) {
     clearHistory: () => undefined,
     state: 'idle',
     debugInfo: () => ({}),
+    surfaceDiagnostics: () => {
+      throw new Error('not used by these tests');
+    },
+    surfaceDebugLines: () => [],
   };
   let cursor: Point = { x: 500, y: 500 };
   const win32 = {
@@ -385,6 +390,9 @@ class FakeProvider implements HostSurfaceProvider {
   updateSettings(): void {}
   debugInfo(): Record<string, unknown> {
     return {};
+  }
+  diagnostics(): ProviderDiagnostics {
+    throw new Error('not used by these tests');
   }
   dispose(): Promise<void> {
     return Promise.resolve();
