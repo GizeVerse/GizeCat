@@ -30,10 +30,12 @@ const LedgeSchema = z
     x0: coord,
     x1: coord,
     rest: z.strictObject({ x0: coord, x1: coord }).nullable(),
+    land: z.strictObject({ x0: coord, x1: coord }).optional(),
     focusX: coord.nullable(),
     edge: z.enum(TASKBAR_EDGES).optional(),
   })
-  .refine((s) => s.x1 > s.x0, { message: 'x1 must be greater than x0' });
+  .refine((s) => s.x1 > s.x0, { message: 'x1 must be greater than x0' })
+  .refine((s) => s.land === undefined || (s.land.x0 <= s.x0 && s.land.x1 >= s.x1), { message: 'land must contain [x0, x1]' });
 
 const WallSchema = z
   .strictObject({

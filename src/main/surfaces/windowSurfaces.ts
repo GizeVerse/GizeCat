@@ -238,6 +238,11 @@ export interface Attachment {
    * span (a part bounded by a window that stayed put does not carry the cat along).
    */
   reported?: { x: number; y: number };
+  /**
+   * On a side: which top was listed when the cat got onto it. It stays listed (under its own id)
+   * while the cat clings, so the climb's pull-up ledge does not change under it.
+   */
+  heldTop?: 'windowTop' | 'tabStrip' | null;
 }
 
 export interface BuiltWindowSurfaces {
@@ -247,8 +252,9 @@ export interface BuiltWindowSurfaces {
   strip: LedgeSurface | null;
   /**
    * The top ledge listed for the window (the one its walls pull up onto): the strip when the
-   * window has one, else the plain top. A strip found or lost under the cat does not swap the
-   * ledge it stands on: that one stays listed under its own id until the cat leaves it.
+   * window has a usable one, else the plain top. A strip found or lost under the cat (standing
+   * on the top or clinging to a side) does not swap the ledge: the one listed stays listed under
+   * its own id until the cat leaves.
    */
   top: LedgeSurface | null;
   left: WallSurface | null;
@@ -330,6 +336,10 @@ export function buildWindowSurfaces(
         const r1 = Math.min(chosen[1], strip.rest.x1);
         if (r1 - r0 >= MIN_REST_PX) rest = { x0: r0, x1: r1 };
       }
+      // The open part of the top edge the strip lies on: a pull-up at either corner (or a jump)
+      // lands on the edge there and walks onto the strip's own span.
+      const open = spans.top.find((s) => s[0] <= chosen[0] && s[1] >= chosen[1]);
+      const land = open && (open[0] < chosen[0] || open[1] > chosen[1]) ? { land: { x0: open[0], x1: open[1] } } : {};
       stripLedge = {
         ...base,
         id: sId,
@@ -344,18 +354,23 @@ export function buildWindowSurfaces(
         x0: chosen[0],
         x1: chosen[1],
         rest,
+        ...land,
         focusX: strip.focusX !== null && strip.focusX >= chosen[0] && strip.focusX <= chosen[1] ? strip.focusX : null,
       };
     }
   }
 
-  // The listed top: a strip replaces the plain top, except under a cat standing on the other one.
-  let top: LedgeSurface | null = stripLedge ?? (strip ? null : windowTop);
-  if (attach?.surfaceId === topId) top = windowTop;
-  else if (attach?.surfaceId === sId && !stripLedge && windowTop) {
-    // The strip vanished (helper restarted, tabs re-laid out) under the cat: the ledge goes on
-    // along the window's top edge under the strip's id.
-    top = { ...windowTop, id: sId, kind: 'tabStrip', confidence: Math.min(windowTop.confidence, STRIP_FALLBACK_CONFIDENCE) };
+  // The listed top: a usable strip replaces the plain top; a strip that is covered (or cut
+  // away) leaves the plain top listed, so the sides keep a ledge to pull up onto. Under a cat
+  // standing on the top or clinging to a side, the one listed when it got there stays.
+  const held = attach && (attach.surfaceId === wallId(hwnd, 'left') || attach.surfaceId === wallId(hwnd, 'right')) ? (attach.heldTop ?? null) : null;
+  /** The plain top edge under the strip's id: a strip lost under the cat goes on along the edge. */
+  const stripAlias = (w: LedgeSurface): LedgeSurface => ({ ...w, id: sId, kind: 'tabStrip', confidence: Math.min(w.confidence, STRIP_FALLBACK_CONFIDENCE) });
+  let top: LedgeSurface | null = stripLedge ?? windowTop;
+  if (attach?.surfaceId === topId || held === 'windowTop') top = windowTop;
+  else if ((attach?.surfaceId === sId || held === 'tabStrip') && !stripLedge && windowTop) {
+    // The strip vanished (helper restarted, tabs re-laid out) or was covered under the cat.
+    top = stripAlias(windowTop);
   }
 
   const right = rect.x + rect.width;
@@ -365,12 +380,11 @@ export function buildWindowSurfaces(
     if (!top) return false;
     const corner = side === 'left' ? rect.x + spans.inset : right - spans.inset;
     const fromCorner = (s: Span): boolean => (side === 'left' ? s[0] <= corner + CORNER_REACH_PX : s[1] >= corner - CORNER_REACH_PX);
-    if (top.kind !== 'tabStrip') return fromCorner([top.x0, top.x1]);
     // A tab strip stops short of the corners by design (margins, window controls): it counts
-    // when the open edge runs unbroken from the corner to it. Whether it is close enough to
-    // pull up onto is the sim's call (SurfaceGraph.cornerX).
-    const t = top;
-    return spans.top.some((s) => s[0] <= t.x0 && s[1] >= t.x1 && fromCorner(s));
+    // when the open edge it lies on (`land`) runs unbroken from the corner to it. Whether it is
+    // close enough to pull up onto is the sim's call (SurfaceGraph.cornerX).
+    const reach = top.land ?? top;
+    return fromCorner([reach.x0, reach.x1]);
   };
   const wall = (side: 'left' | 'right', sideSpans: readonly Span[]): WallSurface | null => {
     const id = wallId(hwnd, side);

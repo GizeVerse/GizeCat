@@ -103,7 +103,7 @@ describe('built surfaces', () => {
     expect(b.right).toMatchObject({ vx: 30 });
   });
 
-  it('drops a strip whose safe span is fully covered rather than falling back to the plain top', () => {
+  it('a strip on a top edge covered all along leaves no top at all', () => {
     const r = rect(300, 200, 1100, 700);
     const spans = computeOpenSpans(r, [rect(300, 100, 1200, 200)], displays, OPTS);
     const source = {
@@ -140,6 +140,48 @@ describe('built surfaces', () => {
       expect([b.left?.topLedgeId, b.right?.topLedgeId]).toEqual(['windowTop:7', 'windowTop:7']);
     });
 
+    it('falls back to the plain top when the strip has no open part, so a side still pulls up (v1.1.1)', () => {
+      // A palette over the tab area: only the caption end of the top edge, [1270, 1392), is open.
+      const spans = computeOpenSpans(r, [rect(330, 150, 940, 100)], displays, OPTS);
+      const b = buildWindowSurfaces('7', r, spans, displays, META, placed, null);
+      expect(b.strip).toBeNull();
+      expect(b.top).toBe(b.windowTop);
+      expect(b.top).toMatchObject({ id: 'windowTop:7', x0: 1270, x1: 1392 });
+      expect([b.left?.topLedgeId, b.right?.topLedgeId]).toEqual([null, 'windowTop:7']);
+    });
+
+    it('gives the strip the open top edge it lies on as its landing span, none when it is no wider (v1.1.1)', () => {
+      const b = buildWindowSurfaces('7', r, computeOpenSpans(r, [], displays, OPTS), displays, META, placed, null);
+      expect(b.strip?.land).toEqual({ x0: 308, x1: 1392 });
+      expect(b.strip?.land).toEqual({ x0: b.windowTop?.x0, x1: b.windowTop?.x1 });
+      // Cut by a window above near the right corner: the landing span ends there too.
+      const cut = buildWindowSurfaces('7', r, computeOpenSpans(r, [rect(1300, 100, 200, 200)], displays, OPTS), displays, META, placed, null);
+      expect(cut.strip?.land).toEqual({ x0: 308, x1: 1300 });
+      expect(cut.windowTop).toMatchObject({ x0: 308, x1: 1300 });
+      // A strip over the whole open edge needs none.
+      const whole = buildWindowSurfaces('7', r, computeOpenSpans(r, [], displays, OPTS), displays, META, { ...placed, x0: 300, x1: 1400 }, null);
+      expect(whole.strip).toMatchObject({ x0: 308, x1: 1392 });
+      expect(whole.strip !== null && 'land' in whole.strip).toBe(false);
+    });
+
+    it('holds the top listed when the cat got onto a side, whichever way the strip changed since (v1.1.1)', () => {
+      const spans = computeOpenSpans(r, [], displays, OPTS);
+      const onSide = (heldTop: 'windowTop' | 'tabStrip') => ({ surfaceId: 'windowSide:7:left', x: 300, y: 600, heldTop });
+      // Got on while the plain top was listed; a strip has been found since.
+      const a = buildWindowSurfaces('7', r, spans, displays, META, placed, onSide('windowTop'));
+      expect(a.top).toBe(a.windowTop);
+      expect([a.left?.topLedgeId, a.right?.topLedgeId]).toEqual(['windowTop:7', 'windowTop:7']);
+      // Got on while the strip was listed; it is gone since: the edge under the strip's id.
+      const b = buildWindowSurfaces('7', r, spans, displays, META, null, onSide('tabStrip'));
+      expect(b.top).toMatchObject({ id: 'tabStrip:7', kind: 'tabStrip', x0: 308, x1: 1392, confidence: 0.5 });
+      expect(b.left?.topLedgeId).toBe('tabStrip:7');
+      // Nothing changed: the strip it set out for.
+      const c = buildWindowSurfaces('7', r, spans, displays, META, placed, onSide('tabStrip'));
+      expect(c.top).toBe(c.strip);
+      // Not on a side of this window: nothing is held.
+      expect(buildWindowSurfaces('7', r, spans, displays, META, placed, { surfaceId: 'windowSide:8:left', x: 300, y: 600, heldTop: 'windowTop' }).top?.kind).toBe('tabStrip');
+    });
+
     it('carries a strip that vanished under the cat along the plain top edge, under the strip id', () => {
       const spans = computeOpenSpans(r, [], displays, OPTS);
       const b = buildWindowSurfaces('7', r, spans, displays, META, null, { surfaceId: 'tabStrip:7', x: 700, y: 200 });
@@ -169,6 +211,13 @@ describe('injected surface validation', () => {
     expect(parseInjectedSurfaces([good])).toEqual([good]);
     const w = { id: 'windowSide:1:left', kind: 'windowSide', orientation: 'wall', ownerId: '1', displayId: null, phase: 'stable', vx: 0, vy: 0, confidence: 1, validatedAt: 0, excluded: false, x: 10, y0: 10, y1: 200, side: 'left', topLedgeId: null };
     expect(parseInjectedSurfaces([w])).toEqual([w]);
+  });
+
+  it('accepts a ledge landing span that contains the ledge, rejects one that does not (v1.1.1)', () => {
+    const strip = { id: 'tabStrip:1', kind: 'tabStrip', orientation: 'ledge', ownerId: '1', displayId: '1', phase: 'stable', vx: 0, vy: 0, confidence: 1, validatedAt: 0, excluded: false, y: 300, x0: 100, x1: 900, rest: null, focusX: null };
+    expect(parseInjectedSurfaces([{ ...strip, land: { x0: 40, x1: 960 } }])).toEqual([{ ...strip, land: { x0: 40, x1: 960 } }]);
+    expect(() => parseInjectedSurfaces([{ ...strip, land: { x0: 140, x1: 960 } }])).toThrow(/land/);
+    expect(() => parseInjectedSurfaces([{ ...strip, land: { x0: 40, x1: 960, y: 3 } }])).toThrow();
   });
 
   it('rejects malformed, unbounded, duplicate or extra-field input', () => {

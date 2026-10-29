@@ -4,9 +4,12 @@
 // - Lazy: the helper starts only while the tabStrips toggle is on and an interesting Edge/Chrome
 //   window exists (setInterest), and stops after `idleShutdownMs` without one.
 // - Windows passed to setInterest are polled at 1 Hz (the cat is on or heading to them; tab rects
-//   raise no change events). Windows that were of interest recently stay listed and are refreshed
-//   only on helper events (tab selected, content structure changed) or when they are resized, then
-//   dropped after `idleShutdownMs`.
+//   raise no change events); those passed as `slow` (far browsers that are only possible
+//   destinations) every `slowPollIntervalMs`. Windows that were of interest recently stay listed
+//   and are refreshed only on helper events (tab selected, content structure changed) or when they
+//   are resized, then dropped after `idleShutdownMs`.
+// - Why a window of interest has no usable strip (maximized, no head room, vertical tabs, a
+//   timeout...) is kept as a short code for the diagnostics (no ids, titles or names).
 // - Excluded (private) windows are never queried: the exclusion verdict is re-read right before
 //   every request and an excluded window is dropped on sight.
 // - A crashed, blocked or hung helper is restarted with exponential backoff; after too many
@@ -26,7 +29,7 @@ import type { Logger, TabStripService } from '../contracts';
 import { HelperTransportError, spawnUiaHelper, UiaHelperClient, type ChildProcessLike, type HelperExit } from './client';
 import { fromWireRect, HWND_PATTERN, UIA_PROTOCOL_VERSION, type HelperEvent, type HelperRequest, type HelperResponse, type WireStrip } from './protocol';
 import { DEFAULT_RESTART_BUDGET, RestartBudget, type RestartBudgetOptions } from './restartBudget';
-import { catExtentPx, computeTabStripSegment, placeStrip, toRelativeStrip, type RelativeStrip, type StripGeometry, type TabStripSegment } from './segment';
+import { catExtentPx, computeTabStripSegment, placeStrip, toRelativeStrip, type RelativeStrip, type SegmentDisabledReason, type StripGeometry, type TabStripSegment } from './segment';
 
 /** Browsers whose tab strips are read (both expose native UIA by default since Chrome 138). */
 export const TAB_STRIP_BROWSERS: readonly string[] = ['msedge.exe', 'chrome.exe'];
@@ -37,6 +40,8 @@ export interface TabStripServiceOptions {
   requestTimeoutMs: number;
   /** Refresh period for windows of interest. */
   pollIntervalMs: number;
+  /** Refresh period for windows of interest passed as `slow` (far candidates). */
+  slowPollIntervalMs: number;
   /** Helper stops (and retained windows are dropped) after this long without interest. */
   idleShutdownMs: number;
   /** Window descriptions (rect, maximized, exclusion) are re-read at most this often. */
@@ -83,6 +88,7 @@ export interface TabStripServiceOptions {
 export const DEFAULT_TAB_STRIP_OPTIONS: TabStripServiceOptions = {
   requestTimeoutMs: 1500,
   pollIntervalMs: 1000,
+  slowPollIntervalMs: 3000,
   idleShutdownMs: 60_000,
   describeIntervalMs: 250,
   liveDescribeMs: 50,
@@ -138,6 +144,8 @@ interface Tracked {
   vx: number;
   vy: number;
   interested: boolean;
+  /** Of interest at the slow rate (a far candidate). */
+  slow: boolean;
   lastInterestAt: number;
   strip: RelativeStrip | null;
   stripAt: number;
@@ -185,6 +193,8 @@ export type TabStripDebug = {
   };
   windows: number;
   interested: number;
+  /** Of those, polled at the slow rate. */
+  interestedSlow: number;
   withStrip: number;
   /** Windows quarantined after their browser stalled the helper. */
   stalled: number;
@@ -199,8 +209,56 @@ export type TabStripDebug = {
   eventsDropped: number;
 };
 
+/** Counts and codes for the surface diagnostics (ProviderDiagnostics.tabStrips): no ids, titles or names. */
+export interface TabStripDiagnostics {
+  state: SurfaceStatus['tabStrips'];
+  helperRunning: boolean;
+  /** Windows currently of interest (being measured). */
+  interest: number;
+  /** Windows with a usable strip right now. */
+  strips: number;
+  /** Strip requests sent / failed (error answer, timeout or transport). */
+  reads: number;
+  errors: number;
+  /** Host clock (ms) of the last successful read (0 = never). */
+  lastReadAt: number;
+  /**
+   * Why the window last found without a usable strip has none (cleared once it has one):
+   * 'maximized', 'noHeadroom', 'vertical', 'noTabs', 'tooNarrow', 'timeout', 'hung', 'excluded',
+   * or the helper's error code in camelCase (e.g. 'noStrip', 'rejected', 'gone').
+   */
+  lastRejection: string | null;
+  /** Host clock (ms) when lastRejection was recorded (0 = none). */
+  lastRejectionAt: number;
+}
+
+/** What the real service offers beyond the TabStripService contract (fakes may not). */
+export interface TabStripServiceExtras {
+  /** As the contract's; `slow` (a subset of windowIds) are polled every slowPollIntervalMs. */
+  setInterest(windowIds: readonly string[], now: number, slow?: readonly string[]): void;
+  diagnostics(): TabStripDiagnostics;
+}
+
+export const hasTabStripExtras = (s: TabStripService): s is TabStripService & TabStripServiceExtras =>
+  typeof (s as Partial<TabStripServiceExtras>).diagnostics === 'function';
+
+const SEGMENT_REJECTION: Record<SegmentDisabledReason, string> = {
+  maximized: 'maximized',
+  vertical: 'vertical',
+  'no-tabs': 'noTabs',
+  'no-head-room': 'noHeadroom',
+  'too-narrow': 'tooNarrow',
+};
+
+/** A helper error slug (validated by the protocol: lower-case letters and dashes) in camelCase. */
+const helperRejection = (code: string): string => code.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+
 const isBrowserCandidate = (info: WindowInfo): boolean =>
   TAB_STRIP_BROWSERS.includes(info.processName) && !info.excluded && !info.minimized && !info.fullscreen;
+
+/** Why a window is not a candidate (isBrowserCandidate false), as a diagnostics code. */
+const candidateRejection = (info: WindowInfo): string =>
+  info.excluded ? 'excluded' : info.fullscreen ? 'fullscreen' : info.minimized ? 'minimized' : 'unsupportedBrowser';
 
 function toGeometry(s: WireStrip): StripGeometry {
   return {
@@ -238,8 +296,8 @@ const sameSurface = (a: LedgeSurface, b: LedgeSurface): boolean =>
   a.displayId === b.displayId &&
   a.phase === b.phase;
 
-/** The contract with a typed debugInfo (still assignable to TabStripService). */
-export type TabStripServiceImpl = Omit<TabStripService, 'debugInfo'> & { debugInfo(): TabStripDebug };
+/** The contract with a typed debugInfo and the extras (still assignable to TabStripService). */
+export type TabStripServiceImpl = Omit<TabStripService, 'debugInfo' | 'setInterest'> & TabStripServiceExtras & { debugInfo(): TabStripDebug };
 
 export function createTabStripService(deps: TabStripServiceDeps): TabStripServiceImpl {
   const o: TabStripServiceOptions = { ...DEFAULT_TAB_STRIP_OPTIONS, ...deps.options };
@@ -278,7 +336,25 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
    */
   const stalls = new Map<string, { until: number; streak: number }>();
   const queue: SimEvent[] = [];
-  const stats = { reads: 0, readsDone: 0, readErrors: 0, lastReadMs: null as number | null, eventsIn: { selected: 0, structure: 0 }, eventsOut: 0, eventsDropped: 0 };
+  const stats = { reads: 0, readsDone: 0, readErrors: 0, lastReadMs: null as number | null, lastReadAt: 0, eventsIn: { selected: 0, structure: 0 }, eventsOut: 0, eventsDropped: 0 };
+  /** The window last found without a usable strip, and why (the id never leaves the service). */
+  let rejection: { id: string; code: string; at: number } | null = null;
+
+  function reject(id: string, code: string, at: number): void {
+    if (rejection?.id === id && rejection.code === code) return;
+    rejection = { id, code, at };
+  }
+
+  /** A usable strip (or a window no longer of interest) clears its rejection. */
+  function clearRejection(id: string): void {
+    if (rejection?.id === id) rejection = null;
+  }
+
+  function noteSegment(t: Tracked, seg: TabStripSegment | null, at: number): void {
+    if (seg === null) return;
+    if (seg.ok) clearRejection(t.id);
+    else if (t.interested) reject(t.id, SEGMENT_REJECTION[seg.reason], at);
+  }
 
   const client: UiaHelperClient | null =
     deps.helperPath === null
@@ -318,6 +394,8 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   function drop(t: Tracked, reason: string): void {
     if (windows.get(t.id) !== t) return;
     windows.delete(t.id);
+    // Idle or evicted windows simply stopped mattering; the other reasons explain a missing strip.
+    if (reason === 'idle' || reason === 'evicted') clearRejection(t.id);
     log.debug('tab strip window dropped', { reason });
   }
 
@@ -325,7 +403,10 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   function refreshInfo(t: Tracked, at: number): boolean {
     const info = deps.describeWindow(t.id);
     if (info === null || !isBrowserCandidate(info)) {
-      drop(t, info === null ? 'gone' : info.excluded ? 'excluded' : 'not a candidate');
+      const reason = info === null ? 'gone' : info.excluded ? 'excluded' : 'not a candidate';
+      if (info === null) clearRejection(t.id);
+      else if (t.interested) reject(t.id, candidateRejection(info), at);
+      drop(t, reason);
       return false;
     }
     const dt = at - t.infoAt;
@@ -358,7 +439,11 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       rejected.delete(id);
     }
     const info = deps.describeWindow(id);
-    if (info === null || !isBrowserCandidate(info)) return null;
+    if (info === null) return null;
+    if (!isBrowserCandidate(info)) {
+      reject(id, candidateRejection(info), at);
+      return null;
+    }
     if (windows.size >= o.maxWindows) {
       let victim: Tracked | null = null;
       for (const t of windows.values()) if (!t.interested && (victim === null || t.lastInterestAt < victim.lastInterestAt)) victim = t;
@@ -372,6 +457,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       vx: 0,
       vy: 0,
       interested: false,
+      slow: false,
       lastInterestAt: at,
       strip: null,
       stripAt: 0,
@@ -515,7 +601,10 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       fail('request timed out (helper hung)', at);
       return;
     }
-    for (const id of blamed) stall(id, at);
+    for (const id of blamed) {
+      stall(id, at);
+      reject(id, 'timeout', at);
+    }
     const next = stallBudget.recordFailure(at);
     if (next === null) {
       fail('request timed out (browser windows keep stalling the helper)', at);
@@ -627,6 +716,8 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       stats.readErrors++;
       const code = r.ok ? 'no-strip' : r.error;
       t.lastError = code;
+      if (code === 'gone') clearRejection(t.id);
+      else reject(t.id, helperRejection(code), at);
       if (code === 'hung') {
         // The helper found the browser not responding before calling into it. Its strip cannot
         // have moved (a hung window does not move or repaint), so it stays listed while it ages.
@@ -661,10 +752,12 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     t.lastError = null;
     t.lastReadMs = r.strip.ms;
     stats.lastReadMs = r.strip.ms;
+    stats.lastReadAt = at;
     // The helper's frame was read after our description: adopt it.
     t.info = { ...t.info, rect: geo.frame, maximized: geo.maximized };
     t.infoAt = at;
     detectChange(t, at, hint);
+    noteSegment(t, segmentFor(t), at);
     pump(at);
   }
 
@@ -704,11 +797,16 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   function scheduleReads(at: number): void {
     let inFlight = 0;
     for (const t of windows.values()) if (t.inFlight) inFlight++;
-    const order = [...windows.values()].sort((a, b) => Number(b.interested) - Number(a.interested) || b.lastInterestAt - a.lastInterestAt);
+    // Windows of interest first, the near ones (normal rate) before the far ones (slow rate).
+    const rank = (t: Tracked): number => (t.interested ? (t.slow ? 1 : 2) : 0);
+    const order = [...windows.values()].sort((a, b) => rank(b) - rank(a) || b.lastInterestAt - a.lastInterestAt);
     for (const t of order) {
       if (inFlight >= o.maxInFlight) return;
+      // A maximized browser is never asked (its strip has no room above it).
+      if (t.interested && t.info.maximized) reject(t.id, 'maximized', at);
       if (t.inFlight || !queryable(t) || at < t.retryAt || quarantined(t.id, at)) continue;
-      const due = t.strip === null || (t.dirty ? at - t.lastRequestAt >= o.refreshGapMs : t.interested && at - t.stripAt >= o.pollIntervalMs);
+      const period = t.slow ? o.slowPollIntervalMs : o.pollIntervalMs;
+      const due = t.strip === null || (t.dirty ? at - t.lastRequestAt >= o.refreshGapMs : t.interested && at - t.stripAt >= period);
       if (!due) continue;
       read(t, at);
       if (t.inFlight) inFlight++;
@@ -754,6 +852,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     windows.clear();
     rejected.clear();
     stalls.clear();
+    rejection = null;
     queue.length = 0;
     watchedKey = '';
     helperReady = false;
@@ -827,7 +926,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       if (started) armTimer();
     },
 
-    setInterest(windowIds: readonly string[], at: number): void {
+    setInterest(windowIds: readonly string[], at: number, slow: readonly string[] = []): void {
       maybeRecover(at);
       if (!active()) return;
       const admitted = new Set<string>();
@@ -839,9 +938,14 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         if (t === null) continue;
         admitted.add(id);
         t.interested = true;
+        t.slow = slow.includes(id);
         t.lastInterestAt = at;
       }
-      for (const t of windows.values()) if (!admitted.has(t.id)) t.interested = false;
+      for (const t of windows.values()) {
+        if (admitted.has(t.id)) continue;
+        t.interested = false;
+        t.slow = false;
+      }
       pump(at);
     },
 
@@ -855,6 +959,8 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         if (at - t.infoAt >= maxAge && !refreshInfo(t, at)) continue;
         if (!queryable(t)) continue;
         const seg = segmentFor(t);
+        // Moves and resizes between reads re-place the strip (e.g. no head room any more).
+        noteSegment(t, seg, at);
         if (seg === null || !seg.ok) continue;
         const sizeMatches = t.strip.frameWidth === t.info.rect.width && t.strip.frameHeight === t.info.rect.height;
         const age = at - t.stripAt;
@@ -895,9 +1001,11 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     debugInfo() {
       const at = now();
       let interested = 0;
+      let interestedSlow = 0;
       let withStrip = 0;
       for (const t of windows.values()) {
         if (t.interested) interested++;
+        if (t.interested && t.slow) interestedSlow++;
         if (t.strip !== null) withStrip++;
       }
       const cs = client?.stats;
@@ -928,6 +1036,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         },
         windows: windows.size,
         interested,
+        interestedSlow,
         withStrip,
         stalled,
         watched: watchedKey === '' ? 0 : watchedKey.split(',').length,
@@ -938,6 +1047,27 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         eventsIn: { ...stats.eventsIn },
         eventsOut: stats.eventsOut,
         eventsDropped: stats.eventsDropped,
+      };
+    },
+
+    diagnostics(): TabStripDiagnostics {
+      let interested = 0;
+      let usable = 0;
+      for (const t of windows.values()) {
+        if (t.interested) interested++;
+        if (t.strip !== null && queryable(t) && segmentFor(t)?.ok === true) usable++;
+      }
+      const on = active();
+      return {
+        state: service.status,
+        helperRunning: client?.running ?? false,
+        interest: on ? interested : 0,
+        strips: on ? usable : 0,
+        reads: stats.reads,
+        errors: stats.readErrors,
+        lastReadAt: stats.lastReadAt,
+        lastRejection: rejection?.code ?? null,
+        lastRejectionAt: rejection?.at ?? 0,
       };
     },
 

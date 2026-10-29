@@ -428,6 +428,7 @@ describe('TabStripService: helper failures', () => {
     expect(r.svc.status).toBe('idle');
     expect(r.svc.statusReason).toBeNull();
     expect(r.svc.debugInfo()).toMatchObject({ stalled: 1, helper: { timeouts: 2, recentFailures: 0, stallRestarts: 1, nextStartInMs: 250 } });
+    expect(r.svc.diagnostics()).toMatchObject({ lastRejection: 'timeout', lastRejectionAt: r.clock.now() });
 
     // The replacement reads B and leaves A alone for 30 s.
     r.svc.setInterest([A, B], r.clock.advance(250));
@@ -459,6 +460,8 @@ describe('TabStripService: helper failures', () => {
     // A was never subscribed while it was stalled.
     expect(r.h.ops('watch').slice(0, -1).every((q) => !(q.hwnds ?? []).includes(A))).toBe(true);
     expect(r.svc.debugInfo()).toMatchObject({ status: 'active', stalled: 0, helper: { recentFailures: 0, spawns: 3 } });
+    // Its strip is back: no reason left to report.
+    expect(r.svc.diagnostics().lastRejection).toBeNull();
   });
 
   it('a window that hangs the helper while being subscribed is quarantined the same way', async () => {
@@ -488,6 +491,7 @@ describe('TabStripService: helper failures', () => {
     r.h.patchState({ strips: { [A]: { error: 'hung' }, [B]: wireStrip({ browser: 'chrome' }) } });
     await stepAndRead(r, 1000, [A, B], 2);
     expect(r.svc.debugInfo().stalled).toBe(1);
+    expect(r.svc.diagnostics().lastRejection).toBe('hung');
     const aOps = stripOps(r, A);
     // A hung window cannot move: its strip stays listed while it ages, and A is not watched.
     expect(r.svc.surfaces().map((s) => s.ownerId).sort()).toEqual([A, B].sort());
@@ -556,6 +560,71 @@ describe('TabStripService: helper failures', () => {
     expect(d.malformed).toBeGreaterThanOrEqual(2);
     expect(d.oversized).toBeGreaterThanOrEqual(2);
     expect(r.svc.status).toBe('active');
+  });
+});
+
+describe('TabStripService: slow interest and diagnostics (v1.1.1)', () => {
+  it('polls windows of interest passed as slow every 3 s, the others at 1 Hz', async () => {
+    const r = rig({ strips: { [A]: wireStrip({ browser: 'edge' }), [B]: wireStrip({ browser: 'chrome' }) } });
+    r.svc.start();
+    r.wins.set(A);
+    r.wins.set(B, { processName: 'chrome.exe' });
+    r.svc.setInterest([A, B], r.clock.now(), [B]);
+    await waitForStrip(r, A);
+    await waitForStrip(r, B);
+    expect([stripOps(r, A), stripOps(r, B)]).toEqual([1, 1]);
+    expect(r.svc.debugInfo()).toMatchObject({ interested: 2, interestedSlow: 1 });
+    const step = async (ms: number, reads: number, slow: string[]): Promise<void> => {
+      const done = r.svc.debugInfo().readsDone;
+      r.svc.setInterest([A, B], r.clock.advance(ms), slow);
+      await eventually(() => expect(r.svc.debugInfo().readsDone).toBe(done + reads));
+    };
+    await step(1100, 1, [B]);
+    expect([stripOps(r, A), stripOps(r, B)]).toEqual([2, 1]);
+    await step(1100, 1, [B]);
+    expect([stripOps(r, A), stripOps(r, B)]).toEqual([3, 1]);
+    await step(1100, 2, [B]);
+    expect([stripOps(r, A), stripOps(r, B)]).toEqual([4, 2]);
+    // Not slow any more (the cat came near it): the normal rate.
+    await step(1100, 2, []);
+    expect([stripOps(r, A), stripOps(r, B)]).toEqual([5, 3]);
+    expect(r.svc.debugInfo().interestedSlow).toBe(0);
+  });
+
+  it('reports counts, the last read and why a window of interest has no usable strip, as codes', async () => {
+    const r = rig({ strips: { [A]: wireStrip({ browser: 'edge', vertical: true }), [B]: wireStrip({ browser: 'chrome' }) } });
+    r.svc.start();
+    expect(r.svc.diagnostics()).toEqual({ state: 'idle', helperRunning: false, interest: 0, strips: 0, reads: 0, errors: 0, lastReadAt: 0, lastRejection: null, lastRejectionAt: 0 });
+    r.wins.set(A);
+    r.wins.set(B, { processName: 'chrome.exe' });
+    r.svc.setInterest([A, B], r.clock.now());
+    await waitForStrip(r, B);
+    await eventually(() => expect(r.svc.debugInfo().withStrip).toBe(2));
+    expect(r.svc.diagnostics()).toEqual({ state: 'active', helperRunning: true, interest: 2, strips: 1, reads: 2, errors: 0, lastReadAt: r.clock.now(), lastRejection: 'vertical', lastRejectionAt: r.clock.now() });
+    // Horizontal tabs again: the reason is cleared once A has a strip.
+    r.h.patchState({ strips: { [A]: wireStrip({ browser: 'edge' }), [B]: wireStrip({ browser: 'chrome' }) } });
+    await stepAndRead(r, 1100, [A, B], 2);
+    expect(r.svc.diagnostics()).toMatchObject({ strips: 2, lastRejection: null });
+    // Moved up against the top of the work area: no room for the cat above the strip.
+    r.h.patchState({ strips: { [A]: wireStrip({ browser: 'edge', at: { x: 133, y: 30 } }), [B]: wireStrip({ browser: 'chrome' }) } });
+    r.wins.set(A, { rect: { x: 133, y: 30, width: 1359, height: 867 } });
+    await stepAndRead(r, 1100, [A, B], 2);
+    expect(r.svc.diagnostics()).toMatchObject({ strips: 1, lastRejection: 'noHeadroom' });
+    // The helper cannot read it: its error code.
+    r.h.patchState({ strips: { [A]: { error: 'no-strip' }, [B]: wireStrip({ browser: 'chrome' }) } });
+    await stepAndRead(r, 1100, [A, B], 2);
+    expect(r.svc.diagnostics()).toMatchObject({ strips: 1, errors: 1, lastRejection: 'noStrip' });
+    // Back to normal, then B is maximized: never asked, and said so.
+    r.h.patchState({ strips: { [A]: wireStrip({ browser: 'edge' }), [B]: wireStrip({ browser: 'chrome' }) } });
+    r.wins.set(A, { rect: { x: 133, y: 125, width: 1359, height: 867 } });
+    await stepAndRead(r, 2100, [A, B], 2);
+    expect(r.svc.diagnostics().lastRejection).toBeNull();
+    r.wins.set(B, { maximized: true });
+    await stepAndRead(r, 1100, [A, B], 1);
+    expect(r.svc.diagnostics()).toMatchObject({ strips: 1, lastRejection: 'maximized', reads: r.h.ops('strip').length });
+    // Counts and codes only: no window ids or process names.
+    const d = r.svc.diagnostics();
+    expect(Object.values(d).filter((v) => typeof v === 'string')).toEqual(['active', 'maximized']);
   });
 });
 

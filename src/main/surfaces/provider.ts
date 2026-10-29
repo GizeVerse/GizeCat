@@ -10,9 +10,13 @@
 //   windows being dragged are re-read live. Only windows touched by a change are recomputed,
 //   and unchanged surfaces keep their object identity.
 // - Browser tab strips (TabStripService) replace their window's top ledge, cut to the open
-//   part of the edge and shifted with the window while it moves. A strip found or lost while
-//   the cat stands on the window's top does not swap the ledge under it: the one it is on
-//   stays listed under its id until it leaves (walls name whichever top is listed).
+//   part of the edge and shifted with the window while it moves; a strip with no open part
+//   leaves the plain top listed. A strip found or lost while the cat stands on the window's top
+//   or clings to one of its sides does not swap the top: the one listed when it got there stays
+//   listed under its id until it leaves (walls name whichever top is listed).
+// - Tab-strip interest: the browser the cat is attached to, those whose top edge is within reach
+//   (interestRadiusDip), and up to maxOpenTopInterest more whose top edge is open somewhere on a
+//   display the cat may use, nearest first; those are measured at the service's slow rate.
 // - getSurface(id) re-reads that one owner live (GetWindowRect/DWM) for the cat riding it and
 //   rebuilds the surface from the live frame, however far a drag, snap or resize moved it since
 //   the last tick: the cat's reported spot (noteCat, in the frame of the previous tick) is
@@ -31,14 +35,16 @@
 // cat is on is still served, flagged `excluded`, so it leaves calmly. Tab-strip interest and tab
 // events are never forwarded for them. No window title is read here.
 import os from 'node:os';
+import { displayAtPoint, displayForRect, nearestDisplay, primaryDisplay } from '../../core/display/displayMath';
 import type { Rect } from '../../shared/geometry';
 import type { Settings } from '../../shared/settings';
 import type { SimEvent } from '../../shared/sim';
-import type { ProviderDiagnostics } from '../../shared/surfaceDiagnostics';
+import type { ProviderDiagnostics, ProviderSkipReason } from '../../shared/surfaceDiagnostics';
 import { emptySurfaceCounts } from '../../shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface, SurfacePhase, SurfaceStatus } from '../../shared/surfaces';
-import type { WindowInfo } from '../../shared/world';
+import type { DisplayGeometry, WindowInfo } from '../../shared/world';
 import type { DisplayService, Logger, SurfaceProvider, TabStripService, TaskbarTracker, Unsubscribe, Win32Api, WindowTracker } from '../contracts';
+import { hasTabStripExtras, TAB_STRIP_BROWSERS, type TabStripDiagnostics } from '../uia/service';
 import type { Occluder } from '../win32/platforms';
 import { hasWin32Extensions } from '../win32/win32Api';
 import type { WindowChange, WindowTrackerExtras } from '../win32/windowTracker';
@@ -47,6 +53,8 @@ import {
   bareWindowSurface,
   buildWindowSurfaces,
   computeOpenSpans,
+  cornerInsetPx,
+  coversWorkArea,
   defaultCornerRadiusDip,
   EMPTY_WINDOW_SURFACES,
   offersSurfaces,
@@ -61,7 +69,7 @@ import {
 } from './windowSurfaces';
 
 /** What the provider needs from the window tracker beyond the WindowTracker contract. */
-export type SurfaceTracker = WindowTracker & Pick<WindowTrackerExtras, 'running' | 'onChange' | 'windowInfo' | 'listWindows' | 'isMoving'>;
+export type SurfaceTracker = WindowTracker & Pick<WindowTrackerExtras, 'running' | 'onChange' | 'windowInfo' | 'listWindows' | 'isMoving' | 'debugInfo'>;
 
 export interface SurfaceProviderOptions extends Omit<WindowSurfaceOptions, 'climbWindows'> {
   /** How long a window that was just shown/restored reports phase 'entering' (ms). */
@@ -70,6 +78,12 @@ export interface SurfaceProviderOptions extends Omit<WindowSurfaceOptions, 'clim
   leavingMaxMs: number;
   /** Browser windows whose top edge is this close to the cat are of tab-strip interest (DIP, scaled). */
   interestRadiusDip: number;
+  /**
+   * Beyond that radius, at most this many more browser windows whose top edge is open (a span of
+   * at least minLedgeWidthPx, on a display the cat may use) are of interest, nearest first. The
+   * service measures them at its slow rate.
+   */
+  maxOpenTopInterest: number;
   /** Interest refresh period (ms). */
   interestIntervalMs: number;
   /** Bound on the windows passed to setInterest. */
@@ -86,10 +100,14 @@ export const DEFAULT_SURFACE_OPTIONS: Readonly<SurfaceProviderOptions> = Object.
   enteringMs: 300,
   leavingMaxMs: 1000,
   interestRadiusDip: 300,
+  maxOpenTopInterest: 3,
   interestIntervalMs: 500,
   maxInterest: 4,
   maxSurfaces: 256,
 });
+
+/** Bound on ProviderDiagnostics.recentErrors. */
+const MAX_RECENT_ERRORS = 10;
 
 export interface SurfaceProviderDeps {
   logger: Logger;
@@ -129,6 +147,8 @@ export type SurfaceProviderDebug = {
   snapshotAgeMs: number | null;
   injected: number | null;
   interest: number;
+  /** Of those, the far browsers with an open top edge (measured at the slow rate). */
+  interestOpenTop: number;
   errors: number;
   taskbar: Record<string, unknown> | null;
   tabStrips: Record<string, unknown> | null;
@@ -207,7 +227,7 @@ function sameSurface(a: Surface | null, b: Surface | null): boolean {
   if (a === null || b === null) return a === b;
   if (a.id !== b.id || a.phase !== b.phase || a.vx !== b.vx || a.vy !== b.vy || a.confidence !== b.confidence || a.excluded !== b.excluded || a.displayId !== b.displayId) return false;
   if (a.validatedAt !== b.validatedAt) return false;
-  if (a.orientation === 'ledge' && b.orientation === 'ledge') return a.y === b.y && a.x0 === b.x0 && a.x1 === b.x1 && a.focusX === b.focusX && sameRest(a.rest, b.rest);
+  if (a.orientation === 'ledge' && b.orientation === 'ledge') return a.y === b.y && a.x0 === b.x0 && a.x1 === b.x1 && a.focusX === b.focusX && sameRest(a.rest, b.rest) && sameRest(a.land ?? null, b.land ?? null);
   if (a.orientation === 'wall' && b.orientation === 'wall') return a.x === b.x && a.y0 === b.y0 && a.y1 === b.y1 && a.topLedgeId === b.topLedgeId;
   return false;
 }
@@ -229,6 +249,14 @@ interface CatAttachment extends Attachment {
   owner: string | null;
   /** The owner's frame when the cat was there (null: unknown, e.g. a window not tracked yet). */
   frame: Rect | null;
+}
+
+/** Diagnostics source of a provider step (report op). */
+function errorSource(op: string): string {
+  if (op.startsWith('taskbar') || op === 'status') return 'taskbar';
+  if (op.startsWith('tab') || op === 'interest') return 'tabStrips';
+  if (op === 'rect') return 'win32';
+  return 'surfaces';
 }
 
 /** Same ids in the same order: the snapshots differ only in rects (or not at all). */
@@ -279,6 +307,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
   let climbWindows = isEnabled(deps.settings, 'climbWindows');
   let taskbarPlay = isEnabled(deps.settings, 'taskbarPlay');
   let tabStripsOn = isEnabled(deps.settings, 'tabStrips');
+  let allowMultiMonitor = deps.settings.behavior.allowMultiMonitor;
 
   let order: Occluder[] = [];
   let entries = new Map<string, Entry>();
@@ -311,6 +340,13 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
 
   let interestAt = -Infinity;
   let interest: string[] = [];
+  /** How many of `interest` are far browsers with an open top (the service's slow rate). */
+  let interestOpenTop = 0;
+  /** Where the cat was last reported, hidden or not (diagnostics: the cat's display). */
+  let catPoint: { x: number; y: number } | null = null;
+  /** Why a browser's strip was not listed, as decided here (the service records its own reasons). */
+  let stripRejection: { id: string; code: string; at: number } | null = null;
+  const recentErrors: ProviderDiagnostics['recentErrors'] = [];
   let snapshots = 0;
   let incrementalUpdates = 0;
   let recomputes = 0;
@@ -320,6 +356,9 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
 
   function report(op: string, e: unknown): void {
     errors++;
+    // Codes only (the message stays in the log): the diagnostics never carry free text.
+    recentErrors.push({ at: clock(), source: errorSource(op), kind: op });
+    if (recentErrors.length > MAX_RECENT_ERRORS) recentErrors.splice(0, recentErrors.length - MAX_RECENT_ERRORS);
     if (errors <= 5 || errors % 1000 === 0) log.warn('surface provider step failed', { op, count: errors, error: e instanceof Error ? e.message : String(e) });
   }
 
@@ -475,8 +514,9 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     const f = a.frame;
     const dx = f && e.rect.width === f.width ? e.rect.x - f.x : 0;
     const dy = f && e.rect.height === f.height ? e.rect.y - f.y : 0;
-    if (dx === 0 && dy === 0) return { surfaceId: a.surfaceId, x: a.x, y: a.y };
-    return { surfaceId: a.surfaceId, x: a.x + dx, y: a.y + dy, reported: { x: a.x, y: a.y } };
+    const held = a.heldTop !== undefined ? { heldTop: a.heldTop } : {};
+    if (dx === 0 && dy === 0) return { surfaceId: a.surfaceId, x: a.x, y: a.y, ...held };
+    return { surfaceId: a.surfaceId, x: a.x + dx, y: a.y + dy, reported: { x: a.x, y: a.y }, ...held };
   }
 
   /** Recomputes one window's surfaces; true when any listed surface changed. */
@@ -484,11 +524,17 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     recomputes++;
     const displays = display.world.displays;
     let next: BuiltWindowSurfaces = EMPTY_WINDOW_SURFACES;
+    let placed: StripPlacement | null = null;
     e.spans = null;
     if (offersSurfaces(e.info, e.rect, displays)) {
       e.spans = computeOpenSpans(e.rect, aboveRects(e.id), displays, { ...opts, climbWindows });
-      next = buildWindowSurfaces(e.id, e.rect, e.spans, displays, meta(e, now), stripPlacement(e), attachmentFor(e));
+      placed = stripPlacement(e);
+      next = buildWindowSurfaces(e.id, e.rect, e.spans, displays, meta(e, now), placed, attachmentFor(e));
     }
+    // A measured strip with no open part (the plain top, if any, is listed instead).
+    if (placed && !next.strip && !e.info.excluded) {
+      if (stripRejection?.id !== e.id || stripRejection.code !== 'covered') stripRejection = { id: e.id, code: 'covered', at: now };
+    } else if (stripRejection?.id === e.id) stripRejection = null;
     const r = stabilize(e.built, next);
     e.built = r.built;
     if (r.changed) windowVersion++;
@@ -801,39 +847,84 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     return list;
   }
 
+  /** Why a shown window offers the cat nothing right now (null: it has a listed surface). */
+  function skipReason(e: Entry, displays: readonly DisplayGeometry[]): ProviderSkipReason | null {
+    // Private windows are only counted (and their surfaces are never listed).
+    if (e.info.excluded) return 'excluded';
+    const b = e.built;
+    if (b.top || b.left || b.right) return null;
+    if (e.info.minimized) return 'minimized';
+    if (e.info.fullscreen) return 'fullscreen';
+    if (e.info.maximized) return 'maximized';
+    if (coversWorkArea(e.rect, displays)) return 'coversWorkArea';
+    const r = e.rect;
+    if (!displays.some((d) => r.x < d.workAreaPx.x + d.workAreaPx.width && d.workAreaPx.x < r.x + r.width && r.y < d.workAreaPx.y + d.workAreaPx.height && d.workAreaPx.y < r.y + r.height)) return 'offScreen';
+    const scale = scaleForRect(displays, r);
+    const inset = cornerInsetPx(opts, scale);
+    const narrow = r.width - 2 * inset < opts.minLedgeWidthPx;
+    const short = r.height - 2 * inset < Math.round(opts.minWallHeightDip * scale);
+    if (narrow && short) return 'tooSmall';
+    // Only its sides could hold the cat, and climbing is switched off.
+    if (narrow && !climbWindows) return 'disabled';
+    // Everything it has is hidden behind windows above it (or against the screen edge).
+    return 'covered';
+  }
+
+  /** The display the cat is on (or nearest to), else the primary one. */
+  function catDisplay(displays: readonly DisplayGeometry[]): DisplayGeometry | null {
+    if (catPoint === null) return primaryDisplay(displays);
+    return displayAtPoint(displays, catPoint) ?? nearestDisplay(displays, catPoint);
+  }
+
   function updateInterest(now: number): void {
     if (!tabStrips) return;
     if (now - interestAt < opts.interestIntervalMs) return;
     interestAt = now;
     const ids: string[] = [];
+    const slow: string[] = [];
     // No cat on screen (hidden, or no output yet): nothing is of interest, the helper idles.
-    // Otherwise only the browser the cat is on and those whose top edge is within reach
-    // (interestRadiusDip, about a jump) are polled; the foreground one is no exception.
+    // Otherwise: the browser the cat is on (top or side), those whose top edge is within reach
+    // (interestRadiusDip, about a jump), then the nearest few whose top edge is open (visible)
+    // on a display the cat may use: a strip there is a destination worth knowing about even from
+    // the floor. Maximized, fullscreen, minimized and private windows never qualify as the
+    // latter (they offer no top); the foreground one gets no special treatment.
     if (tabStripsOn && windowTracking() && catPos !== null) {
       const cat = catPos;
-      const add = (id: string): void => {
-        if (!ids.includes(id) && ids.length < opts.maxInterest) ids.push(id);
+      const displays = display.world.displays;
+      const add = (id: string, far: boolean): void => {
+        if (ids.includes(id) || ids.length >= opts.maxInterest) return;
+        ids.push(id);
+        if (far) slow.push(id);
       };
       const usable = (info: WindowInfo | null): info is WindowInfo => info !== null && info.category === 'browser' && !info.excluded && !info.minimized;
       if (cat.surfaceId) {
         const p = parseSurfaceId(cat.surfaceId);
-        if (p && p.kind !== 'taskbar' && usable(tracker.windowInfo(p.owner))) add(p.owner);
+        if (p && p.kind !== 'taskbar' && usable(tracker.windowInfo(p.owner))) add(p.owner, false);
       }
+      const home = allowMultiMonitor ? null : catDisplay(displays);
       const near: Array<{ id: string; d: number }> = [];
+      const open: Array<{ id: string; d: number }> = [];
       for (const e of entries.values()) {
         if (!usable(e.info)) continue;
         const r = e.rect;
         const dx = cat.x < r.x ? r.x - cat.x : cat.x > r.x + r.width ? cat.x - (r.x + r.width) : 0;
         const d = Math.hypot(dx, cat.y - r.y);
-        if (d <= opts.interestRadiusDip * scaleForRect(display.world.displays, r)) near.push({ id: e.id, d });
+        if (d <= opts.interestRadiusDip * scaleForRect(displays, r)) near.push({ id: e.id, d });
+        // spans exist only for windows offering surfaces (not maximized, fullscreen, covering);
+        // only browsers whose strips the service can read take one of the few far places.
+        else if (e.spans !== null && e.spans.top.length > 0 && TAB_STRIP_BROWSERS.includes(e.info.processName) && (home === null || displayForRect(displays, r)?.id === home.id)) open.push({ id: e.id, d });
       }
       near.sort((a, b) => a.d - b.d);
-      for (const n of near) add(n.id);
+      open.sort((a, b) => a.d - b.d);
+      for (const n of near) add(n.id, false);
+      for (const n of open.slice(0, opts.maxOpenTopInterest)) add(n.id, true);
     }
     if (ids.length === 0 && interest.length === 0) return;
     interest = ids;
+    interestOpenTop = slow.length;
     try {
-      tabStrips.setInterest(ids, now);
+      if (hasTabStripExtras(tabStrips)) tabStrips.setInterest(ids, now, slow);
+      else tabStrips.setInterest(ids, now);
     } catch (e) {
       report('interest', e);
     }
@@ -1014,8 +1105,9 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
         taskbarPlay = play;
         composed = null;
       }
-      if (tabsOn !== tabStripsOn) {
+      if (tabsOn !== tabStripsOn || settings.behavior.allowMultiMonitor !== allowMultiMonitor) {
         tabStripsOn = tabsOn;
+        allowMultiMonitor = settings.behavior.allowMultiMonitor;
         interestAt = -Infinity;
       }
       try {
@@ -1029,6 +1121,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       const at = cat && Number.isFinite(cat.x) && Number.isFinite(cat.y) ? cat : null;
       // A hidden cat is still on its surface (the sim keeps it there): only interest stops.
       catPos = at && at.hidden !== true ? { x: at.x, y: at.y, surfaceId: at.surfaceId } : null;
+      catPoint = at ? { x: at.x, y: at.y } : null;
       let next: CatAttachment | null = null;
       if (at && at.surfaceId) {
         const p = parseSurfaceId(at.surfaceId);
@@ -1037,6 +1130,13 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
         // The owner's frame now is the one the last output was computed in (the host notes the
         // cat before reading surfaces): attachmentFor carries the spot from there.
         next = { surfaceId: at.surfaceId, x: at.x, y: at.y, owner, frame: e ? { ...e.rect } : null };
+        if (p?.kind === 'windowSide') {
+          // The top listed when the cat got onto the side (the one the climb pulls up onto) is
+          // held while it clings. The last output was computed from the current build.
+          const listedTop = e?.built.top ?? null;
+          const kept = attach?.surfaceId === at.surfaceId ? (attach.heldTop ?? null) : null;
+          next.heldTop = kept ?? (listedTop === null ? null : listedTop.kind === 'tabStrip' ? 'tabStrip' : 'windowTop');
+        }
       }
       const before = attach?.owner ?? null;
       const after = next?.owner ?? null;
@@ -1048,9 +1148,10 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       } else if (after && next && attach && (next.x !== attach.x || next.y !== attach.y)) {
         const e = entries.get(after);
         const listed = e ? [e.built.top, e.built.windowTop, e.built.strip, e.built.left, e.built.right].find((s) => s?.id === next.surfaceId) : undefined;
-        if (listed && (listed.orientation === 'ledge' ? next.x < listed.x0 - ATTACH_TOLERANCE_PX || next.x > listed.x1 + ATTACH_TOLERANCE_PX : next.y < listed.y0 - ATTACH_TOLERANCE_PX || next.y > listed.y1 + ATTACH_TOLERANCE_PX)) {
-          recompute.add(after);
-        }
+        // A strip's landing span is its open edge part (it holds no other part of the strip).
+        const span = listed?.orientation === 'ledge' ? (listed.land ?? listed) : null;
+        const past = span ? next.x < span.x0 - ATTACH_TOLERANCE_PX || next.x > span.x1 + ATTACH_TOLERANCE_PX : listed?.orientation === 'wall' && (next.y < listed.y0 - ATTACH_TOLERANCE_PX || next.y > listed.y1 + ATTACH_TOLERANCE_PX);
+        if (past) recompute.add(after);
       }
       attach = next;
     },
@@ -1070,19 +1171,69 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       log.info('surfaces injected (test mode)', { count: copy.length });
     },
 
-    // CONTRACT STUB (v1.1.1): counts and reasons are filled in by the provider work.
     diagnostics(): ProviderDiagnostics {
+      const displays = display.world.displays;
       const listed = emptySurfaceCounts();
-      for (const s of composed?.list ?? []) listed[s.kind] += 1;
+      for (const s of injected ? injected.list : (composed?.list ?? [])) listed[s.kind] += 1;
+      // Per window of the current snapshot (the shown app windows).
+      const skipped: Partial<Record<ProviderSkipReason, number>> = {};
+      let withSurfaces = 0;
+      let considered = 0;
+      let frontMaximized = false;
+      if (windowTracking() && !disposed) {
+        for (const e of entries.values()) {
+          const reason = skipReason(e, displays);
+          if (reason === null) withSurfaces++;
+          else skipped[reason] = (skipped[reason] ?? 0) + 1;
+        }
+        // Windows the tracker knows (its model, no OS call) that are not in the z-order: minimized.
+        let known = entries.size;
+        try {
+          known = Math.max(known, tracker.debugInfo().knownWindows);
+        } catch (e) {
+          report('trackerDebug', e);
+        }
+        considered = known;
+        if (known > entries.size) skipped.minimized = (skipped.minimized ?? 0) + known - entries.size;
+        // The topmost app window on the cat's display (z-order is top first).
+        const home = catDisplay(displays);
+        for (const o of order) {
+          const e = entries.get(o.id);
+          if (!e || !home || displayForRect(displays, e.rect)?.id !== home.id) continue;
+          frontMaximized = e.info.maximized || e.info.fullscreen || coversWorkArea(e.rect, [home]);
+          break;
+        }
+      }
+      let svc: TabStripDiagnostics | null = null;
+      if (tabStrips && hasTabStripExtras(tabStrips)) {
+        try {
+          svc = tabStrips.diagnostics();
+        } catch (e) {
+          report('tabDiagnostics', e);
+        }
+      }
+      // The newer of the service's reason (helper answer, geometry) and this one (covered).
+      const own = stripRejection !== null && entries.has(stripRejection.id) ? stripRejection : null;
+      const theirs = svc?.lastRejection ?? null;
+      const lastRejection = own !== null && (theirs === null || own.at >= (svc?.lastRejectionAt ?? 0)) ? own.code : theirs;
       return {
-        windowsConsidered: entries.size,
-        windowsWithSurfaces: 0,
-        skipped: {},
+        windowsConsidered: considered,
+        windowsWithSurfaces: withSurfaces,
+        skipped,
         listed,
         lastRefreshAt: Number.isFinite(snapshotAt) ? snapshotAt : 0,
-        frontMaximized: false,
-        tabStrips: { state: this.status.tabStrips, helperRunning: false, interest: interest.length, strips: 0, reads: 0, errors: 0, lastReadAt: 0, lastRejection: null },
-        recentErrors: [],
+        frontMaximized,
+        tabStrips: {
+          state: tabStrips ? tabStrips.status : 'unavailable',
+          helperRunning: svc?.helperRunning ?? false,
+          interest: svc?.interest ?? interest.length,
+          strips: svc?.strips ?? strips.length,
+          reads: svc?.reads ?? 0,
+          errors: svc?.errors ?? 0,
+          lastReadAt: svc?.lastReadAt ?? 0,
+          lastRejection,
+        },
+        recentErrors: recentErrors.map((r) => ({ ...r })),
       };
     },
 
@@ -1112,6 +1263,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
         snapshotAgeMs: Number.isFinite(snapshotAt) ? Math.max(0, Math.round(now - snapshotAt)) : null,
         injected: injected ? injected.list.length : null,
         interest: interest.length,
+        interestOpenTop,
         errors,
         taskbar,
         tabStrips: tabs,

@@ -4,8 +4,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export { createTabStripService, DEFAULT_TAB_STRIP_OPTIONS, TAB_STRIP_BROWSERS, tabStripSurfaceId } from './service';
-export type { TabStripDebug, TabStripServiceDeps, TabStripServiceImpl, TabStripServiceOptions } from './service';
+export { createTabStripService, DEFAULT_TAB_STRIP_OPTIONS, hasTabStripExtras, TAB_STRIP_BROWSERS, tabStripSurfaceId } from './service';
+export type { TabStripDebug, TabStripDiagnostics, TabStripServiceDeps, TabStripServiceExtras, TabStripServiceImpl, TabStripServiceOptions } from './service';
 export type { ChildProcessLike } from './client';
 export { computeTabStripSegment, catExtentPx } from './segment';
 export type { StripGeometry, TabStripSegment } from './segment';

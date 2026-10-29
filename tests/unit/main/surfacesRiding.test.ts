@@ -302,7 +302,12 @@ describe('climbing a browser through the real provider', () => {
       return m.step({ now: clock, dtMs: dt, dragCursor: null, getSurface: (id) => provider.getSurface(id, clock) });
     };
     step();
-    expect(m.climbOptions().map((o) => [o.dir, o.wallId, o.target.y])).toEqual([['up', 'windowSide:101:left', 400]]);
+    // v1.1.1: the strip carries the open top edge as its landing span (LedgeSurface.land), so a
+    // pull-up at the right corner, far from the strip's own span, lands on the edge too.
+    expect(m.climbOptions().map((o) => [o.dir, o.wallId, o.target.y])).toEqual([
+      ['up', 'windowSide:101:left', 400],
+      ['up', 'windowSide:101:right', 400],
+    ]);
     m.setGoal({ x: 1000, y: 400, pace: 'walk', allowJump: true, route: 'climb' });
     let wall: string | null = null;
     let arrived = false;
@@ -316,5 +321,51 @@ describe('climbing a browser through the real provider', () => {
     expect(arrived).toBe(true);
     expect(m.support).toMatchObject({ kind: 'surface', surfaceId: 'tabStrip:101' });
     expect(m.y).toBe(400);
+  });
+
+  it('a strip measured while the cat climbs does not take the top away from under it (v1.1.1, RC3)', () => {
+    const frame: Rect = { x: 800, y: 400, width: 700, height: 640 };
+    const api = new SurfaceApi().add(win('101', { ...frame }, { category: 'browser', processName: 'msedge.exe' }));
+    let clock = 1000;
+    const logger = createTestLogger();
+    const tracker = createWindowTracker(api, logger, { now: () => clock });
+    const display = { world: SINGLE, onChange: () => () => undefined } as unknown as DisplayService;
+    const tabs = new FakeTabs();
+    const provider = createSurfaceProvider({ logger, tracker, win32: api, taskbars: NO_TASKBARS, tabStrips: tabs, display, settings: defaultSettings(), now: () => clock, options: { cornerRadiusDip: 8 } });
+    tracker.start();
+    const m = new Mover(SINGLE, { size: 1, movementSpeed: 1, allowMultiMonitor: true, perchOnWindows: true }, { displayId: '1', xFrac: 0.25 });
+    const step = (dt = 16): MoverStep => {
+      clock += dt;
+      tracker.drainEvents();
+      const support = m.support;
+      provider.noteCat({ x: m.x, y: m.y, surfaceId: support.kind === 'surface' ? support.surfaceId : null });
+      m.sense(provider.getSurfaces(clock, 1000));
+      return m.step({ now: clock, dtMs: dt, dragCursor: null, getSurface: (id) => provider.getSurface(id, clock) });
+    };
+    step();
+    m.setGoal({ x: 1000, y: 400, pace: 'walk', allowJump: true, route: 'climb' });
+    let climbing = false;
+    let arrived = false;
+    for (let t = 0; t < 60_000 && !arrived; t += 16) {
+      const r = step();
+      expect(r.perchLost).toBe(false);
+      if (r.climbStarted && !climbing) {
+        climbing = true;
+        // The helper's first read of this browser lands a little after the cat got on its side.
+        tabs.ledges = [
+          {
+            id: 'tabStrip:101', kind: 'tabStrip', orientation: 'ledge', ownerId: '101', displayId: '1', phase: 'stable', vx: 0, vy: 0, confidence: 1, validatedAt: clock, excluded: false,
+            y: 400, x0: 850, x1: 1300, rest: null, focusX: null,
+          },
+        ];
+      }
+      arrived = r.goal === 'arrived';
+    }
+    expect(climbing).toBe(true);
+    expect(arrived).toBe(true);
+    // It pulled up onto the top it set out for, which stays while it stands there.
+    expect(m.support).toMatchObject({ kind: 'surface', surfaceId: 'windowTop:101' });
+    expect(m.y).toBe(400);
+    expect(provider.getSurfaces(clock, 1000).map((s) => s.id)).toContain('windowTop:101');
   });
 });

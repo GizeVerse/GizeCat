@@ -3,14 +3,15 @@
 import { describe, expect, it } from 'vitest';
 import type { DisplayService, TabStripService, TaskbarState, TaskbarTracker } from '../../../src/main/contracts';
 import { createSurfaceProvider, type SurfaceProviderOptions } from '../../../src/main/surfaces';
+import type { TabStripDiagnostics, TabStripServiceExtras } from '../../../src/main/uia';
 import type { Occluder } from '../../../src/main/win32/platforms';
 import { createUnavailableWin32Api } from '../../../src/main/win32/win32Api';
 import { createWindowTracker } from '../../../src/main/win32/windowTracker';
-import type { Point } from '../../../src/shared/geometry';
+import type { Point, Rect } from '../../../src/shared/geometry';
 import { defaultSettings, type Settings } from '../../../src/shared/settings';
 import type { SimEvent } from '../../../src/shared/sim';
 import type { LedgeSurface, Surface, SurfaceStatus, WallSurface } from '../../../src/shared/surfaces';
-import type { DisplayGeometry, WorldGeometry } from '../../../src/shared/world';
+import type { DisplayGeometry, WindowInfo, WorldGeometry } from '../../../src/shared/world';
 import { createTestLogger, FakeExtendedWin32Api, FakeWin32Api, rect, win } from '../win32/fakes';
 
 /** FakeExtendedWin32Api whose z-order (listOccluders) follows its app windows plus extra non-app windows on top. */
@@ -76,6 +77,19 @@ class FakeTabs implements TabStripService {
   }
   dispose(): Promise<void> {
     return Promise.resolve();
+  }
+}
+
+/** A tab-strip fake with the real service's extras (slow interest tier, typed diagnostics). */
+class TieredTabs extends FakeTabs implements TabStripServiceExtras {
+  slow: string[][] = [];
+  diag: TabStripDiagnostics = { state: 'active', helperRunning: true, interest: 2, strips: 1, reads: 7, errors: 1, lastReadAt: 900, lastRejection: null, lastRejectionAt: 0 };
+  override setInterest(ids: readonly string[], now: number, slow: readonly string[] = []): void {
+    super.setInterest(ids, now);
+    this.slow.push([...slow]);
+  }
+  diagnostics(): TabStripDiagnostics {
+    return { ...this.diag };
   }
 }
 
@@ -732,7 +746,7 @@ describe('tab strips', () => {
     expect(ids(s.tick())).toContain('tabStrip:102');
   });
 
-  it('get interest only for browser windows within reach of the cat (the foreground one is no exception), never private ones', () => {
+  it('get interest for browser windows within reach of the cat first (the foreground one is no exception), never private ones', () => {
     const api = new SurfaceApi()
       .add(browser('104', rect(300, 400, 800, 400)))
       .add(browser('105', rect(1300, 100, 500, 400)))
@@ -743,18 +757,19 @@ describe('tab strips', () => {
     s.provider.noteCat({ x: 420, y: 395, surfaceId: null });
     s.tick();
     const first = s.tabs!.interest.at(-1)!;
-    // The foreground browser is far from the cat: it is not polled.
-    expect(first.ids).toEqual(['104']);
+    // The foreground browser is far from the cat: it comes after the one within reach, only
+    // because its top edge is open (v1.1.1: far floating browsers are destinations too).
+    expect(first.ids).toEqual(['104', '105']);
     // Rate-limited.
     const n = s.tabs!.interest.length;
     s.tick(100);
     expect(s.tabs!.interest.length).toBe(n);
     s.run(600);
-    expect(s.tabs!.interest.every((c) => !c.ids.includes('105') && !c.ids.includes('106') && !c.ids.includes('107'))).toBe(true);
-    // The cat comes over to it.
+    expect(s.tabs!.interest.every((c) => !c.ids.includes('106') && !c.ids.includes('107'))).toBe(true);
+    // The cat comes over to it: now it is the one within reach.
     s.provider.noteCat({ x: 1500, y: 120, surfaceId: null });
     s.run(600);
-    expect(s.tabs!.interest.at(-1)!.ids).toEqual(['105']);
+    expect(s.tabs!.interest.at(-1)!.ids).toEqual(['105', '104']);
     // Hidden cat (still on its surface): interest is withdrawn once, then nothing more is sent.
     s.provider.noteCat({ x: 1500, y: 100, surfaceId: 'windowTop:105', hidden: true });
     s.run(600);
@@ -777,6 +792,285 @@ describe('tab strips', () => {
     }
     expect(ledge(s.tick(), 'windowTop:101')).toMatchObject({ x0: 850, x1: 1092 });
     expect(s.provider.getSurface('windowTop:101', s.now())).toMatchObject({ x0: 850, x1: 1092 });
+  });
+});
+
+describe('tab-strip interest beyond reach (v1.1.1)', () => {
+  const browser = (id: string, r: Rect, over: Partial<WindowInfo> = {}) => win(id, r, { category: 'browser', processName: 'msedge.exe', ...over });
+
+  it('adds the nearest far browsers whose top edge is open (at most 3, slow rate), never maximized, covered, private or unsupported ones', () => {
+    const api = new SurfaceApi()
+      .add(browser('208', rect(100, 300, 300, 200), { processName: 'firefox.exe' }))
+      .add(browser('207', rect(600, 950, 300, 150), { excluded: true }))
+      .add(browser('204', rect(1300, 800, 500, 300)))
+      .add(browser('203', rect(1300, 400, 400, 300), { processName: 'chrome.exe' }))
+      .add(browser('202', rect(700, 600, 400, 300)))
+      .add(browser('201', rect(100, 700, 400, 300)))
+      // Below 201: its top edge and sides are hidden behind it.
+      .add(browser('206', rect(150, 750, 300, 200)), false)
+      // At the bottom, maximized: it offers nothing.
+      .add(browser('205', rect(0, 0, 1920, 1152), { maximized: true }), false);
+    const tabs = new TieredTabs();
+    const s = setup({ api, tabs });
+    // On the floor nothing is within reach (300 DIP): the three nearest open tops are measured,
+    // at the slow rate. 206 (covered), 207 (private), 208 (Firefox) and 205 (maximized) would
+    // each be nearer than 204.
+    s.provider.noteCat({ x: 200, y: 1152, surfaceId: null });
+    s.tick();
+    expect(tabs.interest.at(-1)!.ids).toEqual(['201', '202', '204']);
+    expect(tabs.slow.at(-1)).toEqual(['201', '202', '204']);
+    expect(s.provider.debugInfo()).toMatchObject({ interest: 3, interestOpenTop: 3 });
+    // Next to 203's top: within reach (normal rate) and first; the nearest open tops fill the
+    // bound of 4.
+    s.provider.noteCat({ x: 1500, y: 390, surfaceId: null });
+    s.run(600);
+    expect(tabs.interest.at(-1)!.ids).toEqual(['203', '204', '202', '201']);
+    expect(tabs.slow.at(-1)).toEqual(['204', '202', '201']);
+    for (const id of ['205', '206', '207', '208']) expect(tabs.interest.some((c) => c.ids.includes(id)), id).toBe(false);
+    // Clinging to 201's side: the window it is attached to leads, at the normal rate.
+    s.provider.noteCat({ x: 100, y: 900, surfaceId: 'windowSide:201:left' });
+    s.run(600);
+    expect(tabs.interest.at(-1)!.ids[0]).toBe('201');
+    expect(tabs.slow.at(-1)).not.toContain('201');
+  });
+
+  it('only browsers on the cat\'s display while multi-monitor roaming is off', () => {
+    const settings = defaultSettings();
+    settings.behavior.allowMultiMonitor = false;
+    const api = new SurfaceApi().add(browser('301', rect(2200, 300, 800, 500))).add(browser('302', rect(300, 300, 800, 500)));
+    const tabs = new TieredTabs();
+    const s = setup({ api, tabs, settings, displays: [disp('1', 0, 0, 1920, 1200), disp('2', 1920, 0, 1920, 1200)] });
+    s.provider.noteCat({ x: 1800, y: 1152, surfaceId: null });
+    s.tick();
+    expect(tabs.interest.at(-1)!.ids).toEqual(['302']);
+    // Roaming on: the nearer one on the other display comes first.
+    s.provider.updateSettings(defaultSettings());
+    s.run(600);
+    expect(tabs.interest.at(-1)!.ids).toEqual(['301', '302']);
+  });
+});
+
+describe('tab strips and the window top (v1.1.1)', () => {
+  const browser = (id: string, r = rect(300, 200, 1100, 700)) => win(id, r, { category: 'browser', processName: 'msedge.exe' });
+  // A palette over the tab area: only the caption end of the top edge, [1270, 1392), is open.
+  const palette: Occluder = { id: 'palette', rect: rect(330, 150, 940, 100) };
+
+  it('a strip with no open part leaves the plain top listed, so the sides keep a ledge to pull up onto', () => {
+    const api = new SurfaceApi().add(browser('102'));
+    api.extras = [palette];
+    const s = setup({ api });
+    s.tabs!.ledges = [stripLedge('102')];
+    const list = s.tick();
+    expect(byId(list, 'tabStrip:102')).toBeUndefined();
+    expect(ledge(list, 'windowTop:102')).toMatchObject({ x0: 1270, x1: 1392 });
+    expect(wall(list, 'windowSide:102:right').topLedgeId).toBe('windowTop:102');
+    expect(s.provider.diagnostics().tabStrips.lastRejection).toBe('covered');
+    // The palette goes away: the strip replaces the top again.
+    api.extras = [];
+    api.foregroundId = '102';
+    api.fire('foreground', '102');
+    const back = s.run(200);
+    expect(ledge(back, 'tabStrip:102')).toMatchObject({ x0: 341, x1: 1250, land: { x0: 308, x1: 1392 } });
+    expect(byId(back, 'windowTop:102')).toBeUndefined();
+    expect(s.provider.diagnostics().tabStrips.lastRejection).toBeNull();
+  });
+
+  it('a strip ledge carries the open top edge it lies on as its landing span', () => {
+    const api = new SurfaceApi().add(browser('102'));
+    api.extras = [{ id: 'tool', rect: rect(1300, 100, 200, 200) }];
+    const s = setup({ api });
+    s.tabs!.ledges = [stripLedge('102')];
+    const list = s.tick();
+    // The open edge runs from the left corner to the tool window: what the plain top would be.
+    expect(ledge(list, 'tabStrip:102')).toMatchObject({ x0: 341, x1: 1250, land: { x0: 308, x1: 1300 } });
+    expect(s.provider.getSurface('windowTop:102', s.now())).toMatchObject({ x0: 308, x1: 1300 });
+    expect(s.provider.getSurface('tabStrip:102', s.now() + 5)).toMatchObject({ land: { x0: 308, x1: 1300 } });
+    expect([wall(list, 'windowSide:102:left').topLedgeId, wall(list, 'windowSide:102:right').topLedgeId]).toEqual(['tabStrip:102', null]);
+  });
+
+  it('a cat on the landing part of a strip (after a corner pull-up) is on it: no recompute every tick while it walks', () => {
+    const api = new SurfaceApi().add(browser('102'));
+    const s = setup({ api });
+    s.tabs!.ledges = [stripLedge('102')];
+    s.tick();
+    s.provider.noteCat({ x: 310, y: 200, surfaceId: 'tabStrip:102' });
+    s.tick();
+    const before = s.provider.debugInfo().recomputes;
+    for (let x = 312; x < 340; x += 2) {
+      s.provider.noteCat({ x, y: 200, surfaceId: 'tabStrip:102' });
+      s.tick();
+    }
+    expect(s.provider.debugInfo().recomputes).toBe(before);
+    expect(ledge(s.tick(), 'tabStrip:102')).toMatchObject({ x0: 341, x1: 1250, land: { x0: 308, x1: 1392 } });
+  });
+
+  it('a strip found while the cat clings to a side waits: the top it set out for stays listed until it leaves', () => {
+    const api = new SurfaceApi().add(browser('102'));
+    const s = setup({ api });
+    let list = s.tick();
+    expect(wall(list, 'windowSide:102:left').topLedgeId).toBe('windowTop:102');
+    s.provider.noteCat({ x: 300, y: 700, surfaceId: 'windowSide:102:left' });
+    s.tick();
+    s.tabs!.ledges = [stripLedge('102')];
+    list = s.tick();
+    expect(ledge(list, 'windowTop:102')).toMatchObject({ x0: 308, x1: 1392 });
+    expect(byId(list, 'tabStrip:102')).toBeUndefined();
+    expect(wall(list, 'windowSide:102:left').topLedgeId).toBe('windowTop:102');
+    expect(s.provider.getSurface('windowSide:102:left', s.now())).toMatchObject({ topLedgeId: 'windowTop:102' });
+    // Climbing on (the reported spot moves up the side): still the same top.
+    for (let y = 660; y >= 220; y -= 40) {
+      s.provider.noteCat({ x: 300, y, surfaceId: 'windowSide:102:left' });
+      expect(wall(s.tick(), 'windowSide:102:left').topLedgeId, `y ${y}`).toBe('windowTop:102');
+    }
+    // It pulls up onto that top, which stays while the cat stands on it ...
+    s.provider.noteCat({ x: 320, y: 200, surfaceId: 'windowTop:102' });
+    expect(ids(s.tick())).toContain('windowTop:102');
+    // ... and the strip takes over once it has left.
+    s.provider.noteCat({ x: 1500, y: 1152, surfaceId: null });
+    list = s.tick();
+    expect(byId(list, 'windowTop:102')).toBeUndefined();
+    expect(ledge(list, 'tabStrip:102')).toMatchObject({ x0: 341, x1: 1250 });
+  });
+
+  it('a strip lost or covered while the cat clings to a side goes on along the top edge under its id', () => {
+    const api = new SurfaceApi().add(browser('102'));
+    const s = setup({ api });
+    s.tabs!.ledges = [stripLedge('102')];
+    let list = s.tick();
+    expect(wall(list, 'windowSide:102:right').topLedgeId).toBe('tabStrip:102');
+    s.provider.noteCat({ x: 1400, y: 700, surfaceId: 'windowSide:102:right' });
+    s.tick();
+    // The helper restarted: the strip is gone for now.
+    s.tabs!.ledges = [];
+    list = s.tick();
+    expect(ledge(list, 'tabStrip:102')).toMatchObject({ kind: 'tabStrip', y: 200, x0: 308, x1: 1392, confidence: 0.5 });
+    expect(byId(list, 'windowTop:102')).toBeUndefined();
+    expect(wall(list, 'windowSide:102:right').topLedgeId).toBe('tabStrip:102');
+    expect(s.provider.getSurface('tabStrip:102', s.now() + 5)).toMatchObject({ id: 'tabStrip:102', x0: 308, x1: 1392 });
+    // Back, but covered by a palette: still the open edge under the strip's id.
+    s.tabs!.ledges = [stripLedge('102')];
+    api.extras = [palette];
+    api.foregroundId = 'palette';
+    api.fire('foreground', 'palette');
+    list = s.run(200);
+    expect(ledge(list, 'tabStrip:102')).toMatchObject({ x0: 1270, x1: 1392, confidence: 0.5 });
+    expect(wall(list, 'windowSide:102:right').topLedgeId).toBe('tabStrip:102');
+    // The palette goes while the cat climbs on: the real strip again (same id, its own span).
+    api.extras = [];
+    api.foregroundId = '102';
+    api.fire('foreground', '102');
+    s.provider.noteCat({ x: 1400, y: 400, surfaceId: 'windowSide:102:right' });
+    list = s.run(200);
+    expect(ledge(list, 'tabStrip:102')).toMatchObject({ x0: 341, x1: 1250, land: { x0: 308, x1: 1392 } });
+    // Off the side nothing is held: with the strip lost, the plain top is back.
+    s.provider.noteCat({ x: 1500, y: 1152, surfaceId: null });
+    s.tabs!.ledges = [];
+    list = s.tick();
+    expect(ledge(list, 'windowTop:102')).toMatchObject({ x0: 308, x1: 1392 });
+    expect(byId(list, 'tabStrip:102')).toBeUndefined();
+  });
+});
+
+describe('diagnostics (v1.1.1)', () => {
+  // The user's machine: one 1920x1200 px display at 125 %, auto-hide taskbar (work area = full
+  // screen). Window geometry SIMULATED after the report's layout snapshot.
+  const screen = [disp('1', 0, 0, 1920, 1200, 1.25, 1200)];
+  const chrome = (id: string, r: Rect, over: Partial<WindowInfo> = {}) => win(id, r, { category: 'browser', processName: 'chrome.exe', ...over });
+  const quietTabs = (): TieredTabs => {
+    const tabs = new TieredTabs();
+    tabs.diag = { state: 'idle', helperRunning: false, interest: 0, strips: 0, reads: 0, errors: 0, lastReadAt: 0, lastRejection: null, lastRejectionAt: 0 };
+    return tabs;
+  };
+
+  it('a maximized window in front covers every other one: nothing listed, no browser measured', () => {
+    const api = new SurfaceApi()
+      .add(win('406', rect(200, 120, 1100, 800)))
+      .add(chrome('405', rect(400, 300, 1000, 700)))
+      .add(win('404', rect(900, 200, 900, 800)))
+      .add(win('403', rect(100, 400, 800, 700)))
+      .add(win('402', rect(0, 0, 1920, 1200), { maximized: true }))
+      .add(chrome('401', rect(0, 0, 1920, 1200), { maximized: true }))
+      .add(win('400', rect(0, 0, 1920, 1200), { maximized: true }))
+      .add(win('407', rect(300, 300, 800, 600), { minimized: true }), false);
+    api.foregroundId = '400';
+    const tabs = quietTabs();
+    const s = setup({ api, tabs, displays: screen });
+    s.provider.noteCat({ x: 960, y: 1196, surfaceId: null });
+    s.run(1000);
+    const d = s.provider.diagnostics();
+    expect(d).toMatchObject({ windowsConsidered: 8, windowsWithSurfaces: 0, frontMaximized: true, listed: { taskbar: 0, windowTop: 0, windowSide: 0, tabStrip: 0 }, recentErrors: [] });
+    expect(d.skipped).toEqual({ maximized: 3, covered: 4, minimized: 1 });
+    expect(d.lastRefreshAt).toBeGreaterThan(1000);
+    // No candidate: the service is never asked (the helper stays idle).
+    expect(tabs.interest).toEqual([]);
+    expect(d.tabStrips).toEqual({ state: 'idle', helperRunning: false, interest: 0, strips: 0, reads: 0, errors: 0, lastReadAt: 0, lastRejection: null });
+  });
+
+  it('a floating browser in front: listed, measured from the floor, the window behind the maximized one counted as covered', () => {
+    const api = new SurfaceApi()
+      .add(win('503', rect(200, 200, 600, 500)))
+      .add(win('502', rect(0, 0, 1920, 1200), { maximized: true }))
+      .add(chrome('501', rect(308, 140, 976, 752)));
+    const tabs = new TieredTabs();
+    tabs.status = 'active';
+    const s = setup({ api, tabs, displays: screen });
+    s.provider.noteCat({ x: 960, y: 1196, surfaceId: null });
+    s.tick();
+    const d = s.provider.diagnostics();
+    expect(d).toMatchObject({ windowsConsidered: 3, windowsWithSurfaces: 1, frontMaximized: false, listed: { taskbar: 0, windowTop: 1, windowSide: 2, tabStrip: 0 } });
+    expect(d.skipped).toEqual({ maximized: 1, covered: 1 });
+    expect(tabs.interest.at(-1)!.ids).toEqual(['501']);
+    expect(tabs.slow.at(-1)).toEqual(['501']);
+    // The service's own counts come through its typed getter.
+    expect(d.tabStrips).toEqual({ state: 'active', helperRunning: true, interest: 2, strips: 1, reads: 7, errors: 1, lastReadAt: 900, lastRejection: null });
+  });
+
+  it('reports the newer of the service\'s and the provider\'s reasons for a missing strip', () => {
+    const api = new SurfaceApi().add(win('102', rect(300, 200, 1100, 700), { category: 'browser', processName: 'msedge.exe' }));
+    api.extras = [{ id: 'palette', rect: rect(330, 150, 940, 100) }];
+    const tabs = new TieredTabs();
+    const s = setup({ api, tabs });
+    tabs.ledges = [stripLedge('102')];
+    s.tick();
+    tabs.diag = { ...tabs.diag, lastRejection: 'noHeadroom', lastRejectionAt: s.now() - 500 };
+    expect(s.provider.diagnostics().tabStrips.lastRejection).toBe('covered');
+    tabs.diag = { ...tabs.diag, lastRejection: 'timeout', lastRejectionAt: s.now() + 500 };
+    expect(s.provider.diagnostics().tabStrips.lastRejection).toBe('timeout');
+  });
+
+  it('counts why each window offers nothing; private windows are only counted', () => {
+    const settings = defaultSettings();
+    settings.behavior.disabledBehaviors = ['climbWindows'];
+    const api = new SurfaceApi()
+      .add(win('601', rect(300, 400, 800, 500), { excluded: true }))
+      .add(win('602', rect(1500, 300, 60, 60)))
+      .add(win('603', rect(-3000, 300, 800, 500)))
+      .add(win('604', rect(0, 0, 1920, 1200), { fullscreen: true }), false)
+      .add(win('605', rect(0, 0, 1920, 1152)), false)
+      .add(win('606', rect(1700, 500, 60, 400)))
+      .add(win('607', rect(1200, 600, 300, 300)));
+    const s = setup({ api, settings });
+    s.tick();
+    const d = s.provider.diagnostics();
+    expect(d.skipped).toEqual({ excluded: 1, tooSmall: 1, offScreen: 1, fullscreen: 1, coversWorkArea: 1, disabled: 1 });
+    expect([d.windowsConsidered, d.windowsWithSurfaces, d.listed.windowTop]).toEqual([7, 1, 1]);
+  });
+
+  it('keeps the last 10 problems as codes, newest last', () => {
+    class ThrowingTabs extends FakeTabs {
+      override surfaces(): readonly LedgeSurface[] {
+        throw new Error('C:\\Users\\someone\\secret.txt');
+      }
+    }
+    const s = setup({ api: new SurfaceApi().add(win('101', rect(300, 400, 800, 500))), tabs: new ThrowingTabs() });
+    for (let i = 0; i < 15; i++) s.tick();
+    const errs = s.provider.diagnostics().recentErrors;
+    expect(errs).toHaveLength(10);
+    expect(errs.every((e) => e.source === 'tabStrips' && e.kind === 'tabStrips')).toBe(true);
+    expect(errs.map((e) => e.at)).toEqual([...errs.map((e) => e.at)].sort((a, b) => a - b));
+    expect(errs.at(-1)!.at).toBe(s.now());
+    expect(JSON.stringify(errs)).not.toContain('secret');
+    expect(s.provider.debugInfo().errors).toBe(15);
   });
 });
 
