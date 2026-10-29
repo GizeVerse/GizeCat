@@ -9,6 +9,9 @@
 // the host's tick drives all work, so the cost is bounded by the tick rate.
 // Move and close events carry the window's tracked `excluded` flag so the cat leaves
 // private windows alone; private windows never offer a perch platform.
+// Incremental consumers (the surface provider) subscribe to change notices through
+// onChange(): raw hook events as they are ingested, settled window changes, z-order
+// (foreground) changes and "anything may have changed". Notices carry ids only.
 import type { Point, Rect } from '../../shared/geometry';
 import type { SimEvent } from '../../shared/sim';
 import type { Platform, WindowInfo, WorldGeometry } from '../../shared/world';
@@ -41,8 +44,28 @@ export interface WindowTrackerDebug {
   switchesPerMinute: number;
 }
 
+/** A change notice of the tracker's window model (ids and kinds only, never titles). */
+export type WindowChange =
+  /** A window's burst settled (or the reconcile saw it change): `windowInfo(id)` is current. */
+  | { kind: 'window'; id: string; change: 'shown' | 'closed' | 'updated' | 'minimized' | 'restored'; at: number }
+  /** A raw hook event was ingested, before its burst settles (a drag or a minimize starting). */
+  | { kind: 'raw'; id: string; raw: Exclude<RawWinEvent['kind'], 'foreground'>; at: number }
+  /** The foreground window changed, so the z-order did too (`id` is the raw foreground HWND). */
+  | { kind: 'zorder'; id: string | null; at: number }
+  /** Anything may have changed (tracking started or stopped, exclusions changed, event overflow). */
+  | { kind: 'all'; at: number };
+
 export interface WindowTrackerExtras {
   debugInfo(): WindowTrackerDebug;
+  readonly running: boolean;
+  /** Subscribes to change notices; they are delivered synchronously from drainEvents(), start(), stop() and setExclusions(). */
+  onChange(listener: (change: WindowChange) => void): Unsubscribe;
+  /** Tracked info of an app window (no OS call), null when it is not tracked. */
+  windowInfo(id: string): WindowInfo | null;
+  /** App windows in z-order (top first) from an enumeration at most `maxAgeMs` old; [] when not running. */
+  listWindows(maxAgeMs: number): readonly WindowInfo[];
+  /** True while the window is being moved or sized (a move/size start without its end). */
+  isMoving(id: string): boolean;
 }
 
 type RawKind = RawWinEvent['kind'];
@@ -77,6 +100,17 @@ const MASK_EVERYTHING: Rect = Object.freeze({ x: -(2 ** 31), y: -(2 ** 31), widt
 const moved = (a: Rect, b: Rect): boolean =>
   Math.abs(a.x - b.x) > 2 || Math.abs(a.y - b.y) > 2 || Math.abs(a.width - b.width) > 2 || Math.abs(a.height - b.height) > 2;
 
+/** Any change a geometry consumer cares about: the exact rect, the state flags or the privacy verdict. */
+const infoChanged = (a: WindowInfo, b: WindowInfo): boolean =>
+  a.rect.x !== b.rect.x ||
+  a.rect.y !== b.rect.y ||
+  a.rect.width !== b.rect.width ||
+  a.rect.height !== b.rect.height ||
+  a.minimized !== b.minimized ||
+  a.maximized !== b.maximized ||
+  a.fullscreen !== b.fullscreen ||
+  a.excluded !== b.excluded;
+
 export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowTrackerOptions = {}): WindowTracker & WindowTrackerExtras {
   const log = logger.child('windows');
   const now = opts.now ?? (() => performance.now());
@@ -92,6 +126,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
   const switchTimes: number[] = [];
   const rules = new ExclusionRules();
   const extended = hasWin32Extensions(api) ? api : null;
+  const listeners = new Set<(change: WindowChange) => void>();
 
   let mode: WindowTracker['mode'] = api.available ? 'polling' : 'unavailable';
   let running = false;
@@ -110,6 +145,24 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
   let errorCount = 0;
 
   const emit = (e: SimEvent): void => out.push(e);
+
+  function notify(change: WindowChange): void {
+    for (const listener of listeners) {
+      try {
+        listener(change);
+      } catch (e) {
+        reportError('changeListener', e);
+      }
+    }
+  }
+
+  /** Replaces a tracked window's info and notices consumers when anything relevant changed. */
+  function updateInfo(entry: Tracked, info: WindowInfo, t: number): void {
+    const before = entry.info;
+    entry.info = info;
+    if (!info.minimized) entry.lastRect = info.rect;
+    if (infoChanged(before, info)) notify({ kind: 'window', id: info.id, change: 'updated', at: t });
+  }
 
   /** Applies tracker-level process rules for APIs that cannot evaluate exclusions themselves. */
   const withRules = (info: WindowInfo | null): WindowInfo | null =>
@@ -161,6 +214,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
           // A storm of distinct windows: let a full reconcile sort it out.
           pendingOverflows++;
           forceReconcile = true;
+          notify({ kind: 'all', at: ev.at });
           continue;
         }
         p = { firstAt: ev.at, lastAt: ev.at, lastMove: null, sawMoveStart: false, sawMoveEnd: false };
@@ -174,6 +228,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
         p.sawMoveEnd = true;
         p.lastMove = 'moveEnd';
       }
+      notify({ kind: 'raw', id: ev.id, raw: ev.kind, at: ev.at });
     }
   }
 
@@ -210,6 +265,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
         windows.delete(id);
         emit({ type: 'window.closed', id, rect: prev.lastRect, category: prev.info.category, excluded: prev.info.excluded });
         invalidateGeometry();
+        notify({ kind: 'window', id, change: 'closed', at: t });
       }
       return;
     }
@@ -218,17 +274,21 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       emit({ type: 'window.shown', window: info });
       settleMoves(id, entry, p, null, t);
       invalidateGeometry();
+      notify({ kind: 'window', id, change: 'shown', at: t });
       return;
     }
     const wasMinimized = prev.info.minimized;
     const prevRect = prev.lastRect;
     prev.info = info;
     if (!info.minimized) prev.lastRect = info.rect;
+    let change: 'updated' | 'minimized' | 'restored' = 'updated';
     if (!wasMinimized && info.minimized) {
       prev.moving = false;
       emit({ type: 'window.minimized', id });
+      change = 'minimized';
     } else if (wasMinimized && !info.minimized) {
       emit({ type: 'window.restored', window: info });
+      change = 'restored';
     }
     settleMoves(id, prev, p, prevRect, t);
     if (fg && fg.id === id) {
@@ -236,12 +296,15 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       fgRefreshedAt = t;
     }
     invalidateGeometry();
+    // A settled burst always re-validates the window (a drag may have ended where it began).
+    notify({ kind: 'window', id, change, at: t });
   }
 
   function settleForeground(t: number): void {
     fgPending = null;
     const id = api.getForegroundWindowId();
     const info = id ? describe(id) : null;
+    const prevRawId = fgRawId;
     fgRawId = id;
     fgRefreshedAt = t;
     const prevAppId = fg?.id ?? null;
@@ -252,11 +315,13 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
         track(info);
         emit({ type: 'window.shown', window: info });
         invalidateGeometry();
+        notify({ kind: 'window', id: info.id, change: 'shown', at: t });
       } else if (!pending.has(info.id)) {
-        known.info = info;
-        if (!info.minimized) known.lastRect = info.rect;
+        updateInfo(known, info, t);
       }
     }
+    // Any window coming to the front (owned dialogs and tool windows too) reorders the z-order.
+    if (id !== prevRawId) notify({ kind: 'zorder', id, at: t });
     if ((info?.id ?? null) === prevAppId) return;
     switchTimes.push(t);
     if (switchTimes.length > MAX_SWITCH_SAMPLES) switchTimes.shift();
@@ -278,10 +343,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
     fg = fgRawId ? describe(fgRawId) : null;
     if (fg) {
       const known = windows.get(fg.id);
-      if (known && !pending.has(fg.id)) {
-        known.info = fg;
-        if (!fg.minimized) known.lastRect = fg.rect;
-      }
+      if (known && !pending.has(fg.id)) updateInfo(known, fg, t);
     }
   }
 
@@ -297,13 +359,16 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       const prev = windows.get(info.id);
       if (!prev) {
         track(info);
-        if (emitEvents) emit({ type: 'window.shown', window: info });
+        // The silent start-up reconcile announces nothing per window (start() notices 'all').
+        if (emitEvents) {
+          emit({ type: 'window.shown', window: info });
+          notify({ kind: 'window', id: info.id, change: 'shown', at: t });
+        }
         continue;
       }
       const wasMinimized = prev.info.minimized;
       const prevRect = prev.lastRect;
-      prev.info = info;
-      if (!info.minimized) prev.lastRect = info.rect;
+      updateInfo(prev, info, t);
       if (!emitEvents) continue;
       if (!wasMinimized && info.minimized) {
         prev.moving = false;
@@ -324,6 +389,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       if (seen.has(id) || pending.has(id)) continue;
       windows.delete(id);
       if (emitEvents) emit({ type: 'window.closed', id, rect: prev.lastRect, category: prev.info.category, excluded: prev.info.excluded });
+      notify({ kind: 'window', id, change: 'closed', at: t });
     }
     platformCache = null;
   }
@@ -374,6 +440,10 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       return mode;
     },
 
+    get running() {
+      return running;
+    },
+
     start() {
       if (running) return;
       if (!api.available) {
@@ -400,6 +470,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
         reportError('start', e);
       }
       log.info('window tracking started', { mode, windows: windows.size });
+      notify({ kind: 'all', at: now() });
     },
 
     stop() {
@@ -415,6 +486,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       pending.clear();
       fgPending = null;
       invalidateGeometry();
+      notify({ kind: 'all', at: now() });
     },
 
     drainEvents() {
@@ -536,6 +608,7 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
       invalidateGeometry();
       fgRefreshedAt = -Infinity;
       forceReconcile = true;
+      notify({ kind: 'all', at: now() });
     },
 
     debugInfo(): WindowTrackerDebug {
@@ -549,6 +622,33 @@ export function createWindowTracker(api: Win32Api, logger: Logger, opts: WindowT
         pendingOverflows,
         switchesPerMinute: switchesPerMinute(now()),
       };
+    },
+
+    onChange(listener: (change: WindowChange) => void): Unsubscribe {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+
+    windowInfo(id: string): WindowInfo | null {
+      return windows.get(id)?.info ?? null;
+    },
+
+    listWindows(maxAgeMs: number): readonly WindowInfo[] {
+      if (!running) return [];
+      try {
+        return freshList(now(), maxAgeMs);
+      } catch (e) {
+        reportError('listWindows', e);
+        return [];
+      }
+    },
+
+    isMoving(id: string): boolean {
+      if (windows.get(id)?.moving === true) return true;
+      // A move/size start not settled yet (the burst is still pending).
+      return pending.get(id)?.lastMove === 'moveStart';
     },
   };
 }

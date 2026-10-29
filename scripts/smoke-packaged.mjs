@@ -2,7 +2,9 @@
 // Smoke test for the packaged app (fuses on, so Playwright cannot drive it).
 // Launches release/win-unpacked/DesktopCat.exe with a temporary userData directory,
 // waits, reads its log, checks single-instance behaviour, then stops the process
-// it started (only that PID tree).
+// it started (only that PID tree). DESKTOP_CAT_LOGIN_ITEM=off keeps it from ever writing
+// the HKCU Run entry, on top of the write gate's uninstaller check (install-test.ps1 runs
+// this script against an installed copy, which has an uninstaller).
 //
 //   node scripts/with-lock.mjs smoke -- node scripts/smoke-packaged.mjs [path-to-exe]
 import { spawn, spawnSync } from 'node:child_process';
@@ -18,7 +20,7 @@ if (!fs.existsSync(exe)) {
   process.exit(2);
 }
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'dcat-smoke-'));
-const env = { ...process.env, DESKTOP_CAT_USER_DATA: userData };
+const env = { ...process.env, DESKTOP_CAT_USER_DATA: userData, DESKTOP_CAT_LOGIN_ITEM: 'off' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const result = { exe: path.relative(root, exe), checks: {} };
 
@@ -50,6 +52,11 @@ try {
   result.checks.warnings = lines.filter((l) => l.l === 'warn').map((l) => `${l.s}: ${l.m}`);
   result.checks.windowAwareness = lines.filter((l) => /hook|polling|win32/i.test(`${l.s} ${l.m}`)).map((l) => l.m).slice(0, 5);
   result.checks.settingsWritten = fs.existsSync(path.join(userData, 'settings.json'));
+  // The login item is reconciled with the gate closed and never written.
+  const reconciled = lines.filter((l) => l.m === 'login item reconciled').map((l) => l.d ?? {});
+  result.checks.loginItemRules = reconciled.map((d) => d.rule);
+  result.checks.loginItemGateClosedByEnv = reconciled.length > 0 && reconciled.every((d) => Array.isArray(d.gate) && d.gate.includes('env-off'));
+  result.checks.loginItemWrites = lines.filter((l) => l.m === 'login item written').length;
 } finally {
   if (firstExit === null) spawnSync('taskkill', ['/PID', String(first.pid), '/T', '/F'], { stdio: 'ignore' });
   await sleep(1000);
@@ -61,5 +68,8 @@ const ok =
   result.checks.secondInstanceExitCode === 0 &&
   result.checks.firstSurvivedSecondLaunch &&
   result.checks.errors.length === 0 &&
-  result.checks.logLines > 0;
+  result.checks.logLines > 0 &&
+  result.checks.loginItemWrites === 0 &&
+  result.checks.loginItemGateClosedByEnv &&
+  result.checks.loginItemRules.every((r) => r === 'gate-closed');
 process.exit(ok ? 0 : 1);

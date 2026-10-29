@@ -1,19 +1,27 @@
-// The cat's body: grounded locomotion along surfaces, perch riding, anticipation
-// crouch, ballistic jumps, free fall with wall bounces, and being dragged/thrown.
-// Everything is in physical px; DIP constants are scaled by the display under the cat.
+// The cat's body: grounded locomotion along surfaces, riding moving ledges (window tops,
+// taskbars, tab strips), being lifted and lowered by them, climbing window sides, the
+// anticipation crouch, ballistic jumps, free fall with wall bounces, and being
+// dragged/thrown. Everything is in physical px; DIP constants are scaled by the display
+// under the cat. Routes across surfaces come from the SurfaceGraph.
 import { CAT_BASE_WIDTH_DIP, type Facing } from '../../shared/cat';
 import { heldScruffOffset, HELD_SETTLE_MS } from '../interaction/held';
 import type { Point, Rect } from '../../shared/geometry';
-import { clamp, isFiniteRect, rectBottom, rectRight } from '../../shared/geometry';
+import { clamp } from '../../shared/geometry';
 import type { SimSupport } from '../../shared/sim';
-import type { Platform, WorldGeometry } from '../../shared/world';
+import type { LedgeSurface, Surface as EnvSurface, SurfaceKind, WallSurface } from '../../shared/surfaces';
+import type { WorldGeometry } from '../../shared/world';
 import { ARRIVE_RADIUS_DIP, MOVEMENT } from './constants';
 import type { JumpPlan } from './jump';
 import { ballistic, clearanceFor, descendingCrossing, jumpAt, sampleArc, solveJump } from './jump';
-import type { FloorPiece, Surface, SurfacePoint } from './world';
+import type { GraphNode, Route, RouteParams } from './surfaceGraph';
+import { edgeId, SurfaceGraph } from './surfaceGraph';
+import type { FloorPiece, Surface, SurfacePoint, WallTrack } from './world';
 import { sameSurface, WorldModel } from './world';
 
 export type Pace = 'slow' | 'walk' | 'run' | 'chase';
+
+/** 'climb': the cat chose to climb (climbing is strongly preferred); 'noClimb': never via a wall. */
+export type RoutePreference = 'any' | 'climb' | 'noClimb';
 
 export interface MoveGoal {
   x: number;
@@ -23,22 +31,37 @@ export interface MoveGoal {
   allowJump: boolean;
   /** Arrival tolerance in px; defaults to ~3 DIP. */
   arriveRadiusPx?: number;
+  /** How to get there across surfaces (default 'any'). */
+  route?: RoutePreference;
 }
 
 export interface MoverConfig {
   size: number;
   movementSpeed: number;
   allowMultiMonitor: boolean;
+  /** Window tops ('Sit on windows'). */
   perchOnWindows: boolean;
+  /** Taskbars as moving ledges ('taskbarPlay'; default true). */
+  taskbars?: boolean;
+  /** Climbing window sides ('climbWindows'; default true; also needs window tops). */
+  walls?: boolean;
+  /** Browser tab strips ('tabStrips'; default true). */
+  tabStrips?: boolean;
+  /** Personality multipliers for route effort (1 = neutral; higher = avoids that kind of move). */
+  jumpEffort?: number;
+  climbEffort?: number;
 }
 
 export interface MoverInput {
   now: number;
   dtMs: number;
   dragCursor: Point | null;
-  getWindowRect: (id: string) => Rect | null;
-  /** Windows the user is currently moving (platform list may lag for these). */
-  movingWindowIds: ReadonlySet<string>;
+  /** Live geometry of one surface by id (the one the cat is attached to or jumping onto), or null when gone. */
+  getSurface?: (id: string) => EnvSurface | null;
+  /** Windows the user is currently moving (the surface list may lag for these). */
+  movingWindowIds?: ReadonlySet<string>;
+  /** @deprecated v1 window-rect lookup. Ignored: riding uses `getSurface`. Accepted so older callers compile. */
+  getWindowRect?: (id: string) => Rect | null;
 }
 
 export interface LandingInfo {
@@ -55,22 +78,60 @@ export interface LandingInfo {
 
 export type GoalStatus = 'none' | 'moving' | 'arrived' | 'unreachable';
 
+/**
+ * Why the cat lost the surface it stood on or clung to:
+ * gone       getSurface returned null (window closed/minimized/maximized, surface removed);
+ * retracted  a taskbar slid away under it, or its ledge sank below the floor;
+ * occluded   the surface stayed out of the usable list (covered, private) past the grace;
+ * headroom   the ledge moved too close to the top of the screen or off every display;
+ * disabled   the user switched that kind of surface off.
+ */
+export type SupportLossReason = 'gone' | 'retracted' | 'occluded' | 'headroom' | 'disabled';
+
+export interface SupportLoss {
+  reason: SupportLossReason;
+  surfaceId: string;
+  surfaceKind: SurfaceKind;
+  /** true: the cat is falling now; false: it was set down on the surface just below. */
+  fell: boolean;
+}
+
 export interface MoverStep {
   goal: GoalStatus;
   crouchStarted: boolean;
   tookOff: boolean;
   steppedOff: boolean;
   landed: LandingInfo | null;
+  /** The support was lost and the cat started falling (see supportLost for why). */
   perchLost: boolean;
   snapped: boolean;
+  supportLost: SupportLoss | null;
+  /** A ledge rising through the cat's feet picked it up. */
+  lifted: { surfaceId: string; surfaceKind: SurfaceKind } | null;
+  /** A sinking or vanished support set the cat down on the surface below without a fall. */
+  lowered: boolean;
+  climbStarted: boolean;
+  climbEnded: boolean;
 }
 
-export type MoverMode = 'ground' | 'crouch' | 'air' | 'held';
+export type MoverMode = 'ground' | 'crouch' | 'air' | 'held' | 'climb';
+
+/** A climb the behaviour may start from where the cat stands. */
+export interface ClimbOption {
+  dir: 'up' | 'down';
+  wallId: string;
+  ownerId: string;
+  /** Where the climb ends (the top ledge's corner, or the support below the wall). */
+  target: Point;
+}
 
 type Leg =
   | { kind: 'walk'; x: number; reachable: boolean }
   | { kind: 'jump'; takeoffX: number; landX: number; target: Surface }
-  | { kind: 'drop'; dir: 1 | -1 };
+  | { kind: 'drop'; dir: 1 | -1 }
+  | { kind: 'cross'; x: number; to: Surface }
+  | { kind: 'climbUp'; standX: number; wall: WallTrack; ledgeKey: string; cornerX: number }
+  | { kind: 'climbDown'; cornerX: number; wall: WallTrack };
 
 interface Flight {
   t0: number;
@@ -84,16 +145,43 @@ interface Flight {
   target: Surface | null;
   thrown: boolean;
   intentional: boolean;
-  ignoreWindowId: string | null;
+  /** Ledge the cat just left (not landed on again during this flight). */
+  ignoreKey: string | null;
   peakY: number;
   scale: number;
   startedAt: number;
 }
 
-interface Perch {
-  windowId: string;
-  rect: Rect;
+/** The ledge the cat stands on, tracked through the provider's live geometry. */
+interface Attachment {
+  surfaceId: string;
+  ownerId: string;
+  surfaceKind: SurfaceKind;
+  y: number;
+  x0: number;
+  x1: number;
   missingSince: number | null;
+  /** The user switched this kind of surface off: the cat leaves it calmly. */
+  disabled: boolean;
+}
+
+interface Climb {
+  wall: WallTrack;
+  phase: 'mount' | 'swing' | 'climb' | 'pullUp' | 'dismount';
+  /** -1 = up, +1 = down. */
+  dir: -1 | 1;
+  t0: number;
+  durationMs: number;
+  from: Point;
+  to: Point;
+  /** Top ledge for the pull-up (null: none; the cat climbs down instead). */
+  topKey: string | null;
+  cornerX: number | null;
+  /** Dismount target, chosen when the bottom is reached. */
+  exit: { surface: Surface; x: number } | null;
+  missingSince: number | null;
+  /** The goal changed while climbing: reconsider the direction. */
+  replan: boolean;
 }
 
 interface Crouch {
@@ -115,6 +203,19 @@ interface Drag {
 }
 
 const MAX_FLIGHT_MS = 6000;
+const NO_MOVING: ReadonlySet<string> = new Set<string>();
+
+function isLedgeSurface(s: unknown): s is LedgeSurface {
+  if (!s || typeof s !== 'object') return false;
+  const l = s as LedgeSurface;
+  return l.orientation === 'ledge' && Number.isFinite(l.y) && Number.isFinite(l.x0) && Number.isFinite(l.x1) && l.x1 > l.x0;
+}
+
+function isWallSurface(s: unknown): s is WallSurface {
+  if (!s || typeof s !== 'object') return false;
+  const w = s as WallSurface;
+  return w.orientation === 'wall' && Number.isFinite(w.x) && Number.isFinite(w.y0) && Number.isFinite(w.y1) && w.y1 > w.y0;
+}
 
 export class Mover {
   x = 0;
@@ -125,13 +226,19 @@ export class Mover {
   private facingChangedAt = -Infinity;
   private modeValue: MoverMode = 'ground';
   private surface: Surface;
-  private perch: Perch | null = null;
+  private attach: Attachment | null = null;
+  private climbing: Climb | null = null;
   private flight: Flight | null = null;
   private crouch: Crouch | null = null;
   private drag: Drag | null = null;
   private goal: MoveGoal | null = null;
   private leg: Leg | null = null;
-  private windows: Surface[] = [];
+  private ledges: Surface[] = [];
+  private walls: WallTrack[] = [];
+  private readonly graph = new SurfaceGraph();
+  private readonly blockedEdges = new Set<string>();
+  /** Easing of the anchor height toward its support (after a lift or a gentle set-down), px/s; 0 = none. */
+  private easeRate = 0;
   private fullWorld: WorldModel;
   private navWorld: WorldModel;
   private homeDisplayId: string;
@@ -152,6 +259,7 @@ export class Mover {
     this.surface = floor;
     this.x = p.x;
     this.y = p.y;
+    this.graph.update(this.navWorld, [], []);
   }
 
   // ---- queries ---------------------------------------------------------------
@@ -165,8 +273,13 @@ export class Mover {
   get fullWorldModel(): WorldModel {
     return this.fullWorld;
   }
-  get windowSurfaces(): readonly Surface[] {
-    return this.windows;
+  /** Usable ledges this tick (taskbars, window tops, tab strips). */
+  get ledgeSurfaces(): readonly Surface[] {
+    return this.ledges;
+  }
+  /** Usable climbable walls this tick. */
+  get wallTracks(): readonly WallTrack[] {
+    return this.walls;
   }
   get currentSurface(): Surface | null {
     return this.modeValue === 'ground' || this.modeValue === 'crouch' ? this.surface : null;
@@ -180,11 +293,28 @@ export class Mover {
   get held(): boolean {
     return this.modeValue === 'held';
   }
+  /** Clinging to a wall (climbing, pulling up or stepping on/off it). */
+  get onWall(): boolean {
+    return this.modeValue === 'climb';
+  }
+  /** The wall the cat clings to, or null. */
+  get wall(): WallTrack | null {
+    return this.modeValue === 'climb' ? (this.climbing?.wall ?? null) : null;
+  }
   get thrownFlight(): boolean {
     return this.flight?.thrown ?? false;
   }
+  /** Owning window of the ledge or wall the cat is on (null on floors and taskbars). */
   get perchWindowId(): string | null {
-    return this.perch?.windowId ?? null;
+    if (this.modeValue === 'climb') return this.climbing?.wall.ownerId || null;
+    const a = this.attach;
+    return a && a.surfaceKind !== 'taskbar' && (this.modeValue === 'ground' || this.modeValue === 'crouch') ? a.ownerId || null : null;
+  }
+  /** The environment surface the cat is attached to (ledge or wall), or null. */
+  get attachedSurface(): { surfaceId: string; surfaceKind: SurfaceKind; ownerId: string } | null {
+    if (this.modeValue === 'climb' && this.climbing) return { surfaceId: this.climbing.wall.key, surfaceKind: 'windowSide', ownerId: this.climbing.wall.ownerId };
+    const a = this.attach;
+    return a && (this.modeValue === 'ground' || this.modeValue === 'crouch') ? { surfaceId: a.surfaceId, surfaceKind: a.surfaceKind, ownerId: a.ownerId } : null;
   }
   get hasGoal(): boolean {
     return this.goal !== null;
@@ -208,20 +338,27 @@ export class Mover {
         return { kind: 'air' };
       case 'held':
         return { kind: 'held' };
+      case 'climb':
+        if (this.climbing) return { kind: 'surface', surfaceId: this.climbing.wall.key, surfaceKind: 'windowSide', orientation: 'wall' };
+        return { kind: 'air' };
       default:
-        if (this.perch) return { kind: 'window', windowId: this.perch.windowId };
+        if (this.attach) return { kind: 'surface', surfaceId: this.attach.surfaceId, surfaceKind: this.attach.surfaceKind, orientation: 'ledge' };
         return { kind: 'floor', displayId: this.navWorld.displayIdOn(this.surface, this.x) };
     }
   }
-  /** Horizontal ground speed in px/s (0 while airborne or held). */
+  /** Horizontal ground speed in px/s (0 while airborne, held or climbing). */
   get groundSpeed(): number {
     return this.modeValue === 'ground' ? Math.abs(this.vx) : 0;
+  }
+  /** Speed along the wall while climbing, px/s (0 otherwise). */
+  get climbSpeed(): number {
+    return this.modeValue === 'climb' && this.climbing?.phase === 'climb' ? Math.abs(this.vy) : 0;
   }
   paceSpeedPx(pace: Pace): number {
     const dip = pace === 'run' ? MOVEMENT.runDip : pace === 'chase' ? MOVEMENT.chaseDip : pace === 'slow' ? MOVEMENT.slowDip : MOVEMENT.walkDip;
     return dip * this.cfg.movementSpeed * this.scale;
   }
-  /** Where the cat may walk on its current surface (null while airborne or held). */
+  /** Where the cat may walk on its current surface (null while airborne, held or climbing). */
   get walkRange(): { x0: number; x1: number } | null {
     const s = this.currentSurface;
     return s ? this.rangeOn(s, this.x) : null;
@@ -229,6 +366,43 @@ export class Mover {
   /** The cat may not walk, jump or be called onto this display (it may stay on the one it is on). */
   isOffLimits(displayId: string): boolean {
     return this.offLimits.has(displayId) && displayId !== this.displayId;
+  }
+  /** A usable ledge by id this tick. */
+  ledgeById(id: string): Surface | null {
+    return this.ledges.find((l) => l.key === id) ?? null;
+  }
+  /** Non-sensitive graph statistics for diagnostics. */
+  graphInfo(): { nodes: number; edges: number; ledges: number; walls: number; updates: number; rebuilds: number; lastChanged: number } {
+    return {
+      nodes: this.graph.nodes.size,
+      edges: this.graph.edgeCount,
+      ledges: this.ledges.length,
+      walls: this.walls.length,
+      updates: this.graph.updates,
+      rebuilds: this.graph.rebuilds,
+      lastChanged: this.graph.lastChanged,
+    };
+  }
+
+  /** Climbs that can start from the surface the cat stands on (up a wall beside it, or down from the ledge's corner). */
+  climbOptions(): ClimbOption[] {
+    if (this.modeValue !== 'ground' || !this.wallsEnabled()) return [];
+    const out: ClimbOption[] = [];
+    const s = this.surface;
+    for (const e of this.graph.edgesFrom(s.key)) {
+      const node = this.graph.node(e.to);
+      const w = node?.wall;
+      if (!node || !w || this.nodeBlocked(node)) continue;
+      if (e.kind === 'mount' && w.topLedgeId) {
+        const top = this.ledgeById(w.topLedgeId);
+        const cx = top ? this.graph.cornerX(this.navWorld, w, top) : null;
+        if (top && cx !== null) out.push({ dir: 'up', wallId: w.key, ownerId: w.ownerId, target: { x: cx, y: top.y } });
+      } else if (e.kind === 'swing') {
+        const t = this.graph.dismountTarget(this.navWorld, w);
+        if (t && !this.offLimitsAt(t.surface, t.x)) out.push({ dir: 'down', wallId: w.key, ownerId: w.ownerId, target: { x: t.x, y: t.y } });
+      }
+    }
+    return out;
   }
 
   // ---- configuration ---------------------------------------------------------
@@ -242,7 +416,10 @@ export class Mover {
   setConfig(cfg: MoverConfig): boolean {
     const rebuild = cfg.size !== this.cfg.size || cfg.allowMultiMonitor !== this.cfg.allowMultiMonitor;
     this.cfg = { ...cfg };
-    if (!cfg.perchOnWindows) this.windows = [];
+    this.ledges = this.ledges.filter((l) => l.surfaceKind !== null && this.kindEnabled(l.surfaceKind));
+    if (!this.wallsEnabled()) this.walls = [];
+    this.graph.update(this.navWorld, this.ledges, this.walls);
+    if (this.attach && !this.kindEnabled(this.attach.surfaceKind)) this.attach.disabled = true;
     if (!rebuild) return false;
     if (!cfg.allowMultiMonitor) this.homeDisplayId = this.displayId;
     this.fullWorld = new WorldModel(this.geometry, cfg.size, cfg.allowMultiMonitor);
@@ -251,7 +428,7 @@ export class Mover {
 
   /**
    * Displays with a fullscreen app in front. The cat treats them as off limits: a
-   * shared floor ends at their edge like a wall, their window tops are ignored and
+   * shared floor ends at their edge like a wall, their surfaces are ignored and
    * no walk or jump ends on them. The display the cat is already on stays usable.
    */
   setOffLimitsDisplays(ids: readonly string[]): void {
@@ -261,14 +438,32 @@ export class Mover {
     this.leg = null;
   }
 
-  /** Refreshes walkable window tops for this tick. */
-  sense(platforms: readonly Platform[]): void {
-    if (!this.cfg.perchOnWindows) {
-      this.windows = [];
-      return;
+  /**
+   * Refreshes the usable ledges and walls for this tick from the environment's surfaces
+   * (already privacy-filtered by the caller) and updates the surface graph incrementally.
+   */
+  sense(surfaces: readonly EnvSurface[]): void {
+    const ledgesIn: LedgeSurface[] = [];
+    const wallsIn: WallSurface[] = [];
+    const walls = this.wallsEnabled();
+    for (const s of surfaces) {
+      if (!s || typeof s !== 'object') continue;
+      if (s.orientation === 'ledge') {
+        if (this.kindEnabled(s.kind)) ledgesIn.push(s);
+      } else if (s.orientation === 'wall' && walls) {
+        wallsIn.push(s);
+      }
     }
-    const surfaces = this.navWorld.windowSurfaces(platforms);
-    this.windows = this.offLimits.size === 0 ? surfaces : surfaces.filter((w) => !w.displayIds.some((id) => this.isOffLimits(id)));
+    let ledges = this.navWorld.ledgeSurfaces(ledgesIn);
+    let wallTracks = this.navWorld.wallTracks(wallsIn);
+    if (this.offLimits.size > 0) {
+      ledges = ledges.filter((l) => !l.displayIds.some((id) => this.isOffLimits(id)));
+      wallTracks = wallTracks.filter((w) => !this.isOffLimits(w.displayId));
+    }
+    this.ledges = ledges;
+    this.walls = wallTracks;
+    this.graph.update(this.navWorld, ledges, wallTracks);
+    if (this.attach && !this.kindEnabled(this.attach.surfaceKind)) this.attach.disabled = true;
   }
 
   // ---- goals -----------------------------------------------------------------
@@ -281,26 +476,30 @@ export class Mover {
     }
     const prev = this.goal;
     this.goal = goal;
-    if (!prev || prev.allowJump !== goal.allowJump || Math.abs(prev.y - goal.y) > 2 || Math.abs(prev.x - goal.x) > this.bodyWidth * 0.5) {
+    const changed =
+      !prev || prev.allowJump !== goal.allowJump || (prev.route ?? 'any') !== (goal.route ?? 'any') || Math.abs(prev.y - goal.y) > 2 || Math.abs(prev.x - goal.x) > this.bodyWidth * 0.5;
+    if (changed) {
       this.leg = null;
+      this.blockedEdges.clear();
+      if (this.climbing) this.climbing.replan = true;
     }
   }
 
   /** Projects a screen point onto the surface the cat would stand on there. */
   surfacePointFor(p: Point): SurfacePoint {
     const q = this.navWorld.clampInside(p);
-    return this.navWorld.surfaceBelow(q.x, q.y - 2, this.windows) ?? this.navWorld.nearestFloorPoint(q);
+    return this.navWorld.surfaceBelow(q.x, q.y - 2, this.ledges) ?? this.navWorld.nearestFloorPoint(q);
   }
 
-  /** Whether a destination can be reached (same surface or one/two jumps). */
-  canReach(p: Point): boolean {
+  /** Whether a destination can be reached (walking, jumping, dropping or climbing). */
+  canReach(p: Point, route: RoutePreference = 'any'): boolean {
     if (this.modeValue !== 'ground' && this.modeValue !== 'crouch') return false;
     const dest = this.surfacePointFor(p);
     if (sameSurface(this.surface, dest.surface)) {
       const r = this.rangeOn(this.surface, this.x);
       return dest.x >= r.x0 - 1 && dest.x <= r.x1 + 1;
     }
-    const leg = this.planLeg({ x: dest.x, y: dest.y, pace: 'walk', allowJump: true }, this.surface);
+    const leg = this.planLeg({ x: dest.x, y: dest.y, pace: 'walk', allowJump: true, route }, this.surface);
     return leg.kind !== 'walk' || leg.reachable;
   }
 
@@ -365,7 +564,9 @@ export class Mover {
     this.modeValue = 'held';
     this.flight = null;
     this.crouch = null;
-    this.perch = null;
+    this.attach = null;
+    this.climbing = null;
+    this.easeRate = 0;
     this.goal = null;
     this.leg = null;
     this.vx = 0;
@@ -405,7 +606,7 @@ export class Mover {
     }
     this.drag = null;
     const thrown = speed > MOVEMENT.hardThrowDip * scale;
-    this.startFlight(vx, vy, now, { thrown, intentional: false, ignoreWindowId: null });
+    this.startFlight(vx, vy, now, { thrown, intentional: false, ignoreKey: null });
     return { speedDip: speed / scale, thrown };
   }
 
@@ -444,7 +645,20 @@ export class Mover {
   // ---- simulation step -------------------------------------------------------
 
   step(input: MoverInput): MoverStep {
-    const out: MoverStep = { goal: 'none', crouchStarted: false, tookOff: false, steppedOff: false, landed: null, perchLost: false, snapped: false };
+    const out: MoverStep = {
+      goal: 'none',
+      crouchStarted: false,
+      tookOff: false,
+      steppedOff: false,
+      landed: null,
+      perchLost: false,
+      snapped: false,
+      supportLost: null,
+      lifted: null,
+      lowered: false,
+      climbStarted: false,
+      climbEnded: false,
+    };
     switch (this.modeValue) {
       case 'held':
         this.stepHeld(input);
@@ -454,6 +668,9 @@ export class Mover {
         break;
       case 'crouch':
         this.stepCrouch(input, out);
+        break;
+      case 'climb':
+        this.stepClimb(input, out);
         break;
       case 'ground':
         this.stepGround(input, out);
@@ -481,7 +698,9 @@ export class Mover {
   }
 
   private stepGround(input: MoverInput, out: MoverStep): void {
-    if (this.perch && !this.ride(input, out)) return;
+    if (this.attach && !this.ride(input, out)) return;
+    if (this.modeValue !== 'ground') return;
+    this.checkLift(input, out);
     const dt = Math.max(0, input.dtMs) / 1000;
     const s = this.surface;
     const range = this.rangeOn(s, this.x);
@@ -497,11 +716,26 @@ export class Mover {
         this.leg = this.planLeg(this.goal, s);
       }
       const leg = this.leg;
-      if (leg.kind === 'walk') targetX = leg.x;
-      else if (leg.kind === 'jump') targetX = leg.takeoffX;
-      else {
-        stepOffDir = leg.dir;
-        targetX = leg.dir > 0 ? s.x1 + this.bodyWidth : s.x0 - this.bodyWidth;
+      switch (leg.kind) {
+        case 'walk':
+          targetX = leg.x;
+          break;
+        case 'jump':
+          targetX = leg.takeoffX;
+          break;
+        case 'cross':
+          targetX = leg.x;
+          break;
+        case 'climbUp':
+          targetX = leg.standX;
+          break;
+        case 'climbDown':
+          targetX = leg.cornerX;
+          break;
+        case 'drop':
+          stepOffDir = leg.dir;
+          targetX = leg.dir > 0 ? s.x1 + this.bodyWidth : s.x0 - this.bodyWidth;
+          break;
       }
     }
 
@@ -522,7 +756,7 @@ export class Mover {
       if (stepOffDir === dir) {
         this.x = dir > 0 ? s.x1 : s.x0;
         const vx = dir * Math.max(Math.abs(this.vx), this.paceSpeedPx('walk') * 0.8);
-        this.startFlight(vx, 0, input.now, { thrown: false, intentional: true, ignoreWindowId: this.perch?.windowId ?? null });
+        this.startFlight(vx, 0, input.now, { thrown: false, intentional: true, ignoreKey: this.attach?.surfaceId ?? null });
         out.steppedOff = true;
         out.goal = 'moving';
         return;
@@ -531,32 +765,66 @@ export class Mover {
       this.vx = 0;
     }
     this.x = nx;
-    this.y = this.perch ? this.perch.rect.y : this.navWorld.yAt(s, nx);
+    this.applySupportY(dt);
     this.updateFacing(this.vx, input.now);
 
     if (!this.goal || !this.leg) return;
     const leg = this.leg;
-    if (leg.kind === 'jump') {
-      if (Math.abs(this.x - leg.takeoffX) <= 1 && Math.abs(this.vx) < 1) {
-        this.vx = 0;
-        if (Math.abs(leg.landX - this.x) > 2) this.setFacing(leg.landX > this.x ? 1 : -1, input.now);
-        this.modeValue = 'crouch';
-        this.crouch = { until: input.now + MOVEMENT.crouchMs, landX: leg.landX, target: leg.target, clearanceDip: null };
-        out.crouchStarted = true;
+    const settled = Math.abs(this.vx) < 1;
+    switch (leg.kind) {
+      case 'jump':
+        if (Math.abs(this.x - leg.takeoffX) <= 1 && settled) {
+          this.vx = 0;
+          if (Math.abs(leg.landX - this.x) > 2) this.setFacing(leg.landX > this.x ? 1 : -1, input.now);
+          this.modeValue = 'crouch';
+          this.crouch = { until: input.now + MOVEMENT.crouchMs, landX: leg.landX, target: leg.target, clearanceDip: null };
+          out.crouchStarted = true;
+        }
+        out.goal = 'moving';
+        return;
+      case 'cross':
+        if (Math.abs(this.x - leg.x) <= 1) this.crossTo(leg.to, input);
+        out.goal = 'moving';
+        return;
+      case 'climbUp':
+        if (Math.abs(this.x - leg.standX) <= 1 && settled) this.startClimbUp(leg, input, out);
+        out.goal = 'moving';
+        return;
+      case 'climbDown':
+        if (Math.abs(this.x - leg.cornerX) <= 1 && settled) this.startClimbDown(leg, input, out);
+        out.goal = 'moving';
+        return;
+      case 'walk':
+        if (Math.abs(this.x - leg.x) <= this.arriveRadius() && settled) {
+          out.goal = leg.reachable ? 'arrived' : 'unreachable';
+          return;
+        }
+        out.goal = 'moving';
+        return;
+      case 'drop':
+        out.goal = 'moving';
+        return;
+    }
+  }
+
+  /** Puts the anchor at the height of its support, easing after a lift or a gentle set-down. */
+  private applySupportY(dt: number): void {
+    const target = this.attach ? this.attach.y : this.navWorld.yAt(this.surface, this.x);
+    if (this.easeRate > 0) {
+      this.y = approach(this.y, target, this.easeRate * dt);
+      if (Math.abs(this.y - target) < 0.01) {
+        this.y = target;
+        this.easeRate = 0;
       }
-      out.goal = 'moving';
       return;
     }
-    if (leg.kind === 'walk' && Math.abs(this.x - leg.x) <= this.arriveRadius() && Math.abs(this.vx) < 1) {
-      out.goal = leg.reachable ? 'arrived' : 'unreachable';
-      return;
-    }
-    out.goal = 'moving';
+    this.y = target;
   }
 
   private stepCrouch(input: MoverInput, out: MoverStep): void {
-    if (this.perch && !this.ride(input, out)) {
+    if (this.attach && !this.ride(input, out)) {
       this.crouch = null;
+      if (this.modeValue === 'crouch') this.modeValue = 'ground';
       return;
     }
     const c = this.crouch;
@@ -564,6 +832,7 @@ export class Mover {
       this.modeValue = 'ground';
       return;
     }
+    this.applySupportY(Math.max(0, input.dtMs) / 1000);
     if (input.now < c.until) return;
     this.crouch = null;
     const target = this.revalidateTarget(c.target, c.landX);
@@ -586,8 +855,9 @@ export class Mover {
       this.leg = null;
       return;
     }
-    const ignore = this.perch?.windowId ?? null;
-    this.perch = null;
+    const ignore = this.attach?.surfaceId ?? null;
+    this.attach = null;
+    this.easeRate = 0;
     this.modeValue = 'air';
     this.flight = {
       t0: input.now,
@@ -601,7 +871,7 @@ export class Mover {
       target,
       thrown: false,
       intentional: true,
-      ignoreWindowId: target.windowId === ignore ? null : ignore,
+      ignoreKey: target.key === ignore ? null : ignore,
       peakY: plan.apexY,
       scale,
       startedAt: input.now,
@@ -639,7 +909,7 @@ export class Mover {
       }
       const end = jumpAt(f.plan, f.plan.durationMs);
       const target = this.revalidateTarget(f.target, f.plan.to.x);
-      if (target && Math.abs(this.navWorld.yAt(target, f.plan.to.x) - f.plan.to.y) <= 6 * f.scale && this.rectFor(target, input) !== false) {
+      if (target && Math.abs(this.navWorld.yAt(target, f.plan.to.x) - f.plan.to.y) <= 6 * f.scale && (target.kind !== 'ledge' || this.liveLedge(input, target.key) !== null)) {
         this.land(target, f.plan.to.x, input, out, Math.abs(end.vy), false);
         return;
       }
@@ -692,114 +962,407 @@ export class Mover {
   }
 
   private findLanding(f: Flight, s0: number, s1: number, y0: number, y1: number, input: MoverInput): { s: number; surface: Surface; x: number; y: number } | null {
-    let best: { s: number; surface: Surface; x: number; y: number } | null = null;
     // Cheap reject: a descending crossing in (s0, s1] lies below the arc's highest point in that interval.
     const sApex = -f.vy0 / f.g;
     const top = sApex > s0 && sApex < s1 ? f.y0 + f.vy0 * sApex + 0.5 * f.g * sApex * sApex : Math.min(y0, y1);
     const bottom = Math.max(y0, y1);
-    const consider = (surface: Surface, y: number, left: number, right: number, rightInclusive: boolean): void => {
-      if (y < top - 0.5 || y > bottom + 0.5) return;
-      const s = descendingCrossing(f.y0, f.vy0, f.g, y);
-      if (s === null || s > s1 + 1e-9 || (s0 > 0 ? s <= s0 : s < 0)) return;
-      const x = f.x0 + f.vx * s;
-      if (x < left || (rightInclusive ? x > right : x >= right)) return;
-      if (!best || s < best.s) best = { s, surface, x, y };
-    };
-    for (const floor of this.navWorld.floors) {
-      for (const piece of floor.pieces) consider(floor, piece.y, piece.left, piece.right, false);
+    const dead = new Set<string>();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let best: { s: number; surface: Surface; x: number; y: number } | null = null;
+      const consider = (surface: Surface, y: number, left: number, right: number, rightInclusive: boolean): void => {
+        if (y < top - 0.5 || y > bottom + 0.5) return;
+        const s = descendingCrossing(f.y0, f.vy0, f.g, y);
+        if (s === null || s > s1 + 1e-9 || (s0 > 0 ? s <= s0 : s < 0)) return;
+        const x = f.x0 + f.vx * s;
+        if (x < left || (rightInclusive ? x > right : x >= right)) return;
+        if (!best || s < best.s) best = { s, surface, x, y };
+      };
+      for (const floor of this.navWorld.floors) {
+        for (const piece of floor.pieces) consider(floor, piece.y, piece.left, piece.right, false);
+      }
+      for (const w of this.ledges) {
+        if (w.key === f.ignoreKey || dead.has(w.key)) continue;
+        consider(w, w.y, w.landX0, w.landX1, true);
+      }
+      const hit = best as { s: number; surface: Surface; x: number; y: number } | null;
+      if (!hit || hit.surface.kind !== 'ledge' || this.liveLedge(input, hit.surface.key) !== null) return hit;
+      // That ledge is gone (closed, retracted): fall on to the next surface below.
+      dead.add(hit.surface.key);
     }
-    for (const w of this.windows) {
-      if (w.windowId === f.ignoreWindowId) continue;
-      if (input.getWindowRect(w.windowId as string) === null) continue;
-      consider(w, w.y, w.landX0, w.landX1, true);
-    }
-    return best;
+    return null;
   }
 
-  /** Keeps the cat on a moving perch; returns false (and starts a fall) when the perch is lost. */
-  private ride(input: MoverInput, out: MoverStep): boolean {
-    const perch = this.perch as Perch;
-    const lose = (): false => {
-      this.crouch = null;
-      // A window can carry the cat out of the world before it is noticed: fall from inside.
-      const p = this.navWorld.clampInside({ x: this.x, y: this.y });
-      if (Math.hypot(p.x - this.x, p.y - this.y) > 1) out.snapped = true;
-      this.x = p.x;
-      this.y = p.y;
-      this.startFlight(0, 0, input.now, { thrown: false, intentional: false, ignoreWindowId: perch.windowId });
-      out.perchLost = true;
-      return false;
+  // ---- riding ledges -----------------------------------------------------------
+
+  /** Live ledge geometry from the provider, or null when gone (or the provider misbehaves). */
+  private liveLedge(input: MoverInput, id: string): LedgeSurface | null {
+    if (!input.getSurface) return null;
+    try {
+      const s = input.getSurface(id);
+      return isLedgeSurface(s) ? s : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private liveWall(input: MoverInput, id: string): WallSurface | null {
+    if (!input.getSurface) return null;
+    try {
+      const s = input.getSurface(id);
+      return isWallSurface(s) ? s : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private attachmentFrom(live: LedgeSurface): Attachment {
+    return {
+      surfaceId: live.id,
+      ownerId: typeof live.ownerId === 'string' ? live.ownerId : '',
+      surfaceKind: live.kind,
+      y: live.y,
+      x0: live.x0,
+      x1: live.x1,
+      missingSince: null,
+      disabled: !this.kindEnabled(live.kind),
     };
-    const rect = input.getWindowRect(perch.windowId);
-    if (!rect || !isFiniteRect(rect) || rect.width < 1 || rect.height < 1) return lose();
-    if (this.coversWorkArea(rect)) return lose();
-    const dx = rect.x - perch.rect.x;
-    const dy = rect.y - perch.rect.y;
-    const moved = dx !== 0 || dy !== 0;
-    if (moved) {
-      this.x += dx;
-      perch.rect = rect;
+  }
+
+  /**
+   * Keeps the cat on a moving ledge; returns false when the ledge is lost (the cat then
+   * falls, or is set down on the surface just below when a taskbar retracts under it).
+   */
+  private ride(input: MoverInput, out: MoverStep): boolean {
+    const a = this.attach as Attachment;
+    const live = this.liveLedge(input, a.surfaceId);
+    if (!live) return this.loseSupport(a.surfaceKind === 'taskbar' ? 'retracted' : 'gone', input, out);
+    // A window being dragged moves both ends of its top by the same amount; an occluder
+    // that uncovers or covers part of it moves only one end (no translation then).
+    const dx0 = live.x0 - a.x0;
+    const dx1 = live.x1 - a.x1;
+    const shift = Math.abs(dx0 - dx1) <= 1.5 ? (dx0 + dx1) / 2 : 0;
+    const moved = shift !== 0 || live.y !== a.y;
+    this.x += shift;
+    a.x0 = live.x0;
+    a.x1 = live.x1;
+    a.y = live.y;
+    // Sank to the floor (a window dragged down past it, a taskbar sliding out): stand on the floor.
+    const floorY = this.navWorld.floorYAt(this.x);
+    if (floorY !== null && live.y >= floorY - 0.5) {
+      const fp = this.navWorld.surfaceBelow(this.x, floorY - 0.5, []) ?? this.navWorld.nearestFloorPoint({ x: this.x, y: floorY });
+      this.attach = null;
+      this.surface = fp.surface;
+      this.x = clamp(this.x, fp.surface.x0, fp.surface.x1);
+      out.lowered = true;
+      out.supportLost = { reason: 'retracted', surfaceId: a.surfaceId, surfaceKind: a.surfaceKind, fell: false };
+      this.leg = null;
+      return true;
     }
-    this.y = rect.y;
+    const d = this.navWorld.displayAt({ x: this.x, y: live.y });
+    if (!d || live.y - this.bodyHeight * 0.8 < d.workAreaPx.y) return this.loseSupport('headroom', input, out);
     const hw = this.bodyWidth / 2;
-    if (this.x < rect.x - hw * 0.25 || this.x > rectRight(rect) + hw * 0.25) return lose();
-    const d = this.navWorld.displayAt({ x: this.x, y: this.y });
-    if (!d || this.y - this.bodyHeight * 0.8 < d.workAreaPx.y || rectBottom(d.workAreaPx) - this.y < 1) return lose();
-    const seg = this.windows.find((w) => w.windowId === perch.windowId && this.x >= w.landX0 - hw && this.x <= w.landX1 + hw);
-    if (seg) {
-      perch.missingSince = null;
+    const onSegment = this.x >= live.x0 - hw * 0.25 && this.x <= live.x1 + hw * 0.25;
+    const listed = this.ledges.find((l) => l.key === a.surfaceId) ?? null;
+    if (listed && onSegment && !a.disabled) {
+      a.missingSince = null;
     } else {
-      perch.missingSince ??= input.now;
-      const grace = moved || input.movingWindowIds.has(perch.windowId) ? MOVEMENT.perchMovingGraceMs : MOVEMENT.perchGraceMs;
-      if (input.now - perch.missingSince > grace) return lose();
+      a.missingSince ??= input.now;
+      const moving = (input.movingWindowIds ?? NO_MOVING).has(a.ownerId);
+      const grace = a.disabled ? 0 : moved || moving ? MOVEMENT.perchMovingGraceMs : MOVEMENT.perchGraceMs;
+      if (input.now - a.missingSince > grace) return this.loseSupport(a.disabled ? 'disabled' : 'occluded', input, out);
     }
-    this.surface = seg && Math.abs(seg.y - rect.y) <= 2 ? seg : this.surfaceFromRect(rect, perch.windowId, d.id);
-    this.x = clamp(this.x, this.surface.x0, this.surface.x1);
+    if (onSegment) {
+      const s = listed && Math.abs(listed.y - live.y) <= 2 ? listed : this.navWorld.ledgeSurface(live, true);
+      if (s) {
+        this.surface = s;
+        this.x = clamp(this.x, s.x0, s.x1);
+      }
+    } else if (this.surface.kind === 'ledge') {
+      this.surface = { ...this.surface, y: live.y };
+    }
     if (moved) this.leg = null;
     return true;
   }
 
-  private surfaceFromRect(rect: Rect, windowId: string, displayId: string): Surface {
-    const d = this.navWorld.display(displayId) ?? this.navWorld.primary;
-    const bw = this.navWorld.bodyWidth(d.scaleFactor);
-    const lx0 = Math.max(rect.x, d.workAreaPx.x);
-    const lx1 = Math.min(rectRight(rect), rectRight(d.workAreaPx));
-    let x0 = lx0 + bw * 0.25;
-    let x1 = lx1 - bw * 0.25;
-    if (x1 < x0) {
-      x0 = (lx0 + lx1) / 2;
-      x1 = x0;
+  /**
+   * The ledge under the cat is gone. A calm loss (a retracting taskbar, a kind the user
+   * switched off) with a surface just below sets the cat down there; otherwise it falls.
+   */
+  private loseSupport(reason: SupportLossReason, input: MoverInput, out: MoverStep): false {
+    const a = this.attach as Attachment;
+    this.attach = null;
+    this.crouch = null;
+    if (this.modeValue === 'crouch') this.modeValue = 'ground';
+    // A ledge can carry the cat out of the world before it is noticed: continue from inside.
+    const p = this.navWorld.clampInside({ x: this.x, y: this.y });
+    if (Math.hypot(p.x - this.x, p.y - this.y) > 1) out.snapped = true;
+    this.x = p.x;
+    this.y = p.y;
+    const calm = reason === 'retracted' || reason === 'disabled';
+    const below = this.navWorld.surfaceBelow(p.x, p.y, this.ledges.filter((l) => l.key !== a.surfaceId));
+    if (calm && below && below.y - p.y <= MOVEMENT.settleMaxBodyHeights * this.bodyHeight) {
+      const live = below.surface.kind === 'ledge' ? this.liveLedge(input, below.surface.key) : null;
+      if (below.surface.kind === 'floor' || live) {
+        this.setGrounded(below.surface, below.x, live, true);
+        this.easeRate = MOVEMENT.settleDip * this.scale;
+        out.lowered = true;
+        out.supportLost = { reason, surfaceId: a.surfaceId, surfaceKind: a.surfaceKind, fell: false };
+        return false;
+      }
     }
-    return { kind: 'window', key: `win:${windowId}`, windowId, displayIds: [d.id], y: rect.y, x0, x1, landX0: lx0, landX1: lx1, pieces: [] };
+    this.startFlight(0, 0, input.now, { thrown: false, intentional: false, ignoreKey: a.surfaceId });
+    out.perchLost = true;
+    out.supportLost = { reason, surfaceId: a.surfaceId, surfaceKind: a.surfaceKind, fell: true };
+    return false;
   }
 
-  private coversWorkArea(rect: Rect): boolean {
-    const d = this.fullWorld.nearestDisplay({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
-    const wa = d.workAreaPx;
-    return rect.width >= wa.width - 2 && rect.height >= wa.height - 2 && rect.y <= wa.y + 2;
+  /**
+   * A ledge rising through the cat's feet (an auto-hide taskbar sliding in, a window top
+   * dragged up under it) picks the cat up: the support switches and the height eases up.
+   */
+  private checkLift(input: MoverInput, out: MoverStep): void {
+    const maxLift = MOVEMENT.liftMaxBodyHeights * this.bodyHeight;
+    for (const l of this.ledges) {
+      if (this.attach?.surfaceId === l.key || l.phase === 'leaving') continue;
+      if (this.x < l.landX0 || this.x > l.landX1) continue;
+      if (!(l.y < this.y - 0.5 && l.y >= this.y - maxLift)) continue;
+      const prev = this.graph.prevY(l.key);
+      // A ledge that just appeared above the feet counts only for taskbars (they slide in from the screen edge).
+      const rising = prev !== undefined ? prev > l.y + 0.25 && prev >= this.y - 1.5 : l.surfaceKind === 'taskbar';
+      if (!rising) continue;
+      const live = this.liveLedge(input, l.key);
+      if (!live) continue;
+      this.attach = this.attachmentFrom(live);
+      this.surface = l;
+      this.x = clamp(this.x, l.x0, l.x1);
+      this.easeRate = Math.max(MOVEMENT.liftDip * this.scale, 1.5 * Math.abs(l.vy));
+      this.leg = null;
+      out.lifted = { surfaceId: l.key, surfaceKind: l.surfaceKind ?? 'taskbar' };
+      return;
+    }
   }
 
-  /** false when the target is a window that no longer exists. */
-  private rectFor(target: Surface, input: MoverInput): Rect | null | false {
-    if (target.kind !== 'window' || !target.windowId) return null;
-    const r = input.getWindowRect(target.windowId);
-    return r && isFiniteRect(r) ? r : false;
+  /** Walks across onto a touching surface at the same height. */
+  private crossTo(to: Surface, input: MoverInput): void {
+    this.leg = null;
+    if (to.kind === 'floor') {
+      this.attach = null;
+      this.surface = to;
+      this.x = clamp(this.x, to.x0, to.x1);
+      return;
+    }
+    const live = this.liveLedge(input, to.key);
+    if (!live) return;
+    this.attach = this.attachmentFrom(live);
+    this.surface = to;
+    this.x = clamp(this.x, to.x0, to.x1);
   }
+
+  // ---- climbing --------------------------------------------------------------
+
+  private startClimbUp(leg: Extract<Leg, { kind: 'climbUp' }>, input: MoverInput, out: MoverStep): void {
+    const w = this.walls.find((t) => t.key === leg.wall.key);
+    if (!w || !this.liveWall(input, w.key)) {
+      this.leg = null;
+      this.blockedEdges.add(`mount:${this.surface.key}>up:${leg.wall.key}`);
+      return;
+    }
+    const startY = clamp(Math.min(this.y, w.yBottom), w.yTop, w.yBottom);
+    this.beginClimb(w, 'mount', -1, MOVEMENT.mountMs, { x: w.x, y: startY }, input.now, leg.ledgeKey, leg.cornerX);
+    out.climbStarted = true;
+  }
+
+  private startClimbDown(leg: Extract<Leg, { kind: 'climbDown' }>, input: MoverInput, out: MoverStep): void {
+    const w = this.walls.find((t) => t.key === leg.wall.key);
+    if (!w || !this.liveWall(input, w.key)) {
+      this.leg = null;
+      this.blockedEdges.add(`swing:${this.surface.key}>down:${leg.wall.key}`);
+      return;
+    }
+    this.beginClimb(w, 'swing', 1, MOVEMENT.swingMs, { x: w.x, y: w.yTop }, input.now, this.surface.key, leg.cornerX);
+    out.climbStarted = true;
+  }
+
+  private beginClimb(w: WallTrack, phase: 'mount' | 'swing', dir: -1 | 1, ms: number, to: Point, now: number, topKey: string | null, cornerX: number | null): void {
+    this.attach = null;
+    this.easeRate = 0;
+    this.crouch = null;
+    this.leg = null;
+    this.vx = 0;
+    this.vy = 0;
+    this.modeValue = 'climb';
+    this.climbing = { wall: w, phase, dir, t0: now, durationMs: ms / this.cfg.movementSpeed, from: { x: this.x, y: this.y }, to, topKey, cornerX, exit: null, missingSince: null, replan: false };
+    this.setFacing(w.facing, now);
+  }
+
+  private stepClimb(input: MoverInput, out: MoverStep): void {
+    const c = this.climbing;
+    if (!c) {
+      this.settleNow();
+      return;
+    }
+    const live = this.liveWall(input, c.wall.key);
+    const track = live ? this.navWorld.wallTrack(live) : null;
+    if (!live || !track) {
+      this.letGoOfWall(input, out, 'gone');
+      return;
+    }
+    // Ride the window: the wall line and its top move the cat with them.
+    const dx = track.x - c.wall.x;
+    const dy = track.y0 - c.wall.y0;
+    if (dx !== 0 || dy !== 0) {
+      this.x += dx;
+      this.y += dy;
+      c.from = { x: c.from.x + dx, y: c.from.y + dy };
+      c.to = { x: c.to.x + dx, y: c.to.y + dy };
+      if (c.cornerX !== null) c.cornerX += dx;
+    }
+    c.wall = track;
+    if (this.walls.some((w) => w.key === track.key)) {
+      c.missingSince = null;
+    } else {
+      c.missingSince ??= input.now;
+      const moving = (input.movingWindowIds ?? NO_MOVING).has(track.ownerId);
+      const grace = !this.wallsEnabled() ? 0 : dx !== 0 || dy !== 0 || moving ? MOVEMENT.perchMovingGraceMs : MOVEMENT.perchGraceMs;
+      if (input.now - c.missingSince > grace) {
+        this.letGoOfWall(input, out, this.wallsEnabled() ? 'occluded' : 'disabled');
+        return;
+      }
+    }
+    this.facing = track.facing;
+    const dt = Math.max(0, input.dtMs) / 1000;
+    if (c.phase !== 'climb') {
+      const k = clamp((input.now - c.t0) / Math.max(1, c.durationMs), 0, 1);
+      const e = k * k * (3 - 2 * k);
+      this.x = c.from.x + (c.to.x - c.from.x) * e;
+      this.y = c.from.y + (c.to.y - c.from.y) * e;
+      if (k < 1) return;
+      switch (c.phase) {
+        case 'mount':
+        case 'swing':
+          c.phase = 'climb';
+          this.x = track.x;
+          return;
+        case 'pullUp':
+          this.finishPullUp(c, input, out);
+          return;
+        case 'dismount':
+          this.finishDismount(c, input, out);
+          return;
+      }
+    }
+    if (c.replan && this.goal) {
+      c.replan = false;
+      if (this.goal.y > this.y + 1 && c.dir < 0) c.dir = 1;
+      else if (this.goal.y < this.y - 1 && c.dir > 0 && c.topKey && this.ledgeById(c.topKey)) c.dir = -1;
+    }
+    this.x = track.x;
+    if (c.dir < 0) {
+      const speed = MOVEMENT.climbUpDip * this.cfg.movementSpeed * this.scale;
+      this.vy = -speed;
+      this.y = Math.max(track.yTop, this.y - speed * dt);
+      if (this.y > track.yTop + 0.01) return;
+      const top = c.topKey ? this.ledgeById(c.topKey) : null;
+      const cx = top ? this.graph.cornerX(this.navWorld, track, top) : null;
+      if (!top || cx === null) {
+        // No way over the top (the ledge is covered or gone): climb back down.
+        c.dir = 1;
+        return;
+      }
+      c.cornerX = cx;
+      c.phase = 'pullUp';
+      c.t0 = input.now;
+      c.durationMs = MOVEMENT.pullUpMs / this.cfg.movementSpeed;
+      c.from = { x: this.x, y: this.y };
+      c.to = { x: cx, y: top.y };
+      this.vy = 0;
+      return;
+    }
+    const speed = MOVEMENT.climbDownDip * this.cfg.movementSpeed * this.scale;
+    this.vy = speed;
+    const exit = this.graph.dismountTarget(this.navWorld, track);
+    const exitY = exit ? Math.min(exit.y, track.yBottom) : track.yBottom;
+    this.y = Math.min(exitY, this.y + speed * dt);
+    if (this.y < exitY - 0.01) return;
+    this.vy = 0;
+    if (!exit || exit.y - track.yBottom > MOVEMENT.wallReachBodyHeights * this.bodyHeight) {
+      // The wall ends high above the next support: hop down from its foot.
+      const outward = track.side === 'left' ? -1 : 1;
+      this.climbing = null;
+      this.x = track.x + outward * this.bodyWidth * 0.2;
+      this.startFlight(outward * this.paceSpeedPx('walk') * 0.6, 0, input.now, { thrown: false, intentional: true, ignoreKey: null });
+      out.steppedOff = true;
+      out.climbEnded = true;
+      return;
+    }
+    c.exit = { surface: exit.surface, x: exit.x };
+    c.phase = 'dismount';
+    c.t0 = input.now;
+    c.durationMs = MOVEMENT.dismountMs / this.cfg.movementSpeed;
+    c.from = { x: this.x, y: this.y };
+    c.to = { x: exit.x, y: exit.y };
+  }
+
+  private finishPullUp(c: Climb, input: MoverInput, out: MoverStep): void {
+    const top = c.topKey ? this.ledgeById(c.topKey) : null;
+    const live = top ? this.liveLedge(input, top.key) : null;
+    out.climbEnded = true;
+    if (!top || !live) {
+      this.letGoOfWall(input, out, 'gone');
+      return;
+    }
+    this.climbing = null;
+    this.setGrounded(top, c.cornerX ?? this.x, live);
+  }
+
+  private finishDismount(c: Climb, input: MoverInput, out: MoverStep): void {
+    const exit = c.exit;
+    out.climbEnded = true;
+    this.climbing = null;
+    if (!exit) {
+      this.startFlight(0, 0, input.now, { thrown: false, intentional: true, ignoreKey: null });
+      out.steppedOff = true;
+      return;
+    }
+    const live = exit.surface.kind === 'ledge' ? this.liveLedge(input, exit.surface.key) : null;
+    if (exit.surface.kind === 'ledge' && !live) {
+      this.startFlight(0, 0, input.now, { thrown: false, intentional: true, ignoreKey: exit.surface.key });
+      out.steppedOff = true;
+      return;
+    }
+    this.setGrounded(exit.surface, exit.x, live);
+  }
+
+  /** The wall is gone or unusable: the cat lets go and drops (pushing off slightly). */
+  private letGoOfWall(input: MoverInput, out: MoverStep, reason: SupportLossReason): void {
+    const c = this.climbing;
+    this.climbing = null;
+    const outward = c ? (c.wall.side === 'left' ? -1 : 1) : 0;
+    const p = this.navWorld.clampInside({ x: this.x, y: this.y });
+    if (Math.hypot(p.x - this.x, p.y - this.y) > 1) out.snapped = true;
+    this.x = p.x;
+    this.y = p.y;
+    this.startFlight(outward * this.paceSpeedPx('slow'), 0, input.now, { thrown: false, intentional: false, ignoreKey: null });
+    out.perchLost = true;
+    out.climbEnded = true;
+    if (c) out.supportLost = { reason, surfaceId: c.wall.key, surfaceKind: 'windowSide', fell: true };
+  }
+
+  // ---- landing ---------------------------------------------------------------
 
   private revalidateTarget(target: Surface, landX: number): Surface | null {
     if (target.kind === 'floor') return this.navWorld.floors.find((f) => f.key === target.key) ?? null;
     const tol = this.bodyWidth * 0.25;
-    return this.windows.find((w) => w.windowId === target.windowId && landX >= w.landX0 - tol && landX <= w.landX1 + tol) ?? null;
+    return this.ledges.find((w) => w.key === target.key && landX >= w.landX0 - tol && landX <= w.landX1 + tol) ?? null;
   }
 
   private land(surface: Surface, x: number, input: MoverInput, out: MoverStep, impactVy: number, forced: boolean): void {
     const f = this.flight;
     const scale = f?.scale ?? this.scale;
-    let perchRect: Rect | null = null;
-    if (surface.kind === 'window' && surface.windowId) {
-      const r = input.getWindowRect(surface.windowId);
-      perchRect = r && isFiniteRect(r) ? r : null;
-      if (!perchRect) {
+    let live: LedgeSurface | null = null;
+    if (surface.kind === 'ledge') {
+      live = this.liveLedge(input, surface.key);
+      if (!live) {
         const fp = this.navWorld.nearestFloorPoint({ x, y: surface.y });
         surface = fp.surface;
         x = fp.x;
@@ -813,32 +1376,37 @@ export class Mover {
       fallHeightDip: f ? Math.max(0, (this.navWorld.yAt(surface, x) - f.peakY) / scale) : 0,
       forced,
     };
-    this.setGrounded(surface, x, perchRect);
+    this.setGrounded(surface, x, live);
   }
 
-  private setGrounded(surface: Surface, x: number, perchRect: Rect | null): void {
+  /** Stands the cat on `surface` at x (a ledge needs its live geometry, else it goes to the floor below). */
+  private setGrounded(surface: Surface, x: number, live: LedgeSurface | null, keepY = false): void {
     this.modeValue = 'ground';
     this.flight = null;
     this.crouch = null;
+    this.climbing = null;
+    this.easeRate = 0;
     this.surface = surface;
-    this.perch = surface.kind === 'window' && surface.windowId && perchRect ? { windowId: surface.windowId, rect: perchRect, missingSince: null } : null;
-    if (surface.kind === 'window' && !this.perch) {
+    this.attach = surface.kind === 'ledge' && live ? this.attachmentFrom(live) : null;
+    if (surface.kind === 'ledge' && !this.attach) {
       const fp = this.navWorld.nearestFloorPoint({ x, y: surface.y });
       this.surface = fp.surface;
       x = fp.x;
     }
     this.x = clamp(x, this.surface.x0, this.surface.x1);
-    this.y = this.perch ? this.perch.rect.y : this.navWorld.yAt(this.surface, this.x);
+    if (!keepY) this.y = this.attach ? this.attach.y : this.navWorld.yAt(this.surface, this.x);
     this.vx = 0;
     this.vy = 0;
     this.leg = null;
   }
 
-  private startFlight(vx: number, vy: number, now: number, o: { thrown: boolean; intentional: boolean; ignoreWindowId: string | null }): void {
+  private startFlight(vx: number, vy: number, now: number, o: { thrown: boolean; intentional: boolean; ignoreKey: string | null }): void {
     const scale = this.scale;
     this.modeValue = 'air';
-    this.perch = null;
+    this.attach = null;
+    this.climbing = null;
     this.crouch = null;
+    this.easeRate = 0;
     this.leg = null;
     this.flight = {
       t0: now,
@@ -852,7 +1420,7 @@ export class Mover {
       target: null,
       thrown: o.thrown,
       intentional: o.intentional,
-      ignoreWindowId: o.ignoreWindowId,
+      ignoreKey: o.ignoreKey,
       peakY: this.y,
       scale,
       startedAt: now,
@@ -867,8 +1435,60 @@ export class Mover {
     return this.goal?.arriveRadiusPx ?? ARRIVE_RADIUS_DIP * this.scale;
   }
 
+  private kindEnabled(kind: SurfaceKind): boolean {
+    switch (kind) {
+      case 'taskbar':
+        return this.cfg.taskbars ?? true;
+      case 'windowTop':
+        return this.cfg.perchOnWindows;
+      case 'tabStrip':
+        return this.cfg.tabStrips ?? true;
+      case 'windowSide':
+        return this.wallsEnabled();
+    }
+  }
+
+  /** Climbing needs the window tops it leads to. */
+  private wallsEnabled(): boolean {
+    return (this.cfg.walls ?? true) && this.cfg.perchOnWindows;
+  }
+
+  private nodeBlocked(n: GraphNode): boolean {
+    if (this.offLimits.size === 0) return false;
+    if (n.wall) return this.isOffLimits(n.wall.displayId);
+    const s = n.surface;
+    if (!s) return false;
+    return s.displayIds.every((id) => this.isOffLimits(id));
+  }
+
+  private routeParams(goal: MoveGoal): RouteParams {
+    const route = goal.route ?? 'any';
+    const effort = (v: number | undefined): number => (v !== undefined && Number.isFinite(v) && v > 0 ? clamp(v, 0.2, 5) : 1);
+    return {
+      walkSpeedPx: this.paceSpeedPx('walk'),
+      jumpEffort: effort(this.cfg.jumpEffort),
+      climbEffort: effort(this.cfg.climbEffort),
+      allowClimb: this.wallsEnabled() && route !== 'noClimb',
+      preferClimb: route === 'climb',
+      blockedNode: (n) => this.nodeBlocked(n),
+      blockedEdge: (e) => this.blockedEdges.has(edgeId(e)),
+    };
+  }
+
+  /**
+   * While lifted onto a taskbar, a goal on the floor right under it stays on the taskbar:
+   * the cat does not hop down just because the taskbar rose under it.
+   */
+  private liftedGoal(cur: Surface, dest: SurfacePoint): SurfacePoint {
+    if (cur.kind !== 'ledge' || cur.surfaceKind !== 'taskbar' || dest.surface.kind !== 'floor') return dest;
+    if (dest.x < cur.landX0 || dest.x > cur.landX1) return dest;
+    if (dest.y - cur.y > MOVEMENT.liftMaxBodyHeights * this.bodyHeight + 1 || dest.y < cur.y) return dest;
+    const x = clamp(dest.x, cur.x0, cur.x1);
+    return { surface: cur, x, y: cur.y };
+  }
+
   private planLeg(goal: MoveGoal, cur: Surface): Leg {
-    let dest = this.surfacePointFor({ x: goal.x, y: goal.y });
+    let dest = this.liftedGoal(cur, this.surfacePointFor({ x: goal.x, y: goal.y }));
     // Goals on displays the cat may not roam to, or that are off limits, are approached as closely as possible.
     const allowed = this.navWorld.contains(this.fullWorld.clampInside({ x: goal.x, y: goal.y }), 1);
     const range = this.rangeOn(cur, this.x);
@@ -879,19 +1499,55 @@ export class Mover {
     const openX = this.openLandX(dest.surface, dest.x);
     if (openX === null) return { kind: 'walk', x: clamp(dest.x, range.x0, range.x1), reachable: false };
     if (openX !== dest.x) dest = { surface: dest.surface, x: openX, y: this.navWorld.yAt(dest.surface, openX) };
-    const direct = this.planJumpLeg(cur, this.x, dest);
-    if (direct) return direct;
-    // One intermediate window top (e.g. floor -> low window -> high window).
-    for (const w of this.windows) {
-      if (sameSurface(w, cur) || sameSurface(w, dest.surface)) continue;
-      const first = this.planJumpLeg(cur, this.x, { surface: w, x: clamp(dest.x, w.x0, w.x1), y: w.y });
-      if (first && first.kind === 'jump' && this.planJumpLeg(w, first.landX, dest)) return first;
+    const params = this.routeParams(goal);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const route = this.graph.route(cur, this.x, dest.surface.key, dest.x, params);
+      const first = route?.steps[0];
+      if (!route || !first) break;
+      const leg = this.legFrom(route, cur, dest);
+      if (leg) return leg;
+      // The precise check failed (e.g. the arc would clip a display edge): try another way.
+      this.blockedEdges.add(edgeId(first.edge));
     }
-    if (cur.kind === 'window' && dest.y > cur.y + 1) {
+    if (cur.kind === 'ledge' && dest.y > cur.y + 1) {
       const dir: 1 | -1 = dest.x > cur.x1 ? 1 : dest.x < cur.x0 ? -1 : this.x - cur.x0 < cur.x1 - this.x ? -1 : 1;
       return { kind: 'drop', dir };
     }
     return { kind: 'walk', x: clamp(dest.x, range.x0, range.x1), reachable: false };
+  }
+
+  /** The first leg of a route, checked precisely; null when it cannot be executed. */
+  private legFrom(route: Route, cur: Surface, dest: SurfacePoint): Leg | null {
+    const [first, next] = route.steps;
+    if (!first) return null;
+    const e = first.edge;
+    const surfaceFor = (key: string): Surface | null => (key === dest.surface.key ? dest.surface : (this.graph.node(key)?.surface ?? null));
+    switch (e.kind) {
+      case 'walk': {
+        const to = surfaceFor(e.to);
+        return to ? { kind: 'cross', x: first.fromX, to } : null;
+      }
+      case 'jump': {
+        const t = surfaceFor(e.to);
+        if (!t) return null;
+        const landX = next ? clamp(next.fromX, t.x0, t.x1) : clamp(dest.x, t.x0, t.x1);
+        return this.planJumpLeg(cur, this.x, { surface: t, x: landX, y: this.navWorld.yAt(t, landX) });
+      }
+      case 'drop':
+        return { kind: 'drop', dir: Math.abs(first.fromX - cur.x0) <= Math.abs(first.fromX - cur.x1) ? -1 : 1 };
+      case 'mount': {
+        const w = this.graph.node(e.to)?.wall;
+        if (!w || !next || next.edge.kind !== 'pullUp') return null;
+        return { kind: 'climbUp', standX: first.fromX, wall: w, ledgeKey: next.edge.to, cornerX: next.toX };
+      }
+      case 'swing': {
+        const w = this.graph.node(e.to)?.wall;
+        if (!w || !next || next.edge.kind !== 'dismount') return null;
+        return { kind: 'climbDown', cornerX: first.fromX, wall: w };
+      }
+      default:
+        return null;
+    }
   }
 
   private planJumpLeg(cur: Surface, fromX: number, dest: SurfacePoint): Leg | null {
@@ -1016,7 +1672,10 @@ export class Mover {
       if (here) this.homeDisplayId = here.id;
     }
     this.navWorld = this.buildNav();
-    this.windows = [];
+    this.ledges = [];
+    this.walls = [];
+    this.graph.update(this.navWorld, [], []);
+    this.blockedEdges.clear();
     this.leg = null;
     switch (this.modeValue) {
       case 'held': {
@@ -1035,14 +1694,15 @@ export class Mover {
       }
       default: {
         this.crouch = null;
+        const wasClimbing = this.modeValue === 'climb';
+        this.climbing = null;
         this.modeValue = 'ground';
-        if (this.perch) {
-          if (this.navWorld.contains(pos, 1)) return false;
-          this.perch = null;
-        }
-        const oldDisplay = this.surface.kind === 'floor' ? this.surface.pieces.find((p) => pos.x >= p.left && pos.x < p.right)?.displayId ?? this.surface.displayIds[0] : undefined;
+        // A ledge the cat stands on stays its support while it is still inside the world.
+        if (this.attach && !wasClimbing && this.navWorld.contains(pos, 1)) return false;
+        this.attach = null;
+        const oldDisplay = this.surface.kind === 'floor' ? (this.surface.pieces.find((p) => pos.x >= p.left && pos.x < p.right)?.displayId ?? this.surface.displayIds[0]) : undefined;
         const floor = oldDisplay !== undefined ? this.navWorld.floorFor(oldDisplay) : undefined;
-        const sp = floor && this.navWorld.contains(pos, 2) ? this.navWorld.floorPoint(floor, pos.x) : this.navWorld.nearestFloorPoint(this.navWorld.clampInside(pos));
+        const sp = floor && !wasClimbing && this.navWorld.contains(pos, 2) ? this.navWorld.floorPoint(floor, pos.x) : this.navWorld.nearestFloorPoint(this.navWorld.clampInside(pos));
         this.setGrounded(sp.surface, sp.x, null);
         return Math.hypot(this.x - pos.x, this.y - pos.y) > 0.5;
       }

@@ -44,6 +44,43 @@ export const MOVEMENT = {
   hopClearanceDip: 46,
   /** Longest playful pounce toward the pointer, in body lengths. */
   pounceMaxBodyLengths: 2.2,
+
+  // ---- v1.1 surfaces --------------------------------------------------------------
+  /** Climbing speeds on a window side at movementSpeed = 1. */
+  climbUpDip: 45,
+  climbDownDip: 60,
+  /** Getting onto a wall from the ground, and stepping off it at the bottom. */
+  mountMs: 320,
+  dismountMs: 260,
+  /** Pulling up over a top corner onto the ledge, and the reverse swing down onto the wall. */
+  pullUpMs: 520,
+  swingMs: 460,
+  /** Lowest a wall may end above the support the cat climbs from, in body heights. */
+  wallReachBodyHeights: 0.6,
+  /** A ledge rising through the cat's feet lifts it when it comes from at most this far below, in body heights. */
+  liftMaxBodyHeights: 0.9,
+  /** Easing speed toward a support the cat was lifted onto or lowered onto (and at least 1.5x the support's speed). */
+  liftDip: 900,
+  settleDip: 420,
+  /** A retracting taskbar sets the cat down without a fall when the surface below is at most this far, in body heights. */
+  settleMaxBodyHeights: 0.6,
+  /** Two ledges at the same height (within this) whose ends touch (within joinGapBodyLengths) are walk-connected. */
+  walkJoinToleranceDip: 2,
+  walkJoinGapBodyLengths: 0.3,
+} as const;
+
+/** Route effort weights (seconds of walking one leg is worth), before personality multipliers. */
+export const ROUTE_EFFORT = {
+  jumpBase: 0.9,
+  jumpUpPerMax: 0.8,
+  jumpDownPerMax: 0.3,
+  jumpAcrossPerMax: 0.2,
+  dropBase: 0.5,
+  dropPerMax: 0.3,
+  walkJoin: 0.05,
+  /** Climbing is slower and harder than jumping: cats only climb when they choose to or must. */
+  climbMultiplier: 1.6,
+  climbTransition: 0.6,
 } as const;
 
 /** Arrival tolerance when walking to a point, in DIP. */

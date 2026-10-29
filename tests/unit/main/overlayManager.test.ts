@@ -1,5 +1,6 @@
 // Overlay manager with Electron mocked: cross-display drags, the renderer hang
-// watchdog and lost presses without Win32 button state.
+// watchdog, lost presses without Win32 button state, and the shell integration
+// (NonRudeHWND around show/destroy, TaskbarCreated forwarding; MOCKED shell).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Point } from '../../../src/shared/geometry';
 import type { OverlayPointerEvent } from '../../../src/shared/ipc';
@@ -9,7 +10,7 @@ import type { DisplayGeometry, WorldGeometry } from '../../../src/shared/world';
 import type { DisplayService } from '../../../src/main/contracts';
 import type { WindowRegistry } from '../../../src/main/security';
 import { createGestureRecognizer } from '../../../src/core/interaction/gestures';
-import { createOverlayManager, type OverlayManager } from '../../../src/main/overlay/overlayManager';
+import { createOverlayManager, type OverlayManager, type OverlayManagerOptions } from '../../../src/main/overlay/overlayManager';
 import { memoryLogger } from './helpers';
 
 const fakes = vi.hoisted(() => {
@@ -28,6 +29,8 @@ const fakes = vi.hoisted(() => {
     }
   }
   let nextId = 1;
+  /** Ordered record of show / destroy / shell calls across all windows. */
+  const calls: string[] = [];
   class FakeWebContents extends Emitter {
     readonly id = nextId++;
     readonly sent: { channel: string; payload: unknown }[] = [];
@@ -52,6 +55,7 @@ const fakes = vi.hoisted(() => {
       return this.destroyed;
     }
     destroy(): void {
+      calls.push(`destroy:${this.displayId}`);
       this.destroyed = true;
       this.emit('closed');
     }
@@ -59,7 +63,9 @@ const fakes = vi.hoisted(() => {
       return { ...this.bounds };
     }
     setBounds(): void {}
-    showInactive(): void {}
+    showInactive(): void {
+      calls.push(`show:${this.displayId}`);
+    }
     setAlwaysOnTop(): void {}
     isAlwaysOnTop(): boolean {
       return true;
@@ -79,11 +85,29 @@ const fakes = vi.hoisted(() => {
     }
   }
   const windows: FakeWindow[] = [];
-  return { FakeWindow, windows };
+  const shell = {
+    failSet: false,
+    throwOnHook: false,
+    hooks: [] as Array<{ displayId: string; cb: () => void }>,
+    beforeShow(win: FakeWindow, displayId: string): boolean {
+      calls.push(`nonRude:${displayId}`);
+      return !shell.failSet;
+    },
+    beforeDestroy(win: FakeWindow, displayId: string): boolean {
+      calls.push(`clearNonRude:${displayId}`);
+      return true;
+    },
+    hookTaskbarCreated(win: FakeWindow, cb: () => void): boolean {
+      shell.hooks.push({ displayId: win.displayId, cb });
+      return true;
+    },
+  };
+  return { FakeWindow, windows, calls, shell };
 });
 
 vi.mock('electron', () => ({ screen: { dipToScreenRect: (_w: unknown, r: unknown) => r } }));
 vi.mock('../../../src/main/overlay/overlayWindow', () => ({
+  createOverlayShell: () => fakes.shell,
   overlayUrl: (id: string) => `desktop-cat://app/renderer/overlay/index.html?display=${id}`,
   createOverlayWindow: (o: { display: DisplayGeometry }) => {
     const w = new fakes.FakeWindow(o.display.id, o.display.workAreaDip);
@@ -170,7 +194,7 @@ interface Rig {
 
 let rig: Rig;
 
-function makeRig(): Rig {
+function makeRig(extra: Partial<OverlayManagerOptions> = {}): Rig {
   let now = 1000;
   let button: boolean | null = false;
   const events: SimEvent[] = [];
@@ -189,6 +213,7 @@ function makeRig(): Rig {
     onSessionEnd: () => undefined,
     isLeftButtonDown: () => button,
     clock: () => now,
+    ...extra,
   });
   mgr.start();
   const win = (id: string): FakeWindow => [...fakes.windows].reverse().find((w) => w.displayId === id && !w.destroyed)!;
@@ -222,6 +247,9 @@ const types = (evs: SimEvent[]): string[] => evs.map((e) => e.type);
 beforeEach(() => {
   vi.useFakeTimers();
   fakes.windows.length = 0;
+  fakes.calls.length = 0;
+  fakes.shell.failSet = false;
+  fakes.shell.hooks.length = 0;
   rig = makeRig();
 });
 
@@ -414,5 +442,71 @@ describe('overlay manager: lost release without Win32 button state', () => {
     }
     expect(rig.mgr.pressed).toBe(true);
     expect(rig.mgr.dragging).toBe(true);
+  });
+});
+
+describe('overlay manager: shell integration (NonRudeHWND, TaskbarCreated)', () => {
+  it('sets NonRudeHWND right before showInactive and removes it right before destroy', () => {
+    rig.win('A').emit('ready-to-show');
+    rig.win('B').emit('ready-to-show');
+    expect(fakes.calls).toEqual(['nonRude:A', 'show:A', 'nonRude:B', 'show:B']);
+    expect(rig.mgr.info().map((o) => [o.displayId, o.nonRude])).toEqual([
+      ['A', true],
+      ['B', true],
+    ]);
+    fakes.calls.length = 0;
+    rig.mgr.dispose();
+    expect(fakes.calls).toEqual(['clearNonRude:A', 'destroy:A', 'clearNonRude:B', 'destroy:B']);
+  });
+
+  it('removes the property before the window of a crashed renderer is destroyed', () => {
+    const a = rig.win('A');
+    a.emit('ready-to-show');
+    fakes.calls.length = 0;
+    a.webContents.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+    expect(fakes.calls).toEqual(['clearNonRude:A', 'destroy:A']);
+  });
+
+  it('shows the overlay anyway when setting the property fails, and does not remove what was never set', () => {
+    fakes.shell.failSet = true;
+    const a = rig.win('A');
+    a.emit('ready-to-show');
+    expect(fakes.calls).toEqual(['nonRude:A', 'show:A']);
+    expect(rig.mgr.info().find((o) => o.displayId === 'A')!.nonRude).toBe(false);
+    fakes.calls.length = 0;
+    rig.mgr.dispose();
+    expect(fakes.calls.filter((c) => c.startsWith('clearNonRude'))).toEqual([]);
+  });
+
+  it('does not hook TaskbarCreated without a consumer', () => {
+    expect(fakes.shell.hooks).toEqual([]);
+    expect(rig.mgr.info().every((o) => !o.taskbarCreatedHook)).toBe(true);
+  });
+
+  it('forwards TaskbarCreated once per broadcast although every overlay receives it', () => {
+    rig.mgr.dispose();
+    fakes.shell.hooks.length = 0;
+    let notified = 0;
+    rig = makeRig({ onTaskbarCreated: () => notified++ });
+    expect(fakes.shell.hooks.map((h) => h.displayId)).toEqual(['A', 'B']);
+    expect(rig.mgr.info().every((o) => o.taskbarCreatedHook)).toBe(true);
+    for (const h of fakes.shell.hooks) h.cb();
+    expect(notified).toBe(1);
+    rig.advance(1500);
+    for (const h of fakes.shell.hooks) h.cb();
+    expect(notified).toBe(2);
+    expect(rig.log.entries.filter((e) => e.msg.startsWith('taskbar re-created'))).toHaveLength(2);
+  });
+
+  it('contains a failing TaskbarCreated consumer', () => {
+    rig.mgr.dispose();
+    fakes.shell.hooks.length = 0;
+    rig = makeRig({
+      onTaskbarCreated: () => {
+        throw new Error('consumer failed');
+      },
+    });
+    expect(() => fakes.shell.hooks[0]!.cb()).not.toThrow();
+    expect(rig.log.entries.some((e) => e.level === 'error' && e.msg === 'TaskbarCreated handler failed')).toBe(true);
   });
 });

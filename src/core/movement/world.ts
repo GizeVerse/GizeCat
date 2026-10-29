@@ -1,9 +1,12 @@
-// The cat's physical world: floors (bottom edge of each display's work area),
-// walls, window-top platforms and containment, all in physical px.
+// The cat's physical world: floors (bottom edge of each display's work area), the
+// environment's ledges (taskbars, window tops, tab strips) and climbable walls (window
+// sides), and containment, all in physical px.
+import type { Facing } from '../../shared/cat';
 import { CAT_BASE_HEIGHT_DIP, CAT_BASE_WIDTH_DIP } from '../../shared/cat';
 import type { Point } from '../../shared/geometry';
 import { clamp, isFiniteRect, rectBottom, rectRight } from '../../shared/geometry';
-import type { DisplayGeometry, Platform, WorldGeometry } from '../../shared/world';
+import type { LedgeSurface, SurfaceKind, SurfacePhase, WallSurface } from '../../shared/surfaces';
+import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
 import { MOVEMENT } from './constants';
 
 /** One display's share of a floor. */
@@ -16,12 +19,17 @@ export interface FloorPiece {
   scale: number;
 }
 
-/** A walkable horizontal surface. */
+/** A walkable horizontal surface: a floor, or one of the environment's ledges. */
 export interface Surface {
-  kind: 'floor' | 'window';
-  /** Stable identity: joined display ids for floors, window id for windows. */
+  kind: 'floor' | 'ledge';
+  /** Stable identity: joined display ids for floors, the environment surface id for ledges. */
   key: string;
-  windowId: string | null;
+  /** Ledges: the environment surface id (src/shared/surfaces.ts); null for floors. */
+  surfaceId: string | null;
+  /** Ledges: taskbar, window top or tab strip; null for floors. */
+  surfaceKind: SurfaceKind | null;
+  /** Ledges: the owning top-level window (or taskbar window); null for floors. */
+  ownerId: string | null;
   displayIds: readonly string[];
   /** Representative height (floors: of the first piece). */
   y: number;
@@ -33,6 +41,43 @@ export interface Surface {
   landX1: number;
   /** Floors only, sorted left to right. */
   pieces: readonly FloorPiece[];
+  /** Ledges: preferred resting span for the anchor (inside [x0, x1]), or null for anywhere. */
+  rest: { x0: number; x1: number } | null;
+  /** Ledges: something worth looking at on the ledge (a tab strip's active tab), or null. */
+  focusX: number | null;
+  /** Ledges: lifecycle phase (a 'leaving' ledge is never a jump target). Floors: 'stable'. */
+  phase: SurfacePhase;
+  /** Ledges: vertical motion reported by the provider, px/s (negative = up). */
+  vy: number;
+}
+
+/**
+ * A climbable vertical edge (a window side) in anchor terms. While climbing, the anchor is
+ * the grip point on the wall line at hind-paw height and the body extends upwards.
+ */
+export interface WallTrack {
+  /** The environment surface id. */
+  key: string;
+  ownerId: string;
+  displayId: string;
+  /** The wall line (the window's visible side). */
+  x: number;
+  side: 'left' | 'right';
+  /** +1 when the cat hangs on a window's left side (wall to its right), -1 on a right side. */
+  facing: Facing;
+  /** Raw extent of the edge. */
+  y0: number;
+  y1: number;
+  /** Highest anchor height on the wall: the head peeks over the top corner (pull-up position). */
+  yTop: number;
+  /** Lowest anchor height on the wall: its bottom end, cut off by the floor. */
+  yBottom: number;
+  /** Where the cat stands on a support beside the wall before climbing (outside the window). */
+  standX: number;
+  /** Ledge reachable by pulling up at the top corner, or null. */
+  topLedgeId: string | null;
+  phase: SurfacePhase;
+  scale: number;
 }
 
 export interface SurfacePoint {
@@ -177,7 +222,7 @@ export class WorldModel {
 
   /** Height of the surface at x. */
   yAt(surface: Surface, x: number): number {
-    if (surface.kind === 'window') return surface.y;
+    if (surface.kind === 'ledge') return surface.y;
     return this.floorPieceAt(surface, x)?.y ?? surface.y;
   }
 
@@ -210,11 +255,23 @@ export class WorldModel {
     return { surface, x: cx, y: this.yAt(surface, cx) };
   }
 
+  /** Floor height under x (the floor of the display column containing x), or null outside every display column. */
+  floorYAt(x: number): number | null {
+    let best: number | null = null;
+    for (const f of this.floors) {
+      for (const piece of f.pieces) {
+        if (x < piece.left || x >= piece.right) continue;
+        if (best === null || piece.y > best) best = piece.y;
+      }
+    }
+    return best;
+  }
+
   /**
    * First surface at or below (x, y) whose landing range contains x. Floors are
    * only considered on the display column containing x.
    */
-  surfaceBelow(x: number, y: number, windows: readonly Surface[], tolerance = 1): SurfacePoint | null {
+  surfaceBelow(x: number, y: number, ledges: readonly Surface[], tolerance = 1): SurfacePoint | null {
     let best: SurfacePoint | null = null;
     for (const f of this.floors) {
       for (const piece of f.pieces) {
@@ -222,7 +279,7 @@ export class WorldModel {
         if (!best || piece.y < best.y) best = { surface: f, x: clamp(x, f.x0, f.x1), y: piece.y };
       }
     }
-    for (const w of windows) {
+    for (const w of ledges) {
       if (x < w.landX0 || x > w.landX1 || w.y < y - tolerance) continue;
       if (!best || w.y < best.y) best = { surface: w, x: clamp(x, w.x0, w.x1), y: w.y };
     }
@@ -230,38 +287,137 @@ export class WorldModel {
   }
 
   /**
-   * Converts the host's visible window-top segments into walkable surfaces:
-   * each must lie inside a work area, leave head room for the cat and be wide enough.
+   * Converts the environment's ledges into walkable surfaces. Each must lie inside a work
+   * area, leave head room for the cat and be wide enough. Window tops and tab strips must
+   * also keep clear of the floor; a taskbar only has to be above it (a docked taskbar below
+   * the work area is the floor already, and top or side taskbars are a ceiling or a wall).
+   * Duplicate ids keep their first entry.
    */
-  windowSurfaces(platforms: readonly Platform[], maxCount = 64): Surface[] {
+  ledgeSurfaces(ledges: readonly LedgeSurface[], maxCount = 64): Surface[] {
     const out: Surface[] = [];
-    for (const p of platforms) {
+    const seen = new Set<string>();
+    for (const l of ledges) {
       if (out.length >= maxCount) break;
-      if (!Number.isFinite(p.y) || !Number.isFinite(p.x0) || !Number.isFinite(p.x1) || p.x1 - p.x0 < 1) continue;
-      const d = this.displayAt({ x: (p.x0 + p.x1) / 2, y: p.y });
-      if (!d) continue;
-      const wa = d.workAreaPx;
-      const bw = this.bodyWidth(d.scaleFactor);
-      const bh = this.bodyHeight(d.scaleFactor);
-      if (p.y - bh * 0.8 < wa.y) continue;
-      if (rectBottom(wa) - p.y < bh * 0.5) continue;
-      const lx0 = Math.max(p.x0, wa.x);
-      const lx1 = Math.min(p.x1, rectRight(wa));
-      if (lx1 - lx0 < bw * 0.9) continue;
-      out.push({
-        kind: 'window',
-        key: `win:${p.windowId}`,
-        windowId: p.windowId,
-        displayIds: [d.id],
-        y: p.y,
-        x0: lx0 + bw * 0.25,
-        x1: lx1 - bw * 0.25,
-        landX0: lx0,
-        landX1: lx1,
-        pieces: [],
-      });
+      if (!l || seen.has(l.id)) continue;
+      const s = this.ledgeSurface(l, false);
+      if (!s) continue;
+      seen.add(l.id);
+      out.push(s);
     }
     return out;
+  }
+
+  /** One ledge as a walkable surface, or null. `relaxed` keeps a ledge the cat already stands on (geometry sanity only). */
+  ledgeSurface(l: LedgeSurface, relaxed: boolean): Surface | null {
+    if (l.orientation !== 'ledge' || typeof l.id !== 'string' || l.id.length === 0) return null;
+    if (!Number.isFinite(l.y) || !Number.isFinite(l.x0) || !Number.isFinite(l.x1) || l.x1 - l.x0 < 1) return null;
+    if (l.kind === 'windowSide') return null;
+    if (l.kind === 'taskbar' && (l.edge === 'top' || l.edge === 'left' || l.edge === 'right')) return null;
+    const d = this.displayAt({ x: (l.x0 + l.x1) / 2, y: l.y });
+    if (!d) return null;
+    const wa = d.workAreaPx;
+    const bw = this.bodyWidth(d.scaleFactor);
+    const bh = this.bodyHeight(d.scaleFactor);
+    if (!relaxed) {
+      if (l.y - bh * 0.8 < wa.y) return null;
+      if (l.kind === 'taskbar') {
+        const floorY = this.floorYAt((l.x0 + l.x1) / 2) ?? rectBottom(wa);
+        if (floorY - l.y < 2 * d.scaleFactor) return null;
+      } else if (rectBottom(wa) - l.y < bh * 0.5) {
+        return null;
+      }
+    }
+    const lx0 = Math.max(l.x0, wa.x);
+    const lx1 = Math.min(l.x1, rectRight(wa));
+    if (lx1 - lx0 < (relaxed ? 1 : bw * 0.9)) return null;
+    // A taskbar spans its display: like on a floor, the cat keeps its whole body on screen.
+    const inset = l.kind === 'taskbar' ? bw / 2 : bw * 0.25;
+    let x0 = lx0 + inset;
+    let x1 = lx1 - inset;
+    if (x1 < x0) {
+      x0 = (lx0 + lx1) / 2;
+      x1 = x0;
+    }
+    let rest: { x0: number; x1: number } | null = null;
+    if (l.rest && Number.isFinite(l.rest.x0) && Number.isFinite(l.rest.x1)) {
+      const r0 = clamp(l.rest.x0, x0, x1);
+      const r1 = clamp(l.rest.x1, x0, x1);
+      if (r1 - r0 >= 1) rest = { x0: r0, x1: r1 };
+    }
+    return {
+      kind: 'ledge',
+      key: l.id,
+      surfaceId: l.id,
+      surfaceKind: l.kind,
+      ownerId: typeof l.ownerId === 'string' ? l.ownerId : null,
+      displayIds: [d.id],
+      y: l.y,
+      x0,
+      x1,
+      landX0: lx0,
+      landX1: lx1,
+      pieces: [],
+      rest,
+      focusX: typeof l.focusX === 'number' && Number.isFinite(l.focusX) ? l.focusX : null,
+      phase: l.phase === 'entering' || l.phase === 'leaving' ? l.phase : 'stable',
+      vy: Number.isFinite(l.vy) ? l.vy : 0,
+    };
+  }
+
+  /**
+   * Converts window sides into climbable walls (duplicates keep their first entry). The cat
+   * hangs outside the window, so there must be room for its body beside the edge on the
+   * same display; the climbable stretch runs from just below the top corner (head over the
+   * edge) down to the bottom end or the floor, whichever is higher.
+   */
+  wallTracks(walls: readonly WallSurface[], maxCount = 64): WallTrack[] {
+    const out: WallTrack[] = [];
+    const seen = new Set<string>();
+    for (const w of walls) {
+      if (out.length >= maxCount) break;
+      if (!w || seen.has(w.id)) continue;
+      const t = this.wallTrack(w);
+      if (!t) continue;
+      seen.add(w.id);
+      out.push(t);
+    }
+    return out;
+  }
+
+  wallTrack(w: WallSurface): WallTrack | null {
+    if (w.orientation !== 'wall' || w.kind !== 'windowSide' || typeof w.id !== 'string' || w.id.length === 0) return null;
+    if (!Number.isFinite(w.x) || !Number.isFinite(w.y0) || !Number.isFinite(w.y1) || w.y1 <= w.y0) return null;
+    if (w.side !== 'left' && w.side !== 'right') return null;
+    const outward = w.side === 'left' ? -1 : 1;
+    const d = this.displayAt({ x: w.x + outward, y: (w.y0 + w.y1) / 2 }) ?? this.displayAt({ x: w.x + outward, y: w.y0 });
+    if (!d) return null;
+    const wa = d.workAreaPx;
+    const bw = this.bodyWidth(d.scaleFactor);
+    const bh = this.bodyHeight(d.scaleFactor);
+    // Room for the body beside the edge (it sticks out about one body height while hanging).
+    const outer = w.x + outward * bh * 0.85;
+    if (outer < wa.x || outer > rectRight(wa)) return null;
+    const standX = w.x + outward * bw * 0.55;
+    const floorY = this.floorYAt(standX) ?? rectBottom(wa);
+    const yTop = Math.max(w.y0 + bw * 0.55, wa.y + bw);
+    const yBottom = Math.min(w.y1, floorY);
+    if (yBottom - yTop < bw * 0.25) return null;
+    return {
+      key: w.id,
+      ownerId: typeof w.ownerId === 'string' ? w.ownerId : '',
+      displayId: d.id,
+      x: w.x,
+      side: w.side,
+      facing: w.side === 'left' ? 1 : -1,
+      y0: w.y0,
+      y1: w.y1,
+      yTop,
+      yBottom,
+      standX,
+      topLedgeId: typeof w.topLedgeId === 'string' && w.topLedgeId.length > 0 ? w.topLedgeId : null,
+      phase: w.phase === 'entering' || w.phase === 'leaving' ? w.phase : 'stable',
+      scale: d.scaleFactor,
+    };
   }
 
   private buildFloors(): Surface[] {
@@ -301,7 +457,9 @@ export class WorldModel {
     return {
       kind: 'floor',
       key: `floor:${ids.join('+')}`,
-      windowId: null,
+      surfaceId: null,
+      surfaceKind: null,
+      ownerId: null,
       displayIds: ids,
       y: first.y,
       x0,
@@ -309,6 +467,10 @@ export class WorldModel {
       landX0: first.left,
       landX1: last.right,
       pieces,
+      rest: null,
+      focusX: null,
+      phase: 'stable',
+      vy: 0,
     };
   }
 }
@@ -319,7 +481,5 @@ function clampToWorkArea(d: DisplayGeometry, p: Point): Point {
 }
 
 export function sameSurface(a: Surface, b: Surface): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'floor') return a.key === b.key;
-  return a.windowId === b.windowId && a.x0 <= b.x1 && b.x0 <= a.x1;
+  return a.kind === b.kind && a.key === b.key;
 }

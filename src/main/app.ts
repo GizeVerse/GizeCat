@@ -23,7 +23,7 @@ import { createThrottle } from './ipc/rateLimit';
 import { applyViewState, createViewStateMemory, startupPlan } from './ipc/startupState';
 import { appRootFrom, appVersion } from './lifecycle/appInfo';
 import type { CrashGuard } from './lifecycle/crashGuard';
-import { createLoginItemController } from './lifecycle/loginItem';
+import { createLoginItemService, LOGIN_ITEM_NAME } from './lifecycle/loginItem';
 import { catContextMenuModel, type MenuContext } from './lifecycle/menuModel';
 import { createQuitSequence } from './lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndWindow } from './lifecycle/sessionEnd';
@@ -40,6 +40,7 @@ import type { SettingsStore } from './store/settingsStore';
 import { installTestHooks } from './testHooks';
 import { createTrayController, toMenuTemplate } from './tray';
 import { createActivityMonitor, createWin32Api, createWindowTracker, sameWindowExclusions, windowExclusionsFor } from './win32';
+import { createLoginItemRegistry } from './win32/registry';
 
 export interface AppBootstrap {
   logger: RootLogger;
@@ -150,15 +151,26 @@ export function startApp(boot: AppBootstrap): RunningApp {
     devTools: boot.flags.dev,
   });
 
-  // Status, UI refresh
-  const loginItem = createLoginItemController({
-    api: app,
+  // Launch at sign-in: reconciled once, before the host starts (two registry reads, microseconds).
+  // Only an installed, non-test build may write its entry (see the write gate in loginItemReconcile.ts).
+  const loginItem = createLoginItemService({
+    writer: app,
+    registry: createLoginItemRegistry(LOGIN_ITEM_NAME),
+    settings,
     logger: logger.child('login-item'),
     execPath: process.execPath,
-    appPathArg: app.isPackaged ? null : appRoot,
-    writesEnabled: !boot.flags.test,
+    userData: boot.userData,
+    logDir: logger.logDir,
+    packaged: app.isPackaged,
+    test: boot.flags.test,
+    launchedAtLogin: boot.flags.launchedAtLogin,
+    env: process.env,
+    settingsLoadStatus: boot.settingsLoadStatus,
+    clock: () => performance.now(),
   });
-  const loginActive = loginItem.isActive();
+  loginItem.reconcileAtStartup();
+
+  // Status, UI refresh
   const shortcuts = createShortcutManager(globalShortcut, logger.child('shortcuts'), () => {
     if (host) host.setHidden(!host.hidden);
   });
@@ -182,7 +194,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       displayCount: display.world.displays.length,
       perception: perception ? perception.status : offStatus(s, 'Screen analysis is unavailable.'),
       windowAwareness: tracker.mode,
-      launchAtLoginActive: loginActive,
+      loginItem: loginItem.status(),
       shortcutRegistered: shortcuts.registered,
       startedAt: boot.startedAt,
     };
@@ -266,6 +278,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
         host: h.debug(),
         overlays: overlays.info().map(({ hwnd: _hwnd, ...o }) => o),
         windowTracker: tracker.debugInfo(),
+        loginItem: loginItem.debugInfo(),
         win32Available: win32.available,
         encryptionAvailable: secrets.encryptionAvailable,
         startup: { settings: boot.settingsLoadStatus, cat: { recovered: catLoad.recovered, source: catLoad.source } },
@@ -277,9 +290,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
   }
 
   const targets: ActionTargets = {
-    // Replaced by the v1.1 login-item reconciler (main-owned loginItem section).
-    setLaunchAtLogin: () => ({ ok: false, message: 'Launch at sign-in is not available in this build yet.' }),
-    dismissLaunchNotice: () => ({ ok: true }),
+    // The only paths that change the main-owned loginItem section after boot.
+    setLaunchAtLogin: (on) => loginItem.setLaunchAtLogin(on),
+    dismissLaunchNotice: () => loginItem.dismissNotice(),
     setPaused: (p) => requireHost().setPaused(p),
     setHidden: (h) => requireHost().setHidden(h),
     callCat: () => requireHost().callCat(),

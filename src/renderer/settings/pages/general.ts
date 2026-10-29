@@ -1,12 +1,27 @@
-import type { AppStatus } from '../../../shared/ipc';
+import type { AppStatus, LoginItemStatus } from '../../../shared/ipc';
 import { MAX_CAT_NAME_LENGTH, MAX_SHORTCUT_LENGTH, STARTUP_STATES } from '../catalog';
 import type { PageContext, PageView } from '../context';
-import { button, group, page, row, runAction, segmentedRow, setButtonLabel, setNote, textRow, toggleRow } from '../controls';
-import { h } from '../dom';
+import { button, group, page, row, runAction, segmentedRow, setButtonLabel, setNote, textRow, toggleRow, toggleSwitch, type NoteTone } from '../controls';
+import { h, icon } from '../dom';
+import { errorText } from '../store';
 import { S } from '../strings';
 import { validateCatName, validateShortcut } from '../validate';
 
 const G = S.general;
+
+/**
+ * The status line under "Start with Windows". Main reports the state as data; the common
+ * cases are worded here, anything unusual (stale entry, unreadable registry, a Task Manager
+ * disable the user just tried to switch on) uses main's explanation.
+ */
+export function launchStatusView(s: LoginItemStatus): { text: string; tone: NoteTone } {
+  const L = G.launchStatus;
+  if (!s.writable) return { text: L.notAvailable, tone: 'info' };
+  if (s.disabledBy === 'windows') return { text: L.windowsDisabled, tone: 'warn' };
+  if (s.enabled && s.active) return { text: L.active, tone: 'ok' };
+  if (!s.enabled && !s.active) return { text: s.disabledBy === 'external' ? L.removedOutside : L.off, tone: 'info' };
+  return { text: s.reason ?? (s.enabled ? L.pending : L.off), tone: 'warn' };
+}
 
 /**
  * The simulation ignores a call while the cat is paused (main still reports success),
@@ -49,8 +64,57 @@ export function generalPage(ctx: PageContext): PageView {
     void runAction(ctx, ctx.store.view.status.paused ? 'resume' : 'pause', pauseBtn, pause.note);
   });
 
-  // v1.1: launch at sign-in moves to the main-owned loginItem model (enable/disableLaunchAtLogin actions).
-  const launch = { parts: row({ title: G.launchTitle, desc: G.launchDesc, icon: 'startup' }) };
+  // Launch at sign-in is main-owned: the switch runs the enable/disableLaunchAtLogin actions
+  // instead of patching settings, and always shows what main reports afterwards.
+  const launch = row({ title: G.launchTitle, desc: G.launchDesc, icon: 'startup' });
+  const launchSwitch = toggleSwitch(launch.titleId, launch.describedBy);
+  launch.control.append(launchSwitch.root);
+  launch.note.setAttribute('aria-live', 'polite');
+  let launchBusy = false;
+  const syncLaunch = (s: LoginItemStatus): void => {
+    if (!launchBusy) {
+      launchSwitch.input.checked = s.enabled;
+      launchSwitch.refresh();
+    }
+    const line = launchStatusView(s);
+    setNote(launch.note, line.text, line.tone);
+  };
+  launchSwitch.input.addEventListener('change', () => {
+    const on = launchSwitch.input.checked;
+    launchBusy = true;
+    launchSwitch.input.disabled = true;
+    launchSwitch.input.setAttribute('aria-busy', 'true');
+    setNote(launch.error, null, 'error');
+    void (async () => {
+      try {
+        const res = await ctx.api.action(on ? 'enableLaunchAtLogin' : 'disableLaunchAtLogin');
+        if (!res.ok) setNote(launch.error, S.errors.actionFailed(res.message ?? S.errors.unexpected), 'error');
+      } catch (e) {
+        setNote(launch.error, S.errors.actionFailed(errorText(e)), 'error');
+      }
+      launchBusy = false;
+      launchSwitch.input.disabled = false;
+      launchSwitch.input.removeAttribute('aria-busy');
+      try {
+        await ctx.refresh();
+      } catch {
+        // The next broadcast from main brings the switch up to date.
+      }
+      syncLaunch(ctx.store.view.status.loginItem);
+    })();
+  });
+
+  const noticeDismiss = button(G.launchNoticeDismiss);
+  const notice = h('div', { class: 'callout callout-startup', hidden: true }, [
+    icon('startup', 'callout-icon'),
+    h('div', {}, [
+      h('h3', { class: 'callout-title', text: G.launchNoticeTitle }),
+      h('p', { class: 'callout-text', text: G.launchNoticeText }),
+      h('div', { class: 'callout-actions' }, [noticeDismiss]),
+    ]),
+  ]);
+  noticeDismiss.addEventListener('click', () => void runAction(ctx, 'dismissLaunchNotice', noticeDismiss, null));
+
   const startState = segmentedRow(
     ctx,
     'general',
@@ -79,7 +143,8 @@ export function generalPage(ctx: PageContext): PageView {
 
   const element = page(G.title, [
     group(G.groupCat, [name.parts.row, call.row, visibility.row, pause.row]),
-    group(G.groupStartup, [launch.parts.row, startState.parts.row, shortcuts.parts.row, shortcut.parts.row]),
+    group(G.groupStartup, [notice, launch.row, startState.parts.row]),
+    group(G.groupShortcuts, [shortcuts.parts.row, shortcut.parts.row]),
     group(G.groupApp, [quit.row]),
   ]);
 
@@ -97,7 +162,8 @@ export function generalPage(ctx: PageContext): PageView {
     if (status.paused) setNote(pause.note, G.pausedNow, 'info');
     else if (pause.note.classList.contains('tone-info')) setNote(pause.note, null);
 
-    setNote(launch.parts.note, status.launchAtLoginActive ? null : G.launchInactive, 'warn');
+    syncLaunch(status.loginItem);
+    notice.hidden = !status.loginItem.showNotice;
 
     const enabled = ctx.store.intended('general', 'shortcutsEnabled');
     shortcut.input.disabled = !enabled;

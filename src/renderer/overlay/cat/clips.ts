@@ -21,6 +21,11 @@ export interface ClipContext {
   hasLook: boolean;
   arousal: number;
   contentment: number;
+  /**
+   * Climb only: 0 clinging still .. 1 climbing, eased by the animator so starting and stopping on
+   * the wall blend in; when absent the clip derives it from `speed`.
+   */
+  engage?: number;
 }
 
 /** Durations (s) of clips that play once and hold their final pose. */
@@ -48,12 +53,33 @@ const WALK_DUTY = 0.64;
 const WALK_MAX_STRIDE = 20;
 const RUN_DUTY = 0.38;
 const RUN_MAX_STRIDE = 34;
+/**
+ * Climb: share of a cycle each paw grips the wall, the step the cadence aims for and the longest
+ * step (DIP, vertical). Paws keep their grip exactly up to CLIMB_MAX_GRIP_SPEED; a faster climb
+ * scrambles (the paws slip a little, like a walk past its longest stride).
+ */
+const CLIMB_DUTY = 0.62;
+const CLIMB_STEP = 10;
+const CLIMB_MAX_STRIDE = 15;
+const CLIMB_MAX_HZ = 2.6;
+/** Fastest climb (body-lengths/s) at which every gripping paw stays exactly put on the wall. */
+export const CLIMB_MAX_GRIP_SPEED = (CLIMB_MAX_HZ * CLIMB_MAX_STRIDE) / CLIMB_DUTY / CAT_BASE_WIDTH_DIP;
+/** Climbing speed (body-lengths/s) at which the climbing motion is fully developed; slower fades into clinging. */
+export const CLIMB_FULL_SPEED = 0.14;
+/** Period (s) of the clinging-still idle of the climb clip: a glance down at the viewer, a re-grip, a look up. */
+export const CLIMB_IDLE_PERIOD_S = 7.2;
+
+/** How far the climbing motion is developed at a climbing speed: 0 clinging still .. 1 climbing. */
+export function climbEngagement(speed: number): number {
+  return Number.isFinite(speed) ? sseg(speed, 0, CLIMB_FULL_SPEED) : 0;
+}
 
 /** Gait cycle rate (Hz at animation speed 1) for a locomotion clip. */
 export function gaitHz(clip: AnimClip, speed: number): number {
   const v = Math.max(0, Number.isFinite(speed) ? speed : 0) * BODY_LENGTH_DIP;
   if (clip === 'walk') return clamp((v * WALK_DUTY) / WALK_MAX_STRIDE, 1.3, 3.4);
   if (clip === 'run') return clamp((v * RUN_DUTY) / RUN_MAX_STRIDE, 2.1, 4.4);
+  if (clip === 'climb') return clamp((v * CLIMB_DUTY) / CLIMB_STEP, 0.9, CLIMB_MAX_HZ);
   return 0;
 }
 
@@ -61,6 +87,9 @@ function strideFor(clip: AnimClip, speed: number): number {
   const v = Math.max(0, Number.isFinite(speed) ? speed : 0) * BODY_LENGTH_DIP;
   const hz = gaitHz(clip, speed);
   if (clip === 'walk') return clamp((v * WALK_DUTY) / hz, 3, WALK_MAX_STRIDE);
+  // Climb: the gripping paws must stay put on the wall while the anchor climbs, so the stride follows
+  // the speed exactly and is 0 when the cat holds still.
+  if (clip === 'climb') return clamp((v * CLIMB_DUTY) / hz, 0, CLIMB_MAX_STRIDE);
   return clamp((v * RUN_DUTY) / hz, 12, RUN_MAX_STRIDE);
 }
 
@@ -81,6 +110,25 @@ function footCycle(phase: number, duty: number, stride: number, lift: number): v
     fcX = stride * (-0.5 + easeInOut(s));
     fcY = -lift * Math.sin(Math.PI * s);
     fcS = Math.sin(Math.PI * s);
+  }
+}
+
+/**
+ * Paw path on a wall (cat facing the wall at +x, up = -y): while gripping the paw slides down
+ * relative to the climbing body (it stays put on the wall), then it lets go, swings out from the
+ * wall (fcX < 0) and reaches up. fcS is 0..1 through the reach.
+ */
+function wallCycle(phase: number, duty: number, stride: number, lift: number): void {
+  const ph = wrap01(phase);
+  if (ph < duty) {
+    fcY = stride * (ph / duty - 0.5);
+    fcX = 0;
+    fcS = 0;
+  } else {
+    const s = (ph - duty) / (1 - duty);
+    fcY = stride * (0.5 - easeInOut(s));
+    fcS = Math.sin(Math.PI * s);
+    fcX = -lift * fcS;
   }
 }
 
@@ -194,6 +242,44 @@ function crouchPose(p: Pose, depth: number): void {
   setFoot(p, LEG_BF, -15, 0, 0);
   p.tailBase = lerp(1.15, 0.12, depth);
   p.tailCurl = lerp(1.5, 0.5, depth);
+}
+
+/**
+ * Clinging to a wall at +x (the anchor is the hind-paw grip on the wall line): body upright along
+ * the wall, belly towards it, front paws up on the edge, hind paws braced under the haunch, head on
+ * top turned towards the viewer and the tail hanging. Built with the torso tilt rather than the
+ * global rotation, so "down" stays down for the tail and the head stays upright.
+ */
+function climbPose(p: Pose): void {
+  resetPose(p);
+  p.tilt = 1.42;
+  p.bodyX = -15;
+  p.bodyY = -30;
+  p.bodyLen = 1.06;
+  p.bodyH = 0.96;
+  p.arch = 0.15;
+  p.haunch = 0.35;
+  p.pivX = -14;
+  p.pivY = -34;
+  p.headX = -23.5;
+  p.headY = -65;
+  p.headRot = 0.1;
+  p.faceTurn = -0.75;
+  p.pupilX = 0.1;
+  p.pupilY = -0.2;
+  p.pupilSize = 0.7;
+  p.earBR = 0.05;
+  setFoot(p, LEG_FN, -1, -63, -1.25);
+  setFoot(p, LEG_FF, -0.5, -54, -1.25);
+  setFoot(p, LEG_BN, -2, -1, -1.35);
+  setFoot(p, LEG_BF, -3, -6, -1.35);
+  p.tailBase = -1.37;
+  p.tailCurl = 1.2;
+  p.tailBend = 0;
+  p.tailFront = 0;
+  p.tailStiff = 0.4;
+  p.shadow = 0;
+  p.lookW = 0.6;
 }
 
 // ---------------------------------------------------------------------------
@@ -756,6 +842,64 @@ function clipRollOver(p: Pose, c: ClipContext): void {
   p.lookW = 0.2;
 }
 
+function clipClimb(p: Pose, c: ClipContext): void {
+  climbPose(p);
+  const t = c.t;
+  const cyc = c.cycle;
+  const speed = Number.isFinite(c.speed) ? Math.max(0, c.speed) : 0;
+  // 0 holding still .. 1 climbing (eased by the animator, so it never jumps).
+  const move = c.engage !== undefined && Number.isFinite(c.engage) ? clamp01(c.engage) : climbEngagement(speed);
+  const still = 1 - move;
+  const stride = strideFor('climb', speed);
+  const lift = 2 + 3 * move;
+
+  // Ladder climb: diagonal pairs reach together (near front with far hind, then the other pair).
+  // Holding still, the front paws keep a staggered grip; climbing, they alternate about one height.
+  // Every paw uses the same stride, so each one stays put on the wall while it grips.
+  wallCycle(cyc, CLIMB_DUTY, stride, lift * move);
+  setFoot(p, LEG_FN, -1 + fcX, lerp(-63, -61, move) + fcY, -1.25 - 0.35 * fcS * move);
+  wallCycle(cyc + 0.5, CLIMB_DUTY, stride, lift * move);
+  setFoot(p, LEG_FF, -0.5 + fcX, lerp(-54, -61, move) + fcY, -1.25 - 0.35 * fcS * move);
+  wallCycle(cyc + 0.08, CLIMB_DUTY, stride, 2.5 * move);
+  setFoot(p, LEG_BF, -3 + fcX, lerp(-6, -3.5, move) + fcY, -1.35 - 0.25 * fcS * move);
+  wallCycle(cyc + 0.58, CLIMB_DUTY, stride, 2.5 * move);
+  setFoot(p, LEG_BN, -2 + fcX, lerp(-1, -1.5, move) + fcY, -1.35 - 0.25 * fcS * move);
+
+  // Each pull lifts the body a little and rocks it towards the gripping side.
+  const pull = Math.cos(TAU * 2 * cyc);
+  p.bodyY += -1.1 * pull * move;
+  p.tilt += 0.035 * Math.sin(TAU * cyc) * move;
+  p.bodyX += -0.6 * Math.sin(TAU * cyc + 0.4) * move;
+  p.headY += -0.8 * Math.cos(TAU * 2 * cyc + 0.6) * move;
+  p.headRot += 0.1 * move;
+  p.pupilY -= 0.2 * move;
+  p.earBR += 0.08 * move;
+  p.earFR += 0.06 * move;
+
+  // Holding still: a glance down at the viewer, a quick re-grip of the near paw, a look up the wall.
+  const it = wrap01(t / CLIMB_IDLE_PERIOD_S) * CLIMB_IDLE_PERIOD_S;
+  const down = pulse(it, 1.6, 2.1, 3.0, 3.5) * still;
+  const regrip = pulse(it, 3.8, 3.95, 4.1, 4.35) * still;
+  const up = pulse(it, 4.7, 5.2, 5.9, 6.4) * still;
+  p.headRot += -0.26 * down + 0.3 * up;
+  p.faceTurn += -0.45 * down + 0.12 * up;
+  p.headX += -1.2 * down;
+  p.headY += 1.2 * down - 0.8 * up;
+  p.pupilY += 0.6 * down - 0.5 * up;
+  p.pupilX -= 0.25 * down;
+  p.earBR += 0.12 * down;
+  p.earFR -= 0.1 * up;
+  p.fnX -= 2.5 * regrip;
+  p.fnY -= 2 * regrip;
+  p.fnPaw -= 0.3 * regrip;
+
+  // Tail hangs with gravity: a slow pendulum sway (two per idle loop), plus a swing in time with the pulls.
+  const sw = (TAU * 2 * t) / CLIMB_IDLE_PERIOD_S;
+  p.tailBase += 0.1 * Math.sin(sw) * still + 0.12 * Math.sin(TAU * cyc + 1) * move;
+  p.tailCurl += 0.22 * Math.sin(sw - 1.1) * still + 0.3 * Math.sin(TAU * cyc) * move;
+  p.blinkOK = down > 0.2 || up > 0.2 ? 0 : 1;
+}
+
 type ClipFn = (p: Pose, c: ClipContext) => void;
 
 const CLIPS: Readonly<Record<AnimClip, ClipFn>> = {
@@ -780,8 +924,7 @@ const CLIPS: Readonly<Record<AnimClip, ClipFn>> = {
   meow: clipMeow,
   hide: clipHide,
   rollOver: clipRollOver,
-  // TEMPORARY (v1.1 contract step): replaced by the real clinging/climbing clip in the renderer workstream.
-  climb: clipCrouch,
+  climb: clipClimb,
 };
 
 /** Samples `clip` at the context's phase into `out`. One-shot clips hold their last pose. */
@@ -802,9 +945,21 @@ export function sampleClip(clip: AnimClip, ctx: ClipContext, out: Pose): Pose {
   return out;
 }
 
+/** Cross-fade (ms) between the climb clip and the ground clips (getting onto a wall, pulling up onto a ledge). */
+export const CLIMB_FADE_MS = 280;
+/** Cross-fade (ms) into a quick clip off the wall (leaping or falling off it, a startle) and for grabbing it out of the air. */
+const CLIMB_QUICK_FADE_MS = 210;
+
 /** Cross-fade duration (ms) when switching between clips. */
 export function crossFadeMs(from: AnimClip | null, to: AnimClip): number {
   if (from === null) return 0;
+  // The climb pose turns the whole body through 90 degrees, with the front paws a body length up:
+  // rearing up onto a wall or pulling up over a corner onto the ledge takes a little longer, and even
+  // the quick ways on and off the wall are slower than the usual quick fades (so nothing pops).
+  // Picking the cat up keeps the held fade below, which the mover's scruff settle is timed to.
+  const quick = (c: AnimClip): boolean => c === 'jump' || c === 'fall' || c === 'land' || c === 'startle';
+  if (from === 'climb' && to !== 'held') return quick(to) ? CLIMB_QUICK_FADE_MS : CLIMB_FADE_MS;
+  if (to === 'climb' && from !== 'held') return quick(from) ? CLIMB_QUICK_FADE_MS : CLIMB_FADE_MS;
   if (to === 'startle' || to === 'land' || to === 'jump') return 150;
   if (to === 'fall' || from === 'land') return 170;
   if (to === 'sleep' || from === 'sleep' || to === 'loaf' || to === 'rollOver' || from === 'rollOver') return 250;
@@ -813,7 +968,7 @@ export function crossFadeMs(from: AnimClip | null, to: AnimClip): number {
 }
 
 /** Whether a clip is a locomotion cycle driven by `speed`. */
-export const isGait = (clip: AnimClip): boolean => clip === 'walk' || clip === 'run';
+export const isGait = (clip: AnimClip): boolean => clip === 'walk' || clip === 'run' || clip === 'climb';
 
 /** Seconds of one loop of a looping clip (used by previews/tests), null if not periodic. */
 export function loopPeriodS(clip: AnimClip): number | null {
@@ -824,6 +979,9 @@ export function loopPeriodS(clip: AnimClip): number | null {
       return 1.15;
     case 'hide':
       return 2.6;
+    case 'climb':
+      // Holding still; while climbing the motion follows the gait cycle instead.
+      return CLIMB_IDLE_PERIOD_S;
     default:
       return null;
   }

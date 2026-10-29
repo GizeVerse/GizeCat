@@ -10,14 +10,16 @@ import type { DisplayGeometry } from '../../shared/world';
 /**
  * Room around the nominal footprint (CAT_BASE_* DIP, `boundsPx`) that the renderer may
  * draw into, DIP at size 1: tail and paws reach past the sides (crouch, run), the held
- * cat hangs its head and ears above the footprint and its legs below it, and pixel
- * style rounds every edge out to whole blocks. An overlay draws the cat whenever this
- * rect touches its display, so nothing is clipped at a monitor seam
- * (tests/unit/renderer/presence.test.ts measures the drawn extent of every clip).
+ * cat hangs its head and ears above the footprint and its legs below it, a cat climbing
+ * a wall reaches about one body length up and lets its tail hang below its hind paws
+ * (to ~37 DIP while climbing, pixel style), and pixel style rounds every edge out to whole
+ * blocks. An overlay draws the cat whenever this rect touches its display, so nothing is
+ * clipped at a monitor seam (tests/unit/renderer/presence.test.ts measures the drawn
+ * extent of every clip).
  */
 export const BODY_MARGIN_SIDE_DIP = 32;
 export const BODY_MARGIN_TOP_DIP = 36;
-export const BODY_MARGIN_BOTTOM_DIP = 28;
+export const BODY_MARGIN_BOTTOM_DIP = 40;
 /** Top margin while emotes are enabled (an emote floats above the held cat's head). */
 export const EMOTE_MARGIN_TOP_DIP = 64;
 

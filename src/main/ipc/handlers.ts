@@ -19,7 +19,7 @@ import {
   type PerceptionPreview,
   type SettingsViewState,
 } from '../../shared/ipc';
-import { rejectConsentBypass, type PatchResult } from '../../shared/settings';
+import { rejectConsentBypass, rejectMainOwnedPatch, type PatchResult } from '../../shared/settings';
 import type { Logger, PerceptionService } from '../contracts';
 import { redactString } from '../diagnostics/redact';
 import { verifyIpcSender, type WindowRegistry } from '../security';
@@ -162,6 +162,11 @@ export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
     if (bypass !== null) {
       log.warn('rejected settings patch touching consent fields');
       return { ok: false, error: bypass };
+    }
+    const section = rejectMainOwnedPatch(parsed.data);
+    if (section !== null) {
+      log.warn('rejected settings patch touching a section main owns');
+      return { ok: false, error: section };
     }
     const owned = rejectMainOwnedFields(parsed.data);
     if (owned !== null) {

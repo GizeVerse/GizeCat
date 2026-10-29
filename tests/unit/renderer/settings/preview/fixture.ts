@@ -84,7 +84,7 @@ export function previewView(now: number, versions: FixtureVersions): SettingsVie
         lastError: null,
       },
       windowAwareness: 'event-hooks',
-      launchAtLoginActive: false,
+      loginItem: { enabled: true, preference: 'unset', disabledBy: null, active: true, writable: true, reason: null, showNotice: false },
       shortcutRegistered: true,
       startedAt: now - 3 * HOUR - 12 * MIN,
     },

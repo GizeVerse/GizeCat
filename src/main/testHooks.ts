@@ -4,11 +4,13 @@ import type { AppStatus } from '../shared/ipc';
 import type { Settings, PatchResult } from '../shared/settings';
 import type { SimEvent, SimOutput } from '../shared/sim';
 import type { PerceptionStatus } from '../shared/perception';
+import type { Surface, SurfaceStatus } from '../shared/surfaces';
 import type { CatHostDebug } from './catHost';
 import type { LogEntry } from './diagnostics/logger';
 import type { AppAction } from './ipc/actions';
 import type { OverlayInfo } from './overlay/overlayManager';
 import { isTestMode } from './lifecycle/launchArgs';
+import { parseInjectedSurfaces } from './surfaces/validate';
 
 export const TEST_HOOK_GLOBAL = '__desktopCatTest';
 
@@ -32,6 +34,14 @@ export interface TestHookContext {
   /** The diagnostics export payload, without the save dialog. */
   getDiagnosticsReport(): Record<string, unknown>;
   injectEvent(ev: SimEvent): void;
+  /** env.surfaces of the last host tick (what the sim saw). */
+  getSurfaces(): readonly Surface[];
+  getSurfaceStatus(): SurfaceStatus;
+  /**
+   * Replaces every environment surface with `list` (SIMULATED geometry, validated), or
+   * restores the real observers with null. Injected taskbar ledges raise taskbar.shown/hidden.
+   */
+  injectSurfaces(list: readonly Surface[] | null): void;
   forceInteractive(value: boolean | null): void;
   setTimeScale(scale: number): void;
   runAction(action: AppAction): Promise<unknown>;
@@ -64,6 +74,9 @@ export function installTestHooks(ctx: TestHookContext, env: Record<string, strin
     forceInteractive(value) {
       if (value !== null && typeof value !== 'boolean') throw new Error('forceInteractive: expected boolean or null');
       ctx.forceInteractive(value);
+    },
+    injectSurfaces(list) {
+      ctx.injectSurfaces(parseInjectedSurfaces(list));
     },
     installedAt: Date.now(),
   };

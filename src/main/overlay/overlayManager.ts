@@ -14,7 +14,7 @@ import type { WindowRegistry } from '../security';
 import { crashBackoff, boundsDiffer, planOverlaySync } from './displayDiff';
 import { decideInteractive } from '../../core/interaction/clickThrough';
 import type { GestureRecognizer } from '../../core/interaction/gestures';
-import { createOverlayWindow, overlayUrl } from './overlayWindow';
+import { createOverlayShell, createOverlayWindow, overlayUrl, type OverlayShell } from './overlayWindow';
 import { displaysShowingCat, hiddenRenderState, mapRenderState } from './renderMapping';
 
 const DISPLAY_DEBOUNCE_MS = 300;
@@ -41,6 +41,8 @@ const HANG_SILENCE_MS = 3000;
 const HANG_RECREATE_MS = 5000;
 /** Silence counted per watchdog check is capped, so main's own stalls never count against a renderer. */
 const WATCHDOG_MAX_STEP_MS = 250;
+/** Every overlay receives the TaskbarCreated broadcast: forward one notification per broadcast. */
+const TASKBAR_CREATED_DEDUPE_MS = 1000;
 
 export interface OverlayInfo {
   displayId: string;
@@ -58,6 +60,10 @@ export interface OverlayInfo {
   active: boolean;
   healthy: boolean;
   crashes: number;
+  /** NonRudeHWND was set on this overlay before it was shown. */
+  nonRude: boolean;
+  /** The TaskbarCreated broadcast is hooked on this overlay. */
+  taskbarCreatedHook: boolean;
 }
 
 export interface OverlayManagerOptions {
@@ -78,6 +84,10 @@ export interface OverlayManagerOptions {
   isLeftButtonDown: () => boolean | null;
   /** Monotonic ms. */
   clock: () => number;
+  /** Shell integration (NonRudeHWND, TaskbarCreated); defaults to the koffi-backed one. */
+  shell?: OverlayShell;
+  /** Explorer re-created the taskbar (TaskbarCreated broadcast): e.g. the taskbar tracker's rediscover. */
+  onTaskbarCreated?: () => void;
 }
 
 export interface OverlayManager {
@@ -132,6 +142,8 @@ interface Entry {
   /** Time spent hung (silent or 'unresponsive'), null while live. */
   hungMs: number | null;
   disposing: boolean;
+  nonRude: boolean;
+  taskbarHooked: boolean;
 }
 
 export function createOverlayManager(opts: OverlayManagerOptions): OverlayManager {
@@ -151,7 +163,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
   let offDisplay: Unsubscribe | null = null;
   let disposed = false;
   let lastWatchdogAt: number | null = null;
+  let lastTaskbarCreatedAt: number | null = null;
   const topmostReasserts: number[] = [];
+  const shell = opts.shell ?? createOverlayShell(log.child('shell'));
 
   function hwndOf(win: BrowserWindow): string {
     try {
@@ -252,11 +266,14 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       silentMs: 0,
       hungMs: null,
       disposing: false,
+      nonRude: false,
+      taskbarHooked: false,
     };
     entries.set(d.id, e);
     byWc.set(e.wcId, e);
     opts.registry.register(win.webContents, 'overlay');
     wire(e);
+    if (opts.onTaskbarCreated) e.taskbarHooked = shell.hookTaskbarCreated(win, () => taskbarCreated(e.displayId));
     win.loadURL(overlayUrl(d.id)).catch((err: unknown) => log.error('loading overlay page failed', { displayId: d.id, error: err }));
     log.info('overlay created', { displayId: d.id, workAreaDip: d.workAreaDip, scaleFactor: d.scaleFactor });
   }
@@ -266,6 +283,8 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     const wc = win.webContents;
     win.once('ready-to-show', () => {
       if (!alive(e)) return;
+      // Right before showing: a full-monitor topmost overlay must not count as a fullscreen app.
+      e.nonRude = shell.beforeShow(win, e.displayId);
       win.showInactive();
       verifyBounds(e);
     });
@@ -310,11 +329,28 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     opts.registry.unregister(e.wcId);
     if (e.pressed) endLostPress(e);
     if (!e.win.isDestroyed()) {
+      if (e.nonRude) {
+        shell.beforeDestroy(e.win, e.displayId);
+        e.nonRude = false;
+      }
       try {
         e.win.destroy();
       } catch (err) {
         log.warn('destroying overlay failed', { displayId: e.displayId, error: err });
       }
+    }
+  }
+
+  /** TaskbarCreated reaches every overlay; one notification per broadcast. Runs inside the window procedure: keep it cheap. */
+  function taskbarCreated(displayId: string): void {
+    const now = opts.clock();
+    if (lastTaskbarCreatedAt !== null && now - lastTaskbarCreatedAt < TASKBAR_CREATED_DEDUPE_MS) return;
+    lastTaskbarCreatedAt = now;
+    log.info('taskbar re-created by the shell (TaskbarCreated)', { displayId });
+    try {
+      opts.onTaskbarCreated?.();
+    } catch (err) {
+      log.error('TaskbarCreated handler failed', { error: err });
     }
   }
 
@@ -695,6 +731,8 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           active: e.active,
           healthy: e.healthy && e.hungMs === null,
           crashes: crashHistory.get(e.displayId)?.length ?? 0,
+          nonRude: e.nonRude,
+          taskbarCreatedHook: e.taskbarHooked,
         });
       }
       return out;

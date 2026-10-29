@@ -8,6 +8,8 @@ export { categorizeProcess, exeBasename, ExclusionRules } from './processNames';
 export { createWindowTracker } from './windowTracker';
 export type { WindowTrackerDebug, WindowTrackerExtras, WindowTrackerOptions } from './windowTracker';
 export { createActivityMonitor } from './activityMonitor';
+export { createTaskbarTracker, createUnavailableTaskbarTracker, taskbarSurfaceId } from './taskbar';
+export type { TaskbarNative, TaskbarRediscoverReason, TaskbarTrackerHandle, TaskbarTrackerOptions } from './taskbar';
 export type { ActivityMonitorExtras, ActivityMonitorOptions } from './activityMonitor';
 export { computePlatforms, computeFullscreenDisplayIds, MIN_PLATFORM_WIDTH } from './platforms';
 export { createUnavailableWin32Api, hasWin32Extensions } from './win32Api';

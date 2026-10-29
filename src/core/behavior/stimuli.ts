@@ -128,6 +128,38 @@ export function windowRelevance(w: WindowStimulus): number {
   );
 }
 
+export interface SurfaceStimulus {
+  /** Distance from the cat to the nearest point of the surface, in body lengths. */
+  distBodyLengths: number;
+  curiosity: number;
+  playfulness: number;
+  /** Current energy (stat). */
+  energy: number;
+  confidence: number;
+  sensitivity: number;
+  habituation: number;
+  typing: boolean;
+}
+
+/**
+ * 0..1 how interesting a surface that just appeared (an auto-hide taskbar sliding in) is:
+ * close and fresh matters most; a curious, playful, energetic and confident cat cares more;
+ * repeated appearances habituate quickly.
+ */
+export function surfaceRelevance(s: SurfaceStimulus): number {
+  const near = 1 - clamp01(s.distBodyLengths / 12);
+  return clamp01(
+    clamp01(s.sensitivity) *
+      near *
+      (0.3 + 0.4 * clamp01(s.curiosity) + 0.3 * clamp01(s.playfulness)) *
+      (0.4 + 0.6 * clamp01((s.energy - 0.1) / 0.5)) *
+      (0.6 + 0.4 * clamp01(s.confidence)) *
+      (1 - clamp01(s.habituation)) *
+      (s.typing ? 0.4 : 1) *
+      2.2,
+  );
+}
+
 export interface FlickStimulus {
   /** Cursor speed, DIP/s. */
   speedDip: number;

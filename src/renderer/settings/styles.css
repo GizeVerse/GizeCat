@@ -1138,6 +1138,23 @@ p.row-desc {
   margin-top: 0;
 }
 
+/* One-time "now starts with Windows" notice, first in the Startup group. */
+.group-rows > .callout {
+  margin-top: 0;
+}
+
+.callout-startup {
+  background: var(--info-bg);
+  border-color: var(--info-stroke);
+}
+
+.callout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 /* ---------- welcome ---------- */
 
 .hero {

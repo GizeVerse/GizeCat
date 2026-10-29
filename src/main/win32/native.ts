@@ -62,8 +62,58 @@ export interface Win32Native {
   getThreadDpiAwareness(): number | null;
   registerWinEventProc(proc: WinEventProc): bigint;
   unregisterCallback(ptr: bigint): void;
-  setWinEventHook(eventMin: number, eventMax: number, proc: bigint, flags: number): bigint | null;
+  /** `idProcess` (default 0 = every process) limits the hook to one process's events. */
+  setWinEventHook(eventMin: number, eventMax: number, proc: bigint, flags: number, idProcess?: number): bigint | null;
   unhookWinEvent(hook: bigint): boolean;
+}
+
+/**
+ * Shell and taskbar bindings (v1.1), bound together with Win32Native. A separate interface so
+ * existing Win32Native implementations stay valid. Class names only: never window titles.
+ */
+export interface ShellNative {
+  /** FindWindowW(className, NULL): the first top-level window of the class. */
+  findWindow(className: string): Hwnd | null;
+  /** FindWindowExW(NULL, after, className, NULL): the next top-level window of the class after `after` (null: the first). */
+  findNextWindow(className: string, after: Hwnd | null): Hwnd | null;
+  /** SHAppBarMessage(ABM_GETSTATE): ABS_* bits. Cross-process call to Explorer: never per tick. */
+  appBarGetState(): number;
+  /** SHAppBarMessage(ABM_GETTASKBARPOS): the primary taskbar's docked rect (also while auto-hidden) and ABE_* edge; null on failure. */
+  appBarGetTaskbarPos(): { edge: number; rect: RawRect } | null;
+  /** SetPropW with an integer value; false on failure. */
+  setProp(h: Hwnd, name: string, value: number): boolean;
+  /** RemovePropW: the removed value (0 when the property was absent or the call failed). */
+  removeProp(h: Hwnd, name: string): number;
+  /** RegisterWindowMessageW: a message id (0xC000..0xFFFF), or 0 on failure. */
+  registerWindowMessage(name: string): number;
+}
+
+/** A koffi pointer type as resolved at binding time (unit-tested: anonymous-name clashes turn struct pointers into callbacks). */
+export interface NativeTypeInfo {
+  name: string;
+  /** koffi's (anonymous) name of the pointee type: must be unique per type. */
+  typeName: string;
+  kind: 'struct-pointer' | 'callback-pointer';
+  primitive: string;
+  /** sizeof the pointee (0 for callbacks). */
+  size: number;
+  offsets?: Record<string, number>;
+}
+
+let shellMemo: { shell: ShellNative } | { error: Error } | null = null;
+let typeReport: NativeTypeInfo[] = [];
+
+/** The shell/taskbar bindings. Loads Win32Native first; throws when either is unavailable. */
+export function loadShellNative(): ShellNative {
+  loadWin32Native();
+  if (shellMemo === null) throw new Error('shell bindings were not bound');
+  if ('error' in shellMemo) throw shellMemo.error;
+  return shellMemo.shell;
+}
+
+/** How koffi resolved every pointer type bound in this process (empty before loading). */
+export function nativeTypeReport(): readonly NativeTypeInfo[] {
+  return typeReport;
 }
 
 const MAX_ENUM_WINDOWS = 4096;
@@ -195,6 +245,23 @@ function bind(): Win32Native {
     return buf.toString('utf16le', 0, size[0] * 2);
   };
 
+  // v1.1 shell bindings: after every koffi.proto above (APPBARDATA has a pointer member; declared
+  // before the protos, koffi 3.3.4 gives MONITORINFO and WNDENUMPROC the same anonymous type
+  // name, docs/research/v1.1/taskbar.md pitfall 2). A failure here disables only ShellNative.
+  let appBarData: TypeObject | null = null;
+  try {
+    const bound = bindShell(koffi, user32, shell32, RECT, readRect);
+    shellMemo = { shell: bound.shell };
+    appBarData = bound.APPBARDATA;
+  } catch (e) {
+    shellMemo = { error: e instanceof Error ? e : new Error(String(e)) };
+  }
+  try {
+    typeReport = describePointerTypes(koffi, { RECT, POINT, MONITORINFO, LASTINPUTINFO, ...(appBarData ? { APPBARDATA: appBarData } : {}) }, { WINEVENTPROC, WNDENUMPROC });
+  } catch {
+    typeReport = []; // diagnostics only; an empty report fails its unit test
+  }
+
   return {
     ownPid: process.pid,
     getCursorPos() {
@@ -290,7 +357,69 @@ function bind(): Win32Native {
       return koffi.register(relay, koffi.pointer(WINEVENTPROC));
     },
     unregisterCallback: (ptr) => koffi.unregister(ptr),
-    setWinEventHook: (eventMin, eventMax, proc, flags) => SetWinEventHook(eventMin, eventMax, null, proc, 0, 0, flags),
+    setWinEventHook: (eventMin, eventMax, proc, flags, idProcess = 0) => SetWinEventHook(eventMin, eventMax, null, proc, idProcess, 0, flags),
     unhookWinEvent: (hook) => UnhookWinEvent(hook) !== 0,
   };
+}
+
+type AppBarData = { cbSize: number; hWnd: null; uCallbackMessage: number; uEdge: number; rc: Partial<RawRect>; lParam: number };
+const ABM_GETSTATE = 4;
+const ABM_GETTASKBARPOS = 5;
+
+/** Nonzero for koffi integer results that may come back as number or BigInt. */
+const nonZero = (v: number | bigint): boolean => (typeof v === 'bigint' ? v !== 0n : v !== 0);
+
+function bindShell(
+  koffi: Koffi,
+  user32: LibraryHandle,
+  shell32: LibraryHandle,
+  RECT: TypeObject,
+  readRect: (r: Partial<RawRect>) => RawRect | null,
+): { shell: ShellNative; APPBARDATA: TypeObject } {
+  const s = <A extends unknown[], R>(lib: LibraryHandle, def: string): Fn<A, R> => lib.func(def);
+  // sizeof == 48 on x64: hWnd 8, uCallbackMessage 16, uEdge 20, rc 24, lParam 40 (unit-tested).
+  const APPBARDATA = koffi.struct({ cbSize: 'uint32_t', hWnd: 'void *', uCallbackMessage: 'uint32_t', uEdge: 'uint32_t', rc: RECT, lParam: 'intptr_t' });
+  const SHAppBarMessage: Fn<[number, AppBarData], number | bigint> = shell32.func('__stdcall', 'SHAppBarMessage', 'uintptr_t', [
+    'uint32_t',
+    koffi.inout(koffi.pointer(APPBARDATA)),
+  ]);
+  const FindWindowW = s<[string, null], Hwnd | null>(user32, 'void * __stdcall FindWindowW(const char16_t *cls, const char16_t *title)');
+  const FindWindowExTop = s<[null, Hwnd | null, string, null], Hwnd | null>(
+    user32,
+    'void * __stdcall FindWindowExW(void *parent, void *after, const char16_t *cls, const char16_t *title)',
+  );
+  const SetPropW = s<[Hwnd, string, number], number>(user32, 'int __stdcall SetPropW(void *h, const char16_t *name, intptr_t data)');
+  const RemovePropW = s<[Hwnd, string], number | bigint>(user32, 'intptr_t __stdcall RemovePropW(void *h, const char16_t *name)');
+  const RegisterWindowMessageW = s<[string], number>(user32, 'uint32_t __stdcall RegisterWindowMessageW(const char16_t *name)');
+  const abd = (): AppBarData => ({ cbSize: koffi.sizeof(APPBARDATA), hWnd: null, uCallbackMessage: 0, uEdge: 0, rc: { left: 0, top: 0, right: 0, bottom: 0 }, lParam: 0 });
+
+  const shell: ShellNative = {
+    findWindow: (className) => FindWindowW(className, null),
+    findNextWindow: (className, after) => FindWindowExTop(null, after, className, null),
+    appBarGetState: () => Number(SHAppBarMessage(ABM_GETSTATE, abd())),
+    appBarGetTaskbarPos() {
+      const data = abd();
+      if (!nonZero(SHAppBarMessage(ABM_GETTASKBARPOS, data))) return null;
+      const rect = readRect(data.rc);
+      return rect ? { edge: data.uEdge, rect } : null;
+    },
+    setProp: (h, name, value) => SetPropW(h, name, value) !== 0,
+    removeProp: (h, name) => Number(RemovePropW(h, name)),
+    registerWindowMessage: (name) => RegisterWindowMessageW(name),
+  };
+  return { shell, APPBARDATA };
+}
+
+function describePointerTypes(koffi: Koffi, structs: Record<string, TypeObject>, callbacks: Record<string, TypeObject>): NativeTypeInfo[] {
+  const out: NativeTypeInfo[] = [];
+  for (const [name, t] of Object.entries(structs)) {
+    const members = koffi.type(t).members;
+    const offsets: Record<string, number> = {};
+    for (const [m, info] of Object.entries(members ?? {})) offsets[m] = info.offset;
+    out.push({ name, typeName: koffi.type(t).name, kind: 'struct-pointer', primitive: koffi.type(koffi.pointer(t)).primitive, size: koffi.sizeof(t), offsets });
+  }
+  for (const [name, t] of Object.entries(callbacks)) {
+    out.push({ name, typeName: koffi.type(t).name, kind: 'callback-pointer', primitive: koffi.type(koffi.pointer(t)).primitive, size: 0 });
+  }
+  return out;
 }

@@ -51,9 +51,14 @@ const TAIL_AUTHORED: ReadonlySet<AnimClip> = new Set<AnimClip>([
   'wake',
   'rollOver',
   'land',
+  'climb',
 ]);
 
 const MAX_LAYER_DT_S = 0.1;
+/** Rate (1/s) at which the climb clip follows speed changes (start/stop on the wall without a pop). */
+const CLIMB_SPEED_RATE = 9;
+/** Anchor vertical speed (cat-local DIP/s) beyond which the climb gait runs downwards / upwards again. */
+const CLIMB_DIR_DIP_S = 4;
 
 export class CatAnimator {
   /** Final pose (clip + cross-fade + procedural layers). */
@@ -103,6 +108,11 @@ export class CatAnimator {
   private swing = 0;
   private swingVel = 0;
 
+  /** Eased speed the climb clip plays at, the anchor's smoothed vertical speed and the gait direction. */
+  private climbSpeed = 0;
+  private climbVy = 0;
+  private climbDir = 1;
+
   /** `at` of the newest reaction seen; each distinct one is considered once. */
   private reactionSeen = Number.NaN;
   /** Sim time (ms) each reaction kind last started, NaN when never. */
@@ -134,16 +144,24 @@ export class CatAnimator {
 
   /**
    * @param motionX horizontal body motion since the last frame (cat-local DIP), drives the held swing.
+   * @param motionY vertical body motion since the last frame (cat-local DIP, + = down): a cat moving
+   *   down a wall climbs down tail first, so the climb gait runs backwards and its paws keep their grip.
    */
-  update(input: AnimInput, simTimeMs: number, dtMs: number, motionX: number): Pose {
+  update(input: AnimInput, simTimeMs: number, dtMs: number, motionX: number, motionY = 0): Pose {
     const dt = clamp(Number.isFinite(dtMs) ? dtMs / 1000 : 0, 0, MAX_LAYER_DT_S);
     const animSpeed = clamp(Number.isFinite(input.animSpeed) ? input.animSpeed : 1, 0.1, 3);
     this.time += dt * animSpeed;
+    const speed = Number.isFinite(input.speed) ? Math.max(0, input.speed) : 0;
 
     if (input.clip !== this.clip || input.clipStartedAt !== this.clipStart) {
       const first = this.clip === null;
       if (!first) copyPose(this.fromPose, this.base);
       if (!isGait(input.clip) || (this.clip !== null && !isGait(this.clip))) this.cycle = 0;
+      if (input.clip === 'climb' && this.clip !== 'climb') {
+        this.climbSpeed = speed;
+        this.climbVy = 0;
+        this.climbDir = 1;
+      }
       this.fadeDur = first ? 0 : crossFadeMs(this.clip, input.clip) / 1000;
       this.fadeElapsed = 0;
       this.clip = input.clip;
@@ -153,9 +171,22 @@ export class CatAnimator {
     const c = this.ctx;
     c.t = (Math.max(0, simTimeMs - this.clipStart) * animSpeed) / 1000;
     if (!Number.isFinite(c.t)) c.t = 0;
-    if (isGait(input.clip)) this.cycle += gaitHz(input.clip, input.speed) * dt * animSpeed;
+    let gaitSpeed = speed;
+    let dir = 1;
+    if (input.clip === 'climb') {
+      this.climbSpeed = damp(this.climbSpeed, speed, CLIMB_SPEED_RATE, dt);
+      if (dt > 0 && Number.isFinite(motionY)) this.climbVy = damp(this.climbVy, clamp(motionY / dt, -3000, 3000), 8, dt);
+      if (this.climbVy > CLIMB_DIR_DIP_S) this.climbDir = -1;
+      else if (this.climbVy < -CLIMB_DIR_DIP_S) this.climbDir = 1;
+      gaitSpeed = this.climbSpeed;
+      dir = this.climbDir;
+    }
+    if (isGait(input.clip)) this.cycle += dir * gaitHz(input.clip, gaitSpeed) * dt * animSpeed;
+    // Gait clips only use the cycle's fractional part; keep it finite and small (a backwards climb counts down).
+    if (!Number.isFinite(this.cycle)) this.cycle = 0;
+    else if (Math.abs(this.cycle) > 1e6) this.cycle -= Math.trunc(this.cycle);
     c.cycle = this.cycle;
-    c.speed = Number.isFinite(input.speed) ? input.speed : 0;
+    c.speed = gaitSpeed;
     c.vy = Number.isFinite(input.vy) ? input.vy : 0;
     c.hasLook = input.hasLook && Number.isFinite(input.lookX) && Number.isFinite(input.lookY);
     c.lookX = c.hasLook ? input.lookX : 0;

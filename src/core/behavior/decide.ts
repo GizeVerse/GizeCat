@@ -5,6 +5,7 @@ import type { BehaviorState } from '../../shared/cat';
 import type { Preferences, Stats, Traits } from '../../shared/catState';
 import type { Point } from '../../shared/geometry';
 import type { Settings, ToggleableBehavior } from '../../shared/settings';
+import type { SurfaceKind } from '../../shared/surfaces';
 import type { Random, Scored } from './random';
 import { softmaxPick } from './random';
 
@@ -29,7 +30,18 @@ export type Variant =
   | 'corner'
   | 'surprise'
   | 'playful'
-  | 'screen';
+  | 'screen'
+  // v1.1 surfaces
+  /** Sitting on a window top's edge, looking down into the window. */
+  | 'edge'
+  /** Climbing a window side (up to the top corner, or down from it). */
+  | 'climb'
+  /** Visiting or walking along a browser tab strip. */
+  | 'tabStrip'
+  /** Hopping onto (or off) the taskbar. */
+  | 'taskbar'
+  /** A short start after the surface under the cat suddenly vanished. */
+  | 'lostFooting';
 
 export interface Candidate {
   state: BehaviorState;
@@ -67,8 +79,18 @@ export interface DecisionView {
   favoriteSpot: { point: Point; distBodyLengths: number } | null;
   perchTarget: { windowId: string; point: Point } | null;
   wanderTarget: Point | null;
-  /** The far end of the floor the cat stands on, when it is a walk away. */
+  /** The far end of the floor (or window top / taskbar) the cat stands on, when it is a walk away. */
   cornerTarget: Point | null;
+  /** 0..1 share of the last ~30 s with keyboard-like activity: intensive typing keeps the cat off surfaces. */
+  typingIntensity: number;
+  /** What the cat stands on. */
+  standingOn: 'floor' | SurfaceKind;
+  /** A climb up a window side to its top corner, or down from the window top the cat stands on (null: none, off or cooling down). */
+  climbTarget: { point: Point; dir: 'up' | 'down' } | null;
+  /** A tab-strip rest point worth a visit, or a walk along the strip the cat stands on (null: none, off or cooling down). */
+  tabStripTarget: Point | null;
+  /** Standing on a window top: sit on its edge and look down into the window. */
+  edgeLook: { windowId: string; point: Point } | null;
   /** The long cooldown of an occasional surprise startle has elapsed. */
   surpriseReady: boolean;
   /** Most recent first, the activities chosen lately. */
@@ -175,10 +197,27 @@ export function scoreCandidates(v: DecisionView): Scored<Candidate>[] {
   if (rough > 0) add(cand('hiding'), 0.05 * rough * (1.2 - t.confidence) * (typing ? 0.5 : 1));
   // A rare, mild start at nothing in particular (long cooldown, see surpriseReady).
   if (v.surpriseReady && !typing) add(cand('startled', { variant: 'surprise' }), 0.02 * (0.5 + t.curiosity) * energyGate * activeMul);
+  // Trips onto surfaces (window tops, sides, tab strips) get rarer while the user types hard.
+  const excursion = (1 - 0.85 * clamp01(v.typingIntensity)) * (typing ? 0.3 : 1);
   // Jumping up to explore a window top is 'Sit on windows', independent of 'Inspect windows'.
   if (v.perchTarget && !v.disabled.has('perchOnWindows')) {
-    const score = (0.04 + 0.32 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * (0.6 + 0.4 * t.confidence);
+    const score = (0.04 + 0.32 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * (0.6 + 0.4 * t.confidence) * excursion;
     add(cand('inspectingWindow', { variant: 'explore', windowId: v.perchTarget.windowId, target: v.perchTarget.point }), score);
+  }
+  // On a window top: sit at its edge and look down into the window.
+  if (v.edgeLook && !v.disabled.has('perchOnWindows')) {
+    add(cand('inspectingWindow', { variant: 'edge', windowId: v.edgeLook.windowId, target: v.edgeLook.point }), (0.05 + 0.2 * t.curiosity) * calmMul);
+  }
+  // Climbing a window side is 'Climb windows' (and needs 'Sit on windows' for the top it leads to).
+  if (v.climbTarget && !v.disabled.has('climbWindows') && !v.disabled.has('perchOnWindows')) {
+    const up = v.climbTarget.dir === 'up';
+    const score = (0.02 + 0.14 * t.curiosity * (0.4 + s.boredom) * (0.5 + t.energyLevel)) * energyGate * activeMul * excursion * (up ? 0.6 + 0.4 * t.confidence : 1);
+    add(cand('walking', { variant: 'climb', target: v.climbTarget.point, then: up ? 'idle' : null }), score);
+  }
+  if (v.tabStripTarget && !v.disabled.has('tabStrips')) {
+    const onStrip = v.standingOn === 'tabStrip';
+    const score = (onStrip ? 0.06 + 0.1 * t.curiosity : 0.02 + 0.1 * t.curiosity * (0.3 + s.boredom)) * energyGate * activeMul * excursion;
+    add(cand('walking', { variant: 'tabStrip', target: v.tabStripTarget, then: onStrip ? null : 'resting' }), score);
   }
   const lookAt = v.foreground?.center ?? v.wanderTarget;
   if (lookAt) add(cand('curious', { target: lookAt, variant: 'look' }), (0.06 + 0.22 * t.curiosity * s.boredom) * activeMul);

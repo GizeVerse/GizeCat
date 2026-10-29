@@ -5,6 +5,9 @@
 import { BrowserWindow } from 'electron';
 import { OVERLAY_URL } from '../../shared/ipc';
 import type { DisplayGeometry } from '../../shared/world';
+import type { Logger } from '../contracts';
+import type { Hwnd } from '../win32/native';
+import { loadOverlayShellNative, type OverlayShellNative } from '../win32/taskbar/windowProps';
 
 export interface OverlayWindowOptions {
   display: DisplayGeometry;
@@ -59,4 +62,92 @@ export function createOverlayWindow(opts: OverlayWindowOptions): BrowserWindow {
   win.setIgnoreMouseEvents(true);
   win.setContentProtection(opts.contentProtection);
   return win;
+}
+
+/**
+ * Shell integration of the overlay windows (ADR 0002 §2). Every method is non-fatal: failures
+ * are logged and reported as false, and the overlay works on without it.
+ */
+export interface OverlayShell {
+  /**
+   * Call right before showInactive(): sets NonRudeHWND so Windows does not treat the
+   * full-monitor transparent topmost overlay as a fullscreen app, which would strip the
+   * taskbar's always-on-top style and break the auto-hide reveal.
+   */
+  beforeShow(win: BrowserWindow, displayId: string): boolean;
+  /** Call right before destroy(): removes NonRudeHWND (SetPropW requires it). */
+  beforeDestroy(win: BrowserWindow, displayId: string): boolean;
+  /** Calls `cb` when Explorer broadcasts TaskbarCreated (taskbar re-created, e.g. Explorer restarted). */
+  hookTaskbarCreated(win: BrowserWindow, cb: () => void): boolean;
+}
+
+function hwndOf(win: BrowserWindow): Hwnd | null {
+  const buf = win.getNativeWindowHandle();
+  if (!Buffer.isBuffer(buf) || buf.length < 8) return null;
+  const h = buf.readBigUInt64LE(0);
+  return h === 0n ? null : h;
+}
+
+/** `native` is injectable for tests; by default the koffi bindings are loaded on first use. */
+export function createOverlayShell(logger: Logger, native?: OverlayShellNative | null): OverlayShell {
+  let shell: OverlayShellNative | null | undefined = native;
+  const failures = new Map<string, number>();
+
+  function get(): OverlayShellNative | null {
+    if (shell === undefined) {
+      try {
+        shell = loadOverlayShellNative();
+      } catch (e) {
+        shell = null;
+        logger.warn('overlay shell integration unavailable (NonRudeHWND, TaskbarCreated)', { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return shell;
+  }
+
+  function fail(op: string, data: Record<string, unknown>): false {
+    const n = (failures.get(op) ?? 0) + 1;
+    failures.set(op, n);
+    if (n <= 3 || n % 100 === 0) logger.warn(`overlay ${op} failed`, { ...data, count: n });
+    return false;
+  }
+
+  return {
+    beforeShow(win, displayId) {
+      const s = get();
+      if (s === null) return false;
+      try {
+        const h = hwndOf(win);
+        if (h === null) return fail('NonRudeHWND set', { displayId, reason: 'no window handle' });
+        if (!s.setNonRude(h)) return fail('NonRudeHWND set', { displayId, reason: 'SetPropW returned 0' });
+        logger.debug('overlay marked NonRudeHWND', { displayId });
+        return true;
+      } catch (e) {
+        return fail('NonRudeHWND set', { displayId, error: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    beforeDestroy(win, displayId) {
+      const s = get();
+      if (s === null) return false;
+      try {
+        const h = hwndOf(win);
+        if (h === null) return fail('NonRudeHWND removal', { displayId, reason: 'no window handle' });
+        return s.clearNonRude(h);
+      } catch (e) {
+        return fail('NonRudeHWND removal', { displayId, error: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    hookTaskbarCreated(win, cb) {
+      const s = get();
+      if (s === null) return false;
+      try {
+        const msg = s.taskbarCreatedMessage();
+        if (msg === null) return fail('TaskbarCreated hook', { reason: 'RegisterWindowMessageW failed' });
+        win.hookWindowMessage(msg, () => cb());
+        return true;
+      } catch (e) {
+        return fail('TaskbarCreated hook', { error: e instanceof Error ? e.message : String(e) });
+      }
+    },
+  };
 }

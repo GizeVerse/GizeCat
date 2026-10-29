@@ -19,6 +19,8 @@ const MAX_SHIFT = 40;
 /** Max upward correction per sub-step when a point is below the ground line (while easing in). */
 const GROUND_PUSH = 0.6;
 const GROUND_RAMP_S = 0.25;
+/** A ground line that moves up by more than this (DIP) in one frame eases in again (e.g. pulling up onto a ledge). */
+const GROUND_JUMP = 1.5;
 /** Max free-point speed (DIP/s) from inertia and target pull; root drag is not limited. */
 const MAX_SPEED = 600;
 
@@ -31,6 +33,7 @@ export class TailChain {
   readonly ty = new Float64Array(POINTS);
   private ready = false;
   private groundBlend = 1;
+  private lastGroundY = Number.NaN;
   /** Tail radius multiplier from puff (1 = normal). */
   puff = 1;
   front = false;
@@ -58,6 +61,7 @@ export class TailChain {
     if (!this.ready || (valid && dtMs > RESET_GAP_MS) || !Number.isFinite(rootX) || !Number.isFinite(rootY)) {
       this.snapToTarget();
       this.constrain(groundY, Number.POSITIVE_INFINITY);
+      this.lastGroundY = groundY;
       for (let i = 0; i < POINTS; i++) {
         this.px[i] = this.x[i]!;
         this.py[i] = this.y[i]!;
@@ -86,9 +90,14 @@ export class TailChain {
     const h = dtMs / 1000 / steps;
     const keep = Math.exp(-5 * h);
     const maxMove = MAX_SPEED * h;
-    // The ground clamp eases in over GROUND_RAMP_S after it switches on, then is hard.
-    if (Number.isFinite(groundY)) this.groundBlend = Math.min(1, this.groundBlend + dtMs / 1000 / GROUND_RAMP_S);
-    else this.groundBlend = 0;
+    // The ground clamp eases in over GROUND_RAMP_S after it switches on or jumps up, then is hard.
+    if (Number.isFinite(groundY)) {
+      if (Number.isFinite(this.lastGroundY) && groundY < this.lastGroundY - GROUND_JUMP) this.groundBlend = 0;
+      this.groundBlend = Math.min(1, this.groundBlend + dtMs / 1000 / GROUND_RAMP_S);
+    } else {
+      this.groundBlend = 0;
+    }
+    this.lastGroundY = groundY;
     const push = this.groundBlend >= 1 ? Number.POSITIVE_INFINITY : GROUND_PUSH + this.groundBlend * 4;
     for (let s = 0; s < steps; s++) {
       for (let i = 1; i < POINTS; i++) {

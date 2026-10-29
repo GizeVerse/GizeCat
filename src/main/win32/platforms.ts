@@ -1,4 +1,5 @@
-// Pure computations over a z-ordered window list (top first).
+// Pure computations over a z-ordered window list (top first). The span helpers are shared
+// with the v1.1 surface provider (src/main/surfaces), which builds ledges and walls on them.
 import { displayForRect } from '../../core/display/displayMath';
 import { rectArea, rectIntersection } from '../../shared/geometry';
 import type { Rect } from '../../shared/geometry';
@@ -7,7 +8,8 @@ import type { NotificationState } from './windowRules';
 
 export const MIN_PLATFORM_WIDTH = 80;
 
-type Span = readonly [number, number];
+/** A half-open interval [start, end). */
+export type Span = readonly [number, number];
 
 /** Removes [cut0, cut1) from every span. */
 export function subtractSpan(spans: readonly Span[], cut0: number, cut1: number): Span[] {
@@ -23,6 +25,36 @@ export function subtractSpan(spans: readonly Span[], cut0: number, cut1: number)
   return out;
 }
 
+/**
+ * Parts of the horizontal segment [x0, x1) on row `y` that no rect in `above` covers
+ * (a rect covers the row when y is in [rect.y, rect.y + height)).
+ */
+export function openRowSpans(y: number, x0: number, x1: number, above: Iterable<Rect>): Span[] {
+  if (!(x1 > x0)) return [];
+  let spans: Span[] = [[x0, x1]];
+  for (const a of above) {
+    if (y < a.y || y >= a.y + a.height) continue;
+    spans = subtractSpan(spans, a.x, a.x + a.width);
+    if (spans.length === 0) break;
+  }
+  return spans;
+}
+
+/**
+ * Parts of the vertical extent [y0, y1) of a column band [bandX0, bandX1) that no rect in
+ * `above` overlaps (a rect cuts its own y-range wherever it overlaps the band horizontally).
+ */
+export function openColumnSpans(bandX0: number, bandX1: number, y0: number, y1: number, above: Iterable<Rect>): Span[] {
+  if (!(y1 > y0) || !(bandX1 > bandX0)) return [];
+  let spans: Span[] = [[y0, y1]];
+  for (const a of above) {
+    if (a.x >= bandX1 || a.x + a.width <= bandX0) continue;
+    spans = subtractSpan(spans, a.y, a.y + a.height);
+    if (spans.length === 0) break;
+  }
+  return spans;
+}
+
 /** A shown top-level window that hides what is below it (app window or not). */
 export interface Occluder {
   id: string;
@@ -30,14 +62,7 @@ export interface Occluder {
 }
 
 function pushEdge(out: Platform[], id: string, r: Rect, above: readonly Rect[], minWidth: number): void {
-  const y = r.y;
-  let spans: Span[] = [[r.x, r.x + r.width]];
-  for (const a of above) {
-    if (y < a.y || y >= a.y + a.height) continue;
-    spans = subtractSpan(spans, a.x, a.x + a.width);
-    if (spans.length === 0) break;
-  }
-  for (const [x0, x1] of spans) if (x1 - x0 >= minWidth) out.push({ windowId: id, y, x0, x1 });
+  for (const [x0, x1] of openRowSpans(r.y, r.x, r.x + r.width, above)) if (x1 - x0 >= minWidth) out.push({ windowId: id, y: r.y, x0, x1 });
 }
 
 /**

@@ -14,7 +14,7 @@ const status: AppStatus = {
   displayCount: 1,
   perception: { mode: 'off', paused: false, blockedReason: null, lastCaptureAt: null, capturesThisHour: 0, aiProviderLabel: null, lastError: null },
   windowAwareness: 'event-hooks',
-  launchAtLoginActive: false,
+  loginItem: { enabled: true, preference: 'unset', disabledBy: null, active: false, writable: false, reason: null, showNotice: false },
   shortcutRegistered: true,
   startedAt: 0,
 };

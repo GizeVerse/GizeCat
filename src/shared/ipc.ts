@@ -136,10 +136,8 @@ export interface AppStatus {
   displayCount: number;
   perception: PerceptionStatus;
   windowAwareness: 'event-hooks' | 'polling' | 'unavailable';
-  /** @deprecated use loginItem.active */
-  launchAtLoginActive: boolean;
   /** v1.1 launch-at-sign-in state (main-owned). */
-  loginItem?: LoginItemStatus;
+  loginItem: LoginItemStatus;
   /** v1.1 environment observers (taskbar, window surfaces, tab strips). */
   surfaces?: SurfaceStatus;
   shortcutRegistered: boolean;

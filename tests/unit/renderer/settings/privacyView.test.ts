@@ -30,7 +30,7 @@ function view(perception: Partial<PerceptionStatus> = {}, opts: { userPaused?: b
     displayCount: 1,
     perception: status(perception),
     windowAwareness: 'event-hooks',
-    launchAtLoginActive: false,
+    loginItem: { enabled: true, preference: 'unset', disabledBy: null, active: false, writable: false, reason: null, showNotice: false },
     shortcutRegistered: true,
     startedAt: NOW - 60_000,
   };

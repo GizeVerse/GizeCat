@@ -1,4 +1,4 @@
-import type { ResourceSample, SettingsViewState } from '../../../shared/ipc';
+import type { LoginItemStatus, ResourceSample, SettingsViewState } from '../../../shared/ipc';
 import type { PageContext, PageView } from '../context';
 import { button, group, keyValues, page, row, runAction, segmentedRow, toggleRow } from '../controls';
 import { h, svg, uid } from '../dom';
@@ -73,6 +73,14 @@ function sampleTable(samples: readonly ResourceSample[]): HTMLElement | null {
   ]);
 }
 
+/** One-word "Start with Windows" state for the status list. */
+export function loginItemLabel(s: LoginItemStatus): string {
+  if (s.active) return D.active;
+  if (!s.writable) return D.loginNotAvailable;
+  if (s.disabledBy === 'windows') return D.loginWindowsDisabled;
+  return s.enabled ? D.inactive : D.loginOff;
+}
+
 export function statusEntries(view: SettingsViewState, now: number): Array<readonly [string, string]> {
   const { status, settings } = view;
   const p = status.perception;
@@ -96,7 +104,7 @@ export function statusEntries(view: SettingsViewState, now: number): Array<reado
   if (p.lastError) entries.push([D.lastError, p.lastError]);
   entries.push(
     [D.shortcut, !settings.general.shortcutsEnabled ? D.shortcutsOff : status.shortcutRegistered ? D.registered : D.notRegistered],
-    [D.launchAtLogin, status.launchAtLoginActive ? D.active : D.inactive],
+    [D.launchAtLogin, loginItemLabel(status.loginItem)],
     [D.uptime, formatElapsed(status.startedAt, now)],
   );
   return entries;

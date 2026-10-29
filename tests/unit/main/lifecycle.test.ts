@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCrashGuard, readRelaunchHistory } from '../../../src/main/lifecycle/crashGuard';
 import { hasFlag, parseTimeScale, parseUserDataOverride } from '../../../src/main/lifecycle/launchArgs';
-import { createLoginItemController, LOGIN_ITEM_NAME } from '../../../src/main/lifecycle/loginItem';
+import { LOGIN_ITEM_NAME, UNINSTALL_MARKER_FILE, UNINSTALLER_FILE } from '../../../src/main/lifecycle/loginItem';
 import { createQuitSequence } from '../../../src/main/lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndKind } from '../../../src/main/lifecycle/sessionEnd';
 import { createShortcutManager } from '../../../src/main/lifecycle/shortcuts';
@@ -289,22 +289,23 @@ describe('session-end saver', () => {
   });
 });
 
-describe('login item', () => {
-  it('reads state but writes only on an explicit change, never in test mode', () => {
-    const writes: unknown[] = [];
-    const api = {
-      getLoginItemSettings: () => ({ openAtLogin: true, executableWillLaunchAtLogin: false }),
-      setLoginItemSettings: (s: unknown) => writes.push(s),
-    };
-    const ctl = createLoginItemController({ api, logger: memoryLogger(), execPath: 'C:\\app\\DesktopCat.exe', appPathArg: null, writesEnabled: true });
-    expect(ctl.isActive()).toBe(false);
-    expect(writes).toEqual([]);
-    ctl.onSettingChanged(true);
-    // A fixed value name, so the uninstaller can remove the Run entry.
-    expect(writes).toEqual([{ openAtLogin: true, path: 'C:\\app\\DesktopCat.exe', args: ['--launched-at-login'], name: LOGIN_ITEM_NAME }]);
+describe('login item names shared with the installer', () => {
+  const root = path.resolve(__dirname, '..', '..', '..');
+  const nsh = fs.readFileSync(path.join(root, 'build', 'installer.nsh'), 'utf8');
 
-    const dev = createLoginItemController({ api, logger: memoryLogger(), execPath: 'electron.exe', appPathArg: 'C:\\src\\cat', writesEnabled: false });
-    dev.onSettingChanged(true);
-    expect(writes).toHaveLength(1);
+  it('the uninstaller removes the Run and StartupApproved values under the fixed value name, only on a real uninstall', () => {
+    expect(nsh).toContain(`DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${LOGIN_ITEM_NAME}"`);
+    expect(nsh).toContain(`DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run" "${LOGIN_ITEM_NAME}"`);
+    expect(nsh).toMatch(/\$\{ifNot\} \$\{isUpdated\}/);
+  });
+
+  it('the uninstall marker the app looks for is the one the uninstaller writes', () => {
+    expect(nsh).toContain(`$APPDATA\\Desktop Cat\\${UNINSTALL_MARKER_FILE}`);
+    expect(UNINSTALLER_FILE).toBe('Uninstall Desktop Cat.exe');
+  });
+
+  it('the value name equals the AppUserModelID (Electron defaults the name to it)', () => {
+    const index = fs.readFileSync(path.join(root, 'src', 'main', 'index.ts'), 'utf8');
+    expect(index).toContain(`APP_USER_MODEL_ID = '${LOGIN_ITEM_NAME}'`);
   });
 });
