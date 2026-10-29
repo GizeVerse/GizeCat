@@ -2,6 +2,7 @@
 // titles, process lists, images or the user's profile path (it holds the Windows
 // account name); exclusion lists are reduced to counts and the whole report is
 // passed through redaction once more. Pure.
+import type { BehaviorProfileSnapshot } from '../../shared/behaviorProfile';
 import type { AppStatus, ResourceSample } from '../../shared/ipc';
 import { DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS, type Settings } from '../../shared/settings';
 import type { SurfaceDiagnostics } from '../../shared/surfaceDiagnostics';
@@ -24,6 +25,12 @@ export interface DiagnosticsInput {
   cat: Record<string, unknown>;
   /** v1.1.1: why the cat can or cannot leave the floor (counts, kinds, reasons, geometry; no titles or ids). */
   surfaces?: SurfaceDiagnostics | null;
+  /**
+   * v1.2 (ADR 0003 §11, review C2 seam): the sim's behaviour profile. The settings/diagnostics
+   * package adds it as the `behaviorProfile` section once it validates it against
+   * BehaviorProfileSchema (and PRIVACY.md lists it); until then it is not exported.
+   */
+  behaviorProfile?: BehaviorProfileSnapshot | null;
   services: Record<string, unknown>;
   resources: readonly ResourceSample[];
   logs: readonly LogEntry[];

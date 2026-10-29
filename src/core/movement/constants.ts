@@ -7,6 +7,9 @@ export const MOVEMENT = {
   runDip: 260,
   chaseDip: 210,
   slowDip: 42,
+  /** v1.2 paces (ADR 0003 §6.7): the hunting creep and a flat-out dash (sprint clip). */
+  stalkDip: 24,
+  sprintDip: 360,
   /** Horizontal acceleration / braking while grounded. */
   accelDip: 900,
   brakeDip: 1500,
@@ -83,6 +86,43 @@ export const MOVEMENT = {
   /** Two ledges at the same height (within this) whose ends touch (within joinGapBodyLengths) are walk-connected. */
   walkJoinToleranceDip: 2,
   walkJoinGapBodyLengths: 0.3,
+
+  // ---- v1.2 (ADR 0003 §6) -----------------------------------------------------------
+  /** Landing impact classes by vertical impact speed: soft below, hard from (medium between). */
+  impactSoftBelowDip: 1000,
+  impactHardFromDip: 1600,
+  /**
+   * No planned, non-emergency jump or drop ends further below the feet than this, whatever the
+   * settings say. Only LeaveOption.emergency legs (hang from the edge, then drop) may exceed it.
+   */
+  jumpDownAbsoluteMaxDip: 900,
+  /** An emergency leg hangs from the edge first: the drop starts this much lower (body heights). */
+  emergencyHangBodyHeights: 1,
+  /**
+   * Safe jump-down height never lands hard: H_safe <= this x (impactHardFromDip^2 / 2g) x
+   * (0.8 + 0.4 heights) (review C2; ~477 DIP at the defaults, the medium class).
+   */
+  jumpDownSafeHardFraction: 0.95,
+  /** Hard cap on a screen-edge top-corner hold, whatever holdOnWall was given (stuck-state guard). */
+  maxWallHoldMs: 20_000,
+  /** After this many planCancelled within planCancelBackoffWindowMs the mover reports goal 'unreachable' for a while. */
+  planCancelBackoffCount: 2,
+  planCancelBackoffWindowMs: 10_000,
+  /** Ballistic hunting pounce: reach, anticipation crouch (visible wiggle) and apex range. */
+  pounceReachBodyLengths: 3.2,
+  pounceCrouchMinMs: 600,
+  pounceCrouchMaxMs: 1600,
+  pounceApexMinDip: 30,
+  pounceApexMaxDip: 70,
+  /** Ledges down to this width (body lengths) are accepted as narrow (balance) when enabled. */
+  narrowLedgeMinBodyLengths: 0.25,
+  /** A ledge narrower than this (body lengths) is narrow: the cat walks slower and balances. */
+  narrowLedgeBelowBodyLengths: 0.9,
+  /**
+   * A screen-edge wall's highest anchor is at least this far below the work-area top, so the
+   * climbing pose (about 100 DIP above the anchor) and the ears stay on screen.
+   */
+  screenEdgeTopClearanceDip: 120,
 } as const;
 
 /** Route effort weights (seconds of walking one leg is worth), before personality multipliers. */

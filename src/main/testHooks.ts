@@ -1,5 +1,7 @@
 // End-to-end test surface, installed only when DESKTOP_CAT_TEST=1. Playwright
 // reaches it through electronApp.evaluate(() => globalThis.__desktopCatTest...).
+import type { BehaviorProfileSnapshot } from '../shared/behaviorProfile';
+import type { Point } from '../shared/geometry';
 import type { AppStatus } from '../shared/ipc';
 import type { Settings, PatchResult } from '../shared/settings';
 import type { SimEvent, SimOutput } from '../shared/sim';
@@ -48,6 +50,19 @@ export interface TestHookContext {
   /** v1.1.1: the sim's surface-outline segments (physical px), whether or not the outlines are shown. */
   getSurfaceDebugLines(): SurfaceDebugLine[];
   forceInteractive(value: boolean | null): void;
+  // ---- v1.2 (ADR 0003 §15.4, review C2) ----
+  /** The sim's session behaviour profile (counts, kinds, durations). */
+  getBehaviorProfile(): BehaviorProfileSnapshot;
+  /**
+   * Feeds `p` (physical px) to the host as the cursor position, for the sim and for the overlay's
+   * click-through decision, until null restores the real cursor. Never moves the real cursor.
+   */
+  injectCursor(p: Point | null): void;
+  /**
+   * Lists only windows of these processes as surfaces (the E2E's own windows), or every window
+   * again with null, so the user's windows never join a run.
+   */
+  restrictSurfacesToPids(pids: readonly number[] | null): void;
   setTimeScale(scale: number): void;
   runAction(action: AppAction): Promise<unknown>;
   patchSettings(patch: unknown): PatchResult;
@@ -58,6 +73,12 @@ export interface TestHookContext {
 
 export interface DesktopCatTestApi extends TestHookContext {
   readonly installedAt: number;
+}
+
+function isPointLike(v: unknown): v is Point {
+  if (v === null || typeof v !== 'object') return false;
+  const p = v as { x?: unknown; y?: unknown };
+  return typeof p.x === 'number' && Number.isFinite(p.x) && Math.abs(p.x) < 1e6 && typeof p.y === 'number' && Number.isFinite(p.y) && Math.abs(p.y) < 1e6;
 }
 
 function isSimEventLike(v: unknown): v is SimEvent {
@@ -82,6 +103,21 @@ export function installTestHooks(ctx: TestHookContext, env: Record<string, strin
     },
     injectSurfaces(list) {
       ctx.injectSurfaces(parseInjectedSurfaces(list));
+    },
+    injectCursor(p) {
+      if (p !== null && !isPointLike(p)) throw new Error('injectCursor: expected {x, y} finite numbers or null');
+      ctx.injectCursor(p === null ? null : { x: p.x, y: p.y });
+    },
+    restrictSurfacesToPids(pids) {
+      const raw: unknown = pids;
+      if (raw === null) {
+        ctx.restrictSurfacesToPids(null);
+        return;
+      }
+      if (!Array.isArray(raw) || raw.length > 64 || !raw.every((n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n > 0)) {
+        throw new Error('restrictSurfacesToPids: expected up to 64 positive integer pids or null');
+      }
+      ctx.restrictSurfacesToPids((raw as number[]).slice());
     },
     installedAt: Date.now(),
   };

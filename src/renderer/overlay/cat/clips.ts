@@ -37,7 +37,40 @@ export const ONE_SHOT_DURATION_S: Readonly<Partial<Record<AnimClip, number>>> = 
   land: 0.25,
   startle: 0.8,
   meow: 0.9,
+  // v1.2 (ADR 0003 §8)
+  slip: 0.9,
+  impact: 0.45,
+  landRecover: 0.9,
+  swat: 0.45,
+  hiss: 1.2,
+  stretch: 1.6,
 };
+
+/**
+ * v1.2 contract step: the pose each new clip borrows until the renderer package authors it (ADR
+ * 0003 §8). A clip listed here samples, paces its gait and loops exactly like its base clip; the
+ * renderer package removes each entry as it draws the real pose. The brain does not select these
+ * clips before then.
+ */
+export const CLIP_BASE: Readonly<Partial<Record<AnimClip, AnimClip>>> = {
+  stalk: 'walk',
+  sprint: 'run',
+  pounce: 'jump',
+  slip: 'fall',
+  impact: 'land',
+  landRecover: 'sit',
+  swat: 'pawAt',
+  hiss: 'startle',
+  grumpy: 'annoyed',
+  slink: 'walk',
+  stretch: 'wake',
+  balance: 'stand',
+  tailChase: 'rollOver',
+  edgeSit: 'sit',
+};
+
+/** The clip whose motion `clip` uses (itself once authored). */
+export const baseClip = (clip: AnimClip): AnimClip => CLIP_BASE[clip] ?? clip;
 
 export function clipDurationS(clip: AnimClip): number | null {
   return ONE_SHOT_CLIPS.has(clip) ? (ONE_SHOT_DURATION_S[clip] ?? null) : null;
@@ -77,7 +110,8 @@ export function climbEngagement(speed: number): number {
 }
 
 /** Gait cycle rate (Hz at animation speed 1) for a locomotion clip. */
-export function gaitHz(clip: AnimClip, speed: number): number {
+export function gaitHz(anyClip: AnimClip, speed: number): number {
+  const clip = baseClip(anyClip);
   const v = Math.max(0, Number.isFinite(speed) ? speed : 0) * BODY_LENGTH_DIP;
   if (clip === 'walk') return clamp((v * WALK_DUTY) / WALK_MAX_STRIDE, 1.3, 3.4);
   if (clip === 'run') return clamp((v * RUN_DUTY) / RUN_MAX_STRIDE, 2.1, 4.4);
@@ -85,7 +119,8 @@ export function gaitHz(clip: AnimClip, speed: number): number {
   return 0;
 }
 
-function strideFor(clip: AnimClip, speed: number): number {
+function strideFor(anyClip: AnimClip, speed: number): number {
+  const clip = baseClip(anyClip);
   const v = Math.max(0, Number.isFinite(speed) ? speed : 0) * BODY_LENGTH_DIP;
   const hz = gaitHz(clip, speed);
   if (clip === 'walk') return clamp((v * WALK_DUTY) / hz, 3, WALK_MAX_STRIDE);
@@ -938,6 +973,21 @@ const CLIPS: Readonly<Record<AnimClip, ClipFn>> = {
   hide: clipHide,
   rollOver: clipRollOver,
   climb: clipClimb,
+  // v1.2 placeholders (CLIP_BASE): the base clip's pose until authored.
+  stalk: clipWalk,
+  sprint: clipRun,
+  pounce: clipJump,
+  slip: clipFall,
+  impact: clipLand,
+  landRecover: clipSit,
+  swat: clipPawAt,
+  hiss: clipStartle,
+  grumpy: clipAnnoyed,
+  slink: clipWalk,
+  stretch: clipWake,
+  balance: clipStand,
+  tailChase: clipRollOver,
+  edgeSit: clipSit,
 };
 
 /** Samples `clip` at the context's phase into `out`. One-shot clips hold their last pose. */
@@ -1007,10 +1057,15 @@ export function crossFadeMs(from: AnimClip | null, to: AnimClip, movementSpeed =
 }
 
 /** Whether a clip is a locomotion cycle driven by `speed`. */
-export const isGait = (clip: AnimClip): boolean => clip === 'walk' || clip === 'run' || clip === 'climb';
+export const isGait = (anyClip: AnimClip): boolean => {
+  const clip = baseClip(anyClip);
+  return clip === 'walk' || clip === 'run' || clip === 'climb';
+};
 
 /** Seconds of one loop of a looping clip (used by previews/tests), null if not periodic. */
-export function loopPeriodS(clip: AnimClip): number | null {
+export function loopPeriodS(anyClip: AnimClip): number | null {
+  if (ONE_SHOT_CLIPS.has(anyClip)) return null;
+  const clip = baseClip(anyClip);
   switch (clip) {
     case 'groom':
       return 3.4;

@@ -17,7 +17,7 @@ const WALL = 1_800_000_000_000;
 export const USER_SCREEN = world(display('1', 0, 0, 1920, 1200, { primary: true, scale: 1.25 }));
 
 /** The user's cat (cat-state.json, docs/research/v1.1.1-floor-only-diagnosis.md). */
-export const USER_TRAITS: Traits = { curiosity: 0.65, playfulness: 0.38, affection: 0.44, confidence: 0.51, energyLevel: 0.54, laziness: 0.33 };
+export const USER_TRAITS: Traits = { curiosity: 0.65, playfulness: 0.38, affection: 0.44, confidence: 0.51, energyLevel: 0.54, laziness: 0.33, startleSensitivity: 0.5 };
 export const USER_STATS: Partial<Stats> = { energy: 0.74, boredom: 0.02, bond: 0.28, annoyance: 0, fear: 0 };
 
 /** A typical floating window in front (DWM frame [300,120]-[1300,960]): sides end 245 px above the floor, top ~1075 px up. */

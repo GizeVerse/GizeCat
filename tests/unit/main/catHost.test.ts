@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createCatHost, type HostOverlays, type HostSurfaceProvider } from '../../../src/main/catHost';
 import type { ActivityMonitor, DisplayService, PerceptionService, TaskbarState, TaskbarTracker, Win32Api, WindowTracker } from '../../../src/main/contracts';
 import type { CatPosition } from '../../../src/main/surfaces';
+import { emptyBehaviorProfile } from '../../../src/shared/behaviorProfile';
 import type { Point } from '../../../src/shared/geometry';
 import type { PersistedCat } from '../../../src/shared/catState';
 import { defaultSettings } from '../../../src/shared/settings';
@@ -89,6 +90,7 @@ function harness(opts: HarnessOptions = {}) {
       throw new Error('not used by these tests');
     },
     surfaceDebugLines: () => [],
+    behaviorProfile: () => emptyBehaviorProfile(0),
   };
   let cursor: Point = { x: 500, y: 500 };
   const win32 = {
@@ -340,6 +342,21 @@ describe('cat host loop', () => {
     expect(h.timers.size).toBe(0);
     h.timers.advance(5000);
     expect(h.ticks).toHaveLength(1);
+  });
+
+  it('v1.2 test seam: an injected cursor replaces the real one for the sim until cleared; no guard rects yet', () => {
+    const h = harness();
+    expect(h.host.clickGuardRectsPx()).toEqual([]);
+    h.host.setInjectedCursor({ x: 1200, y: 900 });
+    h.host.start();
+    h.timers.advance(0);
+    expect(h.ticks[0]!.env.cursor).toMatchObject({ x: 1200, y: 900 });
+    expect(h.host.cursorPx()).toEqual({ x: 1200, y: 900 });
+    h.host.setInjectedCursor(null);
+    h.setNextTick(5);
+    h.timers.advance(33);
+    expect(h.ticks.at(-1)!.env.cursor).toMatchObject({ x: 500, y: 500 });
+    h.host.stop();
   });
 });
 

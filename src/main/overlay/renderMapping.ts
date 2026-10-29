@@ -38,6 +38,13 @@ export interface RenderMapContext {
   simNow: number;
   /** settings.behavior.movementSpeed (the renderer times its wall-transition fades with it); absent = 1. */
   movementSpeed?: number;
+  /**
+   * v1.2: this overlay holds the cat's anchor, so it alone gets the sound cue (a cat straddling two
+   * overlays must not play a sound twice). Absent/false: no sound in this snapshot.
+   */
+  soundOwner?: boolean;
+  /** v1.2: settings.sound.volume, carried on the cue. */
+  soundVolume?: number;
 }
 
 /** Cat bounds plus emote/body margins, physical px. */
@@ -94,6 +101,13 @@ export function mapRenderState(out: SimOutput, appearance: Appearance, ctx: Rend
     animSpeed: appearance.animationSpeed,
     reaction: out.reaction ? { kind: out.reaction.kind, at: out.reaction.at } : null,
     ...(ctx.movementSpeed !== undefined && Number.isFinite(ctx.movementSpeed) && ctx.movementSpeed > 0 ? { movementSpeed: ctx.movementSpeed } : {}),
+    // v1.2 render hints: only when the sim sets them (snapshots of a v1.1.1 sim are unchanged).
+    ...(out.jumpKind !== undefined ? { jumpKind: out.jumpKind } : {}),
+    ...(out.impact !== undefined && Number.isFinite(out.impact) ? { impact: clamp01(out.impact) } : {}),
+    ...(out.balance !== undefined && Number.isFinite(out.balance) ? { balance: clamp01(out.balance) } : {}),
+    ...(ctx.soundOwner === true && out.sound
+      ? { sound: { kind: out.sound.kind, at: out.sound.at, ...(ctx.soundVolume !== undefined && Number.isFinite(ctx.soundVolume) ? { volume: clamp01(ctx.soundVolume) } : {}) } }
+      : {}),
   };
 }
 

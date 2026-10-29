@@ -135,8 +135,21 @@ export interface CatHost {
   catAnchor(): Point | null;
   /** Displays with a fullscreen app in front, as last handed to the sim (re-checked about once a second). */
   fullscreenDisplayIds(): readonly string[];
+  /**
+   * v1.2 (ADR 0003 §6.1, §3; review C2) seam: screen rects (px) no overlay takes the mouse over
+   * right now because of what the cat is doing: obstacle windows next to a cat clinging to, leaping
+   * at or jumping off a screen edge, and the covering window while it bails out of a covered ledge.
+   * app.ts unions them with the taskbar guard; a throw makes the overlay manager fail closed
+   * (click-through everywhere). The provider package implements it; the contract stub returns [].
+   */
+  clickGuardRectsPx(): readonly Rect[];
+  /** Test mode only (E2E, via test hooks): use `p` as the cursor for the sim and the click-through decision; null restores the real one. */
+  setInjectedCursor(p: Point | null): void;
   debug(): CatHostDebug;
 }
+
+/** The contract stub's click guard (no extra rects until the provider package implements it). */
+const NO_GUARD_RECTS: readonly Rect[] = Object.freeze([]);
 
 const clampNum = (v: number, lo: number, hi: number): number => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : hi);
 
@@ -165,6 +178,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   let lastOutput: SimOutput | null = null;
   let lastState: BehaviorState | null = null;
   let lastCursor: Point | null = null;
+  /** Test mode only (setInjectedCursor). */
+  let injectedCursor: Point | null = null;
   let fullscreenIds: string[] = [];
   let fullscreenAt = -Infinity;
   let quitWaiters: Array<() => void> = [];
@@ -328,6 +343,10 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   }
 
   function sampleCursor(): Point | null {
+    if (injectedCursor) {
+      lastCursor = injectedCursor;
+      return injectedCursor;
+    }
     let p: Point | null = null;
     if (win32.available) p = win32.getCursorPos();
     if (!p) {
@@ -624,6 +643,11 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     catDisplayId: () => lastOutput?.displayId ?? null,
     catAnchor: () => (lastOutput ? { x: lastOutput.x, y: lastOutput.y } : null),
     fullscreenDisplayIds: () => [...fullscreenIds],
+    clickGuardRectsPx: () => NO_GUARD_RECTS,
+    setInjectedCursor(p) {
+      injectedCursor = p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;
+      log.info(injectedCursor ? 'cursor injected (test mode)' : 'cursor injection ended');
+    },
     debug: () => ({
       ticks,
       tickErrors,

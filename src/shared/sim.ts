@@ -1,12 +1,13 @@
 // Contract between the main-process host and the pure cat simulation (src/core).
 // All coordinates here are PHYSICAL virtual-screen pixels ("px").
-import type { AnimClip, BehaviorState, CatReaction, Emote, Facing } from './cat';
+import type { BehaviorProfileSnapshot } from './behaviorProfile';
+import type { AnimClip, BehaviorState, CatReaction, CatSoundCue, Emote, Facing, JumpKind } from './cat';
 import type { PersistedCat } from './catState';
 import type { Point, Rect } from './geometry';
 import type { SceneReport, VisualSummary } from './perception';
 import type { Settings } from './settings';
 import type { DecisionDiagnostics, NavDiagnostics, SurfaceDebugLine } from './surfaceDiagnostics';
-import type { Surface, TaskbarEdge } from './surfaces';
+import type { ScreenEdgeBand, Surface, SupportSurfaceKind, TaskbarEdge } from './surfaces';
 import type { AppCategory, WindowInfo, WorldGeometry } from './world';
 
 /** Discrete stimuli delivered to the simulation since the previous tick. */
@@ -92,13 +93,34 @@ export interface SimEnv {
   dragCursor: Point | null;
   /** Local wall-clock hour 0..24 for a gentle daily rhythm. */
   localHour: number;
+  // ---- v1.2 (ADR 0003), optional: absent means the stated default ----------------
+  /**
+   * A mouse button is held (the user is clicking, selecting or dragging something). The cat never
+   * stalks or pounces at a cursor whose button is down. Content-free (button state only). Default false.
+   */
+  pointerButtonDown?: boolean;
+  /** ms since the cursor last moved more than ~2 DIP; a still cursor stops being prey. Default: derived from speed. */
+  cursorIdleMs?: number;
+  /**
+   * Outer screen edges' cling bands and where they are clear of app windows (T8 guard). Absent =
+   * no host guard (an older host, a test host, no Win32): the sim never climbs a screen edge at all
+   * (cfg.screenEdges stays off), so an unguarded host can never make the cat cling over app controls.
+   */
+  edgeBands?: readonly ScreenEdgeBand[];
+  /**
+   * v1.2 (review C2): monotonic count of mouse-button presses (down edges, any button) since the host
+   * started. Content-free (no position, no which-button); the sim only compares it with the previous
+   * tick's value: a press ends a running hunt and blocks hunt starts for a few seconds (ADR 0003 §4.3).
+   * Absent: unknown (no button gate beyond pointerButtonDown).
+   */
+  pointerButtonPresses?: number;
 }
 
 export type SimSupport =
   | { kind: 'floor'; displayId: string }
   | { kind: 'window'; windowId: string }
   /** Attached to an environmental surface (v1.1): standing on a ledge or clinging to a wall. */
-  | { kind: 'surface'; surfaceId: string; surfaceKind: Surface['kind']; orientation: Surface['orientation'] }
+  | { kind: 'surface'; surfaceId: string; surfaceKind: SupportSurfaceKind; orientation: Surface['orientation'] }
   | { kind: 'air' }
   | { kind: 'held' };
 
@@ -139,6 +161,15 @@ export interface SimOutput {
   requests: SimRequest[];
   /** Short, one-off body-language reaction (e.g. an ear flick on a tap); the renderer plays it once per distinct `at`. */
   reaction?: CatReaction | null;
+  // ---- v1.2 render hints (ADR 0003 §6, §8, §10), optional ----------------------------
+  /** Kind of the current flight while airborne, else null/absent. */
+  jumpKind?: JumpKind | null;
+  /** 0..1 hardness of the landing being played. */
+  impact?: number;
+  /** 0..1 how hard the cat balances (narrow ledge, top corner of a screen edge). */
+  balance?: number;
+  /** One-off procedural sound (only while settings.sound.enabled); the host routes it to one overlay. */
+  sound?: CatSoundCue | null;
 }
 
 export interface CatSimOptions {
@@ -167,6 +198,8 @@ export interface CatSim {
   surfaceDiagnostics(): { nav: NavDiagnostics; decision: DecisionDiagnostics };
   /** v1.1.1: segments for the optional on-desktop surface visualization (physical px). */
   surfaceDebugLines(): SurfaceDebugLine[];
+  /** v1.2: session behaviour profile (kinds, counts, durations; ADR 0003 §11). */
+  behaviorProfile(): BehaviorProfileSnapshot;
 }
 
 export type CreateCatSim = (opts: CatSimOptions) => CatSim;

@@ -17,11 +17,44 @@ export const MEMORY_KINDS = [
   'annoyed',
   'called',
   'hide',
+  // v1.2 (ADR 0003): 1.1.1 drops these on load (unknown kinds are filtered), which is harmless.
+  'hunt',
+  'pounce',
+  'stay',
+  'slip',
+  'defend',
 ] as const;
 export type MemoryKind = (typeof MEMORY_KINDS)[number];
 
 /** Non-sensitive detail tokens that may accompany a memory entry. */
-export const MEMORY_DETAILS = ['engaged', 'ignored', 'answered', 'unanswered', 'zoomies', 'pawAt', 'rollOver', 'hop', 'window', 'floor', 'hard'] as const;
+export const MEMORY_DETAILS = [
+  'engaged',
+  'ignored',
+  'answered',
+  'unanswered',
+  'zoomies',
+  'pawAt',
+  'rollOver',
+  'hop',
+  'window',
+  'floor',
+  'hard',
+  // v1.2: landing hardness, throw reactions (THROW_REACTIONS), hunt outcomes and stay places.
+  'soft',
+  'medium',
+  'shrug',
+  'surprise',
+  'startledJump',
+  'grumpy',
+  'defensive',
+  'flight',
+  'playful',
+  'avoid',
+  'caught',
+  'missed',
+  'tabStrip',
+  'edge',
+] as const;
 export type MemoryDetail = (typeof MEMORY_DETAILS)[number];
 
 /** Favourite-spot scores halve every three days of wall-clock time. */

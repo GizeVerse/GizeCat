@@ -504,6 +504,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           hidden,
           simNow,
           movementSpeed,
+          // v1.2: a sound cue goes to the one overlay holding the anchor, and only while sound is on.
+          soundOwner: settingsNow.sound.enabled && e.displayId === out.displayId,
+          soundVolume: settingsNow.sound.volume,
         });
         if (!e.active) {
           e.active = true;

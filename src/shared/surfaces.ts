@@ -8,6 +8,29 @@ export const SURFACE_KINDS = ['taskbar', 'windowTop', 'windowSide', 'tabStrip'] 
 export type SurfaceKind = (typeof SURFACE_KINDS)[number];
 
 /**
+ * v1.2 (ADR 0003 §6.1): a climbable outer screen edge. Derived inside src/core/movement from the
+ * world geometry (the exact complement of the floor join), never listed by the provider, so it is
+ * not a SurfaceKind (provider counts and the diagnostics schema keep their four kinds).
+ */
+export const SCREEN_EDGE_KIND = 'screenEdge' as const;
+/** Anything the cat can be attached to: a provider surface or a derived screen edge. */
+export type SupportSurfaceKind = SurfaceKind | typeof SCREEN_EDGE_KIND;
+
+/**
+ * v1.2: one outer screen edge's cling band as main sees it (ADR 0003 §6.1, T8 guard). `clearSpans`
+ * are the vertical stretches (physical px, y0 < y1) where no visible app window overlaps the band
+ * (about 1.2 body heights wide along the edge), so a cat clinging there covers only the desktop.
+ */
+export interface ScreenEdgeBand {
+  displayId: string;
+  /** Screen side the edge is on. */
+  side: 'left' | 'right';
+  /** At most MAX_EDGE_SPANS spans, top to bottom. */
+  clearSpans: ReadonlyArray<{ y0: number; y1: number }>;
+}
+export const MAX_EDGE_SPANS = 8;
+
+/**
  * entering: becoming available (e.g. an auto-hide taskbar sliding in);
  * stable: geometry settled; leaving: about to disappear (sliding out, window minimizing).
  */

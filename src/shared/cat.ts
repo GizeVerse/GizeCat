@@ -62,11 +62,65 @@ export const ANIM_CLIPS = [
   // grip point on the wall line at hind-paw height; the body extends upwards along the wall; facing +1
   // means the wall is to the cat's right (it hangs on a window's LEFT edge), -1 the mirror image.
   'climb',
+  // v1.2 (ADR 0003 §8). Until the renderer package draws them, each one renders the pose of an
+  // existing clip (renderer CLIP_BASE); the brain does not select them before then.
+  'stalk', // low, slow creep toward prey: belly near the ground, shoulders working (gait, rate scales with speed)
+  'sprint', // flat-out dash, longer extension than run (gait)
+  'pounce', // airborne pounce: forelegs reaching forward and down, hind legs trailing (vy and jumpKind drive it)
+  'slip', // a paw misses the edge: scramble with hind legs paddling, then recover (~0.9 s, one-shot)
+  'impact', // hard landing: deep squash, legs splayed, head down (~0.45 s, one-shot; `impact` scales it)
+  'landRecover', // after a hard landing: shake off, look around, sit up (~0.9 s, one-shot)
+  'swat', // one quick defensive/playful paw strike toward `look` (~0.45 s, one-shot)
+  'hiss', // defensive: arched back, puffed tail, ears flat, mouth open (~1.2 s, one-shot, silhouette-legible)
+  'grumpy', // grumpy stare: low sit, ears sideways, narrowed eyes, slow tail thumps (loop)
+  'slink', // retreat gait: low, ears back, tail low (gait)
+  'stretch', // standing stretch: front stretch then back stretch (~1.6 s, one-shot)
+  'balance', // narrow ledge or top corner: crouched stance, tail out as a counterweight, small sway (loop; `balance` scales it)
+  'tailChase', // spinning after its own tail (loop)
+  'edgeSit', // sitting at a ledge's edge looking down past its paws (`look` below the ledge) (loop)
 ] as const;
 export type AnimClip = (typeof ANIM_CLIPS)[number];
 
 /** Clips that play once and then hold their final pose until the brain changes clip. */
-export const ONE_SHOT_CLIPS: ReadonlySet<AnimClip> = new Set<AnimClip>(['wake', 'yawn', 'land', 'startle', 'meow']);
+export const ONE_SHOT_CLIPS: ReadonlySet<AnimClip> = new Set<AnimClip>([
+  'wake',
+  'yawn',
+  'land',
+  'startle',
+  'meow',
+  'slip',
+  'impact',
+  'landRecover',
+  'swat',
+  'hiss',
+  'stretch',
+]);
+
+/**
+ * v1.2: what kind of flight the cat is in (render hint; ADR 0003 §6). 'hop' = a small on-surface
+ * hop, 'up'/'across'/'down' = planned jumps by height change, 'pounce' = a hunting pounce, 'leap' =
+ * a leap that catches a wall, 'wallJump' = a jump off a wall it clung to.
+ */
+export const JUMP_KINDS = ['hop', 'up', 'across', 'down', 'pounce', 'leap', 'wallJump'] as const;
+export type JumpKind = (typeof JUMP_KINDS)[number];
+
+/** v1.2: landing impact class from the vertical impact speed (ADR 0003 §6.4). */
+export const LANDING_IMPACTS = ['soft', 'medium', 'hard'] as const;
+export type LandingImpact = (typeof LANDING_IMPACTS)[number];
+
+/** v1.2: optional procedural sounds (ADR 0003 §10). Off unless settings.sound.enabled. */
+export const SOUND_CUES = ['meow', 'chirp', 'trill', 'purr', 'hiss', 'growl', 'thud'] as const;
+export type SoundCue = (typeof SOUND_CUES)[number];
+/**
+ * A one-off sound; the renderer plays it once per distinct `at` (sim time, ms) and never a cue
+ * older than ~500 ms against the snapshot's `t` (a recreated overlay must not replay it).
+ */
+export interface CatSoundCue {
+  kind: SoundCue;
+  at: number;
+  /** 0..1 playback volume (settings.sound.volume), set by main; absent = 0.4. */
+  volume?: number;
+}
 
 export const EMOTES = ['heart', 'zzz', 'exclaim', 'question', 'anger', 'note', 'sparkle'] as const;
 export type Emote = (typeof EMOTES)[number];
@@ -93,6 +147,27 @@ export interface CatReaction {
  */
 export const CAT_BASE_WIDTH_DIP = 84;
 export const CAT_BASE_HEIGHT_DIP = 64;
+
+/**
+ * v1.2 (ADR 0003 §6.7, review C2): fastest anchor speed (DIP/s at size 1) each locomotion clip
+ * animates without its paws sliding. The renderer authors its gaits to meet at least these (its
+ * tests cross-check clips.ts), and the Mover never drives a pace past 1.1x its clip's limit,
+ * whatever movementSpeed says. walk/run/climb are the v1.1.1 values (diagnosis §4).
+ */
+export const GAIT_LIMIT_DIP = { walk: 106, run: 394, climb: 63, stalk: 40, slink: 90, sprint: 440 } as const satisfies Readonly<Record<string, number>>;
+export type GaitClip = keyof typeof GAIT_LIMIT_DIP;
+
+/**
+ * v1.2 (ADR 0003 §4.2, §6.5, review C2): upper bound (DIP at size 1) on how far the hit region of
+ * a pose reaches ahead of the anchor in the facing direction. Pounce landings and strikes are
+ * placed from these, never from the anchor: the region stays at least HIT_CLEARANCE_DIP (plus the
+ * click-through hysteresis) short of the cursor hotspot (T8). The renderer's tests assert the
+ * rig never exceeds them, in both styles and facings.
+ */
+export const HIT_FRONT_EXTENT_DIP = { crouch: 40, pounce: 46, land: 42, pawAt: 50, swat: 54 } as const satisfies Readonly<Record<string, number>>;
+export type StrikePose = keyof typeof HIT_FRONT_EXTENT_DIP;
+/** Smallest gap (DIP) between a pounce/strike pose's hit region and the cursor hotspot. */
+export const HIT_CLEARANCE_DIP = 8;
 
 /**
  * One render snapshot, main -> overlay renderer. Coordinates are overlay-local DIP
@@ -143,6 +218,14 @@ export interface CatRenderState {
   movementSpeed?: number;
   /** One-off reaction to play on top of the clip (once per distinct `at`). */
   reaction?: CatReaction | null;
+  /** v1.2: kind of the current flight while airborne (jump/fall/pounce poses), else null/absent. */
+  jumpKind?: JumpKind | null;
+  /** v1.2: 0..1 hardness of the landing being played (land/impact/landRecover); absent = 0.5. */
+  impact?: number;
+  /** v1.2: 0..1 how hard the cat has to balance (narrow ledge, top corner); absent = 0. */
+  balance?: number;
+  /** v1.2: one-off sound, sent to exactly one overlay (the one holding the anchor); absent/null = none. */
+  sound?: CatSoundCue | null;
 }
 
 /** Hit region reported by a renderer for its current pose, overlay-local DIP. */

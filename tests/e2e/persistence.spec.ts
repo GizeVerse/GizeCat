@@ -29,7 +29,7 @@ test.describe('persistence', () => {
     }
   });
 
-  test('a v1 settings file is migrated to v2 and saved with the main-owned loginItem section', async ({ userData }) => {
+  test('a v1 settings file is migrated to the current schema (v3) and saved with the main-owned loginItem section', async ({ userData }) => {
     // v1 wrote the whole object, launchAtLogin included; true was an explicit opt-in.
     fs.writeFileSync(
       path.join(userData, 'settings.json'),
@@ -39,7 +39,7 @@ test.describe('persistence', () => {
     try {
       await waitForCat(app);
       const s = await hook(app, 'getSettings');
-      expect(s.schemaVersion).toBe(2);
+      expect(s.schemaVersion).toBe(3);
       expect(s.general).not.toHaveProperty('launchAtLogin');
       expect(s.general.catName).toBe('Pixel');
       expect(s.appearance.size).toBe(1.3);
@@ -51,7 +51,7 @@ test.describe('persistence', () => {
       expect(await quitApp(app)).toBe(0);
     }
     const saved = readJson(path.join(userData, 'settings.json'));
-    expect(saved.schemaVersion).toBe(2);
+    expect(saved.schemaVersion).toBe(3);
     expect(saved.general as Record<string, unknown>).not.toHaveProperty('launchAtLogin');
     expect(saved.loginItem).toEqual({ preference: 'enabled', decidedBy: 'migration', disabledBy: null, registeredPath: null, v1Value: true, noticeShown: false });
 
@@ -117,7 +117,7 @@ test.describe('persistence', () => {
     expect(files.some((f) => f.startsWith('settings.corrupt-'))).toBe(true);
     expect(files.some((f) => f.startsWith('cat-state.corrupt-'))).toBe(true);
     const rewritten = readJson(path.join(userData, 'settings.json'));
-    expect(rewritten.schemaVersion).toBe(2);
+    expect(rewritten.schemaVersion).toBe(3);
     // Damaged settings: this session decided and wrote nothing about launch at sign-in.
     expect(rewritten.loginItem).toMatchObject({ preference: 'unset', decidedBy: 'default', registeredPath: null });
     const reconciled = readLogLines(userData).filter((l) => l.m === 'login item reconciled');

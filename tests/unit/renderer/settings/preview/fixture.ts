@@ -31,7 +31,7 @@ function cat(now: number, name: string): CatSummary {
     catId: 'preview-cat-0001',
     bornAt: now - 12 * 24 * HOUR,
     state: 'resting',
-    traits: { curiosity: 0.72, playfulness: 0.58, affection: 0.64, confidence: 0.41, energyLevel: 0.55, laziness: 0.38 },
+    traits: { curiosity: 0.72, playfulness: 0.58, affection: 0.64, confidence: 0.41, energyLevel: 0.55, laziness: 0.38, startleSensitivity: 0.57 },
     stats: { energy: 0.81, boredom: 0.22, bond: 0.47, annoyance: 0.05, fear: 0 },
     counters: {
       pets: 214,
@@ -47,8 +47,15 @@ function cat(now: number, name: string): CatSummary {
       windowsInspected: 156,
       naps: 88,
       sessions: 23,
+      hunts: 31,
+      pounces: 12,
+      excursions: 64,
+      surfaceHops: 7,
+      edgeClimbs: 5,
+      slips: 2,
+      hardLandings: 4,
     },
-    preferences: { petRatePerHour: 3.4, cursorPlayAcceptance: 0.53, attentionAcceptance: 0.76 },
+    preferences: { petRatePerHour: 3.4, cursorPlayAcceptance: 0.53, attentionAcceptance: 0.76, roughRatePerHour: 0.4 },
     favoriteSpotCount: 3,
     // The simulation's own kinds and detail tokens (src/core/behavior/memory.ts).
     recent: [

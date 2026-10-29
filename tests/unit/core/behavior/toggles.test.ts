@@ -12,9 +12,9 @@ const MIN = 60_000;
 function view(disabled: ToggleableBehavior[]): DecisionView {
   const behavior = { ...defaultSettings().behavior, autonomy: 1, disabledBehaviors: disabled };
   return {
-    traits: { playfulness: 0.5, curiosity: 0.9, affection: 0.5, laziness: 0.2, confidence: 0.8, energyLevel: 0.6 },
+    traits: { playfulness: 0.5, curiosity: 0.9, affection: 0.5, laziness: 0.2, confidence: 0.8, energyLevel: 0.6, startleSensitivity: 0.5 },
     stats: { energy: 0.9, boredom: 0.8, bond: 0.3, annoyance: 0, fear: 0 },
-    prefs: { cursorPlayAcceptance: 0.5, attentionAcceptance: 0.5, petRatePerHour: 0 },
+    prefs: { cursorPlayAcceptance: 0.5, attentionAcceptance: 0.5, petRatePerHour: 0, roughRatePerHour: 0 },
     behavior,
     disabled: new Set(disabled),
     localHour: 14,

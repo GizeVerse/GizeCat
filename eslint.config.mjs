@@ -38,6 +38,20 @@ export default tseslint.config(
     },
   },
   {
+    // v1.2 (ADR 0003 D1, review C2): the simulation is deterministic for a seed. Time and randomness
+    // are injected (CatSimOptions.now/random/wallClock); only the injection defaults may name them.
+    files: ['src/core/**/*.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        { object: 'Math', property: 'random', message: 'Use the injected Random (src/core/behavior/random.ts).' },
+        { object: 'Date', property: 'now', message: 'Use the injected clock (env.now / wallClock).' },
+        { object: 'performance', property: 'now', message: 'Use the injected clock (env.now).' },
+      ],
+      'no-restricted-syntax': ['error', { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: 'Use the injected wall clock.' }],
+    },
+  },
+  {
     files: ['src/renderer/**/*.ts'],
     rules: {
       'no-restricted-imports': [

@@ -44,7 +44,7 @@ import type { Point } from '../../../src/shared/geometry';
 import { defaultSettings, type Settings } from '../../../src/shared/settings';
 import type { SimEvent, SimOutput } from '../../../src/shared/sim';
 import type { DecisionDiagnostics, NavDiagnostics } from '../../../src/shared/surfaceDiagnostics';
-import type { Surface, SurfaceKind } from '../../../src/shared/surfaces';
+import type { Surface, SupportSurfaceKind } from '../../../src/shared/surfaces';
 import type { DisplayGeometry, WorldGeometry } from '../../../src/shared/world';
 import { FakeNative, raw } from '../../unit/win32/fakes';
 
@@ -79,7 +79,7 @@ const TICK0 = 50_000_000;
 export const WALL0 = new Date(2026, 9, 29, 13, 10, 0).getTime();
 
 /** The user's cat (cat-state.json; docs/research/v1.1.1-floor-only-diagnosis.md). */
-export const USER_TRAITS: Traits = { curiosity: 0.65, playfulness: 0.38, affection: 0.44, confidence: 0.51, energyLevel: 0.54, laziness: 0.33 };
+export const USER_TRAITS: Traits = { curiosity: 0.65, playfulness: 0.38, affection: 0.44, confidence: 0.51, energyLevel: 0.54, laziness: 0.33, startleSensitivity: 0.5 };
 export const USER_STATS: Partial<Stats> = { energy: 0.74, boredom: 0.02 };
 
 // ------------------------------------------------------------------ windows
@@ -441,7 +441,7 @@ export interface Sample {
   state: string;
   clip: string;
   /** 'floor', 'air', 'held', 'window', or the surface kind the cat is attached to. */
-  support: 'floor' | 'air' | 'held' | 'window' | SurfaceKind;
+  support: 'floor' | 'air' | 'held' | 'window' | SupportSurfaceKind;
   surfaceId: string | null;
   snap: boolean;
   visible: boolean;

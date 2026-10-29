@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RENDER_STYLES, SKINS } from './cat';
+import { ACTIVITY_PRESET_IDS, matchingPreset, PRESET_VALUES } from './settingsPresets';
 import { DEFAULT_TOGGLE_SHORTCUT, MAX_SHORTCUT_LENGTH, parseShortcut } from './shortcut';
 
 /**
@@ -7,7 +8,7 @@ import { DEFAULT_TOGGLE_SHORTCUT, MAX_SHORTCUT_LENGTH, parseShortcut } from './s
  * value is missing or invalid, so a partially corrupt file degrades field by field
  * instead of resetting everything.
  */
-export const SETTINGS_SCHEMA_VERSION = 2;
+export const SETTINGS_SCHEMA_VERSION = 3;
 
 /** Behaviours the user can switch off individually. */
 export const TOGGLEABLE_BEHAVIORS = [
@@ -26,6 +27,78 @@ export const TOGGLEABLE_BEHAVIORS = [
   'tabStrips',
 ] as const;
 export type ToggleableBehavior = (typeof TOGGLEABLE_BEHAVIORS)[number];
+
+/**
+ * v1.2: behaviours added from v1.2 on that the user can switch off (ADR 0003 §9). They live in
+ * their own tolerant list (`behavior.disabledExtras`), never in `disabledBehaviors`: one id 1.1.1
+ * does not know empties that whole strict list on a downgrade, re-enabling everything the user
+ * turned off. TOGGLEABLE_BEHAVIORS is frozen at its v2 contents.
+ */
+export const LIVELY_BEHAVIORS = [
+  /** Pouncing at the pointer (stalking and watching stay; 'chaseCursor' off turns hunting off entirely). */
+  'pounce',
+  /** Climbing the outer edges of the screen. */
+  'screenEdges',
+  /** Jumping from one surface to another (window to window, window to taskbar, off a wall). */
+  'surfaceHops',
+  /** Hissing and defensive swats after rough handling (it gets grumpy or walks off instead). */
+  'hissing',
+  /** Chasing its own tail. */
+  'tailChase',
+  /** Looking up when tabs are switched, added or closed on the strip it is on. */
+  'tabReactions',
+  /** File Explorer tab strips (needs 'tabStrips'). */
+  'explorerTabs',
+  /** Windows Terminal tab strips (needs 'tabStrips'). */
+  'terminalTabs',
+  /** The occasional deliberate slip on a risky leap (it always recovers). */
+  'slips',
+] as const;
+export type LivelyBehavior = (typeof LIVELY_BEHAVIORS)[number];
+/** Every behaviour id the user can switch off, either list. */
+export type BehaviorId = ToggleableBehavior | LivelyBehavior;
+
+/** Ids the tolerant list keeps: short camelCase slugs (also ids of newer versions, kept and ignored). */
+export const OPT_OUT_ID_PATTERN = /^[a-z][A-Za-z0-9]{0,31}$/;
+export const MAX_OPT_OUTS = 64;
+
+/**
+ * Tolerant opt-out list: entries are checked one by one, so a bad or unknown entry never costs the
+ * others. Malformed entries and duplicates are dropped; well-formed unknown ids (a newer version's
+ * opt-outs) are kept, so a v1.3 -> v1.2 -> v1.3 round trip keeps them, and ignored by this version.
+ */
+const OptOutListSchema = z.array(z.unknown()).transform((items) => {
+  const out: string[] = [];
+  for (const it of items) {
+    if (typeof it !== 'string' || !OPT_OUT_ID_PATTERN.test(it) || out.includes(it)) continue;
+    out.push(it);
+    if (out.length >= MAX_OPT_OUTS) break;
+  }
+  return out;
+});
+
+/**
+ * Opt-outs a v2 behaviour implies for the new ones (ADR 0003 §9.4): the new model never re-enables
+ * something the user switched off under its old name. Applied when reading, never written back.
+ */
+export const IMPLIED_OPT_OUTS: Readonly<Partial<Record<ToggleableBehavior, readonly LivelyBehavior[]>>> = {
+  chaseCursor: ['pounce'],
+  climbWindows: ['screenEdges'],
+  perchOnWindows: ['surfaceHops'],
+  tabStrips: ['explorerTabs', 'terminalTabs', 'tabReactions'],
+};
+
+/** The effective set of switched-off behaviours: both lists plus the implied opt-outs. */
+export function disabledBehaviorSet(behavior: Pick<Settings['behavior'], 'disabledBehaviors' | 'disabledExtras'>): ReadonlySet<BehaviorId> {
+  const out = new Set<BehaviorId>();
+  for (const id of behavior.disabledBehaviors) {
+    out.add(id);
+    for (const implied of IMPLIED_OPT_OUTS[id] ?? []) out.add(implied);
+  }
+  const lively: ReadonlySet<string> = new Set(LIVELY_BEHAVIORS);
+  for (const id of behavior.disabledExtras) if (lively.has(id)) out.add(id as LivelyBehavior);
+  return out;
+}
 
 /** Processes whose windows are never analysed, previewed or sent: blacked out in memory right after each grab, and capture is skipped while one is in front (case-insensitive exe basenames). */
 export const DEFAULT_EXCLUDED_PROCESSES: readonly string[] = [
@@ -156,6 +229,21 @@ const BehaviorSchema = z.object({
   disabledBehaviors: field(z.array(z.enum(TOGGLEABLE_BEHAVIORS)).max(TOGGLEABLE_BEHAVIORS.length), []),
   /** Typical length of a cursor chase in seconds (actual chases vary around it). */
   chaseDurationSec: field(z.number().min(1).max(20), 4.5),
+  // ---- v1.2 (ADR 0003 §9). `autonomy` is shown as "Activity" and `cursorPlay` as "Cursor hunting".
+  /** The preset the activity values came from; 'custom' once one of them no longer matches it. */
+  activityPreset: field(z.enum([...ACTIVITY_PRESET_IDS, 'custom']), 'playful'),
+  /** How much it explores: window tops, tab strips, screen edges and corners. */
+  exploration: field(z.number().min(0).max(1), PRESET_VALUES.playful.behavior.exploration),
+  /** How high it climbs and how far it jumps down (0 = keeps low, 1 = daring). */
+  heights: field(z.number().min(0).max(1), PRESET_VALUES.playful.behavior.heights),
+  /** How cheeky it is. */
+  mischief: field(z.number().min(0).max(1), PRESET_VALUES.playful.behavior.mischief),
+  /** How willing it is to play near what you are working on (never while you type). */
+  workDisruption: field(z.number().min(0).max(1), PRESET_VALUES.playful.behavior.workDisruption),
+  /** How long it stays up on window tops and tab strips (0 = short visits, 1 = long stays). */
+  stayLength: field(z.number().min(0).max(1), PRESET_VALUES.playful.behavior.stayLength),
+  /** v1.2 opt-outs (LIVELY_BEHAVIORS), tolerant: see OptOutListSchema. */
+  disabledExtras: field(OptOutListSchema, []),
 });
 
 const InteractionSchema = z.object({
@@ -166,6 +254,8 @@ const InteractionSchema = z.object({
   throwing: field(z.boolean(), true),
   /** 0 = gets annoyed quickly by repeated clicks, 1 = very tolerant. */
   patience: field(z.number().min(0).max(1), 0.5),
+  /** v1.2: how strongly it reacts to throws and rough handling (0 = shrugs it off, 1 = big reactions). */
+  reactionIntensity: field(z.number().min(0).max(1), PRESET_VALUES.playful.interaction.reactionIntensity),
 });
 
 const PerceptionSchema = z.object({
@@ -199,6 +289,12 @@ const AiSchema = z.object({
   timeoutSec: field(z.number().int().min(3).max(120), 30),
 });
 
+/** v1.2 (ADR 0003 §10): optional procedural sounds, off by default; Windows' volume and mute apply. */
+const SoundSchema = z.object({
+  enabled: field(z.boolean(), false),
+  volume: field(z.number().min(0).max(1), 0.4),
+});
+
 const DiagnosticsSchema = z.object({
   logLevel: field(z.enum(['error', 'warn', 'info', 'debug']), 'info'),
   /** Compatibility switch (applies at next launch) for GPUs that render transparent windows black. */
@@ -214,6 +310,7 @@ export const SettingsSchema = z.object({
   interaction: InteractionSchema.prefault({}).catch(() => InteractionSchema.parse({})),
   perception: PerceptionSchema.prefault({}).catch(() => PerceptionSchema.parse({})),
   ai: AiSchema.prefault({}).catch(() => AiSchema.parse({})),
+  sound: SoundSchema.prefault({}).catch(() => SoundSchema.parse({})),
   diagnostics: DiagnosticsSchema.prefault({}).catch(() => DiagnosticsSchema.parse({})),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -253,6 +350,18 @@ export function migrateSettings(raw: unknown): Settings {
       obj.loginItem = v1 === true ? { preference: 'enabled', decidedBy: 'migration', v1Value: true } : { preference: 'unset', decidedBy: 'default', v1Value: v1 };
     }
     obj.schemaVersion = 2;
+  }
+  if (version < 3) {
+    // v2 -> v3 (ADR 0003 §9.3). Pure and idempotent (it runs on every launch until the first save):
+    // every v2 key keeps its value; new keys get their defaults (never inferred from v2 values, so
+    // mischief and work disruption are never raised); the activity preset is the one the governed
+    // values match, else 'custom' (an explicit autonomy 0.8 / cursorPlay 0.7 is kept and shown as
+    // Custom); the v2 opt-out list is untouched and the new tolerant list starts empty. Consent,
+    // privacy, AI and login-item fields are not looked at.
+    const parsed = SettingsSchema.parse({ ...obj, schemaVersion: 3 });
+    const behavior = obj.behavior !== null && typeof obj.behavior === 'object' && !Array.isArray(obj.behavior) ? (obj.behavior as Record<string, unknown>) : {};
+    if (behavior.activityPreset === undefined) parsed.behavior.activityPreset = matchingPreset(parsed) ?? 'custom';
+    return parsed;
   }
   return SettingsSchema.parse(obj);
 }

@@ -65,7 +65,7 @@ try {
   $result.runValue = Get-Value $runKey
   $result.runExact = ($result.runValue -ceq $expectedRun)
   $result.approvedAbsent = ($null -eq (Get-Value $approvedKey))
-  $null = Wait-Until { (Get-Content (Join-Path $userData 'settings.json') -Raw) -match '"schemaVersion":\s*2' } 20
+  $null = Wait-Until { (Get-Content (Join-Path $userData 'settings.json') -Raw) -match '"schemaVersion":\s*3' } 20
   $settings = Get-Content (Join-Path $userData 'settings.json') -Raw | ConvertFrom-Json
   $result.schemaVersion = $settings.schemaVersion
   $result.catNameKept = ($settings.general.catName -eq 'UpgradeCat')
@@ -91,7 +91,7 @@ try {
 }
 $li = $result.loginItem
 $result.ok = ($result.oldInstallExitCode -eq 0) -and ($result.upgradeExitCode -eq 0) -and $result.singleUninstallEntry -and `
-  $result.registered -and $result.runExact -and $result.approvedAbsent -and ($result.schemaVersion -eq 2) -and $result.catNameKept -and `
+  $result.registered -and $result.runExact -and $result.approvedAbsent -and ($result.schemaVersion -eq 3) -and $result.catNameKept -and `
   $result.skinKept -and $result.launchAtLoginFieldRemoved -and $li -and ($li.v1Value -eq $false) -and ($li.disabledBy -eq $null) -and `
   ($result.uninstallExitCode -eq 0) -and $result.uninstallRemovedRun -and $result.uninstallRemovedApproved -and $result.uninstallEntryRemoved
 $result | ConvertTo-Json -Depth 4

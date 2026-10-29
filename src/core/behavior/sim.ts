@@ -1,6 +1,21 @@
 // The cat simulation: state machine, activities, stimuli, needs, memory and output.
 // Pure TypeScript; time, randomness and the environment are injected.
 import type { AnimClip, BehaviorState, CatReaction, CatReactionKind } from '../../shared/cat';
+import type {
+  ArrivalRoute,
+  BehaviorProfileSnapshot,
+  DecisionRecord,
+  EdgeVisitRecord,
+  ExcursionRecord,
+  FallRecord,
+  HuntRecord,
+  LeaveKind,
+  ReactionRecord,
+  SlipRecord,
+  StayEndReason,
+  StaySurfaceKind,
+} from '../../shared/behaviorProfile';
+import { activityClassOf } from '../../shared/behaviorProfile';
 import type { PersistedCat } from '../../shared/catState';
 import { PersistedCatSchema } from '../../shared/catState';
 import type { Point, Rect } from '../../shared/geometry';
@@ -23,6 +38,7 @@ import type { MemoryDetail } from './memory';
 import { addRateEvent, bumpCounter, clearMemory, decayRate, ema01, learnSpot, rankedSpots, remember } from './memory';
 import { migrateCatState } from './migrate';
 import { newPersistedCat } from './personality';
+import { arrivalRouteOf, BehaviorProfileRecorder, fallCauseOf } from './profile';
 import type { Random } from './random';
 import { chance, range, safeRandom } from './random';
 import type { TransitionCause } from './states';
@@ -63,6 +79,21 @@ export interface TransitionRecord {
 
 export interface SimHooks {
   onTransition?: (r: TransitionRecord) => void;
+  // ---- v1.2 (ADR 0003 §11): the records the behaviour profile is built from ----------------
+  /** Every decision that started an activity (autonomous now; stay/leave/stimulus once v1.2 lands). */
+  onDecision?: (r: DecisionRecord) => void;
+  /** An elevated stay started (phase 'arrive') or ended (phase 'end'). */
+  onExcursion?: (r: ExcursionRecord) => void;
+  /** An unplanned airborne phase ended (throws, drops, lost supports, slips). Planned jumps are not falls. */
+  onFall?: (r: FallRecord) => void;
+  /** The reaction chosen after a throw or rough handling (v1.2 reaction model). */
+  onReaction?: (r: ReactionRecord) => void;
+  /** A cursor hunt ended (v1.2 hunting model). */
+  onHunt?: (r: HuntRecord) => void;
+  /** A deliberate slip happened (v1.2 slips; a 'miss' also reports onFall with cause 'slip'). */
+  onSlip?: (r: SlipRecord) => void;
+  /** A screen-edge climb ended (v1.2 screen edges). */
+  onEdgeVisit?: (r: EdgeVisitRecord) => void;
 }
 
 /** Hard floor between perception requests; the user's minimum interval applies above it. */
@@ -219,6 +250,20 @@ const NO_TARGETS: Record<DecisionTarget, TargetAvailability> = { perch: 'noSurfa
 const EMPTY_SCAN: TargetScan = { at: -Infinity, perch: null, climb: null, strip: null, status: NO_TARGETS };
 
 /** One trip up the cat set out on (exploring a top, climbing a side, visiting a tab strip). */
+/**
+ * v1.2 contract-step instrumentation of an elevated stay (window top or tab strip). `via` is how the
+ * cat is leaving while it is not standing on the stay's surface; the stay ends once it stands
+ * elsewhere. The behaviour package replaces this with the stay model's explicit intents.
+ */
+interface StayTrack {
+  kind: StaySurfaceKind;
+  surfaceId: string;
+  since: number;
+  lastOnAt: number;
+  arrivedBy: ArrivalRoute;
+  via: 'none' | 'held' | 'wall' | 'jump' | 'step' | 'fall' | 'covered' | 'gone';
+}
+
 interface Excursion {
   kind: DecisionTarget;
   act: Activity;
@@ -324,10 +369,24 @@ export class CatSimImpl implements CatSim {
   private readonly invalidSamples: string[] = [];
   private eventErrors = 0;
   private transitionsTotal = 0;
+  /** v1.2 behaviour profile (ADR 0003 §11) and the stay being tracked for it. */
+  private readonly profile: BehaviorProfileRecorder;
+  private stay: StayTrack | null = null;
+  /** How the cat was attached last tick (arrival route of a stay). */
+  private prevAttach: 'ground' | 'wall' | 'air' | 'held' = 'ground';
+  /** Why the support was lost most recently (fall cause of the next landing). */
+  private lastLossReason: SupportLoss['reason'] | null = null;
+  /**
+   * Why the cat last flew, kept past enterLanding (which clears fallReason on the landing tick,
+   * before trackStay runs), so a stay's arrival route is known (review C2). Cleared once grounded.
+   */
+  private lastFlightReason: FallReason | null = null;
 
   constructor(opts: CatSimOptions, hooks: SimHooks = {}) {
     this.hooks = hooks;
+    // eslint-disable-next-line no-restricted-properties -- the injection default (ADR 0003 D1)
     this.random = safeRandom(opts.random ?? Math.random);
+    // eslint-disable-next-line no-restricted-properties -- the injection default (ADR 0003 D1)
     this.wallClock = opts.wallClock ?? Date.now;
     this.settings = opts.settings;
     this.disabled = new Set(opts.settings.behavior.disabledBehaviors);
@@ -335,6 +394,7 @@ export class CatSimImpl implements CatSim {
     this.clipStartedAt = this.now;
     this.lastInteractionAt = this.now;
     this.awakeSince = this.now;
+    this.profile = new BehaviorProfileRecorder(this.now);
     const wall = this.wall();
     let restoring = false;
     if (opts.persisted) {
@@ -394,6 +454,13 @@ export class CatSimImpl implements CatSim {
     if (this.mode !== 'quit') {
       stepStats(this.cat.stats, { state: this.act.state, traits: this.cat.traits, patience: this.settings.interaction.patience }, dt);
     }
+    this.profile.addTime(this.act.state, dt, this.act.variant);
+    {
+      const d = this.cat.drives;
+      this.profile.addMoods({ wary: d.wariness, irritable: d.irritability, fearful: this.cat.stats.fear }, dt);
+    }
+    if (this.typing) this.profile.addContext('typing', dt);
+    if (env.foreground?.maximized === true && !env.foreground.minimized) this.profile.addContext('foregroundMaximized', dt);
     this.updateActivity();
     if (this.mode !== 'away') {
       const step = this.mover.step({
@@ -514,6 +581,11 @@ export class CatSimImpl implements CatSim {
   /** v1.1.1 on-desktop surface visualization segments (physical px). */
   surfaceDebugLines(): SurfaceDebugLine[] {
     return this.mover.debugLines();
+  }
+
+  /** v1.2 session behaviour profile (kinds, counts, durations; ADR 0003 §11). */
+  behaviorProfile(): BehaviorProfileSnapshot {
+    return this.profile.snapshot(this.now);
   }
 
   debugInfo(): Record<string, unknown> {
@@ -1015,6 +1087,135 @@ export class CatSimImpl implements CatSim {
     }
     const r = this.requestCandidate(choice, 'autonomous');
     if (r !== 'ok') this.act.dwellMs = Math.max(this.act.dwellMs, this.now - this.act.startedAt + range(this.random, 1000, 3000));
+    else
+      this.emitDecision({
+        at: this.now,
+        state: choice.state,
+        variant: choice.variant,
+        cause: 'autonomous',
+        utility: null,
+        bestUtility: null,
+        candidates: 0,
+        episode: 'none',
+        activityClass: activityClassOf(choice.state, choice.variant),
+        standingOn: this.mover.attachedSurface?.surfaceKind ?? 'floor',
+        typing: this.typing,
+      });
+  }
+
+  // ---- v1.2 profile records (ADR 0003 §11) ----------------------------------------
+
+  private emitDecision(r: DecisionRecord): void {
+    this.profile.decision(r);
+    this.hooks.onDecision?.(r);
+  }
+
+  private emitExcursion(r: ExcursionRecord): void {
+    this.profile.excursion(r);
+    this.hooks.onExcursion?.(r);
+  }
+
+  private emitFall(r: FallRecord): void {
+    this.profile.fall(r);
+    this.hooks.onFall?.(r);
+  }
+
+  /** v1.2 reaction model entry point (not called before the behaviour package lands). */
+  protected emitReaction(r: ReactionRecord): void {
+    this.profile.reaction(r);
+    this.hooks.onReaction?.(r);
+  }
+
+  /** v1.2 hunting model entry point (not called before the behaviour package lands). */
+  protected emitHunt(r: HuntRecord): void {
+    this.profile.hunt(r);
+    this.hooks.onHunt?.(r);
+  }
+
+  /** v1.2 slip entry point (not called before the behaviour package lands). */
+  protected emitSlip(r: SlipRecord): void {
+    this.profile.slip(r);
+    this.hooks.onSlip?.(r);
+  }
+
+  /** v1.2 screen-edge entry point (not called before the behaviour package lands). */
+  protected emitEdgeVisit(r: EdgeVisitRecord): void {
+    this.profile.edgeVisit(r);
+    this.hooks.onEdgeVisit?.(r);
+  }
+
+  /**
+   * Contract-step stay tracking for the profile: an arrival on a window top or tab strip starts a
+   * stay; it ends once the cat stands somewhere else (hops on the same surface do not end it).
+   */
+  private trackStay(): void {
+    const m = this.mover;
+    const attach: 'ground' | 'wall' | 'air' | 'held' = m.held ? 'held' : m.onWall ? 'wall' : m.grounded ? 'ground' : 'air';
+    const on = attach === 'ground' ? m.attachedSurface : null;
+    const kind = on && (on.surfaceKind === 'windowTop' || on.surfaceKind === 'tabStrip') ? on.surfaceKind : null;
+    const st = this.stay;
+    if (st) {
+      if (on && on.surfaceId === st.surfaceId) {
+        st.via = 'none';
+        st.lastOnAt = this.now;
+      } else if (attach !== 'ground') {
+        if (attach === 'held') st.via = 'held';
+        else if (attach === 'wall') st.via = st.via === 'held' ? 'held' : 'wall';
+        else if (st.via === 'none') {
+          const r = this.fallReason ?? this.lastFlightReason;
+          st.via = r === 'jump' ? 'jump' : r === 'step' ? 'step' : r === 'perch' ? 'gone' : r === 'retracted' && this.lastLossReason === 'occluded' ? 'covered' : 'fall';
+        }
+      } else {
+        const toElevated = kind !== null;
+        let endReason: StayEndReason = 'leave';
+        let leaveKind: LeaveKind | null = null;
+        switch (st.via) {
+          case 'held':
+            endReason = 'drag';
+            break;
+          case 'wall':
+            leaveKind = 'climbDown';
+            break;
+          case 'jump':
+            leaveKind = toElevated ? 'hop' : 'jumpDown';
+            break;
+          case 'step':
+            leaveKind = 'jumpDown';
+            break;
+          case 'none':
+            leaveKind = 'walkOff';
+            break;
+          case 'covered':
+            endReason = 'covered';
+            break;
+          case 'gone':
+            endReason = 'gone';
+            break;
+          case 'fall':
+            endReason = 'other';
+            break;
+        }
+        this.emitExcursion({
+          phase: 'end',
+          at: this.now,
+          surfaceKind: st.kind,
+          arrivedBy: st.arrivedBy,
+          plannedMs: 0,
+          dwellMs: Math.max(0, st.lastOnAt - st.since),
+          endReason,
+          leaveKind,
+        });
+        this.stay = null;
+      }
+    }
+    if (!this.stay && on && kind) {
+      const prev = this.prevAttach;
+      const arrivedBy: ArrivalRoute = arrivalRouteOf(prev, this.fallReason ?? this.lastFlightReason);
+      this.stay = { kind, surfaceId: on.surfaceId, since: this.now, lastOnAt: this.now, arrivedBy, via: 'none' };
+      this.emitExcursion({ phase: 'arrive', at: this.now, surfaceKind: kind, arrivedBy, plannedMs: 0, dwellMs: 0, endReason: null, leaveKind: null });
+    }
+    this.prevAttach = attach;
+    if (attach === 'ground' || attach === 'held') this.lastFlightReason = null;
   }
 
   private requestCandidate(c: Candidate, cause: TransitionCause): RequestStatus {
@@ -1172,6 +1373,7 @@ export class CatSimImpl implements CatSim {
   // ---- physics coupling -----------------------------------------------------------
 
   private onMoverStep(step: MoverStep): void {
+    if (step.supportLost) this.lastLossReason = step.supportLost.reason;
     if (step.crouchStarted) {
       if (this.request('jumping', 'physical', { suspend: true }) === 'ok') this.fallReason = 'jump';
       else this.mover.cancelCrouch();
@@ -2011,6 +2213,10 @@ export class CatSimImpl implements CatSim {
     const info: LandingInfo | null = a.landing;
     const reason = this.fallReason;
     this.fallReason = null;
+    this.lastFlightReason = reason;
+    const cause = info ? fallCauseOf(reason, this.lastLossReason, info) : null;
+    if (info && cause) this.emitFall({ at: this.now, cause, heightDip: info.fallHeightDip, impact: info.impact, jumpKind: info.jumpKind });
+    this.lastLossReason = null;
     if (this.mode !== 'normal' || !info) return;
     // Planned moves and calm drops (a retracting taskbar) resume what the cat was doing.
     if (reason === 'jump' || reason === 'step' || reason === 'retracted') return;
@@ -3034,6 +3240,7 @@ export class CatSimImpl implements CatSim {
    */
   private trackElevation(): void {
     if (this.mode === 'away') return;
+    this.trackStay();
     const m = this.mover;
     const e = this.excursion;
     if (!m.grounded) {

@@ -54,7 +54,7 @@ describe('newPersistedCat', () => {
 });
 
 describe('stats dynamics', () => {
-  const traits: Traits = { curiosity: 0.5, playfulness: 0.5, affection: 0.5, confidence: 0.5, energyLevel: 0.5, laziness: 0.5 };
+  const traits: Traits = { curiosity: 0.5, playfulness: 0.5, affection: 0.5, confidence: 0.5, energyLevel: 0.5, laziness: 0.5, startleSensitivity: 0.5 };
   const fresh = (): Stats => ({ energy: 0.8, boredom: 0.3, bond: 0.3, annoyance: 0, fear: 0 });
 
   it('stays within [0, 1] under any state sequence', () => {

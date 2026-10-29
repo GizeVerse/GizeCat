@@ -174,6 +174,11 @@ export interface SurfaceProviderExtras {
   noteCat(cat: CatPosition | null): void;
   /** Test mode only (E2E): replaces every surface with `list` (SIMULATED geometry); null restores the real ones. */
   injectSurfaces(list: readonly Surface[] | null, now: number): void;
+  /**
+   * v1.2 test mode only (E2E, review C2): list only windows of these processes as surfaces, or all
+   * again with null. Optional until the provider package implements it (the hook then throws).
+   */
+  restrictToPids?(pids: readonly number[] | null): void;
   debugInfo(): SurfaceProviderDebug;
 }
 

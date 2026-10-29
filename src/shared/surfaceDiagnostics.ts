@@ -4,7 +4,7 @@
 // Built on demand (Diagnostics page, diagnostics export), never logged continuously.
 
 import type { Rect } from './geometry';
-import type { SurfaceKind } from './surfaces';
+import type { SupportSurfaceKind, SurfaceKind } from './surfaces';
 
 /** Why the provider offered no surfaces for an app window (counted per window). */
 export const PROVIDER_SKIP_REASONS = [
@@ -47,12 +47,34 @@ export interface ProviderDiagnostics {
     errors: number;
     /** Host clock (ms) of the last successful read (0 = never). */
     lastReadAt: number;
-    /** Why the last measured browser produced no usable strip (e.g. 'maximized', 'noHeadroom', 'vertical', 'timeout'), or null. */
+    /** Why the last measured browser produced no usable strip (e.g. 'maximized', 'noHeadroom', 'vertical', 'timeout', v1.2 'unsupportedApp'), or null. */
     lastRejection: string | null;
+    /** v1.2 (review C2): known strips by reader kind (Chromium tab strip, WinUI TabView). Absent before protocol 2. */
+    byKind?: Partial<Record<TabStripReaderKind, number>>;
+  };
+  /**
+   * v1.2 (review C2): the outer screen edges and the T8 click guard while the cat clings to one.
+   * Absent while screen edges are off or the host has no guard.
+   */
+  screenEdges?: {
+    /** Outer-edge cling bands offered to the sim. */
+    bands: number;
+    clearSpans: number;
+    coveredSpans: number;
+    /** 'active': the guard currently excludes obstacle rects; 'failClosed': its source was stale or failed, the whole cat is click-through. */
+    guard: ScreenEdgeGuardState;
+    /** Times the guard failed closed this session. */
+    failClosed: number;
   };
   /** Most recent problems, newest last, at most 10. `kind` is a short machine-readable code. */
   recentErrors: Array<{ at: number; source: string; kind: string }>;
 }
+
+/** v1.2: tab-strip reader kinds (mirrors src/main/uia/protocol.ts TAB_STRIP_KINDS). */
+export const TAB_STRIP_READER_KINDS = ['chromium', 'tabview'] as const;
+export type TabStripReaderKind = (typeof TAB_STRIP_READER_KINDS)[number];
+export const SCREEN_EDGE_GUARD_STATES = ['off', 'idle', 'active', 'failClosed'] as const;
+export type ScreenEdgeGuardState = (typeof SCREEN_EDGE_GUARD_STATES)[number];
 
 /** Why the movement engine did not accept a listed surface as walkable/climbable. */
 export const NAV_REJECT_REASONS = [
@@ -106,10 +128,10 @@ export type TargetAvailability = (typeof TARGET_AVAILABILITY)[number];
 export interface DecisionDiagnostics {
   /** Behaviour state name (e.g. 'walking', 'inspectingWindow'). */
   state: string;
-  /** What the cat stands on or clings to right now. */
-  support: 'floor' | SurfaceKind | 'air' | 'held' | 'none';
+  /** What the cat stands on or clings to right now (v1.2: also a screen edge). */
+  support: 'floor' | SupportSurfaceKind | 'air' | 'held' | 'none';
   /** Kind of surface the current activity is heading for, or null. */
-  targetKind: 'floor' | SurfaceKind | null;
+  targetKind: 'floor' | SupportSurfaceKind | null;
   /** Availability of each elevated destination type at the last decision or the last look around (every 2 s on the floor or a taskbar, asleep too). */
   targets: Record<DecisionTarget, TargetAvailability>;
   /** 0..1: grows while elevated surfaces are reachable but unvisited; raises the odds of an excursion. */

@@ -7,7 +7,7 @@ import type { AppStatus } from '../../shared/ipc';
 import type { PerceptionMode, VisualEventKind } from '../../shared/perception';
 import type { AiProviderId, Settings, ToggleableBehavior } from '../../shared/settings';
 import type { DecisionDiagnostics, DecisionTarget, NavRejectReason, ProviderDiagnostics, ProviderSkipReason, TargetAvailability } from '../../shared/surfaceDiagnostics';
-import type { SurfaceKind } from '../../shared/surfaces';
+import type { SupportSurfaceKind, SurfaceKind } from '../../shared/surfaces';
 import type { PageId } from './catalog';
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
@@ -522,6 +522,7 @@ export const S = {
       confidence: 'Confidence',
       energyLevel: 'Energy level',
       laziness: 'Laziness',
+      startleSensitivity: 'Jumpiness',
     } satisfies Record<keyof Traits, string>,
     stats: {
       energy: 'Energy',
@@ -544,11 +545,19 @@ export const S = {
       windowsInspected: 'Windows inspected',
       naps: 'Naps',
       sessions: 'Sessions',
+      hunts: 'Pointer hunts',
+      pounces: 'Pounces',
+      excursions: 'Trips up high',
+      surfaceHops: 'Jumps between windows',
+      edgeClimbs: 'Screen-edge climbs',
+      slips: 'Slips',
+      hardLandings: 'Hard landings',
     } satisfies Record<keyof Counters, string>,
     preferences: {
       petRatePerHour: 'Pets per active hour',
       cursorPlayAcceptance: 'Joins pointer play',
       attentionAcceptance: 'Answers attention requests',
+      roughRatePerHour: 'Rough handling per active hour',
     } satisfies Record<keyof Preferences, string>,
     // Keyed by the simulation's own kinds and detail tokens (src/core/behavior/memory.ts).
     memoryKinds: {
@@ -564,6 +573,11 @@ export const S = {
       annoyed: 'Got annoyed',
       called: 'Came when you called',
       hide: 'Hid away',
+      hunt: 'Hunted the pointer',
+      pounce: 'Pounced',
+      stay: 'Stayed up high',
+      slip: 'Slipped',
+      defend: 'Stood its ground',
     } satisfies Record<MemoryKind, string>,
     memoryDetails: {
       engaged: 'you played along',
@@ -577,6 +591,20 @@ export const S = {
       window: 'perched on top',
       floor: 'from the floor',
       hard: 'quite hard',
+      soft: 'softly',
+      medium: 'with a bump',
+      shrug: 'shrugged it off',
+      surprise: 'surprised',
+      startledJump: 'jumped away',
+      grumpy: 'grumpy about it',
+      defensive: 'hissed',
+      flight: 'ran off',
+      playful: 'made a game of it',
+      avoid: 'kept its distance',
+      caught: 'caught it',
+      missed: 'it got away',
+      tabStrip: 'on a tab strip',
+      edge: 'on the screen edge',
     } satisfies Record<MemoryDetail, string>,
   },
   states: {
@@ -725,11 +753,19 @@ export const S = {
         windowTop: 'A window top',
         windowSide: 'A window side',
         tabStrip: 'A tab strip',
+        screenEdge: 'A screen edge',
         air: 'In the air',
         held: 'Being carried',
         none: 'Nothing',
       } satisfies Record<DecisionDiagnostics['support'], string>,
-      targetKinds: { floor: 'The floor', taskbar: 'A taskbar', windowTop: 'A window top', windowSide: 'A window side', tabStrip: 'A tab strip' } satisfies Record<'floor' | SurfaceKind, string>,
+      targetKinds: {
+        floor: 'The floor',
+        taskbar: 'A taskbar',
+        windowTop: 'A window top',
+        windowSide: 'A window side',
+        tabStrip: 'A tab strip',
+        screenEdge: 'A screen edge',
+      } satisfies Record<'floor' | SupportSurfaceKind, string>,
       noTarget: 'Nothing in particular',
       targets: { perch: 'Sit on a window', climb: 'Climb a window', tabStrip: 'Walk on a tab strip' } satisfies Record<DecisionTarget, string>,
       availability: {

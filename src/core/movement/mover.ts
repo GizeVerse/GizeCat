@@ -3,25 +3,28 @@
 // anticipation crouch, ballistic jumps, free fall with wall bounces, and being
 // dragged/thrown. Everything is in physical px; DIP constants are scaled by the display
 // under the cat. Routes across surfaces come from the SurfaceGraph.
-import { CAT_BASE_WIDTH_DIP, type Facing } from '../../shared/cat';
+import { CAT_BASE_WIDTH_DIP, type Facing, type JumpKind, type LandingImpact } from '../../shared/cat';
 import { heldScruffOffset, HELD_SETTLE_MS } from '../interaction/held';
 import type { Point, Rect } from '../../shared/geometry';
 import { clamp, rectBottom, rectRight } from '../../shared/geometry';
+import type { LeaveKind } from '../../shared/behaviorProfile';
 import type { SimSupport } from '../../shared/sim';
 import type { DebugLineRole, NavDiagnostics, NavRejectReason, SurfaceCounts, SurfaceDebugLine } from '../../shared/surfaceDiagnostics';
 import { emptySurfaceCounts, MAX_DEBUG_LINES } from '../../shared/surfaceDiagnostics';
-import type { LedgeSurface, Surface as EnvSurface, SurfaceKind, WallSurface } from '../../shared/surfaces';
+import type { LedgeSurface, Surface as EnvSurface, SupportSurfaceKind, SurfaceKind, WallSurface } from '../../shared/surfaces';
 import { SURFACE_KINDS } from '../../shared/surfaces';
 import type { WorldGeometry } from '../../shared/world';
 import { ARRIVE_RADIUS_DIP, MOVEMENT } from './constants';
 import type { JumpPlan } from './jump';
 import { ballistic, clearanceFor, descendingCrossing, jumpAt, sampleArc, solveJump } from './jump';
+import { impactClass } from './landing';
 import type { GraphNode, Route, RouteParams } from './surfaceGraph';
 import { edgeId, SurfaceGraph } from './surfaceGraph';
 import type { FloorPiece, Surface, SurfacePoint, WallTrack } from './world';
 import { sameSurface, setDownX, WorldModel } from './world';
 
-export type Pace = 'slow' | 'walk' | 'run' | 'chase';
+/** v1.2 adds 'stalk' (hunting creep) and 'sprint' (dash); see MOVEMENT.stalkDip / sprintDip. */
+export type Pace = 'stalk' | 'slow' | 'walk' | 'run' | 'chase' | 'sprint';
 
 /** 'climb': the cat chose to climb (climbing is strongly preferred); 'noClimb': never via a wall. */
 export type RoutePreference = 'any' | 'climb' | 'noClimb';
@@ -42,6 +45,12 @@ export interface MoveGoal {
    * because the taskbar rose under it); with it the cat really goes down to the floor.
    */
   literal?: boolean;
+  /**
+   * v1.2 (ADR 0003 §7.4, T6): pin the goal to this surface (a ledge's surface id, or a floor key).
+   * At every replan x is clamped into that surface's current walk range; the goal never re-maps to
+   * another surface, and it is 'unreachable' once that surface is gone. Absent: v1.1.1 mapping.
+   */
+  surfaceId?: string;
 }
 
 export interface MoverConfig {
@@ -57,6 +66,22 @@ export interface MoverConfig {
   /** Personality multipliers for route effort (1 = neutral; higher = avoids that kind of move). */
   jumpEffort?: number;
   climbEffort?: number;
+  // ---- v1.2 (ADR 0003 §6); every flag defaults to off = v1.1.1 behaviour -----------------
+  /** Climbable walls at outer display edges (never between monitors). Default false. */
+  screenEdges?: boolean;
+  /**
+   * Jump-down limits, DIP below the feet: planned jumps and drops prefer at most `jumpDownSafeDip`
+   * and never exceed `jumpDownMaxDip` (capped at MOVEMENT.jumpDownAbsoluteMaxDip); beyond it the
+   * cat climbs down. Absent: unlimited (v1.1.1).
+   */
+  jumpDownSafeDip?: number;
+  jumpDownMaxDip?: number;
+  /** Accept ledges 0.25..0.9 body lengths wide as narrow ledges (balance). Default false. */
+  narrowLedges?: boolean;
+  /** A covered support is left with a controlled bail-out jump to a visible support, never a free fall. Default false. */
+  bailOut?: boolean;
+  /** Jumps off a wall the cat clings to onto a support within reach (and climb-then-leap descents). Default false. */
+  wallJumps?: boolean;
 }
 
 export interface MoverInput {
@@ -81,7 +106,27 @@ export interface LandingInfo {
   fallHeightDip: number;
   /** Landing had to be forced (fell outside the world). */
   forced: boolean;
+  /** v1.2: impact class of impactDip (MOVEMENT.impactSoftBelowDip / impactHardFromDip). */
+  impact: LandingImpact;
+  /** v1.2: kind of the planned flight that ended (null: a fall, a drop or a throw). */
+  jumpKind: JumpKind | null;
+  /** v1.2: the landing ends a deliberate slip ('miss'). */
+  slipped: boolean;
+  /**
+   * v1.2 (review C2): the support a planned jump aimed at (a ledge's surface id or a floor key);
+   * null when the flight was not a planned jump (falls, drops, throws, step-offs, leaps onto walls).
+   */
+  plannedSupportId: string | null;
+  /**
+   * v1.2: how a planned jump ended against its plan: 'landed' on that support, 'missed' it (it
+   * still exists: it moved or shrank mid-air), or it was 'gone' at landing. null: not planned.
+   * The sim's fall accounting turns 'missed' into a physics error and 'gone' into an environmental fall.
+   */
+  plannedOutcome: PlannedLandingOutcome | null;
 }
+
+/** v1.2: see LandingInfo.plannedOutcome. */
+export type PlannedLandingOutcome = 'landed' | 'missed' | 'gone';
 
 export type GoalStatus = 'none' | 'moving' | 'arrived' | 'unreachable';
 
@@ -100,7 +145,8 @@ export type SupportLossReason = 'gone' | 'retracted' | 'occluded' | 'headroom' |
 export interface SupportLoss {
   reason: SupportLossReason;
   surfaceId: string;
-  surfaceKind: SurfaceKind;
+  /** v1.2: also 'screenEdge' (a display change removed the edge the cat clung to). */
+  surfaceKind: SupportSurfaceKind;
   /** true: the cat is falling now; false: it was set down on the surface just below. */
   fell: boolean;
 }
@@ -126,6 +172,65 @@ export interface MoverStep {
    * itself reports crouchStarted (cancelCrouch() aborts it), then tookOff + climbStarted.
    */
   clung: boolean;
+  /** v1.2: a deliberate slip (armSlip) happened this step. */
+  slipped: SlipKind | null;
+  /** v1.2: the support was covered and the cat left it with a controlled bail-out jump (no free fall). */
+  bailedOut: boolean;
+  /** v1.2: a planned take-off was cancelled during the crouch: its target vanished, moved or was covered (stale plan). */
+  planCancelled: boolean;
+}
+
+/**
+ * v1.2 deliberate slip, drawn by the sim on a risky leap (ADR 0003 §6.6): 'scramble' = the front
+ * paws catch the edge and it pulls itself up; 'miss' = it drops to the support below (only where
+ * that is within the jump-down limit; otherwise the mover turns it into a scramble).
+ */
+export type SlipKind = 'scramble' | 'miss';
+
+/** v1.2: one way off the elevated surface the cat stands on (Mover.leaveOptions). */
+export interface LeaveOption {
+  kind: LeaveKind;
+  /** Where the cat ends up (its anchor on the support it reaches), px. */
+  target: { x: number; y: number };
+  /** Kind and id of that support. */
+  toKind: 'floor' | SupportSurfaceKind;
+  toSurfaceId: string | null;
+  /** Height from the feet down to the support reached, DIP (negative for a hop up). */
+  dropDip: number;
+  /** Impact class of the jump or drop part (null for a pure climb or walk). */
+  impact: LandingImpact | null;
+  /** Planner effort, seconds (walking time plus move efforts, before personality). */
+  effort: number;
+  /** 0..1: height against the limits, landing width, a moving target. */
+  risk: number;
+  /** Where on the current surface the move starts (take-off x, the corner, the joined end). */
+  startX: number;
+  /**
+   * v1.2 (review C2): the emergency way off, offered only when no other option exists (the cat
+   * was carried up, nothing within jumpDownMaxDip, no wall): the cat hangs from the edge first
+   * (about one body height lower) and drops. Only this kind of leg may exceed jumpDownMaxDip and
+   * MOVEMENT.jumpDownAbsoluteMaxDip.
+   */
+  emergency: boolean;
+}
+
+/** v1.2: a ballistic hunting pounce (Mover.pounceAt). */
+export interface PounceOptions {
+  /** Anticipation crouch with a visible wiggle, ms (MOVEMENT.pounceCrouchMinMs..MaxMs). */
+  crouchMs: number;
+  /**
+   * Clearance (px) between the target x (the cursor hotspot) and the leading edge of the landing
+   * pose's hit region: the anchor stops at target.x - facing * (frontExtentPx + shortPx), so the
+   * hit region never ends under the hotspot (T8).
+   */
+  shortPx: number;
+  /**
+   * v1.2 (review C2): how far the landing pose's hit region reaches ahead of the anchor, px
+   * (HIT_FRONT_EXTENT_DIP.pounce x size x scale). Default 0 keeps the v1.1.1 anchor rule.
+   */
+  frontExtentPx?: number;
+  /** Longest pounce, px (at most MOVEMENT.pounceReachBodyLengths body lengths). */
+  maxDistPx: number;
 }
 
 export type MoverMode = 'ground' | 'crouch' | 'air' | 'held' | 'climb';
@@ -139,6 +244,11 @@ export interface ClimbOption {
   target: Point;
   /** Where on the current surface the climb starts (beside the wall, or at the ledge's corner). */
   startX: number;
+  /**
+   * v1.2: what is climbed; absent = 'windowSide'. A 'screenEdge' climb up ends at the edge's top
+   * hold point (no ledge to pull up onto): the sim holds there (holdOnWall), then leaves it.
+   */
+  wallKind?: 'windowSide' | 'screenEdge';
 }
 
 type Leg =
@@ -160,6 +270,8 @@ interface Flight {
   g: number;
   plan: JumpPlan | null;
   target: Surface | null;
+  /** v1.2: key of the support a planned jump aimed at; kept when the target is lost mid-air. */
+  plannedKey: string | null;
   thrown: boolean;
   intentional: boolean;
   /** Ledge the cat just left (not landed on again during this flight). */
@@ -407,8 +519,80 @@ export class Mover {
     return this.modeValue === 'climb' && this.climbing?.phase === 'climb' ? Math.abs(this.vy) : 0;
   }
   paceSpeedPx(pace: Pace): number {
-    const dip = pace === 'run' ? MOVEMENT.runDip : pace === 'chase' ? MOVEMENT.chaseDip : pace === 'slow' ? MOVEMENT.slowDip : MOVEMENT.walkDip;
+    const dip =
+      pace === 'run'
+        ? MOVEMENT.runDip
+        : pace === 'chase'
+          ? MOVEMENT.chaseDip
+          : pace === 'slow'
+            ? MOVEMENT.slowDip
+            : pace === 'stalk'
+              ? MOVEMENT.stalkDip
+              : pace === 'sprint'
+                ? MOVEMENT.sprintDip
+                : MOVEMENT.walkDip;
     return dip * this.cfg.movementSpeed * this.scale;
+  }
+
+  // ---- v1.2 contract stubs (ADR 0003 §6; the movement package implements them) ------------
+
+  /** Kind of the current flight (render jumpKind), null when not airborne. Stub: always null. */
+  get jumpKind(): JumpKind | null {
+    return null;
+  }
+
+  /** 0..1 how narrow the ledge under the paws is (0: 0.9 body lengths or wider). Stub: 0. */
+  get balance(): number {
+    return 0;
+  }
+
+  /** 0..1 risk of the jump or leap about to be taken (slip odds); 0 when not crouching for one. Stub: 0. */
+  get nextLegRisk(): number {
+    return 0;
+  }
+
+  /**
+   * Ways off the elevated surface the cat stands on, for the stay model's single leave intent
+   * (jump down within the limits, climb down, climb part-way and leap, hop to another reachable
+   * surface, walk off a joined end). [] on the floor, on a taskbar or when not grounded. Stub: [].
+   */
+  leaveOptions(): LeaveOption[] {
+    return [];
+  }
+
+  /** Leaves by `option` (from leaveOptions this tick or the last). False when it no longer applies. Stub: false. */
+  leaveBy(option: LeaveOption, pace: Pace): boolean {
+    void option;
+    void pace;
+    return false;
+  }
+
+  /**
+   * Ballistic hunting pounce toward `target` (the cursor's projection onto the current surface,
+   * or a joined one at the same height): crouch for opts.crouchMs, then a low arc landing
+   * opts.shortPx before the target. Reports crouchStarted/tookOff/landed like a jump. Stub: the
+   * v1.1.1 on-surface pounce toward target.x minus shortPx.
+   */
+  pounceAt(now: number, target: { x: number; y: number }, opts: PounceOptions): boolean {
+    if (!Number.isFinite(target.x) || !Number.isFinite(opts.shortPx)) return false;
+    const dir = target.x >= this.x ? 1 : -1;
+    const front = Number.isFinite(opts.frontExtentPx) ? Math.max(0, opts.frontExtentPx ?? 0) : 0;
+    return this.pounce(now, target.x - dir * (front + Math.max(0, opts.shortPx)));
+  }
+
+  /** Arms a deliberate slip for the next take-off (the sim draws it). False when no jump or leap is pending. Stub: false. */
+  armSlip(kind: SlipKind): boolean {
+    void kind;
+    return false;
+  }
+
+  /**
+   * Holds the clinging cat where it is on the wall (screen-edge top-corner peek) until `untilMs`
+   * (sim clock), or releases a hold with null. False when not on a wall. Stub: false.
+   */
+  holdOnWall(untilMs: number | null): boolean {
+    void untilMs;
+    return false;
   }
   /** Where the cat may walk on its current surface (null while airborne, held or climbing). */
   get walkRange(): { x0: number; x1: number } | null {
@@ -1142,6 +1326,7 @@ export class Mover {
       g: plan.g,
       plan,
       target,
+      plannedKey: target.key,
       thrown: false,
       intentional: true,
       ignoreKey: target.key === ignore ? null : ignore,
@@ -1894,8 +2079,20 @@ export class Mover {
       intentional: f?.intentional ?? false,
       fallHeightDip: f ? Math.max(0, (this.navWorld.yAt(surface, x) - f.peakY) / scale) : 0,
       forced,
+      impact: impactClass(impactVy / scale),
+      jumpKind: null,
+      slipped: false,
+      ...this.plannedLanding(f?.plannedKey ?? null, surface, forced, input),
     };
     this.setGrounded(surface, x, live);
+  }
+
+  /** v1.2 fall accounting: how a planned jump ended against the support it aimed at. */
+  private plannedLanding(key: string | null, surface: Surface, forced: boolean, input: MoverInput): Pick<LandingInfo, 'plannedSupportId' | 'plannedOutcome'> {
+    if (key === null) return { plannedSupportId: null, plannedOutcome: null };
+    if (!forced && surface.key === key) return { plannedSupportId: key, plannedOutcome: 'landed' };
+    const exists = this.navWorld.floors.some((fl) => fl.key === key) || this.liveLedge(input, key) !== null;
+    return { plannedSupportId: key, plannedOutcome: exists ? 'missed' : 'gone' };
   }
 
   /** Stands the cat on `surface` at x (a ledge needs its live geometry, else it goes to the floor below). */
@@ -1942,6 +2139,7 @@ export class Mover {
       g: MOVEMENT.gravityDip * scale,
       plan: null,
       target: null,
+      plannedKey: null,
       thrown: o.thrown,
       intentional: o.intentional,
       ignoreKey: o.ignoreKey,
@@ -2300,6 +2498,9 @@ function emptyStep(): MoverStep {
     climbStarted: false,
     climbEnded: false,
     clung: false,
+    slipped: null,
+    bailedOut: false,
+    planCancelled: false,
   };
 }
 

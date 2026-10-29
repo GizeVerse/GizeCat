@@ -1455,6 +1455,7 @@ export function runProfile(sc: ProfileScenario): RunResult {
     debugInfo: () => sim.debugInfo(),
     surfaceDiagnostics: () => sim.surfaceDiagnostics(),
     surfaceDebugLines: () => sim.surfaceDebugLines(),
+    behaviorProfile: () => sim.behaviorProfile(),
   };
 
   // The host is created below; the user only enqueues once the clock runs.

@@ -17,6 +17,11 @@ export const TraitsSchema = z.object({
   confidence: unit(0.5),
   energyLevel: unit(0.5),
   laziness: unit(0.45),
+  /**
+   * v1.2: how easily it startles (sudden motion, rough handling). Cats saved before v1.2 load the
+   * neutral 0.5; new cats derive it from confidence (personality.ts; ADR 0003 §1.2).
+   */
+  startleSensitivity: unit(0.5),
 });
 export type Traits = z.infer<typeof TraitsSchema>;
 
@@ -33,6 +38,34 @@ export const StatsSchema = z.object({
   fear: unit(0),
 });
 export type Stats = z.infer<typeof StatsSchema>;
+
+/**
+ * v1.2 drives (ADR 0003 §1.2), all 0..1. Needs grow on their own and are satisfied by matching
+ * activities (petting satisfies social, not play); moods rise on events and decay to their
+ * baseline within minutes. A separate object so the v1.1.1 `stats` keep their meaning; a cat file
+ * without it (any v1.0/v1.1 cat) loads these defaults. No schema bump: 1.1.1 drops the object.
+ */
+export const DrivesSchema = z.object({
+  /** Wants company; petting, greeting and answered attention satisfy it. */
+  socialNeed: unit(0.3),
+  /** Wants to play; play, hunts and zoomies satisfy it (never petting). */
+  playNeed: unit(0.4),
+  /** Wants to explore; trips up, stays, screen edges, corners and inspecting satisfy it. */
+  exploreNeed: unit(0.4),
+  /** Builds while awake (faster at night and with a dark screen), drops while asleep. */
+  sleepiness: unit(0.2),
+  /** Inclination to cheeky acts; relaxes toward a target set by settings.behavior.mischief. */
+  mischief: unit(0.3),
+  /** Interest in the cursor as prey; evaluated continuously while the cursor is in reach. */
+  huntDrive: unit(0.3),
+  /** Slow grumpiness from rough handling (integrates annoyance); recovers over minutes. */
+  irritability: unit(0),
+  /** Failed attempts (missed pounces, trips that failed); recovers within a couple of minutes. */
+  frustration: unit(0),
+  /** Keeps away from the cursor after rough handling (temporary cursor avoidance). */
+  wariness: unit(0),
+});
+export type Drives = z.infer<typeof DrivesSchema>;
 
 export const FavoriteSpotSchema = z.object({
   /** Display id the spot was learned on. */
@@ -59,6 +92,14 @@ export const CountersSchema = z.object({
   windowsInspected: count,
   naps: count,
   sessions: count,
+  // v1.2
+  hunts: count,
+  pounces: count,
+  excursions: count,
+  surfaceHops: count,
+  edgeClimbs: count,
+  slips: count,
+  hardLandings: count,
 });
 export type Counters = z.infer<typeof CountersSchema>;
 
@@ -69,6 +110,8 @@ export const PreferencesSchema = z.object({
   cursorPlayAcceptance: unit(0.5),
   /** 0..1 how often the user responds to attention seeking. */
   attentionAcceptance: unit(0.5),
+  /** v1.2: exponential moving average of throws and rough drags per active hour (recent handling frequency). */
+  roughRatePerHour: z.number().min(0).max(10000).default(0).catch(0),
 });
 export type Preferences = z.infer<typeof PreferencesSchema>;
 
@@ -106,6 +149,8 @@ export const PersistedCatSchema = z.object({
   traits: TraitsSchema.prefault({}).catch(() => TraitsSchema.parse({})),
   stats: StatsSchema.prefault({}).catch(() => StatsSchema.parse({})),
   memory: MemorySchema.prefault({}).catch(() => MemorySchema.parse({})),
+  /** v1.2 drives; defaults for cats saved before v1.2. */
+  drives: DrivesSchema.prefault({}).catch(() => DrivesSchema.parse({})),
   lastPosition: LastPositionSchema.nullable().default(null).catch(null),
   savedAt: z.number().min(0).default(0).catch(0),
 });
@@ -119,6 +164,8 @@ export interface CatSummary {
   state: string;
   traits: Traits;
   stats: Stats;
+  /** v1.2 drives (optional for summaries built by older code paths). */
+  drives?: Drives;
   counters: Counters;
   preferences: Preferences;
   favoriteSpotCount: number;

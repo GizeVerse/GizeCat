@@ -13,6 +13,8 @@ import {
   emptySurfaceCounts,
   NAV_REJECT_REASONS,
   PROVIDER_SKIP_REASONS,
+  SCREEN_EDGE_GUARD_STATES,
+  TAB_STRIP_READER_KINDS,
   TARGET_AVAILABILITY,
   type DecisionDiagnostics,
   type NavDiagnostics,
@@ -22,7 +24,7 @@ import {
   type TargetAvailability,
 } from '../../shared/surfaceDiagnostics';
 import { MAX_CODE_LENGTH, MAX_DIAGNOSTIC_DISPLAYS, MAX_RECENT_ERRORS } from '../../shared/surfaceDiagnosticsSchema';
-import { SURFACE_KINDS, type SurfaceStatus } from '../../shared/surfaces';
+import { SCREEN_EDGE_KIND, SURFACE_KINDS, type SurfaceStatus } from '../../shared/surfaces';
 import type { WorldGeometry } from '../../shared/world';
 import type { Logger } from '../contracts';
 import { surfaceVerdict, type SurfaceVerdictCode } from './surfaceVerdict';
@@ -34,8 +36,8 @@ export const SURFACE_SUMMARY_MIN_INTERVAL_MS = 60_000;
 
 const COUNT_MAX = 1e9;
 const TAB_STRIP_STATES: ReadonlySet<string> = new Set(['active', 'idle', 'off', 'unavailable']);
-const SUPPORTS: ReadonlySet<string> = new Set(['floor', ...SURFACE_KINDS, 'air', 'held', 'none']);
-const TARGET_KINDS: ReadonlySet<string> = new Set(['floor', ...SURFACE_KINDS]);
+const SUPPORTS: ReadonlySet<string> = new Set(['floor', ...SURFACE_KINDS, SCREEN_EDGE_KIND, 'air', 'held', 'none']);
+const TARGET_KINDS: ReadonlySet<string> = new Set(['floor', ...SURFACE_KINDS, SCREEN_EDGE_KIND]);
 const AVAILABILITY: ReadonlySet<string> = new Set(TARGET_AVAILABILITY);
 
 export interface SurfaceDiagnosticsInputs {
@@ -62,6 +64,8 @@ const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Numb
 const cnt = (v: unknown): number => Math.min(COUNT_MAX, Math.max(0, num(v)));
 const text = (v: unknown, fallback: string): string => (typeof v === 'string' && v.length > 0 ? v.slice(0, MAX_CODE_LENGTH) : fallback);
 const oneOf = <T extends string>(v: unknown, allowed: ReadonlySet<string>, fallback: T): T => (typeof v === 'string' && allowed.has(v) ? (v as T) : fallback);
+
+const GUARD_STATES: ReadonlySet<string> = new Set(SCREEN_EDGE_GUARD_STATES);
 
 function counts(c: Partial<SurfaceCounts> | null | undefined): SurfaceCounts {
   const out = emptySurfaceCounts();
@@ -100,7 +104,19 @@ function pickProvider(p: ProviderDiagnostics): ProviderDiagnostics {
       errors: cnt(t?.errors),
       lastReadAt: num(t?.lastReadAt),
       lastRejection: typeof t?.lastRejection === 'string' ? text(t.lastRejection, 'unknown') : null,
+      ...(t?.byKind ? { byKind: reasons(t.byKind, TAB_STRIP_READER_KINDS) } : {}),
     },
+    ...(p.screenEdges
+      ? {
+          screenEdges: {
+            bands: cnt(p.screenEdges.bands),
+            clearSpans: cnt(p.screenEdges.clearSpans),
+            coveredSpans: cnt(p.screenEdges.coveredSpans),
+            guard: oneOf(p.screenEdges.guard, GUARD_STATES, 'off'),
+            failClosed: cnt(p.screenEdges.failClosed),
+          },
+        }
+      : {}),
     recentErrors: (Array.isArray(p.recentErrors) ? p.recentErrors.slice(-MAX_RECENT_ERRORS) : []).map((e) => ({
       at: num(e?.at),
       source: text(e?.source, 'unknown'),

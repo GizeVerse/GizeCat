@@ -5,6 +5,15 @@ import { z } from 'zod';
 import type { Rect } from '../../shared/geometry';
 
 export const UIA_PROTOCOL_VERSION = 1;
+/**
+ * v1.2 (ADR 0003 §7): protocol 2 adds the WinUI TabView reader. Additive: a strip carries `kind`
+ * (absent = 'chromium', so protocol-1 lines parse unchanged) and ping may list the kinds the
+ * helper reads. UIA_PROTOCOL_VERSION moves to this value in the same change as the native helper
+ * (both ends compare exactly), never before.
+ */
+export const UIA_PROTOCOL_VERSION_V2 = 2;
+export const TAB_STRIP_KINDS = ['chromium', 'tabview'] as const;
+export type TabStripKind = (typeof TAB_STRIP_KINDS)[number];
 /** Lines from the helper longer than this (bytes) are dropped unparsed. */
 export const MAX_HELPER_LINE_BYTES = 64 * 1024;
 /** The helper reports at most this many tab rectangles (it still counts all tabs). */
@@ -34,8 +43,12 @@ export const WireStripSchema = z.object({
   vertical: z.boolean(),
   path: z.enum(['class', 'bfs']),
   ms: z.number().min(0).max(600_000),
+  /** Protocol 2: which reader produced the strip; absent (protocol-1 helpers) means 'chromium' (stripKind). */
+  kind: z.enum(TAB_STRIP_KINDS).optional(),
 });
 export type WireStrip = z.infer<typeof WireStripSchema>;
+/** The reader kind of a strip (protocol-1 strips are Chromium's). */
+export const stripKind = (s: Pick<WireStrip, 'kind'>): TabStripKind => s.kind ?? 'chromium';
 
 const RequestIdSchema = z.number().int().min(1).max(MAX_REQUEST_ID);
 
@@ -50,6 +63,8 @@ const OkResponseSchema = z.object({
   failed: z.array(HwndSchema).max(64).optional(),
   prunedRender: z.number().int().min(0).optional(),
   prunedOther: z.number().int().min(0).optional(),
+  /** Protocol 2 ping: the strip kinds this helper can read. */
+  kinds: z.array(z.enum(TAB_STRIP_KINDS)).max(TAB_STRIP_KINDS.length).optional(),
 });
 export type HelperOkResponse = z.infer<typeof OkResponseSchema>;
 

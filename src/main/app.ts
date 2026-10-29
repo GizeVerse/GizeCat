@@ -19,6 +19,7 @@ import { exportDiagnosticsToFile } from './diagnostics/exportDiagnostics';
 import type { RootLogger } from './diagnostics/logger';
 import { createResourceMonitor } from './diagnostics/resourceMonitor';
 import { assembleSurfaceDiagnostics, createSurfaceDiagnosticsSource, createSurfaceSummaryLog, surfaceSummary } from './diagnostics/surfaceDiagnostics';
+import { createBehaviorLog } from './diagnostics/behaviorLog';
 import { createDisplayService } from './display/displayService';
 import { createActionRunner, type ActionTargets, type AppAction } from './ipc/actions';
 import { registerIpcHandlers } from './ipc/handlers';
@@ -195,6 +196,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
       }),
   });
   const surfaceSummaryLog = createSurfaceSummaryLog({ logger: logger.child('surfaces') });
+  // v1.2 (ADR 0003 §11): 'stay ended' / 'behavior summary' lines from the behaviour profile.
+  const behaviorLog = createBehaviorLog(logger.child('behavior'));
   let surfaceSummaryTimer: ReturnType<typeof setInterval> | null = null;
 
   const cursorFallback = () => screen.dipToScreenPoint(screen.getCursorScreenPoint());
@@ -332,6 +335,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       status: status(),
       cat: sim.debugInfo(),
       surfaces: surfaceDiagnostics.get().diagnostics,
+      behaviorProfile: sim.behaviorProfile(),
       services: {
         host: h.debug(),
         overlays: overlays.info().map(({ hwnd: _hwnd, ...o }) => o),
@@ -409,8 +413,14 @@ export function startApp(boot: AppBootstrap): RunningApp {
     onSessionEnd: () => sessionEnd.notify('overlay'),
     // Explorer restarted: new taskbar window handles.
     onTaskbarCreated: () => taskbars.rediscover('taskbar-created'),
-    // Taskbars and auto-hide reveal bands always get the mouse, whatever the cat does there.
-    excludedRectsPx: () => taskbars.clickGuardRects(),
+    // Taskbars and auto-hide reveal bands always get the mouse, whatever the cat does there; from
+    // v1.2 also the host's guard rects (screen-edge obstacles, a covering window during a bail-out).
+    // A throw in either source makes the overlay manager fail closed (click-through everywhere).
+    excludedRectsPx: () => {
+      const extra = host?.clickGuardRectsPx() ?? [];
+      const bars = taskbars.clickGuardRects();
+      return extra.length === 0 ? bars : [...bars, ...extra];
+    },
     isLeftButtonDown: () => (win32.available ? win32.isLeftButtonDown() : null),
     clock: () => performance.now(),
   });
@@ -645,6 +655,12 @@ export function startApp(boot: AppBootstrap): RunningApp {
     getSurfaceDiagnostics: () => parseSurfaceDiagnostics(surfaceDiagnostics.get().diagnostics),
     getSurfaceDebugLines: () => sim.surfaceDebugLines(),
     forceInteractive: (v) => overlays.forceInteractive(v),
+    getBehaviorProfile: () => sim.behaviorProfile(),
+    injectCursor: (p) => requireHost().setInjectedCursor(p),
+    restrictSurfacesToPids: (pids) => {
+      if (!surfaces.restrictToPids) throw new Error('restrictSurfacesToPids: not implemented yet (ADR 0003 §16 PRV)');
+      surfaces.restrictToPids(pids);
+    },
     setTimeScale: (s) => requireHost().setTimeScale(s),
     runAction: (a) => actions.run(a),
     patchSettings: (p) => settings.patchUnknown(p),
@@ -672,6 +688,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     attempt(log, 'surfaces summary', () => {
       surfaceSummaryLog.note(surfaceSummary(surfaceDiagnostics.get()), surfaceClock());
     });
+    attempt(log, 'behavior log', () => behaviorLog.onProfile(sim.behaviorProfile(), surfaceClock()));
   }, SURFACE_SUMMARY_CHECK_MS);
   applyShortcuts(initial);
   refreshUi();

@@ -201,7 +201,7 @@ test.describe('lifecycle', () => {
     expect(lines.filter((l) => l.m === 'login item written' || l.m.startsWith('writing the login item'))).toEqual([]);
     expect(lines.filter((l) => l.l === 'error')).toEqual([]);
     const saved = JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')) as { schemaVersion: number; loginItem: Record<string, unknown> };
-    expect(saved.schemaVersion).toBe(2);
+    expect(saved.schemaVersion).toBe(3);
     expect(saved.loginItem).toMatchObject({ preference: 'enabled', decidedBy: 'user', disabledBy: null, noticeShown: true, registeredPath: null });
   });
 

@@ -102,6 +102,6 @@ describe('persistence round-trip', () => {
     expect(s.name).toBe('Miso');
     expect(s.state).toBe(h.sim.state);
     expect(s.favoriteSpotCount).toBe(0);
-    expect(Object.keys(s).sort()).toEqual(['bornAt', 'catId', 'counters', 'favoriteSpotCount', 'name', 'preferences', 'recent', 'state', 'stats', 'traits']);
+    expect(Object.keys(s).sort()).toEqual(['bornAt', 'catId', 'counters', 'drives', 'favoriteSpotCount', 'name', 'preferences', 'recent', 'state', 'stats', 'traits']);
   });
 });

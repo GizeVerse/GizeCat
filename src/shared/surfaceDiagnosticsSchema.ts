@@ -6,12 +6,14 @@
 // build would add ~440 KB to a 1 KB preload, zod/mini adds ~22 KB); the type checks at
 // the bottom fail to compile if the schemas drift from the contract.
 import * as z from 'zod/mini';
-import { SURFACE_KINDS } from './surfaces';
+import { SCREEN_EDGE_KIND, SURFACE_KINDS } from './surfaces';
 import {
   DEBUG_LINE_ROLES,
   MAX_DEBUG_LINES,
   NAV_REJECT_REASONS,
   PROVIDER_SKIP_REASONS,
+  SCREEN_EDGE_GUARD_STATES,
+  TAB_STRIP_READER_KINDS,
   TARGET_AVAILABILITY,
   type SurfaceDebugLine,
   type SurfaceDiagnostics,
@@ -54,7 +56,11 @@ const ProviderDiagnosticsSchema = z.strictObject({
     errors: count,
     lastReadAt: time,
     lastRejection: z.nullable(code),
+    byKind: z.optional(z.partialRecord(z.enum(TAB_STRIP_READER_KINDS), count)),
   }),
+  screenEdges: z.optional(
+    z.strictObject({ bands: count, clearSpans: count, coveredSpans: count, guard: z.enum(SCREEN_EDGE_GUARD_STATES), failClosed: count }),
+  ),
   recentErrors: z.array(z.strictObject({ at: time, source: code, kind: code })).check(z.maxLength(MAX_RECENT_ERRORS)),
 });
 
@@ -71,8 +77,8 @@ const availability = z.enum(TARGET_AVAILABILITY);
 
 const DecisionDiagnosticsSchema = z.strictObject({
   state: code,
-  support: z.enum(['floor', ...SURFACE_KINDS, 'air', 'held', 'none']),
-  targetKind: z.nullable(z.enum(['floor', ...SURFACE_KINDS])),
+  support: z.enum(['floor', ...SURFACE_KINDS, SCREEN_EDGE_KIND, 'air', 'held', 'none']),
+  targetKind: z.nullable(z.enum(['floor', ...SURFACE_KINDS, SCREEN_EDGE_KIND])),
   targets: z.strictObject({ perch: availability, climb: availability, tabStrip: availability }),
   exploreUrge: z.number().check(z.gte(0), z.lte(1)),
   lastElevatedAt: time,

@@ -5,8 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { installTestHooks, TEST_HOOK_GLOBAL, type DesktopCatTestApi, type TestHookContext } from '../../../src/main/testHooks';
 import type { SurfaceDebugLine } from '../../../src/shared/surfaceDiagnostics';
 import { fullDiagnostics } from './diagnosticsSurfaceFixture';
+import { emptyBehaviorProfile } from '../../../src/shared/behaviorProfile';
+import type { Point } from '../../../src/shared/geometry';
 
 const lines: SurfaceDebugLine[] = [{ kind: 'windowSide', role: 'reachable', x0: 308, y0: 140, x1: 308, y1: 892 }];
+
+const injected: Array<Point | null> = [];
+const restricted: Array<readonly number[] | null> = [];
 
 function context(): TestHookContext {
   const unused = (): never => {
@@ -30,6 +35,9 @@ function context(): TestHookContext {
     getSurfaceDiagnostics: () => fullDiagnostics(),
     getSurfaceDebugLines: () => lines,
     forceInteractive: () => undefined,
+    getBehaviorProfile: () => emptyBehaviorProfile(7),
+    injectCursor: (p) => void injected.push(p),
+    restrictSurfacesToPids: (pids) => void restricted.push(pids),
     setTimeScale: () => undefined,
     runAction: () => Promise.resolve({ ok: true }),
     patchSettings: unused,
@@ -53,5 +61,17 @@ describe('test hooks', () => {
     expect(api.getSurfaceDiagnostics()).toEqual(fullDiagnostics());
     expect(api.getSurfaceDebugLines()).toEqual(lines);
     expect(Object.isFrozen(api)).toBe(true);
+    // v1.2 (ADR 0003 §15.4): the behaviour profile, an injected cursor, own-process surfaces; inputs validated.
+    expect(api.getBehaviorProfile().since).toBe(7);
+    api.injectCursor({ x: 10, y: 20 });
+    api.injectCursor(null);
+    expect(injected).toEqual([{ x: 10, y: 20 }, null]);
+    expect(() => api.injectCursor({ x: Number.NaN, y: 0 })).toThrow();
+    expect(() => api.injectCursor('here' as unknown as Point)).toThrow();
+    api.restrictSurfacesToPids([1234]);
+    api.restrictSurfacesToPids(null);
+    expect(restricted).toEqual([[1234], null]);
+    expect(() => api.restrictSurfacesToPids([1.5])).toThrow();
+    expect(() => api.restrictSurfacesToPids([0])).toThrow();
   });
 });

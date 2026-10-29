@@ -1,6 +1,6 @@
 // Creating a new cat: identity and randomised (seeded) personality traits.
 import type { PersistedCat, Stats, Traits } from '../../shared/catState';
-import { CAT_STATE_SCHEMA_VERSION, MemorySchema, StatsSchema } from '../../shared/catState';
+import { CAT_STATE_SCHEMA_VERSION, DrivesSchema, MemorySchema, StatsSchema } from '../../shared/catState';
 import type { Random } from './random';
 import { randomHex, safeRandom } from './random';
 
@@ -15,6 +15,7 @@ const TRAIT_MEANS: Readonly<Traits> = {
   confidence: 0.5,
   energyLevel: 0.5,
   laziness: 0.45,
+  startleSensitivity: 0.5,
 };
 const TRAIT_SPREAD = 0.32;
 
@@ -26,13 +27,21 @@ export function randomTraits(random: Random): Traits {
   const draw = (mean: number): number => clampTrait(mean + (r() + r() - 1) * TRAIT_SPREAD);
   const energyLevel = draw(TRAIT_MEANS.energyLevel);
   const lazyRaw = draw(TRAIT_MEANS.laziness);
+  // Same draw order as v1.1.1 (object literal order), so seeded cats are unchanged.
+  const curiosity = draw(TRAIT_MEANS.curiosity);
+  const playfulness = clampTrait(draw(TRAIT_MEANS.playfulness) * 0.8 + energyLevel * 0.2);
+  const affection = draw(TRAIT_MEANS.affection);
+  const confidence = draw(TRAIT_MEANS.confidence);
   return {
-    curiosity: draw(TRAIT_MEANS.curiosity),
-    playfulness: clampTrait(draw(TRAIT_MEANS.playfulness) * 0.8 + energyLevel * 0.2),
-    affection: draw(TRAIT_MEANS.affection),
-    confidence: draw(TRAIT_MEANS.confidence),
+    curiosity,
+    playfulness,
+    affection,
+    confidence,
     energyLevel,
     laziness: clampTrait(lazyRaw * 0.6 + (1 - energyLevel) * 0.4),
+    // v1.2 contract step: derived without an extra draw, so seeded cats (and every seeded test) keep
+    // their traits; the behaviour package may give it its own draw (ADR 0003 §1.2).
+    startleSensitivity: clampTrait(TRAIT_MEANS.startleSensitivity + (TRAIT_MEANS.confidence - confidence) * 0.8),
   };
 }
 
@@ -56,6 +65,7 @@ export function newPersistedCat(random: Random, nowEpochMs: number): PersistedCa
     traits: randomTraits(random),
     stats: defaultStats(),
     memory,
+    drives: DrivesSchema.parse({}),
     lastPosition: null,
     savedAt: now,
   };

@@ -11,6 +11,7 @@ export function summarizeCat(sim: CatSim, name: string): CatSummary {
     state: sim.state,
     traits: { ...p.traits },
     stats: { ...p.stats },
+    drives: { ...p.drives },
     counters: { ...p.memory.counters },
     preferences: { ...p.memory.preferences },
     favoriteSpotCount: p.memory.favoriteSpots.length,

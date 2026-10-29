@@ -1,6 +1,6 @@
 // Defensive shape check for render snapshots arriving over IPC. Main is trusted, but a
 // malformed snapshot must never crash the frame loop.
-import { ANIM_CLIPS, BEHAVIOR_STATES, CAT_REACTIONS, EMOTES, RENDER_STYLES, SKINS, type CatReaction, type CatRenderState } from '../../shared/cat';
+import { ANIM_CLIPS, BEHAVIOR_STATES, CAT_REACTIONS, EMOTES, JUMP_KINDS, RENDER_STYLES, SKINS, SOUND_CUES, type CatReaction, type CatRenderState, type CatSoundCue } from '../../shared/cat';
 import type { OverlayConfig } from '../../shared/ipc';
 
 const CLIPS: ReadonlySet<string> = new Set(ANIM_CLIPS);
@@ -9,6 +9,8 @@ const EMOTE_SET: ReadonlySet<string> = new Set(EMOTES);
 const SKIN_SET: ReadonlySet<string> = new Set(SKINS);
 const STYLE_SET: ReadonlySet<string> = new Set(RENDER_STYLES);
 const REACTION_SET: ReadonlySet<string> = new Set(CAT_REACTIONS);
+const JUMP_KIND_SET: ReadonlySet<string> = new Set(JUMP_KINDS);
+const SOUND_SET: ReadonlySet<string> = new Set(SOUND_CUES);
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
@@ -17,6 +19,14 @@ function isReaction(v: unknown): v is CatReaction {
   const r = v as Record<string, unknown>;
   return typeof r.kind === 'string' && REACTION_SET.has(r.kind) && isNum(r.at);
 }
+
+function isSoundCue(v: unknown): v is CatSoundCue {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.kind === 'string' && SOUND_SET.has(r.kind) && isNum(r.at) && (r.volume === undefined || (isNum(r.volume) && r.volume >= 0 && r.volume <= 1));
+}
+
+const isUnit = (v: unknown): v is number => isNum(v) && v >= 0 && v <= 1;
 
 /**
  * True for a usable snapshot. A malformed optional field never costs the frame: a bad `reaction`
@@ -42,6 +52,11 @@ export function isRenderState(v: unknown): v is CatRenderState {
   }
   if (s.reaction !== undefined && s.reaction !== null && !isReaction(s.reaction)) s.reaction = null;
   if (s.movementSpeed !== undefined && !(isNum(s.movementSpeed) && s.movementSpeed > 0)) delete s.movementSpeed;
+  // v1.2 optional render hints: a malformed one is dropped, never the frame.
+  if (s.jumpKind !== undefined && s.jumpKind !== null && !(typeof s.jumpKind === 'string' && JUMP_KIND_SET.has(s.jumpKind))) s.jumpKind = null;
+  if (s.impact !== undefined && !isUnit(s.impact)) delete s.impact;
+  if (s.balance !== undefined && !isUnit(s.balance)) delete s.balance;
+  if (s.sound !== undefined && s.sound !== null && !isSoundCue(s.sound)) s.sound = null;
   return true;
 }
 

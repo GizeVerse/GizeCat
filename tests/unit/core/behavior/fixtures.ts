@@ -10,7 +10,7 @@ import type { DisplayGeometry, Platform, WorldGeometry } from '../../../../src/s
 import { createInstrumentedCatSim, mulberry32 } from '../../../../src/core/behavior';
 import type { DecisionView } from '../../../../src/core/behavior/decide';
 import { scoreCandidates } from '../../../../src/core/behavior/decide';
-import type { TransitionRecord } from '../../../../src/core/behavior';
+import type { SimHooks, TransitionRecord } from '../../../../src/core/behavior';
 import type { CatSimImpl } from '../../../../src/core/behavior/sim';
 import { simWorld } from '../../../../src/core/display/simWorld';
 import { buildWindowSurfaces, computeOpenSpans, coversWorkArea, type StripPlacement, type SurfaceMeta, type WindowSurfaceOptions } from '../../../../src/main/surfaces/windowSurfaces';
@@ -73,7 +73,9 @@ export class Harness {
    * catHost.ts), so floors sit FLOOR_INSET_DIP above the work-area bottom; surfaces are still built
    * in the real display space, as the provider builds them. false: the raw world.
    */
-  constructor(opts: { seed?: number; settings?: Settings; world?: WorldGeometry; persisted?: PersistedCat | null; now?: number; wall?: number; floorInset?: boolean } = {}) {
+  constructor(
+    opts: { seed?: number; settings?: Settings; world?: WorldGeometry; persisted?: PersistedCat | null; now?: number; wall?: number; floorInset?: boolean; hooks?: Omit<SimHooks, 'onTransition'> } = {},
+  ) {
     this.now = opts.now ?? 1000;
     this.worldGeometry = opts.world ?? SINGLE;
     this.floorInset = opts.floorInset ?? true;
@@ -87,7 +89,7 @@ export class Harness {
         random: mulberry32(opts.seed ?? 1),
         wallClock: () => (wall += 1),
       },
-      { onTransition: (r) => this.transitions.push(r) },
+      { ...opts.hooks, onTransition: (r) => this.transitions.push(r) },
     );
   }
 
@@ -328,9 +330,9 @@ export function insideAnyWorkArea(w: WorldGeometry, x: number, y: number, tol = 
 /** A decision context for scoring tests: an awake, energetic cat with a pointer and a foreground window around. */
 export function decisionView(o: Partial<DecisionView> = {}): DecisionView {
   return {
-    traits: { playfulness: 0.6, curiosity: 0.6, affection: 0.6, laziness: 0.3, confidence: 0.5, energyLevel: 0.6 },
+    traits: { playfulness: 0.6, curiosity: 0.6, affection: 0.6, laziness: 0.3, confidence: 0.5, energyLevel: 0.6, startleSensitivity: 0.5 },
     stats: { energy: 0.9, boredom: 0.5, bond: 0.5, annoyance: 0, fear: 0 },
-    prefs: { cursorPlayAcceptance: 0.5, attentionAcceptance: 0.5, petRatePerHour: 0 },
+    prefs: { cursorPlayAcceptance: 0.5, attentionAcceptance: 0.5, petRatePerHour: 0, roughRatePerHour: 0 },
     behavior: { ...defaultSettings().behavior, autonomy: 1, attentionSeeking: 1 },
     disabled: new Set(),
     localHour: 14,
