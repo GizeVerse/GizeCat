@@ -1,0 +1,73 @@
+{
+  "exe": "release\\win-unpacked\\DesktopCat.exe",
+  "minutes": 10,
+  "userData": "%TEMP%/dcat-qa-traversal-*/userdata",
+  "started": "2026-10-29T14:38:45.996Z",
+  "probe": {
+    "frame": {
+      "x": 297,
+      "y": 180,
+      "width": 1334,
+      "height": 832
+    },
+    "scale": 1.25
+  },
+  "summaries": [
+    {
+      "t": "2026-10-29T14:38:56.386Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "frontMaximized": true,
+      "tabStrips": "idle",
+      "verdict": "frontMaximized",
+      "support": "floor",
+      "excursions": 0
+    }
+  ],
+  "checks": {
+    "appRanThroughout": true,
+    "wentUp": false,
+    "firstUpLoggedAt": null,
+    "secondsToFirstUpLog": null,
+    "seenOnASide": false,
+    "maxExcursions": 0,
+    "errorLines": [],
+    "warnLines": 1,
+    "boot": {
+      "version": "1.1.1",
+      "electron": "44.9.3",
+      "packaged": true,
+      "dev": false,
+      "test": false,
+      "launchedAtLogin": false,
+      "settings": "ok"
+    },
+    "testHooksIgnoredWhenPackaged": true,
+    "cleanedUp": {
+      "probeExited": true,
+      "appExited": true
+    }
+  },
+  "pids": {
+    "probe": 76420,
+    "app": 32568
+  },
+  "finished": "2026-10-29T14:48:53.616Z",
+  "note": "first attempt: the throwaway window never reached the topmost band (no SetWindowPos re-assert yet), so it sat behind the user's maximized window; the app correctly reported frontMaximized with 0 surfaces for 10 min"
+}

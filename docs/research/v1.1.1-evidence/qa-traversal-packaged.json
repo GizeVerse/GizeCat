@@ -1,0 +1,183 @@
+{
+  "exe": "release\\win-unpacked\\DesktopCat.exe",
+  "minutes": 10,
+  "userData": "%TEMP%/dcat-qa-traversal-*/userdata",
+  "started": "2026-10-29T14:49:34.823Z",
+  "probe": {
+    "frame": {
+      "x": 297,
+      "y": 180,
+      "width": 1334,
+      "height": 832
+    },
+    "scale": 1.25,
+    "topmostReasserted": true
+  },
+  "summaries": [
+    {
+      "t": "2026-10-29T14:49:45.163Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "idle",
+      "verdict": "exploring",
+      "support": "floor",
+      "excursions": 0
+    },
+    {
+      "t": "2026-10-29T14:51:55.257Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "idle",
+      "verdict": "elevated",
+      "support": "windowSide",
+      "excursions": 0
+    },
+    {
+      "t": "2026-10-29T14:52:55.291Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "active",
+      "verdict": "elevated",
+      "support": "windowTop",
+      "excursions": 1
+    },
+    {
+      "t": "2026-10-29T14:53:55.333Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "active",
+      "verdict": "exploring",
+      "support": "air",
+      "excursions": 1
+    },
+    {
+      "t": "2026-10-29T14:54:55.385Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "frontMaximized": true,
+      "tabStrips": "active",
+      "verdict": "frontMaximized",
+      "support": "floor",
+      "excursions": 1
+    }
+  ],
+  "checks": {
+    "appRanThroughout": true,
+    "wentUp": true,
+    "firstUpLoggedAt": "2026-10-29T14:52:55.291Z",
+    "secondsToFirstUpLog": 197,
+    "backOnFloorAfterClose": true,
+    "secondsToFloorLogAfterClose": 57,
+    "seenOnASide": true,
+    "maxExcursions": 1,
+    "errorLines": [],
+    "warnLines": 1,
+    "boot": {
+      "version": "1.1.1",
+      "electron": "44.9.3",
+      "packaged": true,
+      "dev": false,
+      "test": false,
+      "launchedAtLogin": false,
+      "settings": "ok"
+    },
+    "testHooksIgnoredWhenPackaged": true,
+    "cleanedUp": {
+      "probeExited": true,
+      "appExited": true
+    }
+  },
+  "pids": {
+    "probe": 72420,
+    "app": 43952
+  },
+  "finished": "2026-10-29T14:55:01.815Z",
+  "installer": {
+    "file": "release/Desktop-Cat-Setup-1.1.1.exe",
+    "note": "release/win-unpacked is the payload of this installer (same npm run package)"
+  }
+}

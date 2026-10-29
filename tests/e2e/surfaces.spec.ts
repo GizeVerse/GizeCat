@@ -710,9 +710,12 @@ test.describe('environment surfaces (real app)', () => {
       skipBecause(info, 'opt-in: set DESKTOP_CAT_REAL_BROWSER=1 (opens a throwaway Edge window on the desktop)');
       return;
     }
-    const exe = findBrowser('edge');
+    // DESKTOP_CAT_REAL_BROWSER_KIND=chrome runs the same check with our own Chrome instance.
+    const kind = process.env.DESKTOP_CAT_REAL_BROWSER_KIND === 'chrome' ? 'chrome' : 'edge';
+    record(info, 'browser', { kind });
+    const exe = findBrowser(kind);
     if (exe === null) {
-      skipBecause(info, 'environment: Microsoft Edge is not installed in a standard location');
+      skipBecause(info, `environment: ${kind} is not installed in a standard location`);
       return;
     }
     const app = await launchApp(userData);
@@ -723,13 +726,13 @@ test.describe('environment surfaces (real app)', () => {
       await settingsForTraversal(app);
       enablePerMonitorDpiAwareness();
       // A normal floating size (about 70 % of a 1536x960 DIP work area), never maximized.
-      inst = launchBrowser('edge', exe, { x: 230, y: 144, width: 1075, height: 672, urls: ['about:blank', 'about:blank', 'about:blank'] });
+      inst = launchBrowser(kind, exe, { x: 230, y: 144, width: 1075, height: 672, urls: ['about:blank', 'about:blank', 'about:blank'] });
       const win = await waitForBrowserWindow(inst, 30_000);
       record(info, 'pids', { edgeLauncher: inst.launcherPid, edgeProcesses: [...(await instancePids(inst))] });
       const w32 = win32Probe();
       const f = win.frame;
       record(info, 'edge', { frame: f, zoomed: w32.isZoomed(win.hwnd) });
-      if (w32.isZoomed(win.hwnd)) skipBecause(info, 'environment: Edge opened maximized');
+      if (w32.isZoomed(win.hwnd)) skipBecause(info, `environment: ${kind} opened maximized`);
       // Our own window in front of the user's normal windows (never another application's window).
       record(info, 'edgeTopmost', w32.setOwnWindowTopmost(win.hwnd, true));
       const edgePids = Object.fromEntries([...(await instancePids(inst))].map((p, i) => [`edge${i}`, p]));
