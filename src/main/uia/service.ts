@@ -10,7 +10,12 @@
 // - Excluded (private) windows are never queried: the exclusion verdict is re-read right before
 //   every request and an excluded window is dropped on sight.
 // - A crashed, blocked or hung helper is restarted with exponential backoff; after too many
-//   failures the service reports 'unavailable' with a reason (window tops keep working).
+//   failures the service reports 'unavailable' with a reason (window tops keep working) and tries
+//   one more start once the restart budget's window has passed.
+// - A browser that stops responding (Not Responding, suspended) blocks the single-threaded helper
+//   inside its UI Automation call. That is the window's fault, not the helper's: the window is
+//   quarantined with a growing delay and the helper is replaced without it, outside the restart
+//   budget, so the other windows keep their strips.
 // All decisions use the injected clock; the optional internal timer only calls pump(now()).
 import type { Point } from '../../shared/geometry';
 import type { Settings } from '../../shared/settings';
@@ -19,7 +24,7 @@ import type { LedgeSurface, SurfaceStatus } from '../../shared/surfaces';
 import type { WindowInfo } from '../../shared/world';
 import type { Logger, TabStripService } from '../contracts';
 import { HelperTransportError, spawnUiaHelper, UiaHelperClient, type ChildProcessLike, type HelperExit } from './client';
-import { fromWireRect, HWND_PATTERN, UIA_PROTOCOL_VERSION, type HelperEvent, type HelperResponse, type WireStrip } from './protocol';
+import { fromWireRect, HWND_PATTERN, UIA_PROTOCOL_VERSION, type HelperEvent, type HelperRequest, type HelperResponse, type WireStrip } from './protocol';
 import { DEFAULT_RESTART_BUDGET, RestartBudget, type RestartBudgetOptions } from './restartBudget';
 import { catExtentPx, computeTabStripSegment, placeStrip, toRelativeStrip, type RelativeStrip, type StripGeometry, type TabStripSegment } from './segment';
 
@@ -54,10 +59,23 @@ export interface TabStripServiceOptions {
   windowRetryMaxMs: number;
   /** Windows the helper rejected (not a browser frame) are skipped this long. */
   rejectedWindowMs: number;
+  /**
+   * A window whose browser stalled the helper (its request timed out, or the helper found it hung)
+   * is not queried or watched for this long; doubles per stall up to stalledWindowMaxMs, and the
+   * next answered read clears it.
+   */
+  stalledWindowMs: number;
+  stalledWindowMaxMs: number;
   quitGraceMs: number;
   /** Internal pump timer period (ms); 0 disables it (tests drive pump through setInterest). */
   autoPumpMs: number;
+  /** Helper failures (crash, spawn error, a hang outside any browser call). */
   restart: RestartBudgetOptions;
+  /**
+   * Helper replacements after a stalled browser window. They do not count as helper failures
+   * until this allowance is used up (a helper that hangs on every window is still a broken helper).
+   */
+  stallRestart: RestartBudgetOptions;
   eventQueueCapacity: number;
   maxLineBytes: number;
 }
@@ -76,9 +94,12 @@ export const DEFAULT_TAB_STRIP_OPTIONS: TabStripServiceOptions = {
   windowRetryMs: 2000,
   windowRetryMaxMs: 60_000,
   rejectedWindowMs: 10 * 60_000,
+  stalledWindowMs: 30_000,
+  stalledWindowMaxMs: 10 * 60_000,
   quitGraceMs: 2000,
   autoPumpMs: 500,
   restart: DEFAULT_RESTART_BUDGET,
+  stallRestart: { baseDelayMs: 250, maxDelayMs: 8000, maxRestarts: 20, windowMs: 10 * 60_000 },
   eventQueueCapacity: 32,
   maxLineBytes: 64 * 1024,
 };
@@ -149,8 +170,12 @@ export type TabStripDebug = {
     dpiMode: string | null;
     spawns: number;
     recentFailures: number;
+    /** Helper replacements after a stalled browser window inside the stallRestart window. */
+    stallRestarts: number;
     lastFailure: string | null;
     nextStartInMs: number | null;
+    /** While unavailable after repeated failures: when the next start is tried. */
+    retryInMs: number | null;
     lines: number;
     malformed: number;
     oversized: number;
@@ -161,6 +186,8 @@ export type TabStripDebug = {
   windows: number;
   interested: number;
   withStrip: number;
+  /** Windows quarantined after their browser stalled the helper. */
+  stalled: number;
   watched: number;
   /** Strip requests sent / answered (ok or error) / failed (error answer or transport). */
   reads: number;
@@ -219,6 +246,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   const log = deps.logger.child('tabStrips');
   const now = deps.now ?? (() => performance.now());
   const budget = new RestartBudget(o.restart);
+  const stallBudget = new RestartBudget(o.stallRestart);
 
   let started = false;
   let enabled = tabStripEnabled(deps.settings);
@@ -231,6 +259,10 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   let helperDpiMode: string | null = null;
   let nextStartAt = 0;
   let lastFailure: string | null = null;
+  /** Unavailable after the restart budget ran out: one more start is tried at this time. */
+  let recoverAt: number | null = null;
+  /** That retry is running: its failure makes the feature unavailable again at once. */
+  let probation = false;
   let lastWantedAt = 0;
   let watchedKey = '';
   let watchInFlight = false;
@@ -240,6 +272,11 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   /** Last list returned by surfaces(); returned again (same identity) while nothing changed. */
   let published: readonly LedgeSurface[] = [];
   const rejected = new Map<string, number>();
+  /**
+   * Windows whose browser stalled the helper: not queried before `until`, not watched until a read
+   * is answered again. Kept apart from `windows` so a dropped and re-admitted window stays quarantined.
+   */
+  const stalls = new Map<string, { until: number; streak: number }>();
   const queue: SimEvent[] = [];
   const stats = { reads: 0, readsDone: 0, readErrors: 0, lastReadMs: null as number | null, eventsIn: { selected: 0, structure: 0 }, eventsOut: 0, eventsDropped: 0 };
 
@@ -260,6 +297,21 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
 
   const active = (): boolean => started && enabled && unavailableReason === null && client !== null;
   const queryable = (t: Tracked): boolean => isBrowserCandidate(t.info) && !t.info.maximized;
+  const quarantined = (id: string, at: number): boolean => {
+    const s = stalls.get(id);
+    return s !== undefined && at < s.until;
+  };
+
+  /** The browser of window `id` stalled (timed out in the helper, or the helper found it hung). */
+  function stall(id: string, at: number): void {
+    const streak = (stalls.get(id)?.streak ?? 0) + 1;
+    const ms = Math.min(o.stalledWindowMaxMs, o.stalledWindowMs * 2 ** (streak - 1));
+    if (stalls.size >= 64) {
+      for (const [k, s] of stalls) if (s.until <= at) stalls.delete(k);
+    }
+    stalls.set(id, { until: at + ms, streak });
+    log.info('tab strip window not responding; skipping it', { streak, retryInMs: ms });
+  }
 
   // ------------------------------------------------------------------ windows
 
@@ -421,16 +473,70 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
 
   function fail(reason: string, at: number): void {
     lastFailure = reason;
+    if (probation) {
+      // The one start tried after the budget ran out failed as well.
+      probation = false;
+      recoverAt = at + o.restart.windowMs;
+      markUnavailable(`helper still failing after a retry (last: ${reason})`);
+      return;
+    }
     const next = budget.recordFailure(at);
     if (client?.running) client.kill();
     helperReady = false;
     watchedKey = '';
     if (next === null) {
+      recoverAt = at + o.restart.windowMs;
       markUnavailable(`helper failed ${budget.recentFailures} times in ${Math.round(o.restart.windowMs / 60_000)} min (last: ${reason})`);
       return;
     }
     nextStartAt = next;
     log.warn('uia helper failed; restarting with backoff', { reason, delayMs: Math.round(next - at) });
+  }
+
+  /**
+   * Requests timed out. The helper answers one at a time, so the first of them (oldest) is the one
+   * it is stuck in; the others only queued behind it. Stuck in a strip or watch request means stuck
+   * in a browser's UI Automation provider (that browser's UI thread stopped: Not Responding,
+   * suspended, busy): those windows are quarantined and the helper is replaced without them,
+   * outside the restart budget. A ping touches no browser: then the helper itself hung.
+   */
+  function onTimeouts(timedOut: readonly HelperRequest[], at: number): void {
+    const first = timedOut[0];
+    let blamed: string[] = [];
+    if (first?.op === 'strip') blamed = [first.hwnd];
+    else if (first?.op === 'watch') {
+      // Subscribing and unsubscribing call into the browsers; windows that stay watched are not touched.
+      const before = new Set(watchedKey === '' ? [] : watchedKey.split(','));
+      const after = new Set(first.hwnds);
+      blamed = [...first.hwnds.filter((h) => !before.has(h)), ...[...before].filter((h) => !after.has(h))];
+    }
+    blamed = blamed.filter((id) => windows.has(id));
+    if (blamed.length === 0) {
+      fail('request timed out (helper hung)', at);
+      return;
+    }
+    for (const id of blamed) stall(id, at);
+    const next = stallBudget.recordFailure(at);
+    if (next === null) {
+      fail('request timed out (browser windows keep stalling the helper)', at);
+      return;
+    }
+    lastFailure = 'browser window not responding';
+    client?.kill();
+    helperReady = false;
+    watchedKey = '';
+    nextStartAt = next;
+    log.warn('uia helper stuck in a browser that stopped responding; replacing it', { windows: blamed.length, delayMs: Math.round(next - at) });
+  }
+
+  /** After the restart budget ran out: one more start once its window passed without a failure. */
+  function maybeRecover(at: number): void {
+    if (recoverAt === null || at < recoverAt || !started || !enabled) return;
+    recoverAt = null;
+    unavailableReason = null;
+    nextStartAt = 0;
+    probation = true;
+    log.info('tab strips: trying the helper again');
   }
 
   function onHelperExit(exit: HelperExit): void {
@@ -467,6 +573,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
           return;
         }
         helperReady = true;
+        probation = false;
         helperDpiMode = r.dpi ?? null;
         if (r.dpi !== undefined && r.dpi !== 'permonitorv2' && r.dpi !== 'preset') log.warn('uia helper is not per-monitor DPI aware', { dpi: r.dpi });
         pump(now());
@@ -520,6 +627,13 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       stats.readErrors++;
       const code = r.ok ? 'no-strip' : r.error;
       t.lastError = code;
+      if (code === 'hung') {
+        // The helper found the browser not responding before calling into it. Its strip cannot
+        // have moved (a hung window does not move or repaint), so it stays listed while it ages.
+        stall(t.id, at);
+        return;
+      }
+      stalls.delete(t.id);
       if (code === 'gone') {
         drop(t, 'gone');
         return;
@@ -539,6 +653,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       return;
     }
     const geo = toGeometry(r.strip);
+    stalls.delete(t.id);
     t.strip = toRelativeStrip(geo);
     t.stripAt = at;
     t.segCache = null;
@@ -555,11 +670,17 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
 
   function syncWatch(at: number): void {
     if (client === null || watchInFlight) return;
-    const ids = [...windows.values()]
-      .filter((t) => t.strip !== null && queryable(t))
+    // A stalled window is subscribed again only after a read was answered (subscribing calls into it).
+    const wanted = [...windows.values()]
+      .filter((t) => t.strip !== null && queryable(t) && !stalls.has(t.id))
       .map((t) => t.id)
       .sort()
       .slice(0, 16);
+    // Subscribing calls into each new window's browser: one new window per request, so a request
+    // stuck in a browser that stopped responding names that window (onTimeouts).
+    const current = new Set(watchedKey === '' ? [] : watchedKey.split(','));
+    const added = wanted.find((id) => !current.has(id));
+    const ids = wanted.filter((id) => current.has(id) || id === added);
     const key = ids.join(',');
     if (key === watchedKey) return;
     watchInFlight = true;
@@ -570,6 +691,8 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         watchedKey = key;
         if (!r.ok) log.debug('uia watch failed', { error: r.error });
         else if ((r.failed?.length ?? 0) > 0) log.debug('uia watch incomplete', { failed: r.failed?.length ?? 0 });
+        // Subscribe the next new window, if any.
+        if (key !== wanted.join(',')) pump(now());
       },
       (e: unknown) => {
         watchInFlight = false;
@@ -584,7 +707,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     const order = [...windows.values()].sort((a, b) => Number(b.interested) - Number(a.interested) || b.lastInterestAt - a.lastInterestAt);
     for (const t of order) {
       if (inFlight >= o.maxInFlight) return;
-      if (t.inFlight || !queryable(t) || at < t.retryAt) continue;
+      if (t.inFlight || !queryable(t) || at < t.retryAt || quarantined(t.id, at)) continue;
       const due = t.strip === null || (t.dirty ? at - t.lastRequestAt >= o.refreshGapMs : t.interested && at - t.stripAt >= o.pollIntervalMs);
       if (!due) continue;
       read(t, at);
@@ -593,16 +716,21 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   }
 
   function pump(at: number): void {
+    maybeRecover(at);
     if (!active() || client === null) return;
-    if (client.running && client.checkTimeouts(at) > 0) fail('request timed out (helper hung)', at);
+    if (client.running) {
+      const timedOut: HelperRequest[] = [];
+      if (client.checkTimeouts(at, timedOut) > 0) onTimeouts(timedOut, at);
+    }
     if (!active()) return;
     for (const t of [...windows.values()]) {
       if (!t.interested && at - t.lastInterestAt >= o.idleShutdownMs) drop(t, 'idle');
       else if (at - t.infoAt >= o.describeIntervalMs) refreshInfo(t, at);
     }
+    // A quarantined window alone does not keep (or bring back) a helper: it would only idle.
     let wanted = false;
     for (const t of windows.values()) {
-      if (t.interested && queryable(t)) {
+      if (t.interested && queryable(t) && !quarantined(t.id, at)) {
         wanted = true;
         break;
       }
@@ -625,6 +753,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   function shutdown(): void {
     windows.clear();
     rejected.clear();
+    stalls.clear();
     queue.length = 0;
     watchedKey = '';
     helperReady = false;
@@ -689,13 +818,17 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       // Turning the feature back on is an explicit retry after repeated helper failures.
       if (unavailableReason !== null && permanentReason === null) {
         budget.reset();
+        stallBudget.reset();
         unavailableReason = null;
+        recoverAt = null;
+        probation = false;
         nextStartAt = 0;
       }
       if (started) armTimer();
     },
 
     setInterest(windowIds: readonly string[], at: number): void {
+      maybeRecover(at);
       if (!active()) return;
       const admitted = new Set<string>();
       const scanLimit = o.maxInterest * 4;
@@ -768,6 +901,8 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         if (t.strip !== null) withStrip++;
       }
       const cs = client?.stats;
+      let stalled = 0;
+      for (const id of stalls.keys()) if (quarantined(id, at)) stalled++;
       return {
         status: service.status,
         reason: service.statusReason,
@@ -780,8 +915,10 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
           dpiMode: helperDpiMode,
           spawns: cs?.spawns ?? 0,
           recentFailures: budget.recentFailures,
+          stallRestarts: stallBudget.recentFailures,
           lastFailure,
           nextStartInMs: client !== null && !client.running && nextStartAt > at ? Math.round(nextStartAt - at) : null,
+          retryInMs: recoverAt !== null && unavailableReason !== null ? Math.max(0, Math.round(recoverAt - at)) : null,
           lines: cs?.lines ?? 0,
           malformed: cs?.malformed ?? 0,
           oversized: cs?.oversized ?? 0,
@@ -792,6 +929,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         windows: windows.size,
         interested,
         withStrip,
+        stalled,
         watched: watchedKey === '' ? 0 : watchedKey.split(',').length,
         reads: stats.reads,
         readsDone: stats.readsDone,

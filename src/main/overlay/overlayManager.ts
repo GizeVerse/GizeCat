@@ -476,7 +476,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     lastOutput = out;
     lastSimNow = simNow;
     lastHidden = hidden;
-    const appearance = opts.getSettings().appearance;
+    const settingsNow = opts.getSettings();
+    const appearance = settingsNow.appearance;
+    const movementSpeed = settingsNow.behavior.movementSpeed;
     const world = opts.display.world;
     const showing = displaysShowingCat(out, world.displays, appearance, hidden);
     const now = opts.clock();
@@ -496,6 +498,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           forceSnap,
           hidden,
           simNow,
+          movementSpeed,
         });
         if (!e.active) {
           e.active = true;

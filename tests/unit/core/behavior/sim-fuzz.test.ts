@@ -165,6 +165,7 @@ function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {})
   let live = new Map<string, Surface>();
   const missingSince = new Map<string, number>();
   let airSince: number | null = null;
+  let buriedSince: number | null = null;
   const onSurface: Record<string, number> = {};
   const surfaceEvents: SimEvent[] = [];
   const buildSurfaces = (): void => {
@@ -300,6 +301,13 @@ function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {})
     } else {
       missingSince.clear();
     }
+    // A shown taskbar covers the floor: a visible cat never stays on the floor inside it (physics, whatever the toggles say).
+    const buried =
+      out.support.kind === 'floor' &&
+      out.visible &&
+      listed.some((s) => s.kind === 'taskbar' && s.orientation === 'ledge' && s.phase === 'stable' && out.x >= s.x0 && out.x <= s.x1 && out.y > s.y + 0.5 && out.y - s.y < 100);
+    buriedSince = buried ? (buriedSince ?? h.now) : null;
+    check(buriedSince === null || h.now - buriedSince <= 1000, 'standing inside a shown taskbar');
     if (out.support.kind === 'air') {
       airSince ??= h.now;
       check(h.now - airSince <= MAX_AIR_MS, 'airborne for too long');
@@ -364,7 +372,9 @@ describe('simulation fuzz', () => {
     const res = fuzz(2, 60_000, { disabledAll: true });
     expect([...res.forbiddenSeen]).toEqual([]);
     expect(res.debug.invalidSamples).toEqual([]);
-    // Everything switched off: no window tops, sides, taskbars or tab strips either.
-    expect(res.onSurface).toEqual({});
+    // Everything switched off: no window tops, sides or tab strips either. A shown taskbar still
+    // lifts the cat off the floor it covers ('taskbarPlay' only gates going there and reacting).
+    expect(Object.keys(res.onSurface).filter((k) => k !== 'taskbar')).toEqual([]);
+    expect(res.onSurface.taskbar ?? 0).toBeGreaterThan(0);
   }, 300_000);
 });

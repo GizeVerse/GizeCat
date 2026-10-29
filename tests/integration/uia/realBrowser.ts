@@ -9,7 +9,8 @@
 //  - shutdown posts WM_CLOSE to our own windows, waits, and only then force-ends what is left of
 //    our own processes, one PID at a time; the profile directory is deleted afterwards.
 // No mouse or keyboard input is ever sent. Window state changes (maximize/restore) use
-// ShowWindowAsync on our own window.
+// ShowWindowAsync on our own window. The one deliberately unsafe UI Automation query
+// (naiveTabItemQuery, the probe's positive control) only ever targets our own window.
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -211,6 +212,31 @@ export async function processStats(pids: number[]): Promise<ProcessStats[]> {
     stats.push({ pid: Number(m[1]), workingSetMB: mb(m[2]), privateMB: mb(m[3]), cpuMs: Number(m[4]) });
   }
   return stats;
+}
+
+/**
+ * POSITIVE CONTROL ONLY, against our own throwaway window: the query the helper must never make.
+ * FindAll over all descendants on ControlType asks every web-content node for its ControlType, which
+ * switches on the browser's web accessibility (docs/research/v1.1/uia-tabs.md §2). Runs in its own
+ * PowerShell process (managed UI Automation). Returns the TabItem counts of two calls and the time
+ * taken, or null when the query failed.
+ */
+export async function naiveTabItemQuery(hwnd: string): Promise<{ counts: number[]; ms: number } | null> {
+  if (!/^[1-9][0-9]{0,19}$/.test(hwnd)) throw new Error('naiveTabItemQuery: bad hwnd');
+  const t0 = Date.now();
+  const out = await powershell(
+    [
+      'Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes',
+      `$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][Int64]'${hwnd}')`,
+      '$cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)',
+      '$a = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond).Count',
+      '$b = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond).Count',
+      '"$a $b"',
+    ].join('; '),
+    60_000,
+  );
+  const m = /^(\d+) (\d+)$/.exec(out?.trim() ?? '');
+  return m ? { counts: [Number(m[1]), Number(m[2])], ms: Date.now() - t0 } : null;
 }
 
 export interface CloseReport {

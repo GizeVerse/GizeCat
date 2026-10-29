@@ -6,8 +6,12 @@
 //    (+~60 MB, +1 s CPU per window, measured).
 //  - The Name property (tab titles, localized captions) is never requested.
 //  - Discovery follows the known class path with Children-scoped FindFirst calls in the raw view.
-//    The fallback breadth-first search starts at BrowserView, is bounded in depth and nodes, and
-//    never descends into child HWNDs (render widgets), Document/WebView nodes, child widget panes,
+//    Where the path breaks, a bounded breadth-first search takes over in up to two phases:
+//    (1) only if BrowserView was not reached, from the top-level window element down to the node
+//    of class BrowserView (this covers BrowserRootView, NonClientView, the frame views and the
+//    caption container); (2) only if the tab container was not reached, from BrowserView down to a
+//    horizontal Tab with TabItem children. Each phase is bounded (depth 4, 200 nodes) and never
+//    descends into child HWNDs (render widgets), Document/WebView nodes, child widget panes,
 //    hidden views or anything below the top band of the window (where web content lives).
 //  - Every rectangle is physical px (the process is per-monitor DPI aware).
 using System;
@@ -75,6 +79,8 @@ namespace DesktopCat.Uia
         private readonly Dictionary<string, WatchEntry> watches = new Dictionary<string, WatchEntry>(StringComparer.Ordinal);
         private readonly EventSink events;
         private readonly Stopwatch clock = Stopwatch.StartNew();
+        /// <summary>A hung window's handlers were left registered (see Unwatch).</summary>
+        private bool orphanedHandlers;
 
         private readonly CacheRequest safeRequest;
         private readonly CacheRequest infoRequest;
@@ -506,7 +512,8 @@ namespace DesktopCat.Uia
             {
                 if (!wanted.Contains(key)) Unwatch(key);
             }
-            if (wanted.Count == 0)
+            // With a hung browser's handlers left registered, RemoveAllEventHandlers could block too.
+            if (wanted.Count == 0 && !orphanedHandlers)
             {
                 RemoveAll();
             }
@@ -570,6 +577,16 @@ namespace DesktopCat.Uia
             WatchEntry entry;
             if (!watches.TryGetValue(key, out entry)) return;
             watches.Remove(key);
+            events.SetWatched(watches.Keys);
+            IntPtr h;
+            if (TryParseHwnd(key, out h) && Native.IsHung(h))
+            {
+                // Removing a handler can call into the browser's provider, which is not responding and
+                // would block this single-threaded helper. Its events are no longer forwarded
+                // (SetWatched above); the registration is left to RemoveAllEventHandlers at quit.
+                orphanedHandlers = true;
+                return;
+            }
             try
             {
                 Automation.RemoveAutomationEventHandler(SelectionItemPattern.ElementSelectedEvent, entry.Target, entry.Selected);
@@ -589,7 +606,6 @@ namespace DesktopCat.Uia
                     // Same as above.
                 }
             }
-            events.SetWatched(watches.Keys);
         }
 
         private void RemoveAll()

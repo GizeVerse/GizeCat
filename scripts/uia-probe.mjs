@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 // REAL tab-strip probe: builds DesktopCatUia.exe, launches OUR OWN Edge (and Chrome) with a temp
-// --user-data-dir and a few about:blank tabs, reads the strip through the real helper, the real
-// client and the TabStripService, opens one more tab by launching the browser again with the same
-// profile, maximizes/restores our window, then closes only the processes it started and deletes
-// the profile. Prints a JSON report. Run it under the machine lock:
+// --user-data-dir, a heavy data: page as the active tab and two about:blank tabs, reads the strip
+// through the real helper, the real client and the TabStripService (checking that no process of
+// the instance grew as web-content accessibility would make it), opens one more tab by launching
+// the browser again with the same profile, maximizes/restores our window, then closes only the
+// processes it started and deletes the profile. A second throwaway instance per browser is the
+// positive control: a naive UI Automation query on it must trip the same check. Prints a JSON
+// report. Run it under the machine lock:
 //   node scripts/with-lock.mjs uia-probe -- node scripts/uia-probe.mjs [--browsers edge,chrome] [--out report.json]
 // The probe logic lives in tests/integration/uia/probe.ts (shared with helper.real.test.ts) and is
 // bundled with esbuild to out/.uia-probe/ for this run.

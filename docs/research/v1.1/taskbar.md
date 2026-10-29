@@ -86,7 +86,7 @@ The test window used the app's exact overlay options: transparent, topmost at th
 - **Order at creation:** a new overlay lands above the taskbar (5 z-order steps above it with `NonRudeHWND` set).
 - **Order after a reveal:** among topmost windows, whichever was raised last is on top. Whether Explorer raises the taskbar again when it slides in is UNVERIFIED.
 - **No way to win a fight:** the docs only guarantee that topmost windows are above non-topmost ones. Raymond Chen says there is no "super topmost" and two programs fighting both lose (https://devblogs.microsoft.com/oldnewthing/20110310-00/?p=11253). He also notes `WS_EX_TOPMOST` "isn't good enough any more" (https://devblogs.microsoft.com/oldnewthing/20230502-00/?p=108131).
-- **What this means for the cat:** put the paws at y = `tray.top − 1` so the cat never overlaps the taskbar; then it looks right whichever window is on top. Never re-assert our z-order. A click-through overlay does not block the 2 px reveal strip, but only once `NonRudeHWND` is set.
+- **What this means for the cat:** put the feet at y = `tray.top − 1` so the body never overlaps the taskbar; then it looks right whichever window is on top (implementation note: paws and shadow still draw ≈ 4–10 DIP over it, and a click guard keeps the taskbar clickable). Don't fight for z-order (the app only restores its own topmost flag when lost). A click-through overlay does not block the 2 px reveal strip, but only once `NonRudeHWND` is set.
 
 ## 6. Pitfalls
 

@@ -13,8 +13,16 @@ export interface FakeHelperState {
   dpi?: string;
   /** hwnd -> strip object (sent as `strip`) or { error: code }. Unknown hwnds answer "not-found". */
   strips?: Record<string, unknown>;
-  /** Ops that are never answered (simulates a hung browser provider). */
+  /** Ops that are never answered (a ping that hangs: the helper itself is stuck). */
   hang?: string[];
+  /**
+   * Windows whose browser stopped responding: a strip request for one, or a watch request that
+   * subscribes one, never returns, and like the real single-threaded helper nothing after it is
+   * answered either (the process stays stuck until it is killed).
+   */
+  hangHwnds?: string[];
+  /** Like hangHwnds, but only subscribing the window hangs (its strip reads are answered). */
+  hangWatchHwnds?: string[];
   /** Exit with this code as soon as the process starts. */
   exitOnStart?: number | null;
   /** Exit with code 3 after this many requests (per process). */
@@ -68,9 +76,14 @@ const poll = setInterval(() => {
 
 let requests = 0;
 let buffer = '';
+/** Stuck inside a hung browser: every later request is ignored. */
+let stuck = false;
+/** Windows the running process has subscribed (watch replaces the set). */
+let watched = new Set<string>();
 
 function handle(line: string): void {
   log(line);
+  if (stuck) return;
   const s = readState();
   let req: { id?: number; op?: string; hwnd?: string; hwnds?: string[] };
   try {
@@ -86,6 +99,13 @@ function handle(line: string): void {
   requests++;
   if (typeof s.exitAfterRequests === 'number' && requests > s.exitAfterRequests) process.exit(3);
   if (req.op !== undefined && (s.hang ?? []).includes(req.op)) return;
+  const hung = new Set([...(s.hangHwnds ?? []), ...(req.op === 'watch' ? (s.hangWatchHwnds ?? []) : [])]);
+  const touches = req.op === 'strip' ? [req.hwnd ?? ''] : req.op === 'watch' ? (req.hwnds ?? []).filter((h) => !watched.has(h)) : [];
+  if (touches.some((h) => hung.has(h))) {
+    stuck = true;
+    return;
+  }
+  if (req.op === 'watch') watched = new Set(req.hwnds ?? []);
   if (s.garbageBefore) send('{"id":');
   if (typeof s.oversizeBefore === 'number') send(`{"id":${req.id ?? 0},"ok":true,"pad":"${'x'.repeat(s.oversizeBefore)}"}`);
   switch (req.op) {

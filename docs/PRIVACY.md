@@ -22,7 +22,7 @@ The clipboard is never read. `GetAsyncKeyState` is used only for the **left mous
 
 All in `%APPDATA%\Desktop Cat\` (removed by deleting that folder; kept on uninstall unless you delete it):
 
-- `settings.json` (+ `settings.json.bak`, the previous version) — your preferences, including the launch-at-sign-in state (preference, who decided it, and the program path last registered — which contains your Windows user folder; the diagnostics export does not include that path).
+- `settings.json` (+ `settings.json.bak`, the previous version) — your preferences, including the launch-at-sign-in state (preference, who decided it, and the program path last registered — which contains your Windows user folder; the diagnostics export replaces that path, and any other path inside your user profile, with `%USERPROFILE%`).
 - `cat-state.json` (+ `cat-state.json.bak`) — the cat's personality numbers (e.g. curiosity 0.62), mood numbers, counters (how often it was petted), learned favourite resting spots (display + horizontal position) and a short list of recent cat events ("nap", "pet"). **No window titles, app names, screenshots or text.**
 - Up to 3 `*.corrupt-<time>.json` copies per file, kept only if a file was unreadable, for inspection.
 - `secrets.json` — only if you enter an AI API key: the key encrypted with Windows DPAPI via Electron `safeStorage` (readable only by your Windows account). **No backup or quarantine copy of this file is ever kept; removing a key deletes it from disk.**

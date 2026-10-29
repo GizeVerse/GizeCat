@@ -64,6 +64,19 @@ function compilerArgs(fw, outFile, files) {
   ];
 }
 
+/** Rename, retried briefly while Windows (e.g. an on-access scan of the exe just run) still holds the file. */
+function renameRetrying(from, to) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (e) {
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(e?.code) || attempt >= 40) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
 /**
  * Builds the helper into `outDir`. Never throws for a missing compiler (returns skipped);
  * throws when compilation itself fails.
@@ -103,13 +116,21 @@ export function buildUiaHelper({ outDir = path.join(root, 'out', 'native'), log 
     const out = `${e.stdout ?? ''}${e.stderr ?? ''}`.trim();
     throw new Error(`build-uia-helper: csc failed\n${out}`);
   }
+  // Smoke check before the new exe replaces anything: it starts and speaks the protocol version (no
+  // UI Automation is loaded). A helper that fails it leaves neither an exe nor a stamp behind, so
+  // the next run compiles and checks again instead of reporting a broken exe as up to date.
+  try {
+    const version = execFileSync(tmpFile, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 }).trim();
+    if (JSON.parse(version)?.version !== 1) throw new Error(`unexpected protocol version ${version}`);
+  } catch (e) {
+    for (const f of [tmpFile, stampFile, outFile]) fs.rmSync(f, { force: true });
+    throw new Error(`build-uia-helper: the new helper failed its --version smoke check (${e instanceof Error ? e.message : String(e)})`);
+  }
+  // The stamp goes last: it may only ever describe an exe that passed the check.
+  fs.rmSync(stampFile, { force: true });
   fs.rmSync(outFile, { force: true });
-  fs.renameSync(tmpFile, outFile);
+  renameRetrying(tmpFile, outFile);
   fs.writeFileSync(stampFile, `${digest}\n`);
-  // Smoke check: the exe starts and speaks the protocol version (no UI Automation is loaded).
-  const version = execFileSync(outFile, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 }).trim();
-  const parsed = JSON.parse(version);
-  if (parsed.version !== 1) throw new Error(`build-uia-helper: unexpected protocol version ${version}`);
   const size = fs.statSync(outFile).size;
   log(`build-uia-helper: ${path.relative(root, outFile)} (${(size / 1024).toFixed(1)} KB) in ${Date.now() - t0} ms`);
   return { ok: true, skipped: false, rebuilt: true, path: outFile, reason: null, ms: Date.now() - t0 };

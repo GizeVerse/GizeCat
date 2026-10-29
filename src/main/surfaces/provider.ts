@@ -17,8 +17,9 @@
 //   rebuilds the surface from the live frame, however far a drag, snap or resize moved it since
 //   the last tick: the cat's reported spot (noteCat, in the frame of the previous tick) is
 //   carried with the window first. For the surface the cat is attached to, the sim reads:
-//   * null: the window is gone (closed, minimized, cloaked), maximized or fullscreen, or that
-//     kind of surface is off. The mover treats it as 'gone', a sudden loss.
+//   * null: the window is gone (closed, minimized, cloaked), maximized or fullscreen (it then
+//     lists nothing either, which the mover reads as 'gone', a sudden loss), or that kind of
+//     surface is switched off.
 //   * a surface that does not hold the cat's spot, or is not in getSurfaces(): the window is
 //     still there but the spot is covered by a window in front, cut away, no longer climbable,
 //     or the window turned private. Without an open part left it is the bare edge (never
@@ -461,17 +462,17 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
    * The cat's attachment on this window, carried onto its current frame. The host reports
    * where the cat was after the previous tick, in the frame the window had then; a drag, snap
    * or resize may have moved it by any amount since. The spot moves the way the sim carries
-   * the cat: along a ledge when the window translates (same width; a resize leaves it where
-   * it was), along a wall with the window's top edge. The sim carries the cat only when its
-   * part of the edge moved as a whole, so where it was is the fallback (a part bounded by a
-   * window that stayed put).
+   * the cat (both ends of its span moving together): along a ledge when the window moves
+   * sideways at the same width, along a wall when it moves up or down at the same height; a
+   * resize leaves it where it was. Where it was is also the fallback when the carried spot is
+   * on no open part (a part bounded by a window that stayed put does not carry the cat).
    */
   function attachmentFor(e: Entry): Attachment | null {
     const a = attach;
     if (!a || a.owner !== e.id) return null;
     const f = a.frame;
     const dx = f && e.rect.width === f.width ? e.rect.x - f.x : 0;
-    const dy = f ? e.rect.y - f.y : 0;
+    const dy = f && e.rect.height === f.height ? e.rect.y - f.y : 0;
     if (dx === 0 && dy === 0) return { surfaceId: a.surfaceId, x: a.x, y: a.y };
     return { surfaceId: a.surfaceId, x: a.x + dx, y: a.y + dy, reported: { x: a.x, y: a.y } };
   }

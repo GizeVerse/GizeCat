@@ -47,6 +47,14 @@ function liftedOntoTaskbar(d: Driver, top = SHOWN_TOP): void {
   expect(d.m.support).toEqual(surf(tb(top)));
 }
 
+/** Moves the taskbar through these tops, one step each. */
+function slide(d: Driver, tops: readonly number[], phase: 'entering' | 'leaving', vy: number): void {
+  for (const t of tops) {
+    d.extra = [tb(t, { phase, vy })];
+    d.step();
+  }
+}
+
 describe('Mover: taskbars', () => {
   it('a taskbar rising under a standing cat lifts it smoothly onto the taskbar (no snap, no fall)', () => {
     const d = make(AUTOHIDE);
@@ -153,19 +161,22 @@ describe('Mover: taskbars', () => {
     expect(d.log.some((r) => r.tookOff)).toBe(true);
   });
 
-  it('switching taskbars off while on one makes the cat leave it calmly', () => {
+  it('a shown taskbar is physics, not play: with every surface toggle off it still carries and lifts the cat', () => {
     const d = make(AUTOHIDE);
     liftedOntoTaskbar(d);
-    d.m.setConfig({ ...CFG, taskbars: false });
-    const r = d.step();
-    expect(r.supportLost).toEqual({ reason: 'disabled', surfaceId: taskbarId('tb'), surfaceKind: 'taskbar', fell: false });
+    d.m.setConfig({ ...CFG, perchOnWindows: false, walls: false, tabStrips: false });
+    d.log = [];
+    d.until(() => false, 1000);
+    expect(d.log.some((r) => r.supportLost !== null)).toBe(false);
+    expect(d.m.support).toEqual(surf(tb(SHOWN_TOP)));
+    // Slides away (the cat is set down on the floor) and back in: lifted again, never left inside it.
+    slide(d, [1165, 1180, 1195], 'leaving', 900);
+    d.extra = [];
     expect(d.until(() => d.m.y === 1200, 1000)).toBe(true);
-    expect(d.m.support.kind).toBe('floor');
-    // Never lifted again while off.
-    d.extra = [tb(1170, { phase: 'entering' })];
-    d.step();
-    expect(d.m.ledgeSurfaces).toEqual([]);
-    expect(d.m.support.kind).toBe('floor');
+    slide(d, [1190, 1175, 1160, SHOWN_TOP], 'entering', -900);
+    d.extra = [tb(SHOWN_TOP)];
+    expect(d.until(() => d.m.y === SHOWN_TOP - 1, 1000)).toBe(true);
+    expect(d.m.support).toEqual(surf(tb(SHOWN_TOP)));
   });
 });
 
@@ -406,6 +417,18 @@ describe('Mover: climbing window sides', () => {
     const r = d.step();
     expect(r.supportLost?.reason).toBe('disabled');
     expect(d.until((s) => s.landed !== null, 3000)).toBe(true);
+  });
+
+  it('switched off while the host already stopped serving the wall, it still lets go calmly (not as if the window vanished)', () => {
+    const d = climber();
+    d.goal({ x: 1000, y: 400, route: 'climb' });
+    expect(d.until((r) => r.climbStarted, 20_000)).toBe(true);
+    d.until(() => false, 1500);
+    // The provider applies the setting first: the side's live lookup is null from now on.
+    d.walls = false;
+    d.m.setConfig({ ...CFG, walls: false });
+    const r = d.step();
+    expect(r.supportLost).toEqual({ reason: 'disabled', surfaceId: sideId('w', 'left'), surfaceKind: 'windowSide', fell: true });
   });
 });
 

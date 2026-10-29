@@ -84,11 +84,11 @@ export type GoalStatus = 'none' | 'moving' | 'arrived' | 'unreachable';
 
 /**
  * Why the cat lost the surface it stood on or clung to:
- * gone       getSurface returned null and the window lists no surfaces any more (closed,
- *            minimized, maximized, surface removed);
+ * gone       getSurface returned null (window closed/minimized/maximized, surface removed);
  * retracted  a taskbar slid away under it, or its ledge sank below the floor;
- * occluded   its spot is covered while the window stays (a window in front), or the surface
- *            stayed out of the usable list or from under its paws (private, cut short) past the grace;
+ * occluded   its spot is covered while the window stays (a window in front: the live surface
+ *            no longer holds it), or the surface stayed out of the usable list or from under
+ *            its paws (private, cut short) past the grace;
  * headroom   the ledge moved too close to the top of the screen or off every display;
  * disabled   the user switched that kind of surface off.
  */
@@ -253,8 +253,6 @@ export class Mover {
   private cfg: MoverConfig;
   private geometry: WorldGeometry;
   private offLimits: ReadonlySet<string> = new Set<string>();
-  /** Owners (windows, taskbars) with any surface in this tick's list: a window that lists something is still there. */
-  private listedOwners: ReadonlySet<string> = new Set<string>();
 
   constructor(geometry: WorldGeometry, cfg: MoverConfig, start: { displayId: string | null; xFrac: number }) {
     this.cfg = { ...cfg };
@@ -463,18 +461,15 @@ export class Mover {
   sense(surfaces: readonly EnvSurface[]): void {
     const ledgesIn: LedgeSurface[] = [];
     const wallsIn: WallSurface[] = [];
-    const owners = new Set<string>();
     const walls = this.wallsEnabled();
     for (const s of surfaces) {
       if (!s || typeof s !== 'object') continue;
-      if (typeof s.ownerId === 'string' && s.ownerId.length > 0) owners.add(s.ownerId);
       if (s.orientation === 'ledge') {
         if (this.kindEnabled(s.kind)) ledgesIn.push(s);
       } else if (s.orientation === 'wall' && walls) {
         wallsIn.push(s);
       }
     }
-    this.listedOwners = owners;
     const keep = this.keptIds();
     let ledges = this.navWorld.ledgeSurfaces(ledgesIn, keep.ledges);
     let wallTracks = this.navWorld.wallTracks(wallsIn, keep.walls);
@@ -1104,15 +1099,6 @@ export class Mover {
     };
   }
 
-  /**
-   * Why a window surface whose live lookup came back null is lost: the window still lists
-   * surfaces, so it is there and only the cat's spot is covered (a window in front), or it
-   * lists nothing any more (closed, minimized, maximized).
-   */
-  private lostReason(ownerId: string): SupportLossReason {
-    return ownerId.length > 0 && this.listedOwners.has(ownerId) ? 'occluded' : 'gone';
-  }
-
   /** x lies on a side edge of a work area on the row above y: an open span ending there is clipped there, not at its window's edge. */
   private atWorkAreaSide(x: number, y: number): boolean {
     for (const d of this.fullWorld.displays) {
@@ -1144,10 +1130,11 @@ export class Mover {
   private ride(input: MoverInput, out: MoverStep): boolean {
     const a = this.attach as Attachment;
     const live = this.liveLedge(input, a.surfaceId);
-    if (!live) return this.loseSupport(a.surfaceKind === 'taskbar' ? 'retracted' : this.lostReason(a.ownerId), input, out);
+    // Not served any more: gone, unless it is a taskbar sliding away or a kind the user switched off.
+    if (!live) return this.loseSupport(a.surfaceKind === 'taskbar' ? 'retracted' : a.disabled ? 'disabled' : 'gone', input, out);
     // The ledge's height is the window's top edge; how far it moved sideways only shows in
     // the ends of its open span (see spanShift).
-    const shift = spanShift([a.x0, a.x1], [live.x0, live.x1], (x) => this.atWorkAreaSide(x, live.y), live.vx, input.dtMs, 2 * this.scale);
+    const shift = spanShift([a.x0, a.x1], [live.x0, live.x1], (x) => this.atWorkAreaSide(x, live.y), live.vx, input.dtMs, 2 * this.scale, live.y !== a.y);
     const moved = shift !== 0 || live.y !== a.y;
     this.x += shift;
     a.x0 = live.x0;
@@ -1324,20 +1311,24 @@ export class Mover {
       this.settleNow();
       return;
     }
+    // Switched off by the user: it lets go at once (calmly), whether or not the host still serves the wall.
+    if (!this.wallsEnabled()) {
+      this.letGoOfWall(input, out, 'disabled');
+      return;
+    }
     const live = this.liveWall(input, c.wall.key);
     const track = live ? this.navWorld.wallTrack(live) : null;
     if (!live || !track) {
-      // Gone (closed, minimized): a sudden loss, unless the window is still there with the
-      // cat's spot covered. Still there but no longer climbable (moved against the screen
-      // edge, cut too short): the cat simply lets go.
-      this.letGoOfWall(input, out, live ? 'occluded' : this.lostReason(c.wall.ownerId));
+      // Gone (closed, minimized): a sudden loss. Still there but no longer climbable (moved
+      // against the screen edge, cut too short): the cat simply lets go.
+      this.letGoOfWall(input, out, live ? 'occluded' : 'gone');
       return;
     }
     // Ride the window: the wall line is its side; how far it moved up or down only shows in
     // the ends of the open span (a window in front covering part of the side moves nothing).
     const dx = track.x - c.wall.x;
     const column = track.side === 'left' ? track.x - 1 : track.x + 1;
-    const dy = spanShift([c.wall.y0, c.wall.y1], [track.y0, track.y1], (y) => this.atWorkAreaRow(y, column), live.vy, input.dtMs, 2 * track.scale);
+    const dy = spanShift([c.wall.y0, c.wall.y1], [track.y0, track.y1], (y) => this.atWorkAreaRow(y, column), live.vy, input.dtMs, 2 * track.scale, dx !== 0);
     if (dx !== 0 || dy !== 0) {
       this.x += dx;
       this.y += dy;
@@ -1347,7 +1338,8 @@ export class Mover {
     }
     c.wall = track;
     // Clinging, the grip must stay on the stretch of the side it can reach: a window in front
-    // covering that part leaves it holding still until the grace runs out, then it lets go.
+    // covering that part makes it climb back onto the open stretch (below), and let go calmly
+    // when it cannot get there within the grace.
     const tol = this.bodyWidth * 0.125;
     const holds = c.phase !== 'climb' || (this.y >= track.yTop - tol && this.y <= track.yBottom + tol);
     if (holds && this.walls.some((w) => w.key === track.key)) {
@@ -1356,8 +1348,8 @@ export class Mover {
       c.missingSince ??= input.now;
       const moving = (input.movingWindowIds ?? NO_MOVING).has(track.ownerId);
       const grace = dx !== 0 || dy !== 0 || moving ? MOVEMENT.perchMovingGraceMs : MOVEMENT.perchGraceMs;
-      if (!this.wallsEnabled() || input.now - c.missingSince > grace) {
-        this.letGoOfWall(input, out, this.wallsEnabled() ? 'occluded' : 'disabled');
+      if (input.now - c.missingSince > grace) {
+        this.letGoOfWall(input, out, 'occluded');
         return;
       }
     }
@@ -1389,8 +1381,13 @@ export class Mover {
       else if (this.goal.y < this.y - 1 && c.dir > 0 && c.topKey && this.ledgeById(c.topKey)) c.dir = -1;
     }
     this.x = track.x;
-    if (!holds) {
-      this.vy = 0;
+    const open = clamp(this.y, track.yTop, track.yBottom);
+    if (open !== this.y) {
+      // Off the open stretch (its end moved past the grip): climb onto it, never jump there.
+      const up = open < this.y;
+      const speed = (up ? MOVEMENT.climbUpDip : MOVEMENT.climbDownDip) * this.cfg.movementSpeed * this.scale;
+      this.vy = up ? -speed : speed;
+      this.y = up ? Math.max(open, this.y - speed * dt) : Math.min(open, this.y + speed * dt);
       return;
     }
     if (c.dir < 0) {
@@ -1445,8 +1442,8 @@ export class Mover {
     const live = top ? this.liveLedge(input, top.key) : null;
     out.climbEnded = true;
     if (!top || !live) {
-      // The ledge dropped out of the list (covered) or its window is gone.
-      this.letGoOfWall(input, out, top ? this.lostReason(c.wall.ownerId) : 'occluded');
+      // The ledge dropped out of the list (covered, switched off) or its window is gone.
+      this.letGoOfWall(input, out, top ? 'gone' : 'occluded');
       return;
     }
     this.climbing = null;
@@ -1907,25 +1904,34 @@ function emptyStep(): MoverStep {
 /**
  * How far a window moved along an edge this tick, judged from the ends of the open span of
  * that edge the cat is on (the provider reports open spans, not the window's frame). Both
- * ends moving together is the window moving; one end moving alone is a window in front
- * covering or uncovering part of the edge, or a resize: nothing moves. An end clipped at the
- * edge of a work area (`pinned`) stays put while the window slides under it, so then the
- * other end alone counts, if the window's reported velocity `v` (px/s) says it moves that way
- * and that fast (within 2.5x over `dtMs`, plus `slack` px): an end that jumps further or the
- * other way is a window in front.
+ * ends moving together is the window moving, as long as the span still overlaps where it
+ * was or the motion is borne out: by the window's reported velocity `v` (px/s; within 2.5x
+ * over `dtMs`, plus `slack` px), or by the frame having moved across the edge (`frameMoved`:
+ * the top edge's height, a side's x, which occlusion never changes). Otherwise a span as long
+ * as the old one somewhere else is another part of the edge (the cat's part was covered), and
+ * nothing moved. One end moving alone is a window in front covering or uncovering part of the
+ * edge, or a resize: nothing moves. An end clipped at the edge of a work area (`pinned`) stays
+ * put while the window slides under it, so then the other end alone counts if the motion is
+ * borne out: an end that jumps further or the other way is a window in front.
  */
-function spanShift(prev: readonly [number, number], next: readonly [number, number], pinned: (v: number) => boolean, v: number, dtMs: number, slack: number): number {
+function spanShift(prev: readonly [number, number], next: readonly [number, number], pinned: (v: number) => boolean, v: number, dtMs: number, slack: number, frameMoved: boolean): number {
   const d0 = next[0] - prev[0];
   const d1 = next[1] - prev[1];
   if (d0 === 0 && d1 === 0) return 0;
-  const free0 = !pinned(prev[0]) && !pinned(next[0]);
-  const free1 = !pinned(prev[1]) && !pinned(next[1]);
-  if (free0 && free1) return Math.abs(d0 - d1) <= 1.5 ? (d0 + d1) / 2 : 0;
-  if (free0 === free1) return 0;
-  const d = free0 ? d0 : d1;
   const vel = Number.isFinite(v) ? v : 0;
   const reach = (2.5 * Math.abs(vel) * Math.max(0, dtMs)) / 1000 + slack;
-  return Math.sign(d) === Math.sign(vel) && Math.abs(d) <= reach ? d : 0;
+  const borneOut = (d: number): boolean => frameMoved || (Math.sign(d) === Math.sign(vel) && Math.abs(d) <= reach);
+  const free0 = !pinned(prev[0]) && !pinned(next[0]);
+  const free1 = !pinned(prev[1]) && !pinned(next[1]);
+  if (free0 && free1) {
+    if (Math.abs(d0 - d1) > 1.5) return 0;
+    const d = (d0 + d1) / 2;
+    const overlaps = next[0] < prev[1] && prev[0] < next[1];
+    return overlaps || borneOut(d) ? d : 0;
+  }
+  if (free0 === free1) return 0;
+  const d = free0 ? d0 : d1;
+  return borneOut(d) ? d : 0;
 }
 
 function approach(v: number, target: number, maxDelta: number): number {

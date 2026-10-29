@@ -79,6 +79,25 @@ describe('UiaHelperClient', () => {
     expect(r.client.running).toBe(true);
   });
 
+  it('names the requests that timed out, in the order they were sent (the first is the one the helper is stuck in)', async () => {
+    const r = rig({ strips: { [H]: wireStrip({ browser: 'edge' }) }, hangHwnds: ['777'] });
+    r.client.start();
+    await r.client.request({ op: 'ping' }, r.clock.now());
+    const stuck = r.client.request({ op: 'strip', hwnd: '777' }, r.clock.now());
+    const behind = r.client.request({ op: 'strip', hwnd: H }, r.clock.advance(100));
+    const later = r.client.request({ op: 'watch', hwnds: [H] }, r.clock.advance(100));
+    for (const p of [stuck, behind, later]) p.catch(() => undefined);
+    const timedOut: Parameters<UiaHelperClient['request']>[0][] = [];
+    r.clock.advance(1400);
+    expect(r.client.checkTimeouts(r.clock.now(), timedOut)).toBe(2);
+    expect(timedOut).toEqual([
+      { op: 'strip', hwnd: '777' },
+      { op: 'strip', hwnd: H },
+    ]);
+    await expect(behind).rejects.toMatchObject({ code: 'timeout' });
+    expect(r.client.pendingCount).toBe(1);
+  });
+
   it('treats a long gap between checks as a host stall (sleep/resume), not a helper hang', async () => {
     const r = rig({ hang: ['strip'] });
     r.client.start();

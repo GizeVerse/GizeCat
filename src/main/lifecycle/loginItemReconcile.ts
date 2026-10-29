@@ -227,6 +227,17 @@ function ownOptOutRecord(li: LoginItemSettings, state: WindowsLoginState): boole
 }
 
 /**
+ * The user switched on in the app over that opt-out record, but the switch was only saved
+ * (registry unreadable, write gate closed, the write did not land): no registered path, and the
+ * app's own record still in place. Only that sequence leaves an on by the user without a
+ * registered path next to Electron's disabled record (a re-added disabled entry records its path),
+ * so the record is not a disable made in Startup apps and the on is applied at the next start.
+ */
+function pendingUserOn(li: LoginItemSettings, state: WindowsLoginState): boolean {
+  return li.preference === 'enabled' && li.decidedBy === 'user' && li.registeredPath === null && state.approved === 'disabled' && state.disabledByApp;
+}
+
+/**
  * Rule 6: after an opt-out the entry is approved again outside the app. A Windows disable undone
  * in Startup apps, an entry removed outside the app and added back, or the in-app opt-out's
  * disabled entry switched on in Startup apps (which writes an explicit "enabled" value).
@@ -246,7 +257,8 @@ function adopted(li: LoginItemSettings): LoginItemSettings {
 /**
  * What the app does at boot. Rules in priority order (startup.md §4):
  * 1. Our entry is disabled in Task Manager → disabled/windows; never written. The disabled
- *    entry the in-app opt-out leaves keeps disabled/user.
+ *    entry the in-app opt-out leaves keeps disabled/user, and an in-app on saved over it
+ *    without taking effect is applied (registered), as rule 5 does without an entry.
  * 2. Only a disabled StartupApproved value is left (orphan) → disabled/external.
  * 3. An undecided v1 `false` with logged evidence of a v1 opt-out → disabled.
  * 4. On (unset or enabled) with an approved entry: confirm it, or repair a stale path or a
@@ -279,7 +291,15 @@ export function reconcile(state: WindowsLoginState, li: LoginItemSettings, f: Re
   // 1 and 2: whatever Windows' Startup apps disabled stays disabled and is never written over.
   if (run !== null && state.approved === 'disabled') {
     if (ownOptOutRecord(li, state)) return result(li, li, 'off', null, f.uninstallMarker);
-    const next = disabled(li, 'windows', 'windows');
+    if (pendingUserOn(li, state)) {
+      // The app's own record, not Windows': the user's saved on is applied now (rule 5's register).
+      if (!f.settingsTrusted) return result(li, li, 'untrusted-settings');
+      if (f.launchedAtLogin) return result(li, li, 'register-skipped-launched-at-login');
+      return result(li, { ...li, registeredPath: f.execPath }, 'register', REGISTER, f.uninstallMarker, li);
+    }
+    // Our entry is recorded as registered (as a confirmed one is), so an on the user saves while
+    // Windows keeps it disabled is never mistaken for pendingUserOn.
+    const next = disabled(isOurEntry(run, f) ? { ...li, registeredPath: f.execPath } : li, 'windows', 'windows');
     return result(li, next, 'windows-disabled', null, f.uninstallMarker);
   }
   if (run === null && state.approved === 'disabled') {
@@ -391,9 +411,11 @@ export function applyUserChoice(on: boolean, state: WindowsLoginState, li: Login
   if (!f.writable) return choice(unregistered, 'not-writable');
   if (!state.readable) return choice(unregistered, 'registry-unreadable');
   if (state.approved === 'disabled') {
-    // The disabled entry the in-app opt-out left: switching on undoes it (enabled:true deletes the value).
-    if (ownOptOutRecord(li, state)) return choice(registered, 'registered', REGISTER, unregistered);
-    if (state.run !== null) return choice(next, 'windows-disabled');
+    // The disabled entry the in-app opt-out left (also with an earlier on not applied yet):
+    // switching on undoes it (enabled:true deletes the value).
+    if (ownOptOutRecord(li, state) || pendingUserOn(li, state)) return choice(registered, 'registered', REGISTER, unregistered);
+    // Saved; Windows keeps it off. Our entry is recorded as registered (see pendingUserOn).
+    if (state.run !== null) return choice(isOurEntry(state.run, f) ? registered : next, 'windows-disabled');
     // Task Manager lists only entries that have a Run value; without one this disable could
     // never be undone there. Add the entry back still disabled (03 + zeros): Windows keeps it off.
     return choice(registered, 'windows-disabled-restored', DISABLED_ENTRY, unregistered);
@@ -439,6 +461,14 @@ export function liveLoginItem(li: LoginItemSettings, state: WindowsLoginState, w
   return li;
 }
 
+/**
+ * When work a sign-in boot had to skip is done: at any start by the user, also one while the app
+ * already runs (the second instance reconciles, LoginItemService.reconcileOnUserLaunch), so the
+ * user never has to quit first.
+ */
+const AT_NEXT_USER_START = 'the next time you open Desktop Cat from the Start menu or a shortcut, even while it is running';
+const REGISTERS_NEXT_START = 'Desktop Cat registers itself the next time it starts.';
+
 export function loginItemStatus(stored: LoginItemSettings, state: WindowsLoginState, f: LoginTarget & { writable: boolean; blockedBy?: readonly WriteGateBlock[] }): LoginItemStatus {
   const li = liveLoginItem(stored, state, f.writable);
   const enabled = effectiveOn(li);
@@ -453,10 +483,11 @@ export function loginItemStatus(stored: LoginItemSettings, state: WindowsLoginSt
         ? 'Not available in this build (development or portable). Windows starts another copy of Desktop Cat (the installed app) at sign-in.'
         : 'Not available in this build (development or portable). The installed app manages Start with Windows.');
   } else if (!state.readable) reason = 'Desktop Cat could not read its Windows startup entry.';
-  else if (enabled && run !== null && state.approved === 'disabled') reason = 'Disabled in Windows Startup apps. To turn it back on, open Task Manager › Startup apps and enable Desktop Cat.';
-  else if (enabled && !active && run !== null) reason = 'The Windows startup entry points to another location. Desktop Cat repairs it the next time you start it yourself.';
-  else if (enabled && !active) reason = li.disabledBy === null && li.registeredPath === null ? 'Desktop Cat registers itself the next time it starts.' : 'Windows has no startup entry for Desktop Cat.';
-  else if (!enabled && run !== null && state.approved !== 'disabled') reason = 'Windows still starts Desktop Cat when you sign in. Desktop Cat turns that off the next time you open it yourself.';
+  else if (enabled && run !== null && state.approved === 'disabled')
+    reason = pendingUserOn(li, state) ? REGISTERS_NEXT_START : 'Disabled in Windows Startup apps. To turn it back on, open Task Manager › Startup apps and enable Desktop Cat.';
+  else if (enabled && !active && run !== null) reason = `The Windows startup entry points to another location. Desktop Cat repairs it ${AT_NEXT_USER_START}.`;
+  else if (enabled && !active) reason = li.disabledBy === null && li.registeredPath === null ? REGISTERS_NEXT_START : 'Windows has no startup entry for Desktop Cat.';
+  else if (!enabled && run !== null && state.approved !== 'disabled') reason = `Windows still starts Desktop Cat when you sign in. Desktop Cat turns that off ${AT_NEXT_USER_START}.`;
   return {
     enabled,
     preference: li.preference,

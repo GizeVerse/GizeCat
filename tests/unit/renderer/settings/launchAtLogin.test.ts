@@ -42,6 +42,18 @@ describe('General page: Start with Windows status line', () => {
     expect(v.text).toMatch(/never overrides/);
   });
 
+  it('an entry approved again in Startup apps while the app runs reads as on, as Diagnostics says (startup#0)', () => {
+    // What main reports, live from the registry, for an off from the Windows side whose entry is
+    // approved again (02 00…) before the next start (loginItemService.test.ts, 'status while the app runs').
+    const live = status({ enabled: true, preference: 'enabled', disabledBy: null, active: true });
+    expect(launchStatusView(live)).toEqual({ text: L.active, tone: 'ok' });
+    expect(loginItemLabel(live)).toBe(D.active);
+    // A recorded Windows disable never outranks an entry Windows does start.
+    const v = launchStatusView(status({ enabled: false, preference: 'disabled', disabledBy: 'windows', active: true, reason: 'Windows still starts Desktop Cat when you sign in.' }));
+    expect(v.text).not.toBe(L.windowsDisabled);
+    expect(v.text).not.toMatch(/Task Manager/);
+  });
+
   it('switched on in the app while Windows keeps it disabled: main’s explanation is shown', () => {
     const reason = 'Disabled in Windows Startup apps. To turn it back on, open Task Manager › Startup apps and enable Desktop Cat.';
     expect(launchStatusView(status({ preference: 'enabled', active: false, reason }))).toEqual({ text: reason, tone: 'warn' });

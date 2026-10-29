@@ -518,6 +518,20 @@ describe('getSurface (live re-read)', () => {
       expect(ledge(s.tick(), 'windowTop:101')).toMatchObject({ x0: 1008, x1: 1792 });
     });
 
+    it('re-reads the window the cat is on with every list, so the list agrees with the live geometry it rides on', () => {
+      const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500))).add(win('102', rect(300, 1000, 800, 100)), false);
+      const s = setup({ api });
+      s.tick();
+      hostTick(s, { x: 700, y: 400, surfaceId: 'windowTop:101' });
+      // Both snap 400 px right; a snap announces itself only after the tracker's coalescing.
+      api.update('101', { rect: rect(700, 400, 800, 500) });
+      api.update('102', { rect: rect(700, 1000, 800, 100) });
+      const list = s.tick();
+      expect(ledge(list, 'windowTop:101')).toMatchObject({ x0: 708, x1: 1492 });
+      // A window the cat is not on waits for its events (or the next snapshot).
+      expect(ledge(list, 'windowTop:102')).toMatchObject({ x0: 308, x1: 1092 });
+    });
+
     it('picks the part the cat was carried onto when the edge moved as a whole', () => {
       const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
       // A palette above 101 splits its top: [308, 650) and [700, 1092). It moves with 101.
@@ -578,6 +592,22 @@ describe('getSurface (live re-read)', () => {
       s.provider.noteCat({ x: 1100, y: 800, surfaceId: 'windowSide:101:right' });
       // Dragged 240 px further up: the whole side is now above the tool window.
       expect(s.provider.getSurface('windowSide:101:right', s.now() + 10)).toMatchObject({ y0: 108, y1: 592 });
+    });
+
+    it('a window resized from its top edge leaves a climbing cat where it was (the sim does not carry it)', () => {
+      const api = new SurfaceApi().add(win('101', rect(300, 400, 800, 500)));
+      api.extras = [{ id: 'tool', rect: rect(1090, 600, 100, 100) }];
+      const s = setup({ api });
+      s.tick();
+      hostTick(s, { x: 1100, y: 720, surfaceId: 'windowSide:101:right' });
+      expect(wall(s.tick(), 'windowSide:101:right')).toMatchObject({ y0: 700, y1: 892 });
+      api.fire('moveStart', '101');
+      hostTick(s, { x: 1100, y: 720, surfaceId: 'windowSide:101:right' });
+      // The top edge is dragged 100 px up; the bottom, the lower part and the cat on it stay.
+      // (Moved with the top edge, the spot would be within reach of the upper part, [308, 600).)
+      api.update('101', { rect: rect(300, 300, 800, 600) });
+      expect(s.provider.getSurface('windowSide:101:right', s.now() + 5)).toMatchObject({ x: 1100, y0: 700, y1: 892 });
+      expect(wall(s.tick(), 'windowSide:101:right')).toMatchObject({ y0: 700, y1: 892 });
     });
   });
 

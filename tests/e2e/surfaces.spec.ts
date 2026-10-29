@@ -17,6 +17,7 @@ import type { Rect } from '../../src/shared/geometry';
 import type { SimOutput } from '../../src/shared/sim';
 import type { LedgeSurface, Surface, WallSurface } from '../../src/shared/surfaces';
 import { electronBinary, expect, hook, launchApp, quitApp, readLogLines, ROOT, test, waitForCat } from './fixtures';
+import { win32Probe, WS_EX_TOPMOST } from './win32Probe';
 
 const LEDGE_ID = 'taskbar:e2e';
 /** How far above the floor the fake taskbar rises (px; below the cat's lift limit at any scale). */
@@ -213,7 +214,25 @@ test.describe('environment surfaces (real app)', () => {
       const f = r.frame;
       if (f === null) throw new Error('probe window has no DWM frame');
       const topId = `windowTop:${r.hwnd}`;
-      await expect.poll(async () => (await surfacesById(app)).has(topId), { timeout: 10_000 }).toBe(true);
+      // Precondition: the probe must really be the topmost window at its own top edge. A fullscreen or
+      // full-monitor window the user has in front can stop Windows from making it topmost; then the
+      // provider is right not to offer a covered edge, and the scenario cannot run on this desktop.
+      {
+        const w32 = win32Probe();
+        await new Promise((res) => setTimeout(res, 500));
+        const coveredBy = w32.rootWindowAt(Math.round(f.x + f.width / 2), Math.round(f.y + 4));
+        const probeTopmost = (w32.exStyle(r.hwnd) & WS_EX_TOPMOST) !== 0;
+        test.skip(!probeTopmost || coveredBy !== r.hwnd, `environment: the probe window is ${probeTopmost ? 'covered' : 'not topmost'} (another window is in front, e.g. a fullscreen app)`);
+      }
+      try {
+        await expect.poll(async () => (await surfacesById(app)).has(topId), { timeout: 10_000 }).toBe(true);
+      } catch (err) {
+        // Attach what the app saw, so an environment-dependent failure can be told from a regression.
+        const seen = [...(await surfacesById(app)).values()].map((s) => `${s.kind}:${s.ownerId}`);
+        const report = await hook(app, 'getDiagnosticsReport');
+        const services = (report['services'] ?? {}) as Record<string, unknown>;
+        throw new Error(`probe ${r.hwnd}; surfaces seen: ${JSON.stringify(seen)}; provider: ${JSON.stringify(services['surfaces']).slice(0, 600)}`, { cause: err });
+      }
       const inset = Math.round(defaultCornerRadiusDip(os.release()) * r.scale);
       const byId = await surfacesById(app);
       const top = byId.get(topId) as LedgeSurface;

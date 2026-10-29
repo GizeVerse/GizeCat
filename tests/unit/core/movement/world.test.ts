@@ -116,6 +116,20 @@ describe('WorldModel', () => {
     expect(w.wallTrack(wall('d', 'left', 600, 300, 2000))?.yBottom).toBe(1040);
   });
 
+  it('caps ledges and walls per kind in list order, but always keeps the ids the cat is on or heading for', () => {
+    const w = new WorldModel(SINGLE, 1, true);
+    const ledges = Array.from({ length: 8 }, (_, i) => ledge(topId(`w${i}`), 'windowTop', `w${i}`, 300 + i * 50, 100 + i * 10, 500 + i * 10));
+    expect(w.ledgeSurfaces(ledges, new Set(), 3).map((s) => s.key)).toEqual([topId('w0'), topId('w1'), topId('w2')]);
+    // The kept one (far down the list) makes the cut; the others fill up the rest, first come first served.
+    const kept = w.ledgeSurfaces(ledges, new Set([topId('w6')]), 3);
+    expect(kept.map((s) => s.key)).toEqual([topId('w0'), topId('w1'), topId('w6')]);
+    expect(kept).toHaveLength(3);
+    const walls = Array.from({ length: 6 }, (_, i) => wall(`w${i}`, 'left', 300 + i * 200, 300, 900));
+    expect(w.wallTracks(walls, new Set([sideId('w5', 'left')]), 2).map((t) => t.key)).toEqual([sideId('w0', 'left'), sideId('w5', 'left')]);
+    // Duplicates keep their first entry, also for a kept id.
+    expect(w.ledgeSurfaces([ledges[2]!, { ...ledges[2]!, y: 800 }], new Set([topId('w2')]), 3).map((s) => s.y)).toEqual([400]);
+  });
+
   it('falls back to a default display for an empty world', () => {
     const w = new WorldModel(world(), 1, true);
     expect(w.usedFallback).toBe(true);

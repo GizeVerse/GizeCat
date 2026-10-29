@@ -2,6 +2,12 @@
 // real DesktopCatUia.exe, real UiaHelperClient and TabStripService, real Win32 describeWindow.
 // Used by helper.real.test.ts (DESKTOP_CAT_REAL_BROWSER=1) and scripts/uia-probe.mjs.
 // Never touches the user's own windows (see realBrowser.ts) and never sends input.
+//
+// Web-content accessibility guard (activation.ts): the active tab is a heavy page, every process
+// of the instance is sampled before any UI Automation query and after the reads and the watch, and
+// a process that grew past the threshold fails the probe. A positive control on a second throwaway
+// instance makes the naive query the helper must never make; that one has to trip the same check,
+// or the probe fails because the guard could not have seen an activation.
 import type { ChildProcess } from 'node:child_process';
 import type { Logger } from '../../../src/main/contracts';
 import { createTabStripService, catExtentPx } from '../../../src/main/uia';
@@ -11,18 +17,22 @@ import { createWin32Api } from '../../../src/main/win32';
 import { defaultSettings } from '../../../src/shared/settings';
 import type { SimEvent } from '../../../src/shared/sim';
 import type { LedgeSurface } from '../../../src/shared/surfaces';
+import { checkActivation, heavyPageUrl, settled, ACTIVATION_GROWTH_MB, type ActivationCheck, type ProcSample } from './activation';
 import {
   closeBrowser,
   enablePerMonitorDpiAwareness,
   fileVersion,
   findBrowser,
+  instancePids,
   launchBrowser,
+  naiveTabItemQuery,
   openTabs,
   processStats,
   showWindow,
   SW_MAXIMIZE,
   SW_RESTORE,
   waitForBrowserWindow,
+  type BrowserInstance,
   type BrowserKind,
   type CloseReport,
   type ProcessStats,
@@ -47,10 +57,60 @@ export interface BrowserProbeResult {
   /** The service's helper (after the run) and the direct client's helper. */
   helperProcess: ProcessStats | null;
   directHelperProcess: ProcessStats | null;
-  /** Browser process private memory: before any UIA query, after the UIA reads (before the extra tab), at the end. */
-  browserPrivateMB: { before: number; afterUiaReads: number | null; after: number } | null;
+  /** Web-content accessibility guard and its positive control (activation.ts). */
+  activation: {
+    thresholdMB: number;
+    /** The heavy page (first tab) was the active one. */
+    heavyTabSelected: boolean | null;
+    /** Our instance before any UIA query vs after the strip reads, the service listing and the watch. */
+    uia: ActivationSummary | null;
+    /** A second instance before vs after the naive descendant query (must be detected). */
+    control: (ActivationSummary & { tabItems: number[] | null; queryMs: number | null }) | null;
+  };
   stdoutStrings: string[];
   close: CloseReport | null;
+  controlClose: CloseReport | null;
+}
+
+export interface ActivationSummary {
+  processes: number;
+  maxGrowthMB: number;
+  /** The process that grew most is the browser process (otherwise a renderer, GPU or utility process). */
+  growthInBrowserProcess: boolean;
+  /** Largest CPU time one process spent between the samples. */
+  maxCpuMs: number;
+  detected: boolean;
+}
+
+/** Tabs of every probe instance: the heavy page (active, first) and two blank ones. */
+const probeUrls = (): string[] => [heavyPageUrl(), 'about:blank', 'about:blank'];
+const PROBE_WINDOW = { x: 100, y: 100, width: 1100, height: 700 };
+
+function summarize(c: ActivationCheck, browserPid: number): ActivationSummary {
+  return {
+    processes: c.deltas.length,
+    maxGrowthMB: c.maxGrowthMB,
+    growthInBrowserProcess: c.pid === browserPid,
+    maxCpuMs: Math.max(0, ...c.deltas.map((d) => d.cpuMs)),
+    detected: c.detected,
+  };
+}
+
+const sampleOf = async (pids: Iterable<number>): Promise<ProcSample[]> => processStats([...pids]);
+
+/**
+ * Every process of the instance once it is idle: two samples 1 s apart with the same processes and
+ * no process more than 2 MB apart (the heavy page has been built), at most ~20 tries.
+ */
+async function settledSample(inst: BrowserInstance): Promise<ProcSample[]> {
+  let prev = await sampleOf(await instancePids(inst));
+  for (let i = 0; i < 20; i++) {
+    await sleep(1000);
+    const next = await sampleOf(await instancePids(inst));
+    if (settled(prev, next, 2)) return next;
+    prev = next;
+  }
+  return prev;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -85,6 +145,7 @@ const PROTOCOL_WORDS = new Set([
   'rejected',
   'hidden',
   'minimized',
+  'hung',
   'not-found',
   'unavailable',
   'internal',
@@ -119,9 +180,10 @@ export async function probeBrowser(kind: BrowserKind, helperPath: string, logger
     maximized: null,
     helperProcess: null,
     directHelperProcess: null,
-    browserPrivateMB: null,
+    activation: { thresholdMB: ACTIVATION_GROWTH_MB, heavyTabSelected: null, uia: null, control: null },
     stdoutStrings: [],
     close: null,
+    controlClose: null,
   };
   const fail = (msg: string): void => {
     r.failures.push(msg);
@@ -156,14 +218,15 @@ export async function probeBrowser(kind: BrowserKind, helperPath: string, logger
   };
 
   const t0 = Date.now();
-  const inst = launchBrowser(kind, exe, { x: 100, y: 100, width: 1100, height: 700, urls: ['about:blank', 'about:blank', 'about:blank'] });
+  const inst = launchBrowser(kind, exe, { ...PROBE_WINDOW, urls: probeUrls() });
   let client: UiaHelperClient | null = null;
   let svc: ReturnType<typeof createTabStripService> | null = null;
   try {
     const win = await waitForBrowserWindow(inst);
     r.timeToWindowMs = Date.now() - t0;
     const hwnd = win.hwnd;
-    const browserBefore = (await processStats([win.pid]))[0];
+    // Before any UI Automation query: every process of the instance, idle.
+    const before = await settledSample(inst);
 
     // ---------------------------------------------------------------- direct client
     client = new UiaHelperClient({
@@ -228,6 +291,8 @@ export async function probeBrowser(kind: BrowserKind, helperPath: string, logger
       if (t.y !== f.y || t.x < f.x || t.x + t.w > f.x + f.w || t.h < 20 || t.h > 120) fail(`implausible tab rect ${JSON.stringify(t)} for frame ${JSON.stringify(f)}`);
     }
     if (sel < 0) fail('no selected tab reported');
+    r.activation.heavyTabSelected = sel === 0;
+    if (sel !== 0) r.notes.push(`tab ${sel} is active, not the heavy page (the positive control shows whether the check still sees an activation)`);
     if (strip.captions === null || strip.captions.x < f.x + f.w / 2) fail('caption buttons not found on the right');
     if (strip.leftButton === null) fail('tab actions / tab search button not found');
     if (strip.newTab === null) fail('new-tab button not found');
@@ -282,7 +347,15 @@ export async function probeBrowser(kind: BrowserKind, helperPath: string, logger
     if (strip.leftButton && s.x0 - half < strip.leftButton.x + strip.leftButton.w) fail('segment reaches the tab actions/search button');
     if (s.x1 - s.x0 < 200) fail(`segment implausibly short (${s.x1 - s.x0})`);
 
-    const browserMid = (await processStats([win.pid]))[0];
+    // After the reads and the event subscription (before the extra tab, which adds a process and
+    // grows the browser): the same processes again, once the browser had time to build a tree.
+    if (!(await until(() => service.debugInfo().watched > 0, 3000))) r.notes.push('the service did not subscribe to events within 3 s');
+    await sleep(2000);
+    const uiaCheck = checkActivation(before, await sampleOf(before.map((p) => p.pid)));
+    r.activation.uia = summarize(uiaCheck, win.pid);
+    if (uiaCheck.detected) {
+      fail(`web-content accessibility switched on? process ${uiaCheck.pid}${uiaCheck.pid === win.pid ? ' (browser)' : ''} grew by ${uiaCheck.maxGrowthMB} MB during the UIA reads (threshold ${uiaCheck.thresholdMB} MB)`);
+    }
 
     // ---------------------------------------------------------------- one more tab
     service.drainEvents();
@@ -335,13 +408,6 @@ export async function probeBrowser(kind: BrowserKind, helperPath: string, logger
     const helperStats = await processStats([helperPid ?? 0, client.pid ?? 0]);
     r.helperProcess = helperStats.find((p) => p.pid === helperPid) ?? null;
     r.directHelperProcess = helperStats.find((p) => p.pid === client?.pid) ?? null;
-    const browserAfter = (await processStats([win.pid]))[0];
-    if (browserBefore && browserAfter) {
-      r.browserPrivateMB = { before: browserBefore.privateMB, afterUiaReads: browserMid?.privateMB ?? null, after: browserAfter.privateMB };
-      // Web-content accessibility would add ~60 MB to the browser process (research §2).
-      const uiaGrowth = (browserMid?.privateMB ?? browserAfter.privateMB) - browserBefore.privateMB;
-      if (uiaGrowth > 25) fail(`browser private memory grew by ${uiaGrowth.toFixed(1)} MB during the UIA reads`);
-    }
   } catch (e) {
     fail(`exception: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
@@ -358,5 +424,32 @@ export async function probeBrowser(kind: BrowserKind, helperPath: string, logger
     const bad = r.stdoutStrings.filter((x) => !allowedString(x));
     if (bad.length > 0) fail(`helper printed ${bad.length} non-protocol string(s)`);
   }
+  if (r.activation.uia !== null) await positiveControl(kind, exe, r, fail);
   return r;
+}
+
+/**
+ * A second throwaway instance, same pages: the naive descendant query must trip the same check,
+ * otherwise a pass of the guard above proves nothing.
+ */
+async function positiveControl(kind: BrowserKind, exe: string, r: BrowserProbeResult, fail: (msg: string) => void): Promise<void> {
+  const inst = launchBrowser(kind, exe, { ...PROBE_WINDOW, urls: probeUrls() });
+  try {
+    const win = await waitForBrowserWindow(inst);
+    const before = await settledSample(inst);
+    const q = await naiveTabItemQuery(win.hwnd);
+    await sleep(2000);
+    const check = checkActivation(before, await sampleOf(before.map((p) => p.pid)));
+    r.activation.control = { ...summarize(check, win.pid), tabItems: q?.counts ?? null, queryMs: q?.ms ?? null };
+    if (q === null) fail('positive control: the naive UI Automation query failed');
+    else if (!check.detected) {
+      fail(`positive control: the naive query grew no process by more than ${check.thresholdMB} MB (max ${check.maxGrowthMB} MB), so the activation check could not have seen an activation`);
+    }
+  } catch (e) {
+    fail(`positive control: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    r.controlClose = await closeBrowser(inst);
+    if (r.controlClose.leftOver > 0) fail(`positive control: ${r.controlClose.leftOver} browser processes left over`);
+    if (!r.controlClose.profileRemoved) fail('positive control: temp profile not removed');
+  }
 }

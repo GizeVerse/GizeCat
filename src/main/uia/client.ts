@@ -68,6 +68,7 @@ export interface UiaHelperClientStats {
 }
 
 interface Pending {
+  req: HelperRequest;
   resolve: (r: HelperResponse) => void;
   reject: (e: HelperTransportError) => void;
   sentAt: number;
@@ -188,7 +189,7 @@ export class UiaHelperClient {
     this.nextId = this.nextId >= MAX_REQUEST_ID ? 1 : this.nextId + 1;
     this.lastTimeoutCheckAt = Math.max(this.lastTimeoutCheckAt, now);
     return new Promise<HelperResponse>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, sentAt: now });
+      this.pending.set(id, { req, resolve, reject, sentAt: now });
       try {
         stdin.write(encodeRequest(id, req));
       } catch {
@@ -203,8 +204,10 @@ export class UiaHelperClient {
    * Fails requests older than the timeout; returns how many timed out. The owner calls this at
    * least every timeout period; a longer gap since the previous call (or request) means the host
    * itself was stalled or suspended, not the helper, so pending requests get a fresh period instead.
+   * The requests that timed out are appended to `timedOut` in the order they were sent (the helper
+   * answers one request at a time, so the first is the one it is stuck in).
    */
-  checkTimeouts(now: number): number {
+  checkTimeouts(now: number, timedOut?: HelperRequest[]): number {
     const gap = now - this.lastTimeoutCheckAt;
     this.lastTimeoutCheckAt = now;
     if (gap > this.o.requestTimeoutMs) {
@@ -216,6 +219,7 @@ export class UiaHelperClient {
       if (now - p.sentAt < this.o.requestTimeoutMs) continue;
       this.pending.delete(id);
       n++;
+      timedOut?.push(p.req);
       p.reject(new HelperTransportError('timeout'));
     }
     this.stats.timeouts += n;

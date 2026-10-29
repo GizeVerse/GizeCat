@@ -54,6 +54,13 @@ async function waitForStrip(r: Rig, hwnd: string): Promise<void> {
   await eventually(() => expect(r.svc.surfaces().some((s) => s.ownerId === hwnd)).toBe(true));
 }
 
+/** Advances the clock, pumps, and waits until `reads` more strip reads were answered. */
+async function stepAndRead(r: Rig, ms: number, ids: string[], reads = 1): Promise<void> {
+  const done = r.svc.debugInfo().readsDone;
+  r.svc.setInterest(ids, r.clock.advance(ms));
+  await eventually(() => expect(r.svc.debugInfo().readsDone).toBe(done + reads));
+}
+
 async function waitStopped(r: Rig): Promise<void> {
   await eventually(() => expect(r.svc.debugInfo().helper.running).toBe(false));
 }
@@ -346,14 +353,15 @@ describe('TabStripService: tabs.changed events', () => {
 });
 
 describe('TabStripService: helper failures', () => {
-  it('kills a hung helper, restarts it with exponential backoff and gives up after 5 restarts', async () => {
-    const r = rig({ hang: ['strip'] });
+  it('kills a hung helper, restarts it with backoff, gives up after 5 restarts and tries once more 10 min later', async () => {
+    // A ping touches no browser: when it hangs, the helper itself is stuck.
+    const r = rig({ hang: ['ping'] });
     r.svc.start();
     r.wins.set(A);
     r.svc.setInterest([A], r.clock.now());
     const delays = [1000, 2000, 4000, 8000, 16000];
     for (let i = 0; i <= delays.length; i++) {
-      await eventually(() => expect(r.h.ops('strip').length).toBe(i + 1));
+      await eventually(() => expect(r.h.ops('ping').length).toBe(i + 1));
       r.svc.setInterest([A], r.clock.advance(1499));
       expect(r.svc.debugInfo().helper.timeouts).toBe(i);
       r.svc.setInterest([A], r.clock.advance(1));
@@ -369,18 +377,147 @@ describe('TabStripService: helper failures', () => {
       expect(r.h.children).toHaveLength(i + 2);
     }
     expect(r.svc.status).toBe('unavailable');
-    expect(r.svc.statusReason).toMatch(/^helper failed 6 times in 10 min \(last: request timed out/);
+    expect(r.svc.statusReason).toBe('helper failed 6 times in 10 min (last: request timed out (helper hung))');
+    expect(r.svc.debugInfo().helper.retryInMs).toBe(600_000);
     r.svc.setInterest([A], r.clock.advance(60_000));
     expect(r.h.children).toHaveLength(6);
     expect(r.svc.surfaces()).toEqual([]);
 
-    // Switching the feature off and on is an explicit retry.
+    // Ten minutes without a failure: one more start, without waiting for the user.
+    r.svc.setInterest([A], r.clock.advance(540_000 - 1));
+    expect(r.svc.status).toBe('unavailable');
+    expect(r.h.children).toHaveLength(6);
+    r.svc.setInterest([A], r.clock.advance(1));
+    expect(r.h.children).toHaveLength(7);
+    expect(r.svc.status).toBe('active');
+    expect(r.svc.statusReason).toBeNull();
+    // It hangs as well: unavailable again at once (no second round of restarts), retried in 10 min.
+    await eventually(() => expect(r.h.ops('ping').length).toBe(7));
+    r.svc.setInterest([A], r.clock.advance(1500));
+    expect(r.svc.status).toBe('unavailable');
+    expect(r.svc.statusReason).toBe('helper still failing after a retry (last: request timed out (helper hung))');
+    await waitStopped(r);
+    r.svc.setInterest([A], r.clock.advance(600_000 - 1));
+    expect(r.h.children).toHaveLength(7);
+    r.svc.setInterest([A], r.clock.advance(1));
+    expect(r.h.children).toHaveLength(8);
+
+    // Switching the feature off and on is an explicit retry at once.
+    await eventually(() => expect(r.h.ops('ping').length).toBe(8));
+    r.svc.setInterest([A], r.clock.advance(1500));
+    expect(r.svc.status).toBe('unavailable');
+    await waitStopped(r);
     r.svc.updateSettings(settingsWith({ tabStrips: false }));
     r.svc.updateSettings(settingsWith({ tabStrips: true }));
     expect(r.svc.status).toBe('idle');
     expect(r.svc.statusReason).toBeNull();
     r.svc.setInterest([A], r.clock.advance(10));
-    expect(r.h.children).toHaveLength(7);
+    expect(r.h.children).toHaveLength(9);
+  });
+
+  it('a browser that stops responding stalls only its own window: quarantined, and the helper replaced outside its budget', async () => {
+    const r = rig({ strips: { [A]: wireStrip({ browser: 'edge' }), [B]: wireStrip({ browser: 'chrome' }) }, hangHwnds: [A] });
+    r.svc.start();
+    r.wins.set(A);
+    r.wins.set(B, { processName: 'chrome.exe' });
+    r.svc.setInterest([A, B], r.clock.now());
+    // A is asked first and never answers; B's request waits behind it in the stuck helper.
+    await eventually(() => expect([stripOps(r, A), stripOps(r, B)]).toEqual([1, 1]));
+    r.svc.setInterest([A, B], r.clock.advance(1500));
+    await waitStopped(r);
+    expect(r.svc.status).toBe('idle');
+    expect(r.svc.statusReason).toBeNull();
+    expect(r.svc.debugInfo()).toMatchObject({ stalled: 1, helper: { timeouts: 2, recentFailures: 0, stallRestarts: 1, nextStartInMs: 250 } });
+
+    // The replacement reads B and leaves A alone for 30 s.
+    r.svc.setInterest([A, B], r.clock.advance(250));
+    expect(r.h.children).toHaveLength(2);
+    await waitForStrip(r, B);
+    await eventually(() => expect(r.h.ops('watch').at(-1)?.hwnds).toEqual([B]));
+    await stepAndRead(r, 29_000, [A, B]);
+    expect(stripOps(r, A)).toBe(1);
+    expect(r.svc.status).toBe('active');
+
+    // Still not responding 30 s later: asked once, quarantined for 60 s, replaced again.
+    r.svc.setInterest([A, B], r.clock.advance(750));
+    await eventually(() => expect(stripOps(r, A)).toBe(2));
+    r.svc.setInterest([A, B], r.clock.advance(1500));
+    await waitStopped(r);
+    expect(r.svc.debugInfo()).toMatchObject({ stalled: 1, helper: { recentFailures: 0, stallRestarts: 2, nextStartInMs: 500 } });
+    // B keeps its strip meanwhile.
+    expect(r.svc.surfaces().map((s) => s.ownerId)).toEqual([B]);
+
+    // The browser recovers: once the quarantine is over A is read, listed and watched again.
+    r.h.patchState({ hangHwnds: [] });
+    await stepAndRead(r, 500, [A, B]);
+    expect(r.h.children).toHaveLength(3);
+    await stepAndRead(r, 59_000, [A, B]);
+    expect(stripOps(r, A)).toBe(2);
+    r.svc.setInterest([A, B], r.clock.advance(500));
+    await waitForStrip(r, A);
+    await eventually(() => expect(r.h.ops('watch').at(-1)?.hwnds).toEqual([A, B].sort()));
+    // A was never subscribed while it was stalled.
+    expect(r.h.ops('watch').slice(0, -1).every((q) => !(q.hwnds ?? []).includes(A))).toBe(true);
+    expect(r.svc.debugInfo()).toMatchObject({ status: 'active', stalled: 0, helper: { recentFailures: 0, spawns: 3 } });
+  });
+
+  it('a window that hangs the helper while being subscribed is quarantined the same way', async () => {
+    const r = rig({ strips: { [A]: wireStrip({ browser: 'edge' }), [B]: wireStrip({ browser: 'chrome' }) }, hangWatchHwnds: [A] });
+    r.svc.start();
+    r.wins.set(A);
+    r.wins.set(B, { processName: 'chrome.exe' });
+    r.svc.setInterest([A, B], r.clock.now());
+    await eventually(() => expect(r.h.ops('watch').some((q) => (q.hwnds ?? []).includes(A))).toBe(true));
+    r.svc.setInterest([A, B], r.clock.advance(1500));
+    await waitStopped(r);
+    expect(r.svc.debugInfo()).toMatchObject({ stalled: 1, helper: { recentFailures: 0, stallRestarts: 1 } });
+    r.svc.setInterest([A, B], r.clock.advance(250));
+    await eventually(() => expect(r.h.ops('watch').at(-1)?.hwnds).toEqual([B]));
+    expect(r.svc.status).toBe('active');
+    expect(r.svc.surfaces().map((s) => s.ownerId).sort()).toEqual([A, B].sort());
+  });
+
+  it('a window the helper finds hung is skipped with the stall delay, without replacing the helper', async () => {
+    const r = rig({ strips: { [A]: wireStrip({ browser: 'edge' }), [B]: wireStrip({ browser: 'chrome' }) } });
+    r.svc.start();
+    r.wins.set(A);
+    r.wins.set(B, { processName: 'chrome.exe' });
+    r.svc.setInterest([A, B], r.clock.now());
+    await waitForStrip(r, A);
+    await waitForStrip(r, B);
+    r.h.patchState({ strips: { [A]: { error: 'hung' }, [B]: wireStrip({ browser: 'chrome' }) } });
+    await stepAndRead(r, 1000, [A, B], 2);
+    expect(r.svc.debugInfo().stalled).toBe(1);
+    const aOps = stripOps(r, A);
+    // A hung window cannot move: its strip stays listed while it ages, and A is not watched.
+    expect(r.svc.surfaces().map((s) => s.ownerId).sort()).toEqual([A, B].sort());
+    await eventually(() => expect(r.h.ops('watch').at(-1)?.hwnds).toEqual([B]));
+    await stepAndRead(r, 29_000, [A, B]);
+    expect(stripOps(r, A)).toBe(aOps);
+    r.svc.setInterest([A, B], r.clock.advance(1000));
+    await eventually(() => expect(stripOps(r, A)).toBe(aOps + 1));
+    expect(r.h.children).toHaveLength(1);
+    expect(r.svc.debugInfo().helper).toMatchObject({ timeouts: 0, recentFailures: 0, stallRestarts: 0 });
+  });
+
+  it('a helper that stalls on every window still counts as failing once the stall allowance is used up', async () => {
+    const r = rig(
+      { strips: { [A]: wireStrip({ browser: 'edge' }), [B]: wireStrip({ browser: 'chrome' }) }, hangHwnds: [A, B] },
+      { options: { stallRestart: { baseDelayMs: 250, maxDelayMs: 8000, maxRestarts: 1, windowMs: 600_000 } } },
+    );
+    r.svc.start();
+    r.wins.set(A);
+    r.wins.set(B, { processName: 'chrome.exe' });
+    r.svc.setInterest([A, B], r.clock.now());
+    await eventually(() => expect([stripOps(r, A), stripOps(r, B)]).toEqual([1, 1]));
+    r.svc.setInterest([A, B], r.clock.advance(1500));
+    await waitStopped(r);
+    expect(r.svc.debugInfo().helper).toMatchObject({ recentFailures: 0, stallRestarts: 1 });
+    r.svc.setInterest([A, B], r.clock.advance(250));
+    await eventually(() => expect(stripOps(r, B)).toBe(2));
+    r.svc.setInterest([A, B], r.clock.advance(1500));
+    await waitStopped(r);
+    expect(r.svc.debugInfo()).toMatchObject({ stalled: 2, helper: { recentFailures: 1, nextStartInMs: 1000, lastFailure: 'request timed out (browser windows keep stalling the helper)' } });
   });
 
   it('a helper that crashes on start is retried with backoff, then reported unavailable', async () => {

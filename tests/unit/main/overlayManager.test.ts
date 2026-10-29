@@ -4,7 +4,7 @@
 // taskbar click guard (the real TaskbarTracker over a MOCKED Win32 taskbar).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Point } from '../../../src/shared/geometry';
-import type { OverlayPointerEvent } from '../../../src/shared/ipc';
+import { IPC, type OverlayPointerEvent } from '../../../src/shared/ipc';
 import { defaultSettings } from '../../../src/shared/settings';
 import type { SimEvent, SimOutput } from '../../../src/shared/sim';
 import type { DisplayGeometry, WorldGeometry } from '../../../src/shared/world';
@@ -460,6 +460,19 @@ describe('overlay manager: lost release without Win32 button state', () => {
 });
 
 describe('overlay manager: shell integration (NonRudeHWND, TaskbarCreated)', () => {
+  it('passes the movement-speed setting to the renderer (wall-transition timing)', () => {
+    rig.mgr.dispose();
+    const settings = defaultSettings();
+    settings.behavior.movementSpeed = 1.6;
+    rig = makeRig({ getSettings: () => settings });
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    const renders = rig
+      .win('A')
+      .webContents.sent.filter((m) => m.channel === IPC.overlayRender)
+      .map((m) => m.payload as { movementSpeed?: number });
+    expect(renders.at(-1)?.movementSpeed).toBe(1.6);
+  });
+
   it('sets NonRudeHWND right before showInactive and removes it right before destroy', () => {
     rig.win('A').emit('ready-to-show');
     rig.win('B').emit('ready-to-show');

@@ -11,7 +11,7 @@ import { createSettingsStore } from '../../../src/main/store/settingsStore';
 import { IPC, type ActionResult } from '../../../src/shared/ipc';
 import { rejectMainOwnedPatch, type PatchResult } from '../../../src/shared/settings';
 import { manualTimers, memoryLogger } from './helpers';
-import { FakeWindowsLogin, memoryFs } from './loginItemFakes';
+import { DISABLE_HEX, FakeWindowsLogin, memoryFs } from './loginItemFakes';
 
 const DIR = 'C:\\Users\\Ada Lovelace\\AppData\\Local\\Programs\\Desktop Cat';
 const EXE = `${DIR}\\DesktopCat.exe`;
@@ -137,11 +137,12 @@ describe('loginItem is main-owned over IPC', () => {
     expect(r.settings.get().loginItem.noticeShown).toBe(true);
 
     expect(await r.action('disableLaunchAtLogin')).toMatchObject({ ok: true, message: expect.stringMatching(/no longer starts/) });
-    expect(r.win.runText()).toBeNull();
+    // Left listed in Startup apps as disabled (Electron's 03 + zeros): the opt-out outside settings.json.
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([`"${EXE}" --launched-at-login`, DISABLE_HEX]);
     expect(r.settings.get().loginItem).toMatchObject({ preference: 'disabled', decidedBy: 'user', disabledBy: 'user' });
 
     expect(await r.action('enableLaunchAtLogin')).toMatchObject({ ok: true, message: expect.stringMatching(/starts when you sign in/) });
-    expect(r.win.runText()).toBe(`"${EXE}" --launched-at-login`);
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([`"${EXE}" --launched-at-login`, null]);
     expect(r.settings.get().loginItem).toMatchObject({ preference: 'enabled', decidedBy: 'user', disabledBy: null, registeredPath: EXE });
   });
 

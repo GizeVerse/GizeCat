@@ -635,7 +635,11 @@ export function startApp(boot: AppBootstrap): RunningApp {
       test: boot.flags.test,
       launchedAtLogin: boot.flags.launchedAtLogin,
       surface: tray,
-      markShown: () => void loginItem.dismissNotice(),
+      // Also hides the Settings › General callout of an open window.
+      markShown: () => {
+        loginItem.dismissNotice();
+        refreshUi();
+      },
       openSettings: () => settingsWindow.open('general'),
       logger: logger.child('login-item'),
     });

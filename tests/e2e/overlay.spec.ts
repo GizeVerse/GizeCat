@@ -217,6 +217,9 @@ test.describe('overlay windows', () => {
     expect(loadWin32Native().getClassName(BigInt(primary.id))).toBe('Shell_TrayWnd');
     expect(primaryDbg!.edgeMismatch).toBe(false);
     const thickness = primary.edge === 'top' || primary.edge === 'bottom' ? primary.dockedRect.height : primary.dockedRect.width;
+    // Precondition: the taskbar is topmost BEFORE Desktop Cat starts. A fullscreen (or full-monitor) app the
+    // user has in front legitimately strips its topmost flag; then this check cannot measure our overlays.
+    test.skip((probe.exStyle(primary.id) & WS_EX_TOPMOST) === 0, 'environment: the taskbar is not topmost before the app starts (a fullscreen app is in front)');
     // Sampled like the app's host does: at the delay it asks for, with the real cursor position.
     const native = loadWin32Native();
     const t0 = performance.now();

@@ -14,7 +14,7 @@ import { findV1OptOutInLogs, isV1OptOutLine } from '../../../src/main/lifecycle/
 import type { JsonReadStatus } from '../../../src/main/store/jsonStore';
 import { migrateSettings, type Settings } from '../../../src/shared/settings';
 import { memoryLogger } from './helpers';
-import { FakeWindowsLogin, memoryFs, memorySettings, TASK_MANAGER_DISABLED, TASK_MANAGER_ENABLED } from './loginItemFakes';
+import { DISABLE_HEX, FakeWindowsLogin, memoryFs, memorySettings, TASK_MANAGER_DISABLED, TASK_MANAGER_ENABLED } from './loginItemFakes';
 
 const DIR = 'C:\\Users\\Ada Lovelace\\AppData\\Local\\Programs\\Desktop Cat';
 const EXE = `${DIR}\\DesktopCat.exe`;
@@ -216,18 +216,67 @@ describe('repairs and removals outside the app', () => {
 });
 
 describe('the switch', () => {
-  it('off removes both values; on registers again', () => {
+  it('off leaves the entry listed in Startup apps as disabled; on deletes that record and starts again', () => {
     const r = rig();
     const svc = r.boot();
     r.win.taskManagerEnable();
-    expect(svc.setLaunchAtLogin(false)).toMatchObject({ ok: true });
-    expect([r.win.runText(), r.win.approvedHex()]).toEqual([null, null]);
+    expect(svc.setLaunchAtLogin(false)).toMatchObject({ ok: true, message: expect.stringMatching(/no longer starts/) });
+    // Electron's enabled:false record (03 + zeros): Task Manager shows Desktop Cat as Disabled.
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([EXPECTED_RUN, DISABLE_HEX]);
+    expect(r.win.writes.at(-1)).toMatchObject({ openAtLogin: true, enabled: false });
     expect(r.settings.get().loginItem).toMatchObject({ preference: 'disabled', decidedBy: 'user', disabledBy: 'user' });
+    expect(svc.status()).toMatchObject({ enabled: false, disabledBy: 'user', active: false, reason: null });
+    // Boots (also at sign-in) keep the user's own record: nothing written, still the user's off.
     r.boot();
-    expect(r.win.runText()).toBeNull();
+    r.boot({ launchedAtLogin: true });
+    expect(r.win.writes).toHaveLength(2);
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'disabled', disabledBy: 'user' });
     expect(svc.setLaunchAtLogin(true)).toMatchObject({ ok: true });
-    expect(r.win.runText()).toBe(EXPECTED_RUN);
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([EXPECTED_RUN, null]);
     expect(svc.status()).toMatchObject({ enabled: true, active: true, showNotice: false });
+  });
+
+  it('off whose disabled record does not land removes the entry instead (nothing left that launches)', () => {
+    const r = rig();
+    const svc = r.boot();
+    r.win.failApprovedWrites = true;
+    expect(svc.setLaunchAtLogin(false)).toMatchObject({ ok: true });
+    expect(r.win.writes.slice(-2)).toMatchObject([
+      { openAtLogin: true, enabled: false },
+      { openAtLogin: false, enabled: true },
+    ]);
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([null, null]);
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'disabled', disabledBy: 'user' });
+  });
+
+  it('an in-app off survives a v1.0 round trip that drops the loginItem section (startup#3)', () => {
+    const r = rig();
+    const svc = r.boot();
+    svc.setLaunchAtLogin(false);
+    // v1.0 drops the unknown section and saves launchAtLogin:false; v1.1 then migrates that file again.
+    r.settings.set(v1(false));
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'unset', v1Value: false, registeredPath: null });
+    const after = r.boot();
+    expect(r.win.writes).toHaveLength(2);
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([EXPECTED_RUN, DISABLE_HEX]);
+    expect(r.settings.get().loginItem.preference).toBe('disabled');
+    expect(after.status()).toMatchObject({ enabled: false, active: false, showNotice: false });
+    // A settings file reset to defaults likewise.
+    r.settings.set(migrateSettings({}));
+    r.boot();
+    expect(r.win.approvedHex()).toBe(DISABLE_HEX);
+    expect(r.win.writes).toHaveLength(2);
+  });
+
+  it('the uninstaller still deletes both values of an in-app off, writes no marker, and the reinstall stays off', () => {
+    const r = rig();
+    const svc = r.boot();
+    svc.setLaunchAtLogin(false);
+    expect(r.win.uninstall()).toBe(false);
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([null, null]);
+    const reinstalled = r.boot();
+    expect(r.win.writes).toHaveLength(2);
+    expect(reinstalled.status()).toMatchObject({ enabled: false, disabledBy: 'user', active: false });
   });
 
   it('only a disabled StartupApproved value left: re-adds the entry still disabled so Task Manager lists it', () => {
@@ -268,6 +317,163 @@ describe('the switch', () => {
     expect(svc.status()).toMatchObject({ active: false, reason: expect.stringMatching(/could not read/) });
     expect(svc.setLaunchAtLogin(true)).toMatchObject({ ok: true, message: expect.stringMatching(/could not be read/) });
     expect(r.win.writes).toEqual([]);
+  });
+});
+
+describe('an on the user chose that has not taken effect yet (startup#2)', () => {
+  it('a write that does not land is retried at the next start, not read as a removal outside the app', () => {
+    const r = rig();
+    const svc = r.boot();
+    // An off whose disabled record did not land: both values removed.
+    r.win.failApprovedWrites = true;
+    svc.setLaunchAtLogin(false);
+    r.win.failApprovedWrites = false;
+    expect(r.win.runText()).toBeNull();
+    // Security software ignores the write to HKCU Run.
+    r.win.failWrites = 'ignore';
+    expect(svc.setLaunchAtLogin(true)).toMatchObject({ ok: false, message: expect.stringMatching(/did not accept/) });
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'enabled', decidedBy: 'user', registeredPath: null });
+    r.win.failWrites = null;
+    const next = r.boot();
+    expect(next.debugInfo()).toMatchObject({ lastReconcile: { rule: 'register', ok: true } });
+    expect(r.win.runText()).toBe(EXPECTED_RUN);
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'enabled', decidedBy: 'user', registeredPath: EXE });
+  });
+
+  it('an on saved while the registry could not be read is applied at the next readable start', () => {
+    const r = rig();
+    const svc = r.boot();
+    r.win.failApprovedWrites = true;
+    svc.setLaunchAtLogin(false);
+    r.win.failApprovedWrites = false;
+    r.win.readError = 5;
+    expect(svc.setLaunchAtLogin(true)).toMatchObject({ ok: true, message: expect.stringMatching(/could not be read/) });
+    r.win.readError = null;
+    r.boot();
+    expect(r.win.runText()).toBe(EXPECTED_RUN);
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'enabled', decidedBy: 'user', registeredPath: EXE });
+  });
+
+  it('an on over the app’s own opt-out record that does not land is retried at the next start (not taken for a Task Manager disable)', () => {
+    const r = rig();
+    const svc = r.boot();
+    svc.setLaunchAtLogin(false);
+    expect(r.win.approvedHex()).toBe(DISABLE_HEX);
+    r.win.failWrites = 'ignore';
+    expect(svc.setLaunchAtLogin(true).ok).toBe(false);
+    expect(svc.status()).toMatchObject({ enabled: true, active: false, reason: 'Desktop Cat registers itself the next time it starts.' });
+    r.win.failWrites = null;
+    const next = r.boot();
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([EXPECTED_RUN, null]);
+    expect(next.status()).toMatchObject({ enabled: true, active: true, disabledBy: null });
+  });
+});
+
+describe('status while the app runs (startup#0)', () => {
+  it('a Windows disable undone in Task Manager shows as on at once, as the next start records it', () => {
+    const r = rig();
+    r.boot();
+    r.win.taskManagerDisable();
+    let now = 0;
+    const svc = r.boot({ clock: () => now });
+    expect(svc.status()).toMatchObject({ enabled: false, disabledBy: 'windows', active: false });
+    // The user follows the on-screen advice while the app runs.
+    r.win.taskManagerEnable();
+    now += 5000;
+    expect(svc.status()).toEqual({ enabled: true, preference: 'enabled', disabledBy: null, active: true, writable: true, reason: null, showNotice: false });
+    // The next start records exactly that and removes nothing.
+    r.boot();
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'enabled', decidedBy: 'windows', disabledBy: null });
+    expect(r.win.runText()).toBe(EXPECTED_RUN);
+    expect(r.win.writes).toHaveLength(1);
+  });
+
+  it('an entry removed outside the app and added back outside it, likewise', () => {
+    const r = rig();
+    r.boot();
+    r.win.deleteRun();
+    let now = 0;
+    const svc = r.boot({ clock: () => now });
+    expect(svc.status()).toMatchObject({ enabled: false, disabledBy: 'external' });
+    r.win.setRunText(EXPECTED_RUN);
+    now += 5000;
+    const s = svc.status();
+    expect(s).toMatchObject({ enabled: true, disabledBy: null, active: true, reason: null });
+    r.boot();
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'enabled', disabledBy: null });
+    expect(r.win.runText()).toBe(EXPECTED_RUN);
+  });
+});
+
+describe('a start by the user while the app runs (startup#4)', () => {
+  it('does the work sign-in boots had to skip: the entry left after an off is disabled again', () => {
+    const r = rig();
+    const svc = r.boot();
+    // The off did not land (security software), so Windows keeps starting the app at sign-in.
+    r.win.failWrites = 'ignore';
+    expect(svc.setLaunchAtLogin(false).ok).toBe(false);
+    r.win.failWrites = null;
+    let running = svc;
+    for (let i = 0; i < 3; i++) {
+      running = r.boot({ launchedAtLogin: true });
+      expect(running.debugInfo()).toMatchObject({ lastReconcile: { rule: 'opt-out-skipped-launched-at-login' } });
+    }
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([EXPECTED_RUN, null]);
+    expect(running.status().reason).toMatch(/even while it is running/);
+    // Opening Desktop Cat from the Start menu reaches the running instance (second instance).
+    expect(running.reconcileOnUserLaunch()).toMatchObject({ rule: 'opt-out', ok: true });
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([EXPECTED_RUN, DISABLE_HEX]);
+    expect(running.status()).toMatchObject({ enabled: false, disabledBy: 'user', active: false, reason: null });
+    expect(r.log.entries.some((e) => e.msg === 'login item reconciled' && e.data?.trigger === 'user-launch')).toBe(true);
+  });
+
+  it('repairs a stale entry a sign-in boot left, and is a no-op when nothing is pending', () => {
+    const r = rig();
+    r.boot();
+    r.win.setRunText('"D:\\Old place\\DesktopCat.exe" --launched-at-login');
+    const running = r.boot({ launchedAtLogin: true });
+    expect(r.win.writes).toHaveLength(1);
+    expect(running.reconcileOnUserLaunch()).toMatchObject({ rule: 'repair', ok: true });
+    expect(r.win.runText()).toBe(EXPECTED_RUN);
+    expect(running.reconcileOnUserLaunch()).toMatchObject({ rule: 'confirmed', write: null });
+    expect(r.win.writes).toHaveLength(2);
+  });
+
+  it('never writes from a build that may not write', () => {
+    const r = rig();
+    r.win.setRunText('"D:\\Old place\\DesktopCat.exe" --launched-at-login');
+    const svc = r.boot({ test: true, launchedAtLogin: true });
+    expect(svc.reconcileOnUserLaunch()).toMatchObject({ rule: 'gate-closed', write: null });
+    expect(r.win.writes).toEqual([]);
+  });
+});
+
+describe('a reinstall after an off undone outside the app (startup#5)', () => {
+  it('registers again: the uninstaller saw an approved entry and left its marker', () => {
+    const r = rig();
+    r.boot();
+    r.win.taskManagerDisable();
+    r.boot();
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'disabled', disabledBy: 'windows' });
+    // Re-enabled in Task Manager, then uninstalled in the same session (no start in between).
+    r.win.taskManagerEnable();
+    expect(r.win.uninstall()).toBe(true);
+    r.fs.files.set(MARKER.toLowerCase(), 'removed by the Desktop Cat uninstaller');
+    const reinstalled = r.boot();
+    expect(reinstalled.debugInfo()).toMatchObject({ lastReconcile: { rule: 'register-after-uninstall', ok: true, markerConsumed: true } });
+    expect([r.win.runText(), r.win.approvedHex()]).toEqual([EXPECTED_RUN, null]);
+    expect(r.fs.existsSync(MARKER)).toBe(false);
+    expect(reinstalled.status()).toMatchObject({ enabled: true, active: true });
+  });
+
+  it('an in-app off is kept: its disabled record gets no marker from the uninstaller', () => {
+    const r = rig();
+    const svc = r.boot();
+    svc.setLaunchAtLogin(false);
+    expect(r.win.uninstall()).toBe(false);
+    r.boot();
+    expect(r.win.runText()).toBeNull();
+    expect(r.settings.get().loginItem).toMatchObject({ preference: 'disabled', disabledBy: 'user' });
   });
 });
 

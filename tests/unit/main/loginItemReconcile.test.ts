@@ -94,8 +94,13 @@ function expected(pref: Pref, run: Run, sa: Sa, registeredBefore: boolean): Expe
   const li = loginItem(pref, registeredBefore);
   const keep = (write: Expected['write'] = null): Expected => ({ pref: li.preference, disabledBy: li.disabledBy, write });
   if (SA_DISABLED(sa)) {
-    // The in-app opt-out's own record stays the user's; any other disable is Windows'.
-    if (run !== 'absent') return pref === 'disabled/user' && sa === '03' ? keep() : { pref: 'disabled', disabledBy: 'windows', write: null };
+    // The in-app opt-out's own record stays the user's, and an in-app on saved over it without
+    // taking effect (no registered path) is applied; any other disable is Windows'.
+    if (run !== 'absent') {
+      if (sa === '03' && pref === 'disabled/user') return keep();
+      if (sa === '03' && pref === 'enabled' && !registeredBefore) return keep('register');
+      return { pref: 'disabled', disabledBy: 'windows', write: null };
+    }
     return pref.startsWith('disabled') ? keep() : { pref: 'disabled', disabledBy: 'external', write: null };
   }
   if (run === 'absent') {
@@ -132,8 +137,10 @@ describe('reconcile: invariants across every flag combination', () => {
       const li = loginItem(pref, reg);
       const f = flagsFor(flag);
       const r = reconcile(windowsState(run, sa), li, f);
-      // A Task Manager disable is never written over.
-      if (SA_DISABLED(sa)) expect(r.write).toBeNull();
+      // A disable made in Startup apps is never written over; the app's own record (03 + zeros)
+      // only for the user's in-app on that was saved without taking effect.
+      if (SA_DISABLED(sa) && sa !== '03') expect(r.write).toBeNull();
+      if (sa === '03' && r.write) expect([pref, reg, writeKind(r.write)]).toEqual(['enabled', false, 'register']);
       // Programs started from Run do not write the key.
       if (flag === 'launched-at-login') expect(r.write).toBeNull();
       // Dev, test, portable, env-off and over-long builds never write and change nothing.
@@ -324,6 +331,40 @@ describe('the user switch', () => {
     expect(reconcile(windowsState('absent', 'absent'), { ...saved[0]!, registeredPath: OLD_EXE }, NORMAL).rule).toBe('external-removal');
   });
 
+  it('an on saved over the app’s own opt-out record without taking effect is applied at the next start, not read as a Windows disable', () => {
+    const optedOut: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'user', disabledBy: 'user', registeredPath: EXE };
+    const record = windowsState('ours', '03');
+    const unread = interpretSnapshot({ run: { kind: 'error', code: 5 }, approved: { kind: 'error', code: 5 } });
+    const saved = [
+      applyUserChoice(true, record, optedOut, { ...target, writable: false }).next,
+      applyUserChoice(true, unread, optedOut, target).next,
+      applyUserChoice(true, record, optedOut, target).nextIfWriteFails,
+    ];
+    for (const li of saved) {
+      expect(li).toMatchObject({ preference: 'enabled', decidedBy: 'user', registeredPath: null });
+      expect(reconcile(record, li, NORMAL)).toMatchObject({ rule: 'register', write: { openAtLogin: true, enabled: true }, next: { preference: 'enabled', registeredPath: EXE }, nextIfWriteFails: li });
+      expect(reconcile(record, li, { ...NORMAL, launchedAtLogin: true })).toMatchObject({ rule: 'register-skipped-launched-at-login', write: null });
+      expect(reconcile(record, li, { ...NORMAL, settingsTrusted: false })).toMatchObject({ rule: 'untrusted-settings', write: null, next: li });
+      expect(loginItemStatus(li, record, target)).toMatchObject({ enabled: true, active: false, disabledBy: null, reason: 'Desktop Cat registers itself the next time it starts.' });
+      // Switching on again applies it; switching off keeps the record as the user's off.
+      expect(applyUserChoice(true, record, li, target)).toMatchObject({ outcome: 'registered', write: { openAtLogin: true, enabled: true } });
+      expect(applyUserChoice(false, record, li, target)).toMatchObject({ outcome: 'unchanged', write: null, next: { preference: 'disabled', disabledBy: 'user' } });
+    }
+    // A disable made in Task Manager (03 + FILETIME) is never taken for that record.
+    expect(reconcile(windowsState('ours', '03+FILETIME'), saved[0]!, NORMAL)).toMatchObject({ rule: 'windows-disabled', write: null });
+  });
+
+  it('an on saved while Windows keeps our entry disabled records the entry, so it is never taken for an on still to apply', () => {
+    // Settings reset (or downgraded) while the app's own record is in place: Windows' disable from then on.
+    const boot = reconcile(windowsState('ours', '03'), base, NORMAL);
+    expect(boot).toMatchObject({ rule: 'windows-disabled', write: null, next: { disabledBy: 'windows', registeredPath: EXE } });
+    const on = applyUserChoice(true, windowsState('ours', '03'), boot.next, target);
+    expect(on).toMatchObject({ outcome: 'windows-disabled', write: null, next: { preference: 'enabled', decidedBy: 'user', registeredPath: EXE } });
+    expect(reconcile(windowsState('ours', '03'), on.next, NORMAL)).toMatchObject({ rule: 'windows-disabled', write: null });
+    // Also when that boot could not record it.
+    expect(applyUserChoice(true, windowsState('ours', '03'), { ...boot.next, registeredPath: null }, target).next.registeredPath).toBe(EXE);
+  });
+
   it('saves the choice but writes nothing in a build that may not write', () => {
     for (const on of [true, false]) {
       const r = applyUserChoice(on, windowsState('absent', 'absent'), base, { ...target, writable: false });
@@ -365,7 +406,8 @@ describe('status', () => {
   it('an entry left after an in-app opt-out is explained as turned off at the next start by the user (not as removed)', () => {
     const optedOut: LoginItemSettings = { ...base, preference: 'disabled', decidedBy: 'user', disabledBy: 'user', registeredPath: EXE };
     const s = loginItemStatus(optedOut, windowsState('ours', 'absent'), target);
-    expect(s).toMatchObject({ enabled: false, disabledBy: 'user', active: true, reason: expect.stringMatching(/next time you open it yourself/) });
+    // The second instance reconciles, so the user need not quit first (startup#4).
+    expect(s).toMatchObject({ enabled: false, disabledBy: 'user', active: true, reason: expect.stringMatching(/next time you open Desktop Cat .*even while it is running/) });
     expect(s.reason).not.toMatch(/removed/);
     // The opt-out record itself is simply off.
     expect(loginItemStatus(optedOut, windowsState('ours', '03'), target)).toMatchObject({ enabled: false, disabledBy: 'user', active: false, reason: null });

@@ -7,6 +7,7 @@ import { createSurfaceProvider } from '../../../src/main/surfaces';
 import type { Occluder } from '../../../src/main/win32/platforms';
 import { createWindowTracker } from '../../../src/main/win32/windowTracker';
 import { mulberry32, newPersistedCat } from '../../../src/core/behavior';
+import { Mover, type MoverStep } from '../../../src/core/movement';
 import type { BehaviorState } from '../../../src/shared/cat';
 import type { PersistedCat, Traits } from '../../../src/shared/catState';
 import type { Rect } from '../../../src/shared/geometry';
@@ -194,6 +195,23 @@ describe('riding a window through the real provider', () => {
     expect(onWindowTop(w.h.last!.support, '101') && Math.abs(w.h.last!.x - at.x) < 100).toBe(false);
   });
 
+  it('a window in front over the whole window (its top and both sides) is a calm drop too, not a vanished window', () => {
+    const w = world();
+    w.perch(950);
+    const fear0 = w.fear();
+    const from = w.h.transitions.length;
+    w.api.extras = [{ id: 'dlg', rect: { x: RECT.x - 100, y: RECT.y - 60, width: RECT.width + 200, height: 400 } }];
+    w.api.foregroundId = 'dlg';
+    w.api.fire('foreground', 'dlg');
+    w.run(4000);
+    // Nothing of 101 is listed any more, but it is still there.
+    expect(w.provider.getSurfaces(w.h.now, 1000).filter((s) => s.ownerId === '101')).toEqual([]);
+    const to = w.transitionsSince(from);
+    expect(to).toContain('falling');
+    expect(to).not.toContain('startled');
+    expect(w.fear()).toBeLessThanOrEqual(fear0 + 1e-9);
+  });
+
   it('a window turning private under a sleeping cat: it leaves calmly within seconds and never returns', () => {
     const w = world();
     w.perch(950);
@@ -250,5 +268,53 @@ describe('riding a window through the real provider', () => {
     expect(onWindowTop(w.h.last!.support, '101')).toBe(true);
     expect(w.h.last!.y).toBe(RECT.y);
     expect(Math.abs(w.h.last!.x - x)).toBeLessThan(200);
+  });
+});
+
+describe('climbing a browser through the real provider', () => {
+  it('climbs the left side of a browser whose tab strip is known and pulls up onto the strip', () => {
+    // 640 px tall, standing on the floor of SINGLE (1040): too high to jump onto.
+    const frame: Rect = { x: 800, y: 400, width: 700, height: 640 };
+    const api = new SurfaceApi().add(win('101', { ...frame }, { category: 'browser', processName: 'msedge.exe' }));
+    let clock = 1000;
+    const logger = createTestLogger();
+    const tracker = createWindowTracker(api, logger, { now: () => clock });
+    const display = { world: SINGLE, onChange: () => () => undefined } as unknown as DisplayService;
+    const tabs = new FakeTabs();
+    // As the helper places it: from just past the first tab's margin to left of the caption
+    // buttons, so it stops short of both top corners (808 and 1492).
+    tabs.ledges = [
+      {
+        id: 'tabStrip:101', kind: 'tabStrip', orientation: 'ledge', ownerId: '101', displayId: '1', phase: 'stable', vx: 0, vy: 0, confidence: 1, validatedAt: 1000, excluded: false,
+        y: 400, x0: 850, x1: 1300, rest: null, focusX: null,
+      },
+    ];
+    const provider = createSurfaceProvider({ logger, tracker, win32: api, taskbars: NO_TASKBARS, tabStrips: tabs, display, settings: defaultSettings(), now: () => clock, options: { cornerRadiusDip: 8 } });
+    tracker.start();
+    const m = new Mover(SINGLE, { size: 1, movementSpeed: 1, allowMultiMonitor: true, perchOnWindows: true }, { displayId: '1', xFrac: 0.25 });
+    // The host's order each tick: feedback, the list, then the sim's live reads.
+    const step = (dt = 16): MoverStep => {
+      clock += dt;
+      tracker.drainEvents();
+      const support = m.support;
+      provider.noteCat({ x: m.x, y: m.y, surfaceId: support.kind === 'surface' ? support.surfaceId : null });
+      m.sense(provider.getSurfaces(clock, 1000));
+      return m.step({ now: clock, dtMs: dt, dragCursor: null, getSurface: (id) => provider.getSurface(id, clock) });
+    };
+    step();
+    expect(m.climbOptions().map((o) => [o.dir, o.wallId, o.target.y])).toEqual([['up', 'windowSide:101:left', 400]]);
+    m.setGoal({ x: 1000, y: 400, pace: 'walk', allowJump: true, route: 'climb' });
+    let wall: string | null = null;
+    let arrived = false;
+    for (let t = 0; t < 60_000 && !arrived; t += 16) {
+      const r = step();
+      expect(r.perchLost).toBe(false);
+      if (r.climbStarted) wall = m.support.kind === 'surface' ? m.support.surfaceId : null;
+      arrived = r.goal === 'arrived';
+    }
+    expect(wall).toBe('windowSide:101:left');
+    expect(arrived).toBe(true);
+    expect(m.support).toMatchObject({ kind: 'surface', surfaceId: 'tabStrip:101' });
+    expect(m.y).toBe(400);
   });
 });

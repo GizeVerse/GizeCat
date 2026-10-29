@@ -55,6 +55,9 @@ namespace DesktopCat.Uia
         private static extern bool IsZoomed(IntPtr h);
 
         [DllImport("user32.dll")]
+        private static extern bool IsHungAppWindow(IntPtr h);
+
+        [DllImport("user32.dll")]
         private static extern IntPtr GetAncestor(IntPtr h, uint flags);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -150,8 +153,12 @@ namespace DesktopCat.Uia
         }
 
         /// <summary>
-        /// Null when the window is a visible top-level Edge/Chrome browser frame; otherwise the
-        /// protocol error code ("gone", "rejected", "hidden" or "minimized").
+        /// Null when the window is a visible, responding top-level Edge/Chrome browser frame;
+        /// otherwise the protocol error code ("gone", "rejected", "hidden", "minimized" or "hung").
+        /// A browser whose UI thread stopped pumping messages would block every UI Automation call
+        /// into it, and this helper answers one request at a time. IsHungAppWindow sends no message,
+        /// so it is safe to ask first; it flags a window Windows shows as Not Responding, but not a
+        /// browser that was suspended while idle (measured), which the app's request timeout covers.
         /// </summary>
         internal static string CheckBrowserWindow(IntPtr h)
         {
@@ -165,7 +172,14 @@ namespace DesktopCat.Uia
             if (IsIconic(h)) return "minimized";
             int cloaked;
             if (DwmGetWindowAttribute(h, DWMWA_CLOAKED, out cloaked, 4) == 0 && cloaked != 0) return "hidden";
+            if (IsHungAppWindow(h)) return "hung";
             return null;
+        }
+
+        /// <summary>The window's thread has not pumped messages for a while (sends no message itself).</summary>
+        internal static bool IsHung(IntPtr h)
+        {
+            return h != IntPtr.Zero && IsHungAppWindow(h);
         }
 
         internal static bool IsMaximized(IntPtr h)

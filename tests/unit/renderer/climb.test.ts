@@ -8,7 +8,7 @@ import { CAT_BASE_HEIGHT_DIP, CAT_BASE_WIDTH_DIP, type AnimClip, type CatRenderS
 import type { Rect } from '../../../src/shared/geometry';
 import { defaultSettings } from '../../../src/shared/settings';
 import type { SimOutput } from '../../../src/shared/sim';
-import { presenceRectPx } from '../../../src/main/overlay/renderMapping';
+import { mapRenderState, presenceRectPx } from '../../../src/main/overlay/renderMapping';
 import { MOVEMENT } from '../../../src/core/movement/constants';
 import { CatAnimator, type AnimInput } from '../../../src/renderer/overlay/cat/animator';
 import {
@@ -28,6 +28,7 @@ import { CatPuppet } from '../../../src/renderer/overlay/cat/puppet';
 import { applyMatX, applyMatY, PAW_RX } from '../../../src/renderer/overlay/cat/rig';
 import { TAIL_RADIUS_TIP } from '../../../src/renderer/overlay/cat/tail';
 import { CatScene, type DeviceRect, type Layer } from '../../../src/renderer/overlay/scene';
+import { isRenderState } from '../../../src/renderer/overlay/validate';
 import { boxInside, createExtentCtx, emptyBox, paintDistance, type Box } from './extentCtx';
 
 const DT = 1000 / 60;
@@ -263,6 +264,26 @@ describe('climb clip: transitions', () => {
     for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) expect(crossFadeMs('climb', 'walk', bad)).toBe(CLIMB_OFF_FADE_MS);
   });
 
+  it('the render snapshot carries the movement speed from main to the animator (a broken value is dropped)', () => {
+    const appearance = defaultSettings().appearance;
+    const ctx = { seq: 1, toLocalDip: (p: { x: number; y: number }) => p, scaleFactor: 1, forceSnap: false, hidden: false, simNow: 0 };
+    const out = simOutput(400, 300, 1, 1);
+    expect(mapRenderState(out, appearance, { ...ctx, movementSpeed: 0.5 }).movementSpeed).toBe(0.5);
+    expect('movementSpeed' in mapRenderState(out, appearance, ctx)).toBe(false);
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect('movementSpeed' in mapRenderState(out, appearance, { ...ctx, movementSpeed: bad }), String(bad)).toBe(false);
+    }
+    // The renderer's snapshot check keeps a good value and drops a broken one without losing the frame.
+    const good = mapRenderState(out, appearance, { ...ctx, movementSpeed: 2 });
+    expect(isRenderState(good)).toBe(true);
+    expect(good.movementSpeed).toBe(2);
+    for (const bad of [0, -2, 'fast', null]) {
+      const s = { ...good, movementSpeed: bad } as unknown;
+      expect(isRenderState(s), String(bad)).toBe(true);
+      expect('movementSpeed' in (s as object), String(bad)).toBe(false);
+    }
+  });
+
   it('gets onto the wall clinging, then the climbing motion develops without a pop', () => {
     const anim = new CatAnimator(() => 0.99);
     let t = 0;
@@ -431,9 +452,11 @@ describe('climb clip: transitions', () => {
 
   /**
    * Plays `legs` and samples the body's tilt (0 level, ~1.5 along the wall) and the ground shadow
-   * during the leg at `index`, at the given fractions of its duration (> 1: after it ended).
+   * during the leg at `index`, at the given fractions of its duration (> 1: after it ended). Frames
+   * are 240 Hz, so a fraction of the 160 ms mount at movement speed 2 lands within 3% of it.
    */
   function poseDuring(legs: readonly Leg[], index: number, fractions: readonly number[], f: 1 | -1, v: number): { tilt: number; shadow: number }[] {
+    const step = DT / 4;
     const scene = new CatScene(() => 0.99);
     const samples: { tilt: number; shadow: number }[] = [];
     let x = legs[0]!.x;
@@ -449,14 +472,14 @@ describe('climb clip: transitions', () => {
         clip = leg.clip;
         clipStart = t;
       }
-      for (let lt = 0; lt < ms; lt += DT, t += DT, frame++) {
-        const k0 = Math.min(1, (lt + DT) / leg.ms);
+      for (let lt = 0; lt < ms; lt += step, t += step, frame++) {
+        const k0 = Math.min(1, (lt + step) / leg.ms);
         const k = leg.ease ? k0 * k0 * (3 - 2 * k0) : k0;
         x = x0 + (leg.x - x0) * k;
         y = y0 + (leg.y - y0) * k;
         const s = state(t, { x, y, facing: f, clip, clipStartedAt: clipStart, speed: leg.speed, movementSpeed: v });
-        scene.update({ x, y, state: s, simTime: t, dtMs: frame === 0 ? 0 : DT, snapped: frame === 0 });
-        while (sample.length > 0 && lt + DT >= sample[0]! * leg.ms - 1e-6) {
+        scene.update({ x, y, state: s, simTime: t, dtMs: frame === 0 ? 0 : step, snapped: frame === 0 });
+        while (sample.length > 0 && lt + step >= sample[0]! * leg.ms - 1e-6) {
           sample.shift();
           samples.push({ tilt: scene.puppet.pose.tilt, shadow: scene.puppet.pose.shadow });
         }
@@ -464,7 +487,7 @@ describe('climb clip: transitions', () => {
     };
     for (let i = 0; i <= index; i++) {
       const leg = legs[i]!;
-      play(leg, i < index ? leg.ms : leg.ms * Math.max(1, ...fractions) + DT, i < index ? [] : [...fractions]);
+      play(leg, i < index ? leg.ms : leg.ms * Math.max(1, ...fractions) + step, i < index ? [] : [...fractions]);
     }
     return samples;
   }

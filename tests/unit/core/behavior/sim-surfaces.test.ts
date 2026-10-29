@@ -9,7 +9,7 @@ import type { SimEvent, SimOutput, SimSupport } from '../../../../src/shared/sim
 import type { DisplayGeometry, WindowInfo } from '../../../../src/shared/world';
 import { mulberry32, newPersistedCat } from '../../../../src/core/behavior';
 import { PHYSICAL_STATES } from '../../../../src/core/behavior/states';
-import { callCat, display, Harness, onWindowTop, settingsWith, SINGLE, stripId, tabStrip, taskbar, taskbarId, WAKE_MS, world } from './fixtures';
+import { callCat, display, Harness, ledge, onWindowTop, settingsWith, SINGLE, stripId, tabStrip, taskbar, taskbarId, topId, WAKE_MS, world } from './fixtures';
 
 const MIN = 60_000;
 const WALL = 1_800_000_000_000;
@@ -253,18 +253,26 @@ describe('taskbar: physics as seen by the cat', () => {
     expect(wakes(PLACID, [1, 2, 3])).toBe(0);
   });
 
-  it('with "taskbarPlay" off a taskbar neither lifts the cat nor gets any reaction', () => {
+  it('with "taskbarPlay" off a shown taskbar still lifts the cat out of its band (physics), but gets no reaction', () => {
     const h = new Harness({ seed: 2, world: AUTOHIDE, persisted: catWith(2, CURIOUS), settings: settingsWith({ behavior: { disabledBehaviors: ['taskbarPlay'], activitySensitivity: 1 } }) });
     h.run(WAKE_MS);
     const from = h.transitions.length;
-    h.keepOutputs = true;
+    let standingOnIt = 0;
     for (let k = 0; k < 5; k++) {
       slideIn(h);
       h.run(3000);
+      // Fully shown: the cat stands on it, never inside it on the floor (its clicks stay the taskbar's).
+      const o = h.last!;
+      if (o.support.kind !== 'air') {
+        expect(onTaskbar(o.support)).toBe(true);
+        expect(o.y).toBe(TB_TOP - 1);
+        standingOnIt++;
+      }
       slideOut(h);
       h.run(3000);
+      expect(onTaskbar(h.last!.support)).toBe(false);
     }
-    expect(h.outputs.some((o) => o.support.kind === 'surface')).toBe(false);
+    expect(standingOnIt).toBeGreaterThanOrEqual(4);
     expect(stimulusTo(h, from)).toEqual([]);
   });
 
@@ -331,6 +339,52 @@ describe('window tops and sides', () => {
     expect(new Set(variants)).toEqual(new Set(['lostFooting']));
     expect(h.sim.serialize().stats.fear - fear0).toBeLessThanOrEqual(0.16);
     expect(h.last!.support.kind).toBe('floor');
+  });
+
+  it('a window brought in front over its spot (the host serves the part of the top left open): a calm drop, no start', () => {
+    const h = perched();
+    const fear0 = h.sim.serialize().stats.fear;
+    const from = h.transitions.length;
+    expect(h.last!.x).toBeGreaterThan(900);
+    // Window f in front covers 900..1100 of w's top: the provider lists and serves 608..900, not holding the cat.
+    const f = { x: 900, y: 500, width: 200, height: 400 };
+    const cut = ledge(topId('w'), 'windowTop', 'w', RECT.y, RECT.x + 8, 900);
+    h.env.surfaces = [ledge(topId('f'), 'windowTop', 'f', f.y, f.x + 8, f.x + f.width - 8), cut];
+    h.env.getSurface = (id) => h.env.surfaces?.find((s) => s.id === id) ?? null;
+    h.run(4000);
+    const to = h.transitions.slice(from).map((t) => t.to);
+    expect(to.slice(0, 2)).toEqual(['falling', 'landing']);
+    expect(to).not.toContain('startled');
+    expect(h.sim.serialize().stats.fear - fear0).toBeLessThan(0.05);
+    expect(h.last!.support.kind).toBe('floor');
+  });
+
+  it('on a wall its bounds (the click-through fallback before the renderer reports) stay outside the window but for the paws', () => {
+    // Too tall to jump onto: called onto its top, the cat climbs the side nearest to it (left, then right).
+    for (const rect of [
+      { x: 900, y: 400, width: 600, height: 640 },
+      { x: 300, y: 400, width: 600, height: 640 },
+    ]) {
+      const h = new Harness({ seed: 3, persisted: catWith(3, PLACID) });
+      h.env.windows = { t: rect };
+      h.run(WAKE_MS);
+      callCat(h, { x: rect.x + rect.width / 2, y: rect.y - 20 });
+      expect(h.runUntil((o) => o.support.kind === 'surface' && o.support.orientation === 'wall', 30_000)).toBe(true);
+      let checked = 0;
+      h.run(4000, 33, (hh) => {
+        const o = hh.last!;
+        if (o.support.kind !== 'surface' || o.support.orientation !== 'wall' || o.clip !== 'climb') return;
+        const b = o.boundsPx;
+        // The paws on the wall line reach about 5.5 DIP in; never half a body width (42 DIP).
+        if (o.support.surfaceId.endsWith(':left')) expect(b.x + b.width).toBeLessThanOrEqual(rect.x + 0.07 * BW);
+        else expect(b.x).toBeGreaterThanOrEqual(rect.x + rect.width - 0.07 * BW);
+        // Still the whole hanging body: about a body length up, a body height out.
+        expect(b.height).toBeGreaterThanOrEqual(BW - 1e-6);
+        expect(b.width).toBeGreaterThanOrEqual(0.95 * BH);
+        checked++;
+      });
+      expect(checked).toBeGreaterThan(30);
+    }
   });
 
   it('a window closed mid-jump: it falls to the floor and carries on, without a start', () => {

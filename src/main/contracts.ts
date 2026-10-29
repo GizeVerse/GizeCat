@@ -180,7 +180,11 @@ export interface TaskbarTracker {
   readonly available: boolean;
   start(): void;
   stop(): void;
-  /** Called by the host with the cursor (px) and whether the cat is on/near a taskbar; returns the suggested next sample delay (ms). */
+  /**
+   * Called by the host with the cursor (px); returns the suggested next sample delay (ms). Bursts
+   * only while geometry changes or the cursor is at a hidden auto-hide edge. `catNear` is accepted
+   * for compatibility and currently does not influence the cadence.
+   */
   sample(now: number, cursor: Point | null, catNear: boolean): number;
   taskbars(): readonly TaskbarState[];
   /** Ledge surfaces for taskbars that currently support the cat. */

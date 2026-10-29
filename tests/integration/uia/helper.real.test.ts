@@ -1,5 +1,6 @@
 // REAL: DesktopCatUia.exe + UiaHelperClient + TabStripService against our own throwaway Edge and
-// Chrome instances (temp profiles, about:blank tabs; see realBrowser.ts for the safety rules).
+// Chrome instances (temp profiles, a heavy data: page and two about:blank tabs; a second instance
+// per browser for the activation check's positive control; see realBrowser.ts for the safety rules).
 // Opt-in: DESKTOP_CAT_REAL_BROWSER=1 (it opens browser windows on the desktop). Run it under the
 // machine lock:  node scripts/with-lock.mjs uia-real -- cmd /c "set DESKTOP_CAT_REAL_BROWSER=1&& npx vitest run tests/integration/uia"
 import { execFileSync } from 'node:child_process';
@@ -32,10 +33,15 @@ describe.runIf(enabled)('tab strips with a real browser (REAL)', () => {
         expect(r.added?.countAfter).toBe(4);
         expect(r.added?.change).toBe('added');
         expect(r.maximized).toEqual({ reported: true, listedWhileMaximized: false, restored: true });
+        // No web-content accessibility from our reads, and the same check does see the naive query.
+        expect(r.activation.uia?.detected).toBe(false);
+        expect(r.activation.control?.detected).toBe(true);
         expect(r.close?.leftOver).toBe(0);
         expect(r.close?.profileRemoved).toBe(true);
+        expect(r.controlClose?.leftOver).toBe(0);
+        expect(r.controlClose?.profileRemoved).toBe(true);
       },
-      120_000,
+      300_000,
     );
   }
 });
