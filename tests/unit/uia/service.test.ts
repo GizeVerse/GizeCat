@@ -594,6 +594,101 @@ describe('TabStripService: slow interest and diagnostics (v1.1.1)', () => {
     expect(r.svc.debugInfo().interestedSlow).toBe(0);
   });
 
+  it('re-describes far (slow) windows at the ordinary 250 ms rate between their reads, near ones at the live 50 ms rate (PT-3, PERF-1)', async () => {
+    const describesIn3s = async (slow: boolean): Promise<number> => {
+      const r = rig({ strips: { [A]: wireStrip({ browser: 'edge' }) } });
+      r.svc.start();
+      r.wins.set(A);
+      const far = slow ? [A] : [];
+      r.svc.setInterest([A], r.clock.now(), far);
+      await waitForStrip(r, A);
+      // The subscription is answered before the clock runs (a pending request would time out).
+      await eventually(() => expect(r.svc.debugInfo().watched).toBe(1));
+      const d0 = r.wins.calls.length;
+      // 3 s of host ticks at 30 Hz (surfaces() each tick); the provider refreshes interest every 500 ms.
+      for (let i = 0; i < 90; i++) {
+        r.clock.advance(33);
+        r.svc.surfaces();
+        if (i % 15 === 0) r.svc.setInterest([A], r.clock.now(), far);
+      }
+      return r.wins.calls.length - d0;
+    };
+    // 2970 ms / 250 ms = 11.9 (the ticks fall on 264 ms); live: every other 33 ms tick.
+    expect(await describesIn3s(true)).toBeLessThanOrEqual(13);
+    expect(await describesIn3s(false)).toBeGreaterThanOrEqual(40);
+  });
+
+  it('a slow window\'s strip keeps full confidence between its 3 s reads, so the published list does not churn (PERF-3)', async () => {
+    const r = rig({ strips: { [A]: wireStrip({ browser: 'edge' }) } });
+    r.svc.start();
+    r.wins.set(A);
+    r.svc.setInterest([A], r.clock.now(), [A]);
+    await waitForStrip(r, A);
+    // The subscription is answered before the clock runs (a pending request would time out).
+    await eventually(() => expect(r.svc.debugInfo().watched).toBe(1));
+    const first = r.svc.surfaces();
+    const confidences = new Set<number>();
+    let changes = 0;
+    // 7 s in 500 ms interest steps: two slow reads (at 3 s and 6 s).
+    for (let i = 0; i < 14; i++) {
+      r.svc.setInterest([A], r.clock.advance(500), [A]);
+      const sent = r.svc.debugInfo().reads;
+      await eventually(() => expect(r.svc.debugInfo().readsDone).toBe(sent));
+      const list = r.svc.surfaces();
+      confidences.add(list[0]!.confidence);
+      if (list !== first) changes++;
+    }
+    expect(stripOps(r, A)).toBe(3);
+    expect([...confidences]).toEqual([1]);
+    expect(changes).toBe(0);
+    // Well past two slow periods without a read (it stalled, say), it does age.
+    const aged = r.svc.surfaces();
+    r.clock.advance(6500);
+    expect(r.svc.surfaces()[0]!.confidence).toBe(0.85);
+    expect(aged[0]!.confidence).toBe(1);
+  });
+
+  it('says which windows cannot give a strip for now (rejected, failing, stalled, vertical tabs) until something changes (PT-1)', async () => {
+    const C = '393216';
+    const r = rig({ strips: { [A]: wireStrip({ browser: 'edge', vertical: true }), [B]: { error: 'no-strip' }, [E]: { error: 'rejected' }, [C]: wireStrip({ browser: 'chrome' }) } });
+    r.svc.start();
+    for (const id of [A, B, E]) r.wins.set(id);
+    r.wins.set(C, { processName: 'chrome.exe' });
+    // Never measured: worth a read.
+    expect([A, B, E, C].map((id) => r.svc.unusable(id, r.clock.now()))).toEqual([false, false, false, false]);
+    // Two reads at a time; an error answer does not pump the next one (the host's 500 ms pump does).
+    await eventually(() => {
+      r.svc.setInterest([A, B, E, C], r.clock.now(), [A, B, E, C]);
+      expect(r.svc.debugInfo().readsDone).toBe(4);
+    });
+    // A and C (both read) are subscribed one at a time; answered before the clock runs.
+    await eventually(() => expect(r.svc.debugInfo().watched).toBe(2));
+    const t0 = r.clock.now();
+    expect([A, B, E, C].map((id) => r.svc.unusable(id, t0))).toEqual([true, true, true, false]);
+    // A failed read: only inside its retry backoff (2 s, doubling).
+    expect(r.svc.unusable(B, t0 + 1999)).toBe(true);
+    expect(r.svc.unusable(B, t0 + 2000)).toBe(false);
+    // Rejected by the helper (not a browser frame): for 10 minutes.
+    expect(r.svc.unusable(E, t0 + 10 * 60_000 - 1)).toBe(true);
+    expect(r.svc.unusable(E, t0 + 10 * 60_000)).toBe(false);
+    // A browser that stalled the helper: while it is quarantined.
+    r.h.patchState({ strips: { [A]: wireStrip({ browser: 'edge', vertical: true }), [B]: { error: 'hung' }, [E]: { error: 'rejected' }, [C]: wireStrip({ browser: 'chrome' }) } });
+    r.svc.setInterest([B], r.clock.advance(2000), [B]);
+    await eventually(() => expect(r.svc.debugInfo().stalled).toBe(1));
+    const t1 = r.clock.now();
+    expect(r.svc.unusable(B, t1 + 29_999)).toBe(true);
+    expect(r.svc.unusable(B, t1 + 30_000)).toBe(false);
+    // Vertical tabs hold until the window is resized (or the helper announces a change).
+    expect(r.svc.unusable(A, t1 + 60_000)).toBe(true);
+    r.wins.set(A, { rect: { x: 133, y: 125, width: 1200, height: 867 } });
+    r.clock.advance(300);
+    r.svc.surfaces();
+    expect(r.svc.unusable(A, r.clock.now())).toBe(false);
+    // The feature switched off: nothing is known.
+    r.svc.updateSettings(settingsWith({ tabStrips: false }));
+    expect(r.svc.unusable(E, r.clock.now())).toBe(false);
+  });
+
   it('reports counts, the last read and why a window of interest has no usable strip, as codes', async () => {
     const r = rig({ strips: { [A]: wireStrip({ browser: 'edge', vertical: true }), [B]: wireStrip({ browser: 'chrome' }) } });
     r.svc.start();

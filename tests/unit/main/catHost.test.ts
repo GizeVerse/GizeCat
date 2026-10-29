@@ -98,6 +98,7 @@ function harness(opts: HarnessOptions = {}) {
   } as unknown as Win32Api;
   const trackerEvents: SimEvent[] = [];
   let platformCalls = 0;
+  let fullscreen: string[] = [];
   const tracker = {
     mode: 'event-hooks',
     drainEvents: () => trackerEvents.splice(0),
@@ -107,7 +108,7 @@ function harness(opts: HarnessOptions = {}) {
       return [];
     },
     getWindowRect: () => null,
-    getFullscreenDisplayIds: () => [],
+    getFullscreenDisplayIds: () => fullscreen,
   } as unknown as WindowTracker;
   const activity = {
     sample: () => undefined,
@@ -173,6 +174,7 @@ function harness(opts: HarnessOptions = {}) {
     },
     setNextTick: (ms: number) => (nextTickMs = ms),
     setOutput: (o: Partial<SimOutput>) => (output = o),
+    setFullscreen: (ids: string[]) => (fullscreen = ids),
     setCursor: (p: Point) => (cursor = p),
     setRequests: (r: SimRequest[]) => (requests = r),
     throwNext: () => (throwNext = true),
@@ -465,19 +467,65 @@ describe('cat host: environment surfaces', () => {
     h.timers.advance(0);
     expect(surfaces.cats[0]).toBeNull();
     h.timers.advance(33);
-    expect(surfaces.cats.at(-1)).toEqual({ x: 640, y: 1020, surfaceId: 'taskbar:1', hidden: false });
+    expect(surfaces.cats.at(-1)).toEqual({ x: 640, y: 1020, surfaceId: 'taskbar:1', hidden: false, asleep: false, paused: false, away: false });
     h.setOutput({ x: 10, y: 1040 });
     h.timers.advance(33);
     h.timers.advance(33);
-    expect(surfaces.cats.at(-1)).toEqual({ x: 10, y: 1040, surfaceId: null, hidden: false });
+    expect(surfaces.cats.at(-1)).toEqual({ x: 10, y: 1040, surfaceId: null, hidden: false, asleep: false, paused: false, away: false });
     h.setOutput({ x: 1000, y: 400, support: { kind: 'surface', surfaceId: 'windowTop:101', surfaceKind: 'windowTop', orientation: 'ledge' } });
     h.timers.advance(33);
     h.host.setHidden(true);
     h.timers.advance(300);
     // The attachment is kept (the provider serves the part of the edge the cat is on); only
     // tab-strip interest stops.
-    expect(surfaces.cats.at(-1)).toEqual({ x: 1000, y: 400, surfaceId: 'windowTop:101', hidden: true });
+    expect(surfaces.cats.at(-1)).toEqual({ x: 1000, y: 400, surfaceId: 'windowTop:101', hidden: true, asleep: false, paused: false, away: false });
     expect(surfaces.calls.at(-1)!.maxAgeMs).toBe(5000);
+    h.host.stop();
+  });
+
+  it('tells the provider when the cat sleeps, is paused or is away, so far browsers are not measured meanwhile (PERF-2)', () => {
+    const surfaces = new FakeProvider();
+    const h = harness({ surfaces });
+    h.host.start();
+    h.timers.advance(0);
+    const last = (): CatPosition => surfaces.cats.at(-1)!;
+    for (const state of ['sleeping', 'fallingAsleep'] as const) {
+      h.setOutput({ x: 10, y: 1040, state });
+      h.timers.advance(33);
+      h.timers.advance(33);
+      expect(last(), state).toMatchObject({ asleep: true, paused: false, away: false });
+    }
+    h.setOutput({ x: 10, y: 1040, state: 'idle' });
+    h.timers.advance(33);
+    h.timers.advance(33);
+    expect(last()).toMatchObject({ asleep: false, paused: false, away: false });
+    h.host.setPaused(true);
+    h.timers.advance(33);
+    h.timers.advance(33);
+    expect(last()).toMatchObject({ asleep: false, paused: true, away: false });
+    h.host.setPaused(false);
+    // Out of sight for a fullscreen app (the sim's 'away', not drawn).
+    h.setOutput({ x: 10, y: 1040, state: 'away', visible: false });
+    h.timers.advance(33);
+    h.timers.advance(33);
+    expect(last()).toMatchObject({ asleep: false, paused: false, away: true, hidden: false });
+    h.host.stop();
+  });
+
+  it('reports the fullscreen displays it hands to the sim (the surface outlines stay off them)', () => {
+    const h = harness();
+    expect(h.host.fullscreenDisplayIds()).toEqual([]);
+    h.setFullscreen(['2']);
+    h.host.start();
+    h.timers.advance(0);
+    expect(h.host.fullscreenDisplayIds()).toEqual(['2']);
+    expect(h.ticks.at(-1)!.env.fullscreenDisplayIds).toEqual(['2']);
+    // Re-checked about once a second.
+    h.setFullscreen([]);
+    h.timers.advance(500);
+    expect(h.host.fullscreenDisplayIds()).toEqual(['2']);
+    h.timers.advance(600);
+    expect(h.host.fullscreenDisplayIds()).toEqual([]);
     h.host.stop();
   });
 

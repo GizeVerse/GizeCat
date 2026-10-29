@@ -11,12 +11,15 @@
 //   and unchanged surfaces keep their object identity.
 // - Browser tab strips (TabStripService) replace their window's top ledge, cut to the open
 //   part of the edge and shifted with the window while it moves; a strip with no open part
-//   leaves the plain top listed. A strip found or lost while the cat stands on the window's top
-//   or clings to one of its sides does not swap the top: the one listed when it got there stays
-//   listed under its id until it leaves (walls name whichever top is listed).
-// - Tab-strip interest: the browser the cat is attached to, those whose top edge is within reach
-//   (interestRadiusDip), and up to maxOpenTopInterest more whose top edge is open somewhere on a
-//   display the cat may use, nearest first; those are measured at the service's slow rate.
+//   leaves the plain top listed, and so does a strip whose open part is narrower than the sim
+//   accepts (a quarter of the cat's width). A strip found or lost while the cat stands on the
+//   window's top or clings to one of its sides does not swap the top: the one listed when it got
+//   there stays listed under its id until it leaves (walls name whichever top is listed).
+// - Tab-strip interest (Edge/Chrome only): the browser the cat is attached to, those whose top
+//   edge is within reach (interestRadiusDip), and, while the cat is awake and free to move, up to
+//   maxOpenTopInterest more whose top edge is open somewhere on a display the cat may use with
+//   room above it for the cat, nearest first, skipping those the service says cannot give a strip
+//   for now; those are measured at the service's slow rate.
 // - getSurface(id) re-reads that one owner live (GetWindowRect/DWM) for the cat riding it and
 //   rebuilds the surface from the live frame, however far a drag, snap or resize moved it since
 //   the last tick: the cat's reported spot (noteCat, in the frame of the previous tick) is
@@ -36,6 +39,7 @@
 // events are never forwarded for them. No window title is read here.
 import os from 'node:os';
 import { displayAtPoint, displayForRect, nearestDisplay, primaryDisplay } from '../../core/display/displayMath';
+import { CAT_BASE_WIDTH_DIP } from '../../shared/cat';
 import type { Rect } from '../../shared/geometry';
 import type { Settings } from '../../shared/settings';
 import type { SimEvent } from '../../shared/sim';
@@ -44,6 +48,7 @@ import { emptySurfaceCounts } from '../../shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface, SurfacePhase, SurfaceStatus } from '../../shared/surfaces';
 import type { DisplayGeometry, WindowInfo } from '../../shared/world';
 import type { DisplayService, Logger, SurfaceProvider, TabStripService, TaskbarTracker, Unsubscribe, Win32Api, WindowTracker } from '../contracts';
+import { catExtentPx } from '../uia/segment';
 import { hasTabStripExtras, TAB_STRIP_BROWSERS, type TabStripDiagnostics } from '../uia/service';
 import type { Occluder } from '../win32/platforms';
 import { hasWin32Extensions } from '../win32/win32Api';
@@ -60,6 +65,8 @@ import {
   offersSurfaces,
   parseSurfaceId,
   scaleForRect,
+  STRIP_MIN_BODY_FRACTION,
+  stripCuts,
   type Attachment,
   type BuiltWindowSurfaces,
   type StripPlacement,
@@ -132,6 +139,14 @@ export interface CatPosition {
    * steers which span is served; nothing is of tab-strip interest.
    */
   hidden?: boolean;
+  /**
+   * The cat sleeps (or is falling asleep), is paused, or is away (out of sight for a fullscreen
+   * app). It makes no trips then, so far browsers are not measured as possible destinations and
+   * the tab-strip helper can idle; the one it is on and those within reach still are.
+   */
+  asleep?: boolean;
+  paused?: boolean;
+  away?: boolean;
 }
 
 // A type alias (not an interface) so it is assignable to the contract's Record<string, unknown>.
@@ -308,6 +323,8 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
   let taskbarPlay = isEnabled(deps.settings, 'taskbarPlay');
   let tabStripsOn = isEnabled(deps.settings, 'tabStrips');
   let allowMultiMonitor = deps.settings.behavior.allowMultiMonitor;
+  /** Appearance size factor: the cat's extent decides head room and the narrowest usable strip. */
+  let catSize = deps.settings.appearance.size;
 
   let order: Occluder[] = [];
   let entries = new Map<string, Entry>();
@@ -479,6 +496,8 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     const dy = e.rect.y - base.rect.y;
     const resized = e.rect.width !== base.rect.width || e.rect.height !== base.rect.height;
     const confidence = Math.min(s.confidence, resized ? CONFIDENCE_STRIP_RESIZED : dx !== 0 || dy !== 0 ? CONFIDENCE_STRIP_SHIFTED : 1);
+    // The sim's body width on this display (WorldModel.bodyWidth): narrower open parts are unusable.
+    const bodyWidth = CAT_BASE_WIDTH_DIP * catSize * scaleForRect(display.world.displays, e.rect);
     return {
       source: s,
       y: s.y + dy,
@@ -487,6 +506,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       rest: s.rest ? { x0: s.rest.x0 + dx, x1: s.rest.x1 + dx } : null,
       focusX: s.focusX === null ? null : s.focusX + dx,
       confidence,
+      minWidth: bodyWidth * STRIP_MIN_BODY_FRACTION,
     };
   }
 
@@ -531,9 +551,11 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       placed = stripPlacement(e);
       next = buildWindowSurfaces(e.id, e.rect, e.spans, displays, meta(e, now), placed, attachmentFor(e));
     }
-    // A measured strip with no open part (the plain top, if any, is listed instead).
+    // A measured strip with no open part, or only one too narrow for the cat (the plain top, if
+    // any, is listed instead).
     if (placed && !next.strip && !e.info.excluded) {
-      if (stripRejection?.id !== e.id || stripRejection.code !== 'covered') stripRejection = { id: e.id, code: 'covered', at: now };
+      const code = e.spans !== null && stripCuts(e.spans.top, placed).length > 0 ? 'tooNarrow' : 'covered';
+      if (stripRejection?.id !== e.id || stripRejection.code !== code) stripRejection = { id: e.id, code, at: now };
     } else if (stripRejection?.id === e.id) stripRejection = null;
     const r = stabilize(e.built, next);
     e.built = r.built;
@@ -876,6 +898,24 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     return displayAtPoint(displays, catPoint) ?? nearestDisplay(displays, catPoint);
   }
 
+  /** The cat fits above the window's top inside its display's work area (a strip needs it: segment.ts 'no-head-room'). */
+  function hasHeadroom(r: Rect, displays: readonly DisplayGeometry[]): boolean {
+    const d = displayForRect(displays, r);
+    if (!d) return false;
+    return r.y - d.workAreaPx.y >= catExtentPx(catSize, 96 * d.scaleFactor).height;
+  }
+
+  /** The service knows this window cannot give a strip for now (false when it cannot tell). */
+  function serviceSaysUnusable(id: string, now: number): boolean {
+    if (!tabStrips || !hasTabStripExtras(tabStrips) || !tabStrips.unusable) return false;
+    try {
+      return tabStrips.unusable(id, now);
+    } catch (e) {
+      report('interest', e);
+      return false;
+    }
+  }
+
   function updateInterest(now: number): void {
     if (!tabStrips) return;
     if (now - interestAt < opts.interestIntervalMs) return;
@@ -884,23 +924,30 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     const slow: string[] = [];
     // No cat on screen (hidden, or no output yet): nothing is of interest, the helper idles.
     // Otherwise: the browser the cat is on (top or side), those whose top edge is within reach
-    // (interestRadiusDip, about a jump), then the nearest few whose top edge is open (visible)
-    // on a display the cat may use: a strip there is a destination worth knowing about even from
-    // the floor. Maximized, fullscreen, minimized and private windows never qualify as the
-    // latter (they offer no top); the foreground one gets no special treatment.
+    // (interestRadiusDip, about a jump), then, while the cat is awake and free to move, the
+    // nearest few whose top edge is open (visible) on a display the cat may use with room above
+    // it for the cat: a strip there is a destination worth knowing about even from the floor.
+    // Maximized, fullscreen, minimized and private windows never qualify as the latter (they
+    // offer no top); the foreground one gets no special treatment. Only browsers whose strips the
+    // service can read (Edge, Chrome) are ever of interest.
     if (tabStripsOn && windowTracking() && catPos !== null) {
       const cat = catPos;
       const displays = display.world.displays;
-      const add = (id: string, far: boolean): void => {
-        if (ids.includes(id) || ids.length >= opts.maxInterest) return;
+      const add = (id: string, far: boolean): boolean => {
+        if (ids.includes(id) || ids.length >= opts.maxInterest) return false;
         ids.push(id);
         if (far) slow.push(id);
+        return true;
       };
-      const usable = (info: WindowInfo | null): info is WindowInfo => info !== null && info.category === 'browser' && !info.excluded && !info.minimized;
+      const usable = (info: WindowInfo | null): info is WindowInfo =>
+        info !== null && info.category === 'browser' && !info.excluded && !info.minimized && TAB_STRIP_BROWSERS.includes(info.processName);
       if (cat.surfaceId) {
         const p = parseSurfaceId(cat.surfaceId);
         if (p && p.kind !== 'taskbar' && usable(tracker.windowInfo(p.owner))) add(p.owner, false);
       }
+      // Asleep, paused or away the cat makes no trips: far browsers are not worth measuring, so
+      // the helper idles (it stops idleShutdownMs after the last window of interest).
+      const roaming = cat.asleep !== true && cat.paused !== true && cat.away !== true;
       const home = allowMultiMonitor ? null : catDisplay(displays);
       const near: Array<{ id: string; d: number }> = [];
       const open: Array<{ id: string; d: number }> = [];
@@ -910,14 +957,20 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
         const dx = cat.x < r.x ? r.x - cat.x : cat.x > r.x + r.width ? cat.x - (r.x + r.width) : 0;
         const d = Math.hypot(dx, cat.y - r.y);
         if (d <= opts.interestRadiusDip * scaleForRect(displays, r)) near.push({ id: e.id, d });
-        // spans exist only for windows offering surfaces (not maximized, fullscreen, covering);
-        // only browsers whose strips the service can read take one of the few far places.
-        else if (e.spans !== null && e.spans.top.length > 0 && TAB_STRIP_BROWSERS.includes(e.info.processName) && (home === null || displayForRect(displays, r)?.id === home.id)) open.push({ id: e.id, d });
+        // spans exist only for windows offering surfaces (not maximized, fullscreen, covering).
+        else if (roaming && e.spans !== null && e.spans.top.length > 0 && (home === null || displayForRect(displays, r)?.id === home.id) && hasHeadroom(r, displays)) open.push({ id: e.id, d });
       }
       near.sort((a, b) => a.d - b.d);
       open.sort((a, b) => a.d - b.d);
       for (const n of near) add(n.id, false);
-      for (const n of open.slice(0, opts.maxOpenTopInterest)) add(n.id, true);
+      // The nearest that can give a strip: one the service knows cannot (rejected, failing,
+      // vertical tabs...) leaves its place to the next.
+      let far = 0;
+      for (const n of open) {
+        if (far >= opts.maxOpenTopInterest || ids.length >= opts.maxInterest) break;
+        if (serviceSaysUnusable(n.id, now)) continue;
+        if (add(n.id, true)) far++;
+      }
     }
     if (ids.length === 0 && interest.length === 0) return;
     interest = ids;
@@ -1097,8 +1150,9 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       const climb = isEnabled(settings, 'climbWindows');
       const play = isEnabled(settings, 'taskbarPlay');
       const tabsOn = isEnabled(settings, 'tabStrips');
-      if (climb !== climbWindows) {
+      if (climb !== climbWindows || settings.appearance.size !== catSize) {
         climbWindows = climb;
+        catSize = settings.appearance.size;
         recomputeAll = true;
       }
       if (play !== taskbarPlay) {
@@ -1120,7 +1174,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     noteCat(cat: CatPosition | null): void {
       const at = cat && Number.isFinite(cat.x) && Number.isFinite(cat.y) ? cat : null;
       // A hidden cat is still on its surface (the sim keeps it there): only interest stops.
-      catPos = at && at.hidden !== true ? { x: at.x, y: at.y, surfaceId: at.surfaceId } : null;
+      catPos = at && at.hidden !== true ? { x: at.x, y: at.y, surfaceId: at.surfaceId, asleep: at.asleep === true, paused: at.paused === true, away: at.away === true } : null;
       catPoint = at ? { x: at.x, y: at.y } : null;
       let next: CatAttachment | null = null;
       if (at && at.surfaceId) {

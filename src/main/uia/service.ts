@@ -5,11 +5,14 @@
 //   window exists (setInterest), and stops after `idleShutdownMs` without one.
 // - Windows passed to setInterest are polled at 1 Hz (the cat is on or heading to them; tab rects
 //   raise no change events); those passed as `slow` (far browsers that are only possible
-//   destinations) every `slowPollIntervalMs`. Windows that were of interest recently stay listed
+//   destinations) every `slowPollIntervalMs`, and their window descriptions are refreshed at the
+//   ordinary describeIntervalMs rather than the live rate. Windows that were of interest recently stay listed
 //   and are refreshed only on helper events (tab selected, content structure changed) or when they
 //   are resized, then dropped after `idleShutdownMs`.
 // - Why a window of interest has no usable strip (maximized, no head room, vertical tabs, a
-//   timeout...) is kept as a short code for the diagnostics (no ids, titles or names).
+//   timeout...) is kept as a short code for the diagnostics (no ids, titles or names). Whether a
+//   window can give one for now is answered per window (unusable), so the surface provider spends
+//   its few far places on browsers that can.
 // - Excluded (private) windows are never queried: the exclusion verdict is re-read right before
 //   every request and an excluded window is dropped on sight.
 // - A crashed, blocked or hung helper is restarted with exponential backoff; after too many
@@ -237,6 +240,13 @@ export interface TabStripServiceExtras {
   /** As the contract's; `slow` (a subset of windowIds) are polled every slowPollIntervalMs. */
   setInterest(windowIds: readonly string[], now: number, slow?: readonly string[]): void;
   diagnostics(): TabStripDiagnostics;
+  /**
+   * Window `id` cannot give a usable strip for now: the helper rejected it, it stalled the helper,
+   * its last read failed (inside the retry backoff), or its strip is unusable for a lasting reason
+   * (vertical tabs, no tabs, no head room, too narrow). A resize, restore or helper event asks for a
+   * fresh read and clears it. The surface provider gives such windows no far place.
+   */
+  unusable?(id: string, now: number): boolean;
 }
 
 export const hasTabStripExtras = (s: TabStripService): s is TabStripService & TabStripServiceExtras =>
@@ -249,6 +259,9 @@ const SEGMENT_REJECTION: Record<SegmentDisabledReason, string> = {
   'no-head-room': 'noHeadroom',
   'too-narrow': 'tooNarrow',
 };
+
+/** Segment reasons that hold until the window is resized or its tabs change (maximized windows are never asked). */
+const LASTING_SEGMENT_REASONS: ReadonlySet<SegmentDisabledReason> = new Set<SegmentDisabledReason>(['vertical', 'no-tabs', 'no-head-room', 'too-narrow']);
 
 /** A helper error slug (validated by the protocol: lower-case letters and dashes) in camelCase. */
 const helperRejection = (code: string): string => code.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -297,7 +310,8 @@ const sameSurface = (a: LedgeSurface, b: LedgeSurface): boolean =>
   a.phase === b.phase;
 
 /** The contract with a typed debugInfo and the extras (still assignable to TabStripService). */
-export type TabStripServiceImpl = Omit<TabStripService, 'debugInfo' | 'setInterest'> & TabStripServiceExtras & { debugInfo(): TabStripDebug };
+export type TabStripServiceImpl = Omit<TabStripService, 'debugInfo' | 'setInterest'> &
+  TabStripServiceExtras & { debugInfo(): TabStripDebug; unusable(id: string, now: number): boolean };
 
 export function createTabStripService(deps: TabStripServiceDeps): TabStripServiceImpl {
   const o: TabStripServiceOptions = { ...DEFAULT_TAB_STRIP_OPTIONS, ...deps.options };
@@ -955,7 +969,9 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       const out: LedgeSurface[] = [];
       for (const t of [...windows.values()]) {
         if (t.strip === null) continue;
-        const maxAge = t.interested ? o.liveDescribeMs : o.describeIntervalMs;
+        // Live descriptions only for the windows the cat is on or near; far (slow) ones are only
+        // possible destinations, and the provider shifts their strips with the window meanwhile.
+        const maxAge = t.interested && !t.slow ? o.liveDescribeMs : o.describeIntervalMs;
         if (at - t.infoAt >= maxAge && !refreshInfo(t, at)) continue;
         if (!queryable(t)) continue;
         const seg = segmentFor(t);
@@ -964,7 +980,9 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         if (seg === null || !seg.ok) continue;
         const sizeMatches = t.strip.frameWidth === t.info.rect.width && t.strip.frameHeight === t.info.rect.height;
         const age = at - t.stripAt;
-        const confidence = !sizeMatches ? 0.5 : age <= 2 * o.pollIntervalMs ? 1 : age <= 30_000 ? 0.85 : 0.7;
+        // Fresh for two periods of the rate the window is read at.
+        const period = t.slow ? o.slowPollIntervalMs : o.pollIntervalMs;
+        const confidence = !sizeMatches ? 0.5 : age <= 2 * period ? 1 : age <= 30_000 ? 0.85 : 0.7;
         const next: LedgeSurface = {
           id: tabStripSurfaceId(t.id),
           kind: 'tabStrip',
@@ -1069,6 +1087,21 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         lastRejection: rejection?.code ?? null,
         lastRejectionAt: rejection?.at ?? 0,
       };
+    },
+
+    unusable(id: string, at: number): boolean {
+      if (!active()) return false;
+      const until = rejected.get(id);
+      if (until !== undefined && at < until) return true;
+      if (quarantined(id, at)) return true;
+      const t = windows.get(id);
+      // Unknown (never measured, or dropped after idling): worth a read.
+      if (t === undefined) return false;
+      // Resized, restored or announced by the helper: worth a fresh read.
+      if (t.dirty) return false;
+      if (t.errorStreak > 0 && at < t.retryAt) return true;
+      const seg = segmentFor(t);
+      return seg !== null && !seg.ok && LASTING_SEGMENT_REASONS.has(seg.reason);
     },
 
     async dispose(): Promise<void> {

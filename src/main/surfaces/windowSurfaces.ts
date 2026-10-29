@@ -225,6 +225,28 @@ export interface StripPlacement {
   rest: { x0: number; x1: number } | null;
   focusX: number | null;
   confidence: number;
+  /**
+   * Narrowest open part of the strip worth listing (px): the sim turns down narrower tab strips
+   * (STRIP_MIN_BODY_FRACTION of the cat's width), so the plain top is listed instead. Absent: any.
+   */
+  minWidth?: number;
+}
+
+/**
+ * The sim's narrowest tab strip, as a fraction of the cat's body width (anchor spans;
+ * WorldModel 'tooNarrow' in src/core/movement/world.ts).
+ */
+export const STRIP_MIN_BODY_FRACTION = 0.25;
+
+/** The strip's walkable part intersected with the open top edge. */
+export function stripCuts(top: readonly Span[], strip: Pick<StripPlacement, 'x0' | 'x1'>): Span[] {
+  const cut: Span[] = [];
+  for (const [a, b] of top) {
+    const x0 = Math.max(a, strip.x0);
+    const x1 = Math.min(b, strip.x1);
+    if (x1 > x0) cut.push([x0, x1]);
+  }
+  return cut;
 }
 
 /** Which surface of this window the cat is attached to, and where (px). */
@@ -321,15 +343,11 @@ export function buildWindowSurfaces(
 
   let stripLedge: LedgeSurface | null = null;
   if (strip) {
-    // Safe span: the strip's walkable part intersected with the open top edge.
-    const cut: Span[] = [];
-    for (const [a, b] of spans.top) {
-      const x0 = Math.max(a, strip.x0);
-      const x1 = Math.min(b, strip.x1);
-      if (x1 > x0) cut.push([x0, x1]);
-    }
-    const chosen = pickSpan(cut, attachedTop, ATTACH_TOLERANCE_PX, reportedTop);
-    if (chosen) {
+    // Safe span: the strip's walkable part intersected with the open top edge. A part the sim
+    // would turn down as too narrow (a sliver beside a window in front) counts as no strip, so
+    // the plain top stays listed and the sides keep a ledge to pull up onto.
+    const chosen = pickSpan(stripCuts(spans.top, strip), attachedTop, ATTACH_TOLERANCE_PX, reportedTop);
+    if (chosen && spanLength(chosen) >= (strip.minWidth ?? 0)) {
       let rest: { x0: number; x1: number } | null = null;
       if (strip.rest) {
         const r0 = Math.max(chosen[0], strip.rest.x0);
@@ -361,7 +379,7 @@ export function buildWindowSurfaces(
   }
 
   // The listed top: a usable strip replaces the plain top; a strip that is covered (or cut
-  // away) leaves the plain top listed, so the sides keep a ledge to pull up onto. Under a cat
+  // away, or down to a sliver) leaves the plain top listed, so the sides keep a ledge to pull up onto. Under a cat
   // standing on the top or clinging to a side, the one listed when it got there stays.
   const held = attach && (attach.surfaceId === wallId(hwnd, 'left') || attach.surfaceId === wallId(hwnd, 'right')) ? (attach.heldTop ?? null) : null;
   /** The plain top edge under the strip's id: a strip lost under the cat goes on along the edge. */

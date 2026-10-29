@@ -415,7 +415,14 @@ export function startApp(boot: AppBootstrap): RunningApp {
     clock: () => performance.now(),
   });
   // v1.1.1 on-desktop surface outlines: session-only debug aid, off at every start (never a setting).
-  const outlines = createSurfaceOutlines({ getLines: () => sim.surfaceDebugLines(), sink: overlays, logger: logger.child('surface-outlines') });
+  // They stay off displays with a fullscreen app in front unless the cat ignores those (the overlay
+  // manager also blanks them while the cat is hidden or out of sight).
+  const outlines = createSurfaceOutlines({
+    getLines: () => sim.surfaceDebugLines(),
+    getQuietDisplayIds: () => (settings.get().behavior.fullscreenBehavior === 'ignore' ? [] : (host?.fullscreenDisplayIds() ?? [])),
+    sink: overlays,
+    logger: logger.child('surface-outlines'),
+  });
 
   const tray = (() => {
     try {
@@ -659,7 +666,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
   overlays.start();
   host.start();
   resources.start();
-  // The cat's world in main.log from now on: counts by kind and a verdict code, on change, at most once a minute.
+  // The cat's world in main.log from now on: counts by kind, a verdict code, what it stands on and
+  // its trips up this session, on change, at most once a minute.
   surfaceSummaryTimer = setInterval(() => {
     attempt(log, 'surfaces summary', () => {
       surfaceSummaryLog.note(surfaceSummary(surfaceDiagnostics.get()), surfaceClock());

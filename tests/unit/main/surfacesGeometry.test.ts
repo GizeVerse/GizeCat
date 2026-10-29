@@ -10,10 +10,14 @@ import {
   offersSurfaces,
   parseSurfaceId,
   pickSpan,
+  STRIP_MIN_BODY_FRACTION,
   type SurfaceMeta,
   type WindowSurfaceOptions,
 } from '../../../src/main/surfaces/windowSurfaces';
+import { Mover } from '../../../src/core/movement';
 import type { DisplayGeometry } from '../../../src/shared/world';
+import { SINGLE } from '../core/behavior/fixtures';
+import { SurfaceDriver } from '../core/movement/surfaceDriver';
 
 const rect = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
 
@@ -180,6 +184,45 @@ describe('built surfaces', () => {
       expect(c.top).toBe(c.strip);
       // Not on a side of this window: nothing is held.
       expect(buildWindowSurfaces('7', r, spans, displays, META, placed, { surfaceId: 'windowSide:8:left', x: 300, y: 600, heldTop: 'windowTop' }).top?.kind).toBe('tabStrip');
+    });
+
+    it('a strip part narrower than its minWidth counts as no strip: the plain top stays listed and the side names it', () => {
+      // A window in front over the tabs from x = 400: the top edge is open on [308, 400), the
+      // strip (from 382) only on [382, 400), 18 px.
+      const spans = computeOpenSpans(r, [rect(400, 100, 1100, 200)], displays, OPTS);
+      const sliver = { ...placed, x0: 382, minWidth: 21 };
+      const b = buildWindowSurfaces('7', r, spans, displays, META, sliver, null);
+      expect(b.strip).toBeNull();
+      expect(b.top).toBe(b.windowTop);
+      expect(b.top).toMatchObject({ id: 'windowTop:7', x0: 308, x1: 400 });
+      expect(b.left?.topLedgeId).toBe('windowTop:7');
+      // At the minimum it is a strip (with the open edge as its landing span).
+      const fits = buildWindowSurfaces('7', r, spans, displays, META, { ...sliver, minWidth: 18 }, null);
+      expect(fits.top).toBe(fits.strip);
+      expect(fits.strip).toMatchObject({ x0: 382, x1: 400, land: { x0: 308, x1: 400 } });
+      expect(fits.left?.topLedgeId).toBe('tabStrip:7');
+      // Without a minimum (callers that do not know the cat): any open part.
+      expect(buildWindowSurfaces('7', r, spans, displays, META, { ...placed, x0: 382 }, null).strip).toMatchObject({ x0: 382, x1: 400 });
+      // Under a cat standing on it, the sliver goes on along the plain edge under the strip's id.
+      const under = buildWindowSurfaces('7', r, spans, displays, META, sliver, { surfaceId: 'tabStrip:7', x: 390, y: 200 });
+      expect(under.top).toMatchObject({ id: 'tabStrip:7', x0: 308, x1: 400, confidence: 0.5 });
+    });
+
+    it('the sim accepts what is listed for a sliver strip: the window keeps a top and the cat a way up (MC-4)', () => {
+      // SINGLE: 1920x1080 at 100 %, floor 1040; the cat is 84 px wide, so the sim's narrowest strip
+      // is 21 px. The window stands on the floor; a window in front covers its top from x = 400.
+      const w = SINGLE.displays;
+      const win = rect(300, 400, 800, 640);
+      const spans = computeOpenSpans(win, [rect(400, 300, 1100, 200)], w, OPTS);
+      const strip = { ...placed, y: 400, x0: 382, x1: 1050, minWidth: STRIP_MIN_BODY_FRACTION * 84 };
+      const b = buildWindowSurfaces('7', win, spans, w, META, strip, null);
+      const d = new SurfaceDriver(new Mover(SINGLE, { size: 1, movementSpeed: 1, allowMultiMonitor: true, perchOnWindows: true }, { displayId: '1', xFrac: 0.25 }), SINGLE);
+      d.extra = [b.top, b.left, b.right].filter((s): s is NonNullable<typeof s> => s !== null);
+      d.step();
+      d.step();
+      expect(d.m.navDiagnostics().rejected.tooNarrow ?? 0).toBe(0);
+      expect(d.m.ledgeSurfaces.map((s) => s.surfaceId)).toEqual(['windowTop:7']);
+      expect(d.m.climbOptions().length).toBeGreaterThan(0);
     });
 
     it('carries a strip that vanished under the cat along the plain top edge, under the strip id', () => {

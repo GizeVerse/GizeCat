@@ -36,8 +36,12 @@ export function surfaceLinesForDisplay(lines: readonly SurfaceDebugLine[], bound
 
 /** Where outline frames go (the overlay manager). */
 export interface SurfaceLinesSink {
-  /** Sends each ready overlay the segments on its display (physical px in). */
-  renderSurfaceLines(lines: readonly SurfaceDebugLine[]): void;
+  /**
+   * Sends each ready overlay the segments on its display (physical px in). Overlays on
+   * `quietDisplayIds` (a fullscreen app in front) and, while the cat is hidden or out of sight,
+   * every overlay get none: one clearing frame, then nothing until there is something to draw.
+   */
+  renderSurfaceLines(lines: readonly SurfaceDebugLine[], quietDisplayIds?: readonly string[]): void;
   /** One empty frame to every overlay that still shows outlines. */
   clearSurfaceLines(): void;
 }
@@ -61,6 +65,8 @@ const realTimers: SurfaceOutlinesTimers = {
 export function createSurfaceOutlines(opts: {
   /** The sim's segments (physical px). */
   getLines: () => readonly SurfaceDebugLine[];
+  /** Displays to keep clear of outlines (a fullscreen app in front); default none. */
+  getQuietDisplayIds?: () => readonly string[];
   sink: SurfaceLinesSink;
   logger: Logger;
   timers?: SurfaceOutlinesTimers;
@@ -74,7 +80,7 @@ export function createSurfaceOutlines(opts: {
 
   const frame = (): void => {
     try {
-      opts.sink.renderSurfaceLines(opts.getLines().slice(0, MAX_DEBUG_LINES));
+      opts.sink.renderSurfaceLines(opts.getLines().slice(0, MAX_DEBUG_LINES), opts.getQuietDisplayIds?.() ?? []);
       failures = 0;
     } catch (err) {
       failures++;

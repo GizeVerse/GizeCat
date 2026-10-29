@@ -84,12 +84,17 @@ class FakeTabs implements TabStripService {
 class TieredTabs extends FakeTabs implements TabStripServiceExtras {
   slow: string[][] = [];
   diag: TabStripDiagnostics = { state: 'active', helperRunning: true, interest: 2, strips: 1, reads: 7, errors: 1, lastReadAt: 900, lastRejection: null, lastRejectionAt: 0 };
+  /** Windows the service would say cannot give a strip for now (rejected, failing, vertical tabs...). */
+  unusableIds = new Set<string>();
   override setInterest(ids: readonly string[], now: number, slow: readonly string[] = []): void {
     super.setInterest(ids, now);
     this.slow.push([...slow]);
   }
   diagnostics(): TabStripDiagnostics {
     return { ...this.diag };
+  }
+  unusable(id: string): boolean {
+    return this.unusableIds.has(id);
   }
 }
 
@@ -848,6 +853,92 @@ describe('tab-strip interest beyond reach (v1.1.1)', () => {
     s.run(600);
     expect(tabs.interest.at(-1)!.ids).toEqual(['301', '302']);
   });
+
+  it('gives a far place to the next nearest browser while the service says a nearer one cannot give a strip (PWA, DevTools, vertical tabs)', () => {
+    const api = new SurfaceApi()
+      .add(browser('11', rect(1300, 700, 500, 300)))
+      .add(browser('12', rect(800, 650, 400, 300)))
+      .add(browser('13', rect(100, 600, 600, 300)))
+      // The farthest, with ordinary tabs.
+      .add(browser('20', rect(300, 150, 600, 300), { processName: 'chrome.exe' }));
+    const tabs = new TieredTabs();
+    tabs.unusableIds = new Set(['11', '12', '13']);
+    const s = setup({ api, tabs });
+    s.provider.noteCat({ x: 1700, y: 1152, surfaceId: null });
+    s.run(3000);
+    expect(tabs.interest.at(-1)!.ids).toEqual(['20']);
+    expect(tabs.slow.at(-1)).toEqual(['20']);
+    expect(tabs.interest.some((c) => c.ids.some((id) => id !== '20'))).toBe(false);
+    // 12 was resized (or announced a tab change): worth a read again, and it is nearer.
+    tabs.unusableIds.delete('12');
+    s.run(600);
+    expect(tabs.interest.at(-1)!.ids).toEqual(['12', '20']);
+  });
+
+  it('only Edge and Chrome are ever of interest, also the browser the cat is on and those within reach', () => {
+    const api = new SurfaceApi()
+      .add(browser('31', rect(300, 400, 800, 400), { processName: 'firefox.exe' }))
+      .add(browser('32', rect(1150, 420, 400, 300), { processName: 'brave.exe' }))
+      .add(browser('33', rect(1150, 800, 400, 300)));
+    const tabs = new TieredTabs();
+    const s = setup({ api, tabs });
+    // On Firefox's top, Brave's within reach: neither can be read, so neither takes a place.
+    s.provider.noteCat({ x: 1000, y: 400, surfaceId: 'windowTop:31' });
+    s.tick();
+    expect(tabs.interest.at(-1)!.ids).toEqual(['33']);
+    expect(tabs.slow.at(-1)).toEqual(['33']);
+  });
+
+  it('measures far browsers only while the cat is awake and free to move, so the helper can idle (asleep, paused, away)', () => {
+    const api = new SurfaceApi().add(browser('41', rect(1300, 400, 400, 300))).add(browser('42', rect(100, 300, 600, 400)));
+    const tabs = new TieredTabs();
+    const s = setup({ api, tabs });
+    s.provider.noteCat({ x: 200, y: 1152, surfaceId: null });
+    s.tick();
+    expect(tabs.interest.at(-1)!.ids).toEqual(['42', '41']);
+    // Asleep on the floor: nothing is of interest any more (said once), so the helper stops after
+    // its idle time.
+    s.provider.noteCat({ x: 200, y: 1152, surfaceId: null, asleep: true });
+    s.run(600);
+    expect(tabs.interest.at(-1)!.ids).toEqual([]);
+    const sent = tabs.interest.length;
+    s.run(5000);
+    expect(tabs.interest.length).toBe(sent);
+    expect(s.provider.debugInfo()).toMatchObject({ interest: 0, interestOpenTop: 0 });
+    // Awake again: measured again.
+    s.provider.noteCat({ x: 200, y: 1152, surfaceId: null });
+    s.run(600);
+    expect(tabs.interest.at(-1)!.ids).toEqual(['42', '41']);
+    // Next to 41's top: within reach it is still measured (normal rate) while paused or away,
+    // the far one is not.
+    for (const flag of [{ paused: true }, { away: true }, { asleep: true }]) {
+      s.provider.noteCat({ x: 1500, y: 390, surfaceId: null, ...flag });
+      s.run(600);
+      expect(tabs.interest.at(-1)!.ids, JSON.stringify(flag)).toEqual(['41']);
+      expect(tabs.slow.at(-1), JSON.stringify(flag)).toEqual([]);
+    }
+    s.provider.noteCat({ x: 1500, y: 390, surfaceId: null, asleep: false, paused: false, away: false });
+    s.run(600);
+    expect(tabs.interest.at(-1)!.ids).toEqual(['41', '42']);
+    expect(tabs.slow.at(-1)).toEqual(['42']);
+  });
+
+  it('a far browser needs room above its top for the cat, as its strip does (80 px at 125 %)', () => {
+    const api = new SurfaceApi().add(browser('51', rect(300, 79, 600, 300))).add(browser('52', rect(1000, 80, 600, 300)));
+    const tabs = new TieredTabs();
+    const s = setup({ api, tabs, displays: [disp('1', 0, 0, 1920, 1200, 1.25)] });
+    s.provider.noteCat({ x: 200, y: 1140, surfaceId: null });
+    const list = s.tick();
+    // Both tops are listed (the sim judges them); only 52 can ever have a readable strip.
+    expect(ids(list)).toEqual(expect.arrayContaining(['windowTop:51', 'windowTop:52']));
+    expect(tabs.interest.at(-1)!.ids).toEqual(['52']);
+    // A bigger cat (size 1.5: 120 px) fits above neither.
+    const big = defaultSettings();
+    big.appearance.size = 1.5;
+    s.provider.updateSettings(big);
+    s.run(600);
+    expect(tabs.interest.at(-1)!.ids).toEqual([]);
+  });
 });
 
 describe('tab strips and the window top (v1.1.1)', () => {
@@ -873,6 +964,38 @@ describe('tab strips and the window top (v1.1.1)', () => {
     expect(ledge(back, 'tabStrip:102')).toMatchObject({ x0: 341, x1: 1250, land: { x0: 308, x1: 1392 } });
     expect(byId(back, 'windowTop:102')).toBeUndefined();
     expect(s.provider.diagnostics().tabStrips.lastRejection).toBeNull();
+  });
+
+  it('a strip whose open part is narrower than the sim accepts (a quarter of the cat) leaves the plain top listed and named by the side', () => {
+    const api = new SurfaceApi().add(browser('102'));
+    // A window in front over nearly all of the tabs: the top edge is open on [308, 400), the
+    // strip (from 382) only on [382, 400): 18 px, under 0.25 x 84 = 21 px at 100 %.
+    api.extras = [{ id: 'front', rect: rect(400, 100, 1100, 200) }];
+    const s = setup({ api });
+    s.tabs!.ledges = [stripLedge('102', { x0: 382, rest: null, focusX: null })];
+    const list = s.tick();
+    expect(byId(list, 'tabStrip:102')).toBeUndefined();
+    expect(ledge(list, 'windowTop:102')).toMatchObject({ x0: 308, x1: 400 });
+    expect(wall(list, 'windowSide:102:left').topLedgeId).toBe('windowTop:102');
+    expect(s.provider.diagnostics().tabStrips.lastRejection).toBe('tooNarrow');
+    // The window in front moves 12 px right: a 30 px strip part is worth standing on.
+    api.extras = [{ id: 'front', rect: rect(412, 100, 1100, 200) }];
+    api.foregroundId = '102';
+    api.fire('foreground', '102');
+    const wider = s.run(200);
+    expect(ledge(wider, 'tabStrip:102')).toMatchObject({ x0: 382, x1: 412, land: { x0: 308, x1: 412 } });
+    expect(byId(wider, 'windowTop:102')).toBeUndefined();
+    expect(wall(wider, 'windowSide:102:left').topLedgeId).toBe('tabStrip:102');
+    expect(s.provider.diagnostics().tabStrips.lastRejection).toBeNull();
+    // A smaller cat (size 0.5: 10.5 px) fits on the 18 px part too.
+    api.extras = [{ id: 'front', rect: rect(400, 100, 1100, 200) }];
+    api.foregroundId = 'front';
+    api.fire('foreground', 'front');
+    expect(byId(s.run(200), 'tabStrip:102')).toBeUndefined();
+    const small = defaultSettings();
+    small.appearance.size = 0.5;
+    s.provider.updateSettings(small);
+    expect(ledge(s.run(200), 'tabStrip:102')).toMatchObject({ x0: 382, x1: 400 });
   });
 
   it('a strip ledge carries the open top edge it lies on as its landing span', () => {

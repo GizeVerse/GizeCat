@@ -740,13 +740,18 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       e.hitAt = opts.clock();
       e.hitAnchor = lastOutput ? { x: lastOutput.x, y: lastOutput.y } : null;
     },
-    renderSurfaceLines(lines) {
+    renderSurfaceLines(lines, quietDisplayIds = []) {
       const world = opts.display.world;
+      // Hiding the cat (shortcut, tray) or the sim taking it out of sight clears the screen: the
+      // outlines go too (one clearing frame, then nothing) and come back when the cat does.
+      const outOfSight = lastHidden || lastOutput?.visible === false;
       for (const e of entries.values()) {
         if (!alive(e) || !e.ready) continue;
         const geo = world.displays.find((d) => d.id === e.displayId) ?? e.geometry;
+        // Nothing is drawn over a fullscreen app either (quietDisplayIds).
+        const quiet = outOfSight || quietDisplayIds.includes(e.displayId);
         // The cat's render state uses this same mapping (render() above).
-        const local = surfaceLinesForDisplay(lines, geo.workAreaPx, (p) => opts.display.toLocalDip(e.displayId, p));
+        const local = quiet ? [] : surfaceLinesForDisplay(lines, geo.workAreaPx, (p) => opts.display.toLocalDip(e.displayId, p));
         if (local.length === 0 && e.outlineLines === 0) continue;
         const payload: SurfaceLinesPayload = { lines: local };
         send(e, IPC.overlaySurfaceLines, payload);

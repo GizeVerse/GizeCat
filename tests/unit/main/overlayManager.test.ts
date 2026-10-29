@@ -769,6 +769,48 @@ describe('overlay manager: surface outlines (v1.1.1 debug aid)', () => {
     expect(outlineFrames('A')).toHaveLength(3);
   });
 
+  it('hiding the cat clears the outlines too (one empty frame, then nothing) and showing it brings them back (SEC-1)', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    expect(outlineFrames('A')).toHaveLength(1);
+    // The global hide shortcut or the tray (before a screen share, say).
+    rig.mgr.render(output({ x: 800, y: 860 }), 2, true);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    expect(outlineFrames('A').slice(1)).toEqual([[]]);
+    expect(outlineFrames('B')).toEqual([]);
+    rig.mgr.render(output({ x: 800, y: 860 }), 3, false);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    expect(outlineFrames('A').at(-1)).toEqual([{ kind: 'windowTop', role: 'valid', x0: 100, y0: 400, x1: 500, y1: 400 }]);
+  });
+
+  it('nothing is drawn while the sim keeps the cat out of sight (a fullscreen app in front, fullscreenBehavior hide)', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    rig.mgr.render(output({ x: 800, y: 860 }, { visible: false }), 2, false);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    expect(outlineFrames('A')).toHaveLength(2);
+    expect(outlineFrames('A').at(-1)).toEqual([]);
+    rig.mgr.render(output({ x: 800, y: 860 }), 3, false);
+    rig.mgr.renderSurfaceLines([seg(100, 400, 500, 400)]);
+    expect(outlineFrames('A').at(-1)).toHaveLength(1);
+  });
+
+  it('a display named quiet (fullscreen app in front) gets no outlines while the others still do', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    const lines = [seg(100, 400, 500, 400), seg(1700, 300, 1900, 300)];
+    rig.mgr.renderSurfaceLines(lines);
+    rig.mgr.renderSurfaceLines(lines, ['B']);
+    rig.mgr.renderSurfaceLines(lines, ['B']);
+    expect(outlineFrames('B')).toEqual([[{ kind: 'windowTop', role: 'valid', x0: 100, y0: 300, x1: 300, y1: 300 }], []]);
+    expect(outlineFrames('A')).toHaveLength(3);
+    expect(outlineFrames('A').every((f) => f.length === 1)).toBe(true);
+    // The fullscreen app is gone: back.
+    rig.mgr.renderSurfaceLines(lines, []);
+    expect(outlineFrames('B').at(-1)).toHaveLength(1);
+  });
+
   it('a recreated overlay gets outlines once its new renderer is ready', () => {
     const old = rig.win('A');
     old.closeFromOutside();

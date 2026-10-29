@@ -133,6 +133,8 @@ export interface CatHost {
   catBoundsPx(): Rect | null;
   catDisplayId(): string | null;
   catAnchor(): Point | null;
+  /** Displays with a fullscreen app in front, as last handed to the sim (re-checked about once a second). */
+  fullscreenDisplayIds(): readonly string[];
   debug(): CatHostDebug;
 }
 
@@ -190,11 +192,23 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
   };
 
-  /** Where the cat is and what it stands on; also while hidden (the sim keeps it on its surface). */
+  /**
+   * Where the cat is and what it stands on; also while hidden (the sim keeps it on its surface).
+   * Asleep, paused or away (out of sight for a fullscreen app) it makes no trips: the provider
+   * then stops measuring far browsers.
+   */
   function catPosition(): CatPosition | null {
     const out = lastOutput;
     if (!out) return null;
-    return { x: out.x, y: out.y, surfaceId: out.support.kind === 'surface' ? out.support.surfaceId : null, hidden };
+    return {
+      x: out.x,
+      y: out.y,
+      surfaceId: out.support.kind === 'surface' ? out.support.surfaceId : null,
+      hidden,
+      asleep: ASLEEP.has(out.state),
+      paused,
+      away: out.state === 'away' || !out.visible,
+    };
   }
 
   function readSurfaces(nowReal: number): readonly Surface[] {
@@ -609,6 +623,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     catBoundsPx: () => (lastOutput && lastOutput.visible && !hidden ? lastOutput.boundsPx : null),
     catDisplayId: () => lastOutput?.displayId ?? null,
     catAnchor: () => (lastOutput ? { x: lastOutput.x, y: lastOutput.y } : null),
+    fullscreenDisplayIds: () => [...fullscreenIds],
     debug: () => ({
       ticks,
       tickErrors,

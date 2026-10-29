@@ -92,10 +92,10 @@ function fakeTimers() {
 }
 
 function recordingSink() {
-  const frames: Array<{ at: string; lines: readonly SurfaceDebugLine[] }> = [];
+  const frames: Array<{ at: string; lines: readonly SurfaceDebugLine[]; quiet?: readonly string[] | undefined }> = [];
   let clears = 0;
   const sink: SurfaceLinesSink = {
-    renderSurfaceLines: (lines) => frames.push({ at: 'render', lines }),
+    renderSurfaceLines: (lines, quiet) => frames.push({ at: 'render', lines, quiet }),
     clearSurfaceLines: () => {
       clears++;
     },
@@ -153,6 +153,24 @@ describe('surface outlines driver', () => {
     expect(t.active).toBe(0);
     outlines.setEnabled(false);
     expect(rec.clears).toBe(1);
+  });
+
+  it('hands each frame the displays to keep clear (a fullscreen app in front), read fresh every frame', () => {
+    const t = fakeTimers();
+    const rec = recordingSink();
+    let quiet: string[] = ['2'];
+    const outlines = createSurfaceOutlines({ getLines: () => [seg(0, 0, 10, 0)], getQuietDisplayIds: () => quiet, sink: rec.sink, logger: memoryLogger(), timers: t.timers });
+    outlines.setEnabled(true);
+    quiet = [];
+    t.advance(250);
+    expect(rec.frames.map((f) => f.quiet)).toEqual([['2'], []]);
+    // Without a source: none.
+    const plain = recordingSink();
+    const other = createSurfaceOutlines({ getLines: () => [], sink: plain.sink, logger: memoryLogger(), timers: fakeTimers().timers });
+    other.setEnabled(true);
+    expect(plain.frames[0]!.quiet).toEqual([]);
+    other.dispose();
+    outlines.dispose();
   });
 
   it('caps every frame at MAX_DEBUG_LINES and contains a failing source', () => {
