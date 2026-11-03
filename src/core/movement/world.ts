@@ -59,6 +59,11 @@ export interface Surface {
   phase: SurfacePhase;
   /** Ledges: vertical motion reported by the provider, px/s (negative = up). */
   vy: number;
+  /**
+   * v1.2 (MoverConfig.narrowLedges): a window top narrower than MOVEMENT.narrowLedgeBelowBodyLengths
+   * body lengths, its raw width in px (the cat balances on it). Absent on every other surface.
+   */
+  narrowWidthPx?: number;
 }
 
 /**
@@ -66,12 +71,24 @@ export interface Surface {
  * the grip point on the wall line at hind-paw height and the body extends upwards.
  */
 export interface WallTrack {
-  /** The environment surface id. */
+  /** The environment surface id (screen edges: `screenEdge:<displayId>:<left|right>`). */
   key: string;
+  /**
+   * v1.2: a window side, or an outer screen edge (MoverConfig.screenEdges): derived from the world
+   * geometry, no window, no top ledge (the cat holds at the top instead of pulling up).
+   */
+  kind: 'windowSide' | 'screenEdge';
+  /** Screen edges: which side of the display the edge is on (`side` is the mirrored wall side). */
+  screenSide?: 'left' | 'right';
   ownerId: string;
   displayId: string;
   /** The wall line (the window's visible side). */
   x: number;
+  /**
+   * Which side of the solid the line is: a window's left or right side. The cat hangs outside the
+   * solid. A display's LEFT screen edge is the right side of the off-screen region ('right': the
+   * cat clings inside the screen, facing left), and the other way round.
+   */
   side: 'left' | 'right';
   /** +1 when the cat hangs on a window's left side (wall to its right), -1 on a right side. */
   facing: Facing;
@@ -119,6 +136,17 @@ export function isUsableDisplay(d: DisplayGeometry): boolean {
   );
 }
 
+/** v1.2 world options (MoverConfig flags the world model needs). */
+export interface WorldOptions {
+  /** Accept window tops down to MOVEMENT.narrowLedgeMinBodyLengths wide (narrow ledges). */
+  narrowLedges?: boolean;
+  /**
+   * Every display of the full geometry, for the screen-edge neighbour test: a world restricted to
+   * one display (multi-monitor roaming off) still never puts a wall between two monitors.
+   */
+  neighbours?: readonly DisplayGeometry[];
+}
+
 export class WorldModel {
   readonly displays: readonly DisplayGeometry[];
   readonly version: number;
@@ -126,15 +154,17 @@ export class WorldModel {
   readonly joinFloors: boolean;
   readonly usedFallback: boolean;
   readonly floors: readonly Surface[];
+  readonly options: WorldOptions;
   private readonly floorByDisplay = new Map<string, Surface>();
 
-  constructor(geometry: WorldGeometry, size: number, joinFloors: boolean) {
+  constructor(geometry: WorldGeometry, size: number, joinFloors: boolean, options: WorldOptions = {}) {
     const usable = geometry.displays.filter(isUsableDisplay);
     this.usedFallback = usable.length === 0;
     this.displays = this.usedFallback ? [FALLBACK_DISPLAY] : usable;
     this.version = geometry.version;
     this.size = Number.isFinite(size) && size > 0 ? size : 1;
     this.joinFloors = joinFloors;
+    this.options = options;
     this.floors = this.buildFloors();
     for (const f of this.floors) for (const id of f.displayIds) this.floorByDisplay.set(id, f);
   }
@@ -142,7 +172,7 @@ export class WorldModel {
   /** A world containing only one display (used when multi-monitor roaming is off). */
   restrictTo(displayId: string): WorldModel {
     const d = this.display(displayId) ?? this.primary;
-    return new WorldModel({ version: this.version, displays: [d] }, this.size, false);
+    return new WorldModel({ version: this.version, displays: [d] }, this.size, false, { ...this.options, neighbours: this.options.neighbours ?? this.displays });
   }
 
   /** Always present: the world has at least one display. */
@@ -339,7 +369,11 @@ export class WorldModel {
     // Tab strips arrive as ANCHOR spans already clear of the browser controls and inset by half the
     // cat (src/main/uia/segment.ts), so they are not narrowed again and may be shorter than a body.
     const anchorSpan = l.kind === 'tabStrip';
-    if (lx1 - lx0 < (relaxed ? 1 : anchorSpan ? bw * 0.25 : bw * 0.9)) return 'tooNarrow';
+    // v1.2 narrow ledges: a window top down to a quarter body (the cat balances on it).
+    const narrowOk = this.options.narrowLedges === true && l.kind === 'windowTop';
+    const minWidth = narrowOk ? bw * MOVEMENT.narrowLedgeMinBodyLengths : bw * 0.9;
+    if (lx1 - lx0 < (relaxed ? 1 : anchorSpan ? bw * 0.25 : minWidth)) return 'tooNarrow';
+    const narrow = narrowOk && lx1 - lx0 < bw * MOVEMENT.narrowLedgeBelowBodyLengths ? { narrowWidthPx: lx1 - lx0 } : {};
     // A taskbar spans its display: like on a floor, the cat keeps its whole body on screen.
     const inset = l.kind === 'taskbar' ? bw / 2 : anchorSpan ? 0 : bw * 0.25;
     let x0 = lx0 + inset;
@@ -381,6 +415,7 @@ export class WorldModel {
       focusX: typeof l.focusX === 'number' && Number.isFinite(l.focusX) ? l.focusX : null,
       phase: l.phase === 'entering' || l.phase === 'leaving' ? l.phase : 'stable',
       vy: Number.isFinite(l.vy) ? l.vy : 0,
+      ...narrow,
     };
   }
 
@@ -423,6 +458,7 @@ export class WorldModel {
     if (yBottom - yTop < bw * 0.25) return 'tooShort';
     return {
       key: w.id,
+      kind: 'windowSide',
       ownerId: typeof w.ownerId === 'string' ? w.ownerId : '',
       displayId: d.id,
       x: w.x,
@@ -437,6 +473,59 @@ export class WorldModel {
       phase: w.phase === 'entering' || w.phase === 'leaving' ? w.phase : 'stable',
       scale: d.scaleFactor,
     };
+  }
+
+  /**
+   * v1.2 (ADR 0003 §6.1): climbable walls at the outer left and right work-area edges. A side gets
+   * one only when no other display of the full geometry is its neighbour there (bounds overlapping
+   * that side over more than 2 px, within the floor-join tolerance at the larger scale; a corner
+   * touch is no neighbour), no taskbar is docked on it (`taskbarSides`: `<displayId>:<side>` seen as
+   * side taskbars, auto-hide ones included; or a work area inset from the bounds), and the display
+   * leaves at least MOVEMENT.screenEdgeMinBodyHeights body heights between the floor and the top
+   * hold point (MOVEMENT.screenEdgeTopClearanceDip below the work-area top). The cat clings inside
+   * the screen; there is no ledge at the top.
+   */
+  screenEdgeWalls(taskbarSides: ReadonlySet<string> = NO_IDS): WallTrack[] {
+    if (this.usedFallback) return [];
+    const all = this.options.neighbours ?? this.displays;
+    const out: WallTrack[] = [];
+    for (const d of this.displays) {
+      const b = d.boundsPx;
+      const wa = d.workAreaPx;
+      const bw = this.bodyWidth(d.scaleFactor);
+      const bh = this.bodyHeight(d.scaleFactor);
+      const yTop = wa.y + MOVEMENT.screenEdgeTopClearanceDip * d.scaleFactor;
+      const yBottom = rectBottom(wa);
+      if (yBottom - yTop < MOVEMENT.screenEdgeMinBodyHeights * bh) continue;
+      for (const screenSide of ['left', 'right'] as const) {
+        if (taskbarSides.has(`${d.id}:${screenSide}`)) continue;
+        // A docked side taskbar insets the work area from the bounds on that side.
+        if (screenSide === 'left' ? wa.x > b.x + 0.5 : rectRight(b) > rectRight(wa) + 0.5) continue;
+        const lineX = screenSide === 'left' ? b.x : rectRight(b);
+        if (all.some((o) => o.id !== d.id && isUsableDisplay(o) && neighbourAt(d, o, lineX))) continue;
+        const x = screenSide === 'left' ? wa.x : rectRight(wa);
+        const inward = screenSide === 'left' ? 1 : -1;
+        out.push({
+          key: `${SCREEN_EDGE_KEY}:${d.id}:${screenSide}`,
+          kind: 'screenEdge',
+          screenSide,
+          ownerId: '',
+          displayId: d.id,
+          x,
+          side: screenSide === 'left' ? 'right' : 'left',
+          facing: screenSide === 'left' ? -1 : 1,
+          y0: wa.y,
+          y1: yBottom,
+          yTop,
+          yBottom,
+          standX: x + inward * bw * 0.55,
+          topLedgeId: null,
+          phase: 'stable',
+          scale: d.scaleFactor,
+        });
+      }
+    }
+    return out;
   }
 
   private buildFloors(): Surface[] {
@@ -530,6 +619,23 @@ function capped<T extends { id: string }, R extends object>(
     if (!kept) others++;
   }
   return out;
+}
+
+/** Key prefix of screen-edge walls (the derived kind src/shared/surfaces.ts calls SCREEN_EDGE_KIND). */
+export const SCREEN_EDGE_KEY = 'screenEdge';
+
+/**
+ * `o` borders `d` along the vertical line x = `lineX` (one of d's sides, physical px): its bounds
+ * reach that line within the floor-join tolerance at the larger scale of the two, and the two
+ * overlap vertically over more than 2 px (a corner-only contact is no neighbour).
+ */
+function neighbourAt(d: DisplayGeometry, o: DisplayGeometry, lineX: number): boolean {
+  const tol = MOVEMENT.floorJoinToleranceDip * Math.max(d.scaleFactor, o.scaleFactor);
+  const ob = o.boundsPx;
+  const db = d.boundsPx;
+  if (lineX < ob.x - tol || lineX > rectRight(ob) + tol) return false;
+  const overlap = Math.min(rectBottom(db), rectBottom(ob)) - Math.max(db.y, ob.y);
+  return overlap > 2;
 }
 
 function clampToWorkArea(d: DisplayGeometry, p: Point): Point {

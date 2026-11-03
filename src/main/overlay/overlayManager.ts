@@ -13,7 +13,8 @@ import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
 import type { DisplayService, Logger, Unsubscribe } from '../contracts';
 import type { WindowRegistry } from '../security';
 import { crashBackoff, boundsDiffer, planOverlaySync } from './displayDiff';
-import { clipRects, decideInteractive } from '../../core/interaction/clickThrough';
+import { clipRects, cursorInHitZone, decideInteractive } from '../../core/interaction/clickThrough';
+import { SCREEN_EDGE_KIND } from '../../shared/surfaces';
 import type { GestureRecognizer } from '../../core/interaction/gestures';
 import { createOverlayShell, createOverlayWindow, overlayUrl, type OverlayShell } from './overlayWindow';
 import { displaysShowingCat, hiddenRenderState, mapRenderState } from './renderMapping';
@@ -48,6 +49,11 @@ const TASKBAR_CREATED_DEDUPE_MS = 1000;
 const NO_RECTS: readonly Rect[] = Object.freeze([]);
 /** Excluded when the exclusion source fails: no hover anywhere (an ongoing drag keeps its captured pointer). */
 const EVERYWHERE: readonly Rect[] = Object.freeze([{ x: -1e9, y: -1e9, width: 2e9, height: 2e9 }]);
+/**
+ * v1.2 hover dwell (ADR 0003 §6.1): a cat clinging to a screen edge takes the mouse only after the
+ * cursor has rested on it this long, so a passing click goes to the window behind it.
+ */
+export const CLING_HOVER_DWELL_MS = 300;
 
 export interface OverlayInfo {
   displayId: string;
@@ -158,6 +164,8 @@ interface Entry {
   taskbarHooked: boolean;
   /** Surface outline segments the renderer currently shows (0 = none: an empty frame need not be sent). */
   outlineLines: number;
+  /** v1.2 hover dwell: main time since which the cursor rests in this overlay's hit zone (null: not). */
+  hoverSince: number | null;
 }
 
 export function createOverlayManager(opts: OverlayManagerOptions): OverlayManager {
@@ -179,6 +187,13 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
   let lastWatchdogAt: number | null = null;
   let lastTaskbarCreatedAt: number | null = null;
   let excludedErrors = 0;
+  /**
+   * v1.2 global sound dedupe (ADR 0003 §10): the `at` of the last cue sent, and the display whose
+   * overlay held the anchor when it was first emitted. Each cue goes out once, to that overlay only,
+   * whatever later renders (display changes, recreated overlays, a cat straddling two displays) do.
+   */
+  let lastSoundAt: number | null = null;
+  let soundDisplayId: string | null = null;
   const topmostReasserts: number[] = [];
   const shell = opts.shell ?? createOverlayShell(log.child('shell'));
 
@@ -284,6 +299,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       nonRude: false,
       taskbarHooked: false,
       outlineLines: 0,
+      hoverSince: null,
     };
     entries.set(d.id, e);
     byWc.set(e.wcId, e);
@@ -487,6 +503,14 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     const world = opts.display.world;
     const showing = displaysShowingCat(out, world.displays, appearance, hidden);
     const now = opts.clock();
+    // A cue is new on its first emission only (by `at`): it then belongs to the overlay holding the
+    // anchor and is never sent again, also when the same output is rendered again.
+    const cue = out.sound ?? null;
+    const newCue = cue !== null && Number.isFinite(cue.at) && cue.at !== lastSoundAt;
+    if (newCue) {
+      lastSoundAt = cue.at;
+      soundDisplayId = out.displayId;
+    }
     for (const e of entries.values()) {
       if (!alive(e)) continue;
       // The overlay that took the press keeps the pointer captured for the whole drag,
@@ -504,8 +528,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           hidden,
           simNow,
           movementSpeed,
-          // v1.2: a sound cue goes to the one overlay holding the anchor, and only while sound is on.
-          soundOwner: settingsNow.sound.enabled && e.displayId === out.displayId,
+          // v1.2: a sound cue goes once, to the one overlay that held the anchor when it was first
+          // emitted (global dedupe), only while sound is on and that overlay can receive it now.
+          soundOwner: settingsNow.sound.enabled && newCue && e.displayId === soundDisplayId && e.ready && !e.crashed,
           soundVolume: settingsNow.sound.volume,
         });
         if (!e.active) {
@@ -513,7 +538,8 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           e.activatedAt = now;
           e.hitRectsPx = null;
         }
-        e.lastState = state;
+        // Never kept for a re-send (ready, recreate): a cue is played once.
+        e.lastState = state.sound ? { ...state, sound: null } : state;
         if (e.ready) {
           send(e, IPC.overlayRender, state);
           e.needSnap = false;
@@ -602,6 +628,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     watchdog(now);
     const buttonDown = opts.isLeftButtonDown();
     const excluded = forced === null ? excludedRects() : NO_RECTS;
+    // v1.2: clinging to a screen edge, the cat takes the mouse only after the hover dwell.
+    const support = lastOutput?.support;
+    const clinging = support?.kind === 'surface' && support.surfaceKind === SCREEN_EDGE_KIND;
     for (const e of entries.values()) {
       if (!alive(e)) continue;
       if (e.pressed && pressLost(e, buttonDown, cursorPx, now)) {
@@ -612,7 +641,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       if (forced !== null) interactive = forced;
       else {
         const region = effectiveRegions(e, now);
-        interactive = decideInteractive({
+        const input = {
           cursor: cursorPx,
           hitRects: region.rects,
           excludeRects: excluded,
@@ -622,6 +651,14 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           rendererHealthy: live(e),
           dragging: e.pressed,
           hitRegionAgeMs: region.ageMs,
+        };
+        // The dwell clock runs while the cursor rests in the (clipped) hit zone; leaving it restarts it.
+        if (clinging && !blocked && cursorInHitZone(input)) e.hoverSince ??= now;
+        else e.hoverSince = null;
+        interactive = decideInteractive({
+          ...input,
+          hoverDwellMs: clinging ? CLING_HOVER_DWELL_MS : 0,
+          ...(e.hoverSince !== null ? { hoveredMs: now - e.hoverSince } : {}),
         });
       }
       setIgnore(e, !interactive);

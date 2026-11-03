@@ -72,6 +72,8 @@ interface Pending {
   resolve: (r: HelperResponse) => void;
   reject: (e: HelperTransportError) => void;
   sentAt: number;
+  /** This request's timeout (ms): requestTimeoutMs unless the caller asked for a longer one. */
+  timeoutMs: number;
 }
 
 function errorCode(e: unknown): string {
@@ -177,8 +179,12 @@ export class UiaHelperClient {
     return true;
   }
 
-  /** Sends a request. Resolves with the helper's response (ok or error); rejects only on transport failure. */
-  request(req: HelperRequest, now: number): Promise<HelperResponse> {
+  /**
+   * Sends a request. Resolves with the helper's response (ok or error); rejects only on transport
+   * failure. `timeoutMs` (v1.2) gives this request a longer timeout than requestTimeoutMs (File
+   * Explorer's UI thread can be busy for over a second); shorter values are raised to the default.
+   */
+  request(req: HelperRequest, now: number, timeoutMs?: number): Promise<HelperResponse> {
     const child = this.child;
     const stdin = child?.stdin;
     if (!child || this.expectedExit || !stdin || stdin.destroyed || !stdin.writable) {
@@ -188,8 +194,9 @@ export class UiaHelperClient {
     const id = this.nextId;
     this.nextId = this.nextId >= MAX_REQUEST_ID ? 1 : this.nextId + 1;
     this.lastTimeoutCheckAt = Math.max(this.lastTimeoutCheckAt, now);
+    const limit = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) ? Math.max(this.o.requestTimeoutMs, timeoutMs) : this.o.requestTimeoutMs;
     return new Promise<HelperResponse>((resolve, reject) => {
-      this.pending.set(id, { req, resolve, reject, sentAt: now });
+      this.pending.set(id, { req, resolve, reject, sentAt: now, timeoutMs: limit });
       try {
         stdin.write(encodeRequest(id, req));
       } catch {
@@ -205,7 +212,9 @@ export class UiaHelperClient {
    * least every timeout period; a longer gap since the previous call (or request) means the host
    * itself was stalled or suspended, not the helper, so pending requests get a fresh period instead.
    * The requests that timed out are appended to `timedOut` in the order they were sent (the helper
-   * answers one request at a time, so the first is the one it is stuck in).
+   * answers one request at a time, so the first is the one it is stuck in). With per-request
+   * timeouts, a request queued behind a longer-timeout one can expire first: then every request
+   * sent before it expires with it, so the first one is still the one the helper is stuck in.
    */
   checkTimeouts(now: number, timedOut?: HelperRequest[]): number {
     const gap = now - this.lastTimeoutCheckAt;
@@ -214,9 +223,17 @@ export class UiaHelperClient {
       for (const p of this.pending.values()) p.sentAt = Math.max(p.sentAt, now);
       return 0;
     }
+    // Map order is send order: expire everything up to the last request past its own timeout.
+    let lastExpired = -1;
+    let i = 0;
+    for (const p of this.pending.values()) {
+      if (now - p.sentAt >= p.timeoutMs) lastExpired = i;
+      i++;
+    }
     let n = 0;
+    i = 0;
     for (const [id, p] of this.pending) {
-      if (now - p.sentAt < this.o.requestTimeoutMs) continue;
+      if (i++ > lastExpired) break;
       this.pending.delete(id);
       n++;
       timedOut?.push(p.req);

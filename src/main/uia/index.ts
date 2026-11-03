@@ -1,10 +1,14 @@
-// Browser tab strips through the DesktopCatUia UI Automation helper (ADR 0002 §3).
+// Tab strips through the DesktopCatUia UI Automation helper (ADR 0002 §3; v1.2 TabView reader and
+// allow-list, ADR 0003 §7).
 //   createTabStripService(deps)   -> TabStripService (src/main/contracts.ts)
 //   resolveUiaHelperPath(opts)    -> path of DesktopCatUia.exe, or null when it is not installed
 import fs from 'node:fs';
 import path from 'node:path';
 
-export { createTabStripService, DEFAULT_TAB_STRIP_OPTIONS, hasTabStripExtras, TAB_STRIP_BROWSERS, tabStripSurfaceId } from './service';
+export { createTabStripService, DEFAULT_TAB_STRIP_OPTIONS, hasTabStripExtras, tabStripSurfaceId } from './service';
+export { EXPLORER_SOAK_PASSED, TAB_STRIP_APPS, tabStripAppRule, tabStripRuleFor, UIA_NEVER_QUERY } from './allowList';
+export type { TabStripAppRule, TabStripAppSlug, TabStripRuleOverrides } from './allowList';
+export { UIA_HEALTH_FILE } from './health';
 export type { TabStripDebug, TabStripDiagnostics, TabStripServiceDeps, TabStripServiceExtras, TabStripServiceImpl, TabStripServiceOptions } from './service';
 export type { ChildProcessLike } from './client';
 export { computeTabStripSegment, catExtentPx } from './segment';

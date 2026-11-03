@@ -16,7 +16,7 @@
 import type { SettingsAction, SettingsViewState } from '../../../../../src/shared/ipc';
 import { IPC } from '../../../../../src/shared/ipc';
 import { applySettingsPatch } from '../../../../../src/shared/settings';
-import { previewSurfaceDiagnostics, previewView } from './fixture';
+import { previewBehaviorProfile, previewSurfaceDiagnostics, previewView } from './fixture';
 
 // ---------------------------------------------------------------------------
 // Minimal local typings
@@ -221,6 +221,7 @@ function installIpc(): void {
   }));
   ipcMain.handle(IPC.settingsListModels, () => ({ ok: true, models: ['example-vision-a', 'example-vision-b:small'] }));
   ipcMain.handle(IPC.settingsGetSurfaceDiagnostics, () => previewSurfaceDiagnostics(NOW));
+  ipcMain.handle(IPC.settingsGetBehaviorProfile, () => previewBehaviorProfile(NOW));
   ipcMain.handle(IPC.settingsPreviewPerception, () => ({
     ok: true,
     imageDataUrl: previewImage(),
@@ -354,6 +355,42 @@ async function behaviourChecks(): Promise<void> {
   const reverted = after.value === 'Control+Alt+Shift+C' && after.error.includes('shortcut already in use') && after.invalid;
   console.log(`harness: reject/revert check ${reverted ? 'ok' : 'FAILED'} ${JSON.stringify(after)}`);
   if (!reverted) problems.push(`revert on rejection: ${JSON.stringify(after)}`);
+
+  // v1.2 Personality: a preset card sends one multi-section patch; a governed slider sends its
+  // value with activityPreset 'custom', and the Custom card names the closest preset.
+  await goto('behavior');
+  updates.length = 0;
+  await js(`document.querySelector('.page:not([hidden]) .preset-calm').click()`);
+  await sleep(300);
+  const presetPatches = JSON.stringify(updates);
+  const presetOk =
+    updates.length === 1 &&
+    view.settings.behavior.activityPreset === 'calm' &&
+    view.settings.behavior.autonomy === 0.35 &&
+    view.settings.interaction.reactionIntensity === 0.35 &&
+    (await js<string>(`document.querySelector('.page:not([hidden]) .preset-calm').getAttribute('aria-checked')`)) === 'true';
+  console.log(`harness: preset check ${presetOk ? 'ok' : 'FAILED'} ${presetPatches}`);
+  if (!presetOk) problems.push(`preset card: ${presetPatches}`);
+  updates.length = 0;
+  await js(`(() => {
+    const s = document.querySelector('.page:not([hidden]) .slider-input');
+    s.value = '0.5'; s.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await sleep(300);
+  const custom = await js<{ checked: string | null; title: string }>(`(() => {
+    const c = document.querySelector('.page:not([hidden]) .preset-custom');
+    return { checked: c.getAttribute('aria-checked'), title: c.querySelector('.option-title').textContent };
+  })()`);
+  const customOk =
+    JSON.stringify(updates) === JSON.stringify([{ behavior: { autonomy: 0.5, activityPreset: 'custom' } }]) &&
+    view.settings.behavior.activityPreset === 'custom' &&
+    custom.checked === 'true' &&
+    custom.title === 'Custom (closest: Calm)';
+  console.log(`harness: custom check ${customOk ? 'ok' : 'FAILED'} ${JSON.stringify(updates)} ${JSON.stringify(custom)}`);
+  if (!customOk) problems.push(`custom preset: ${JSON.stringify(updates)} ${JSON.stringify(custom)}`);
+  await js(`document.querySelector('.page:not([hidden]) .preset-playful').click()`);
+  await sleep(300);
+  if (view.settings.behavior.activityPreset !== 'playful') problems.push('back to Playful failed');
 }
 
 async function run(theme: 'light' | 'dark'): Promise<void> {
@@ -362,6 +399,11 @@ async function run(theme: 'light' | 'dark'): Promise<void> {
     await goto(p);
     await shot(`${p}-${theme}`, true);
   }
+  // v1.2: the Behaviour page with Fine-tune open.
+  await goto('behavior');
+  await js(`document.querySelector('.page:not([hidden]) .fine-tune').open = true`);
+  await shot(`behavior-finetune-${theme}`, true);
+  await js(`document.querySelector('.page:not([hidden]) .fine-tune').open = false`);
   if (theme === 'light') await behaviourChecks();
   // Consent dialog for local statistics.
   await goto('privacy');

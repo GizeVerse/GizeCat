@@ -523,6 +523,17 @@ function earGeom(src: readonly [number, number, number, number, number, number],
   }
 }
 
+/**
+ * Head-local corners (base, tip, base; x,y interleaved) of one ear as drawHead places it for pose
+ * `p`: which 0 = the back ear, 1 = the front ear. The head's hit region uses them (scene.ts).
+ */
+export function earCorners(p: Pose, which: 0 | 1, out: Float64Array): void {
+  const shift = clamp(p.faceTurn, -2, 1) * 1.6;
+  if (which === 0) earGeom(EAR_BACK, p.earBR, p.earBF, shift * 0.6);
+  else earGeom(EAR_FRONT, p.earFR, p.earFF, shift);
+  for (let i = 0; i < 6; i++) out[i] = ear[i]!;
+}
+
 function traceEar(ctx: Ctx2D, inset: number): void {
   let b1x = ear[0]!;
   let b1y = ear[1]!;

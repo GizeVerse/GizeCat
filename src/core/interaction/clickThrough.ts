@@ -1,7 +1,8 @@
 // Click-through decision for the overlays (pure). The overlay ignores the mouse unless
 // the cursor is inside the cat's reported hit region, minus the screen areas that must
-// always reach the window below (taskbars); everything uncertain resolves to
-// "click-through" so the cat can never block the desktop.
+// always reach the window below (taskbars; v1.2 also the windows next to a cat at a screen
+// edge, wallGuardRects); everything uncertain resolves to "click-through" so the cat can
+// never block the desktop. v1.2: an optional hover dwell delays interactivity.
 import type { Point, Rect } from '../../shared/geometry';
 
 export interface ClickThroughInput {
@@ -23,6 +24,14 @@ export interface ClickThroughInput {
   dragging: boolean;
   /** Age of the last hit-region report (ms); Infinity when none was received. */
   hitRegionAgeMs: number;
+  /**
+   * v1.2 hover dwell (ADR 0003 §6.1, T8): when > 0, an overlay that is not yet interactive turns
+   * interactive only after the cursor has stayed inside the (clipped) hit region for this long, so a
+   * passing click never lands on a cat clinging to a screen edge while a deliberate grab still works.
+   */
+  hoverDwellMs?: number;
+  /** How long the cursor has been inside the hit region without a break (ms). Unknown = not yet. */
+  hoveredMs?: number;
 }
 
 export interface ClickThroughConfig {
@@ -86,6 +95,37 @@ export function clipRects(rects: readonly Rect[], holes: readonly Rect[]): Rect[
 
 const grow = (r: Rect, m: number): Rect => (m === 0 ? r : { x: r.x - m, y: r.y - m, width: r.width + 2 * m, height: r.height + 2 * m });
 
+const overlaps = (a: Rect, b: Rect): boolean => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/**
+ * v1.2 T8 screen-edge guard (ADR 0003 §6.1 (a)): the obstacle windows (px, already grown by their
+ * margin) that meet the cat's bounds, unclipped, as cut-outs for `excludeRects`: wherever such a
+ * window is, the click goes to it, never to the cat drawn over it. Pure; empty or non-finite rects
+ * are ignored, and a non-finite cat yields nothing (the caller fails closed on its own).
+ */
+export function wallGuardRects(catBoundsPx: Rect, obstacles: readonly Rect[]): Rect[] {
+  if (!finiteRect(catBoundsPx) || !nonEmpty(catBoundsPx)) return [];
+  const out: Rect[] = [];
+  for (const o of obstacles) {
+    if (!finiteRect(o) || !nonEmpty(o)) continue;
+    if (overlaps(o, catBoundsPx)) out.push({ x: o.x, y: o.y, width: o.width, height: o.height });
+  }
+  return out;
+}
+
+/**
+ * The geometric part of the decision: the cursor lies in the hit region (grown by the hysteresis
+ * margin while already interactive) after the excluded areas are cut out. No health, age or dwell.
+ */
+export function cursorInHitZone(input: Pick<ClickThroughInput, 'cursor' | 'hitRects' | 'excludeRects' | 'interactive'>, config: ClickThroughConfig = DEFAULT_CLICK_THROUGH): boolean {
+  const c = input.cursor;
+  if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y)) return false;
+  const margin = input.interactive ? config.hysteresisPx : 0;
+  const zone = input.hitRects.filter(nonEmpty).map((r) => grow(r, margin));
+  // Nothing left of the region once the excluded areas are cut out: click-through.
+  return clipRects(zone, input.excludeRects ?? []).some((r) => inside(r, c, 0));
+}
+
 export function decideInteractive(input: ClickThroughInput, config: ClickThroughConfig = DEFAULT_CLICK_THROUGH): boolean {
   if (!input.interactionsEnabled || !input.visible) return false;
   const age = Number.isNaN(input.hitRegionAgeMs) ? Infinity : input.hitRegionAgeMs;
@@ -93,12 +133,16 @@ export function decideInteractive(input: ClickThroughInput, config: ClickThrough
   // pointer for the whole drag (also across a taskbar) so the moves and the release arrive.
   if (input.dragging) return age <= config.maxDragRegionAgeMs || input.rendererHealthy;
   if (!input.rendererHealthy || age > config.maxRegionAgeMs) return false;
-  const c = input.cursor;
-  if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y)) return false;
-  const margin = input.interactive ? config.hysteresisPx : 0;
-  const zone = input.hitRects.filter(nonEmpty).map((r) => grow(r, margin));
-  // Nothing left of the region once the excluded areas are cut out: click-through.
-  return clipRects(zone, input.excludeRects ?? []).some((r) => inside(r, c, 0));
+  if (!cursorInHitZone(input, config)) return false;
+  // Hover dwell: not yet interactive -> only after the cursor stayed long enough (unknown = not yet).
+  const dwell = input.hoverDwellMs ?? 0;
+  if (!input.interactive && Number.isFinite(dwell) && dwell > 0) {
+    const hovered = input.hoveredMs;
+    return typeof hovered === 'number' && Number.isFinite(hovered) && hovered >= dwell;
+  }
+  // A NaN/infinite dwell asks for something impossible: fail closed.
+  if (!input.interactive && !Number.isFinite(dwell)) return false;
+  return true;
 }
 
 export interface PollIntervalInput {

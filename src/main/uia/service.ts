@@ -23,19 +23,30 @@
 //   quarantined with a growing delay and the helper is replaced without it, outside the restart
 //   budget, so the other windows keep their strips.
 // All decisions use the injected clock; the optional internal timer only calls pump(now()).
+//
+// v1.2 (ADR 0003 §7.2, §7.3):
+// - Which windows are read comes from the allow-list (allowList.ts): Edge, Chrome, Windows Terminal,
+//   and File Explorer only once its soak passed. A strip whose reader kind differs from the rule's
+//   is dropped (kind cross-check).
+// - File Explorer is the shell's own process: at most one request per second and three windows, its
+//   own timeout, read last in each cycle. Kill switch: a TaskbarCreated broadcast (the shell
+//   restarted) within 10 min of any Explorer request turns Explorer off for the session; a second
+//   one (counted in uia-health.json) turns it off until the next app version.
+// - T6: a failed read keeps the last good strip for up to 10 s (confidence 0.5 -> 0.3), placed on the
+//   window's current frame (the segment clamps it to the frame minus the caption buttons); it is
+//   dropped at once on a width change of more than 4 px or a maximize, then the top is used as before.
 import type { Point } from '../../shared/geometry';
-import type { Settings } from '../../shared/settings';
+import { disabledBehaviorSet, type Settings } from '../../shared/settings';
 import type { SimEvent } from '../../shared/sim';
 import type { LedgeSurface, SurfaceStatus } from '../../shared/surfaces';
 import type { WindowInfo } from '../../shared/world';
 import type { Logger, TabStripService } from '../contracts';
+import { tabStripAppRule, tabStripRuleFor, type TabStripAppRule, type TabStripAppSlug, type TabStripRuleOverrides } from './allowList';
 import { HelperTransportError, spawnUiaHelper, UiaHelperClient, type ChildProcessLike, type HelperExit } from './client';
-import { fromWireRect, HWND_PATTERN, UIA_PROTOCOL_VERSION, type HelperEvent, type HelperRequest, type HelperResponse, type WireStrip } from './protocol';
+import { createUiaHealth } from './health';
+import { fromWireRect, HWND_PATTERN, stripKind, UIA_PROTOCOL_VERSION, type HelperEvent, type HelperRequest, type HelperResponse, type TabStripKind, type WireStrip } from './protocol';
 import { DEFAULT_RESTART_BUDGET, RestartBudget, type RestartBudgetOptions } from './restartBudget';
 import { catExtentPx, computeTabStripSegment, placeStrip, toRelativeStrip, type RelativeStrip, type SegmentDisabledReason, type StripGeometry, type TabStripSegment } from './segment';
-
-/** Browsers whose tab strips are read (both expose native UIA by default since Chrome 138). */
-export const TAB_STRIP_BROWSERS: readonly string[] = ['msedge.exe', 'chrome.exe'];
 
 export const tabStripSurfaceId = (hwnd: string): string => `tabStrip:${hwnd}`;
 
@@ -86,6 +97,17 @@ export interface TabStripServiceOptions {
   stallRestart: RestartBudgetOptions;
   eventQueueCapacity: number;
   maxLineBytes: number;
+  /**
+   * Turns the File Explorer rule on although it ships off (EXPLORER_SOAK_PASSED). The REAL soak and
+   * probes only; the kill switch still wins.
+   */
+  enableExplorerTabs: boolean;
+  /** A TaskbarCreated broadcast this soon after an Explorer request trips the kill switch (ms). */
+  explorerKillWindowMs: number;
+  /** T6: how long a failed read keeps the last good strip listed (ms). */
+  retainStripMs: number;
+  /** T6: a frame width change beyond this (px) drops a retained strip at once. */
+  retainWidthTolerancePx: number;
 }
 
 export const DEFAULT_TAB_STRIP_OPTIONS: TabStripServiceOptions = {
@@ -111,7 +133,15 @@ export const DEFAULT_TAB_STRIP_OPTIONS: TabStripServiceOptions = {
   stallRestart: { baseDelayMs: 250, maxDelayMs: 8000, maxRestarts: 20, windowMs: 10 * 60_000 },
   eventQueueCapacity: 32,
   maxLineBytes: 64 * 1024,
+  enableExplorerTabs: false,
+  explorerKillWindowMs: 10 * 60_000,
+  retainStripMs: 10_000,
+  retainWidthTolerancePx: 4,
 };
+
+/** Retained-strip confidence at the failure and at the end of the retention (ADR 0003 §7.3). */
+const RETAINED_CONFIDENCE_START = 0.5;
+const RETAINED_CONFIDENCE_END = 0.3;
 
 export interface TabStripServiceDeps {
   logger: Logger;
@@ -126,6 +156,10 @@ export interface TabStripServiceDeps {
   /** Display attribution for surfaces; without it displayId is null (the surface provider may fill it). */
   displayAt?: (p: Point) => string | null;
   options?: Partial<TabStripServiceOptions>;
+  /** uia-health.json in userData (the Explorer kill switch's strike counter); null/absent: in memory only. */
+  healthFile?: string | null;
+  /** The running app version (a strike limit reached disables Explorer until the version changes). */
+  appVersion?: string;
 }
 
 type Change = Extract<SimEvent, { type: 'tabs.changed' }>['change'];
@@ -142,6 +176,8 @@ interface Snapshot {
 
 interface Tracked {
   id: string;
+  /** The allow-list rule of the window's app (decided at admission, re-checked with every description). */
+  rule: TabStripAppRule;
   info: WindowInfo;
   infoAt: number;
   vx: number;
@@ -167,6 +203,8 @@ interface Tracked {
   segCache: { key: string; seg: TabStripSegment } | null;
   /** Last surface reported for this window (reused while unchanged, so identities stay stable). */
   surface: LedgeSurface | null;
+  /** T6: host time of the read failure since which `strip` is the retained last good one (null: fresh). */
+  retainedSince: number | null;
 }
 
 export type TabStripDebug = {
@@ -210,6 +248,12 @@ export type TabStripDebug = {
   eventsIn: { selected: number; structure: number };
   eventsOut: number;
   eventsDropped: number;
+  /** v1.2 counts-only request log: strip and watch requests per allow-listed app (never ids). */
+  requestsByApp: Record<TabStripAppSlug, number>;
+  /** v1.2 Explorer kill switch: 'on', 'session' (tripped this session) or 'version' (until the next app version). */
+  explorer: { rule: 'shipped' | 'enabled' | 'off'; killSwitch: 'on' | 'session' | 'version'; strikes: number };
+  /** T6: strips currently retained after a failed read. */
+  retained: number;
 };
 
 /** Counts and codes for the surface diagnostics (ProviderDiagnostics.tabStrips): no ids, titles or names. */
@@ -233,6 +277,8 @@ export interface TabStripDiagnostics {
   lastRejection: string | null;
   /** Host clock (ms) when lastRejection was recorded (0 = none). */
   lastRejectionAt: number;
+  /** v1.2: usable strips by reader kind (ProviderDiagnostics.tabStrips.byKind); absent from older fakes. */
+  byKind?: Record<TabStripKind, number>;
 }
 
 /** What the real service offers beyond the TabStripService contract (fakes may not). */
@@ -240,6 +286,13 @@ export interface TabStripServiceExtras {
   /** As the contract's; `slow` (a subset of windowIds) are polled every slowPollIntervalMs. */
   setInterest(windowIds: readonly string[], now: number, slow?: readonly string[]): void;
   diagnostics(): TabStripDiagnostics;
+  /**
+   * v1.2 Explorer kill switch (ADR 0003 §7.2): the shell broadcast TaskbarCreated (Explorer
+   * restarted). Within explorerKillWindowMs of an Explorer request it turns Explorer off.
+   */
+  noteTaskbarCreated?(now: number): void;
+  /** v1.2: this process's tab strips are read right now (allow-list, opt-outs, the kill switch, test mode). */
+  readsApp?(processName: string): boolean;
   /**
    * Window `id` cannot give a usable strip for now: the helper rejected it, it stalled the helper,
    * its last read failed (inside the retry backoff), or its strip is unusable for a lasting reason
@@ -266,12 +319,10 @@ const LASTING_SEGMENT_REASONS: ReadonlySet<SegmentDisabledReason> = new Set<Segm
 /** A helper error slug (validated by the protocol: lower-case letters and dashes) in camelCase. */
 const helperRejection = (code: string): string => code.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 
-const isBrowserCandidate = (info: WindowInfo): boolean =>
-  TAB_STRIP_BROWSERS.includes(info.processName) && !info.excluded && !info.minimized && !info.fullscreen;
+/** Helper answers that keep the last good strip for the retention period (T6): the window is still there. */
+const RETAINED_ERRORS: ReadonlySet<string> = new Set(['not-found', 'unavailable', 'internal', 'kind-mismatch', 'no-strip']);
 
-/** Why a window is not a candidate (isBrowserCandidate false), as a diagnostics code. */
-const candidateRejection = (info: WindowInfo): string =>
-  info.excluded ? 'excluded' : info.fullscreen ? 'fullscreen' : info.minimized ? 'minimized' : 'unsupportedBrowser';
+const ZERO_APP_COUNTS = (): Record<TabStripAppSlug, number> => ({ edge: 0, chrome: 0, explorer: 0, terminal: 0 });
 
 function toGeometry(s: WireStrip): StripGeometry {
   return {
@@ -291,6 +342,8 @@ function toGeometry(s: WireStrip): StripGeometry {
 }
 
 const tabStripEnabled = (s: Settings): boolean => !s.behavior.disabledBehaviors.includes('tabStrips');
+/** Every opt-out that can switch an app off (v2 list, v1.2 extras and the implied ones). */
+const disabledSetOf = (s: Settings): ReadonlySet<string> => disabledBehaviorSet(s.behavior);
 
 const sameSpan = (a: { x0: number; x1: number } | null, b: { x0: number; x1: number } | null): boolean =>
   a === b || (a !== null && b !== null && a.x0 === b.x0 && a.x1 === b.x1);
@@ -311,7 +364,7 @@ const sameSurface = (a: LedgeSurface, b: LedgeSurface): boolean =>
 
 /** The contract with a typed debugInfo and the extras (still assignable to TabStripService). */
 export type TabStripServiceImpl = Omit<TabStripService, 'debugInfo' | 'setInterest'> &
-  TabStripServiceExtras & { debugInfo(): TabStripDebug; unusable(id: string, now: number): boolean };
+  TabStripServiceExtras & { debugInfo(): TabStripDebug; unusable(id: string, now: number): boolean; noteTaskbarCreated(now: number): void; readsApp(processName: string): boolean };
 
 export function createTabStripService(deps: TabStripServiceDeps): TabStripServiceImpl {
   const o: TabStripServiceOptions = { ...DEFAULT_TAB_STRIP_OPTIONS, ...deps.options };
@@ -323,6 +376,36 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   let started = false;
   let enabled = tabStripEnabled(deps.settings);
   let catSize = deps.settings.appearance.size;
+  let disabled = disabledSetOf(deps.settings);
+
+  // ---- v1.2 allow-list state: the Explorer kill switch and the per-app request pacing
+  const health = createUiaHealth({ filePath: deps.healthFile ?? null, appVersion: deps.appVersion ?? 'dev', logger: log });
+  /** 'version': off until the next app version (persisted); 'session': off until restart. */
+  let explorerKill: 'on' | 'session' | 'version' = health.explorerAllowed() ? 'on' : 'version';
+  if (explorerKill === 'version') log.warn('explorer tab strips are off for this app version (shell restarted twice after explorer reads)');
+  let lastExplorerRequestAt = Number.NEGATIVE_INFINITY;
+  /** Last request per paced app (rules with limits). */
+  const lastAppRequestAt = new Map<TabStripAppSlug, number>();
+  const requestsByApp = ZERO_APP_COUNTS();
+  const overrides = (): TabStripRuleOverrides => (explorerKill !== 'on' ? { explorer: false } : o.enableExplorerTabs ? { explorer: true } : {});
+  /** The enabled, not opted-out allow-list rule of a window's process, or null. */
+  const ruleOf = (info: WindowInfo): TabStripAppRule | null => tabStripRuleFor(info.processName, disabled, overrides());
+  const isCandidate = (info: WindowInfo): boolean => ruleOf(info) !== null && !info.excluded && !info.minimized && !info.fullscreen;
+  /** Why a window is not a candidate, as a diagnostics code. */
+  const candidateRejection = (info: WindowInfo): string =>
+    info.excluded ? 'excluded' : info.fullscreen ? 'fullscreen' : info.minimized ? 'minimized' : tabStripAppRule(info.processName) !== null ? 'appOff' : 'unsupportedApp';
+  /** A paced app (Explorer) may be sent a request now. */
+  const paced = (rule: TabStripAppRule, at: number): boolean => {
+    const lim = rule.limits;
+    if (!lim) return true;
+    const last = lastAppRequestAt.get(rule.slug);
+    return last === undefined || at - last >= 1000 / lim.maxRequestsPerSec;
+  };
+  function noteRequest(rule: TabStripAppRule, at: number): void {
+    requestsByApp[rule.slug]++;
+    if (rule.limits) lastAppRequestAt.set(rule.slug, at);
+    if (rule.slug === 'explorer') lastExplorerRequestAt = at;
+  }
   /** Not installed / not Windows: cannot be fixed at run time. An injected spawner (tests) runs anywhere. */
   const permanentReason: string | null =
     deps.helperPath === null ? 'UI Automation helper not installed' : process.platform !== 'win32' && deps.spawnHelper === undefined ? 'tab strips need Windows' : null;
@@ -386,7 +469,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         });
 
   const active = (): boolean => started && enabled && unavailableReason === null && client !== null;
-  const queryable = (t: Tracked): boolean => isBrowserCandidate(t.info) && !t.info.maximized;
+  const queryable = (t: Tracked): boolean => isCandidate(t.info) && !t.info.maximized;
   const quarantined = (id: string, at: number): boolean => {
     const s = stalls.get(id);
     return s !== undefined && at < s.until;
@@ -416,12 +499,17 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   /** Re-reads the window description; drops it (false) when it is gone, excluded or no longer a candidate. */
   function refreshInfo(t: Tracked, at: number): boolean {
     const info = deps.describeWindow(t.id);
-    if (info === null || !isBrowserCandidate(info)) {
+    // A recycled HWND of another app, or an app switched off meanwhile, is dropped like a non-candidate.
+    if (info === null || !isCandidate(info) || ruleOf(info) !== t.rule) {
       const reason = info === null ? 'gone' : info.excluded ? 'excluded' : 'not a candidate';
       if (info === null) clearRejection(t.id);
       else if (t.interested) reject(t.id, candidateRejection(info), at);
       drop(t, reason);
       return false;
+    }
+    // T6: a retained strip goes at once when the window is maximized or its width changed.
+    if (t.retainedSince !== null && t.strip !== null && (info.maximized || Math.abs(info.rect.width - t.strip.frameWidth) > o.retainWidthTolerancePx)) {
+      dropStrip(t);
     }
     const dt = at - t.infoAt;
     if (dt > 0 && dt <= 1000) {
@@ -454,9 +542,24 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     }
     const info = deps.describeWindow(id);
     if (info === null) return null;
-    if (!isBrowserCandidate(info)) {
+    const rule = ruleOf(info);
+    if (rule === null || !isCandidate(info)) {
       reject(id, candidateRejection(info), at);
       return null;
+    }
+    // Explorer: at most limits.maxWindows windows measured at once (an idle one makes room).
+    const maxOfApp = rule.limits?.maxWindows;
+    if (maxOfApp !== undefined) {
+      const same = [...windows.values()].filter((w) => w.rule === rule);
+      if (same.length >= maxOfApp) {
+        let victim: Tracked | null = null;
+        for (const w of same) if (!w.interested && (victim === null || w.lastInterestAt < victim.lastInterestAt)) victim = w;
+        if (victim === null) {
+          reject(id, 'appLimit', at);
+          return null;
+        }
+        drop(victim, 'evicted');
+      }
     }
     if (windows.size >= o.maxWindows) {
       let victim: Tracked | null = null;
@@ -466,6 +569,7 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     }
     const t: Tracked = {
       id,
+      rule,
       info,
       infoAt: at,
       vx: 0,
@@ -488,9 +592,18 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       lastEmitAt: Number.NEGATIVE_INFINITY,
       segCache: null,
       surface: null,
+      retainedSince: null,
     };
     windows.set(id, t);
     return t;
+  }
+
+  /** Forgets the window's strip (the plain top is used again). */
+  function dropStrip(t: Tracked): void {
+    t.strip = null;
+    t.segCache = null;
+    t.snapshot = null;
+    t.retainedSince = null;
   }
 
   function segmentFor(t: Tracked): TabStripSegment | null {
@@ -711,7 +824,8 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     const hint = t.selectedHint;
     t.selectedHint = false;
     stats.reads++;
-    client.request({ op: 'strip', hwnd: t.id }, at).then(
+    noteRequest(t.rule, at);
+    client.request({ op: 'strip', hwnd: t.id }, at, t.rule.limits?.timeoutMs).then(
       (r) => onStrip(t, r, hint),
       (e: unknown) => {
         t.inFlight = false;
@@ -726,9 +840,12 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     stats.readsDone++;
     if (windows.get(t.id) !== t || !active()) return;
     const at = now();
-    if (!r.ok || r.strip === undefined) {
+    // Kind cross-check: a strip from another reader than the app's rule is never used.
+    const mismatch = r.ok && r.strip !== undefined && stripKind(r.strip) !== t.rule.kind;
+    if (!r.ok || r.strip === undefined || mismatch) {
       stats.readErrors++;
-      const code = r.ok ? 'no-strip' : r.error;
+      const code = mismatch ? 'kind-mismatch' : r.ok ? 'no-strip' : r.error;
+      if (mismatch) log.warn('tab strip of an unexpected reader kind dropped', { expected: t.rule.kind });
       t.lastError = code;
       if (code === 'gone') clearRejection(t.id);
       else reject(t.id, helperRejection(code), at);
@@ -749,18 +866,23 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         return;
       }
       const hadStrip = t.strip !== null;
-      t.strip = null;
-      t.segCache = null;
-      t.snapshot = null;
+      // T6: the last good strip stays listed for retainStripMs (a kind mismatch never keeps one).
+      if (hadStrip && t.retainedSince === null && RETAINED_ERRORS.has(code) && !mismatch) {
+        t.retainedSince = at;
+        t.surface = null;
+      } else if (t.retainedSince === null || mismatch) {
+        dropStrip(t);
+      }
       t.errorStreak++;
       t.retryAt = at + Math.min(o.windowRetryMaxMs, o.windowRetryMs * 2 ** (t.errorStreak - 1));
-      if (hadStrip) log.debug('tab strip lost', { error: code });
+      if (hadStrip) log.debug('tab strip lost', { error: code, retained: t.retainedSince !== null });
       return;
     }
     const geo = toGeometry(r.strip);
     stalls.delete(t.id);
     t.strip = toRelativeStrip(geo);
     t.stripAt = at;
+    t.retainedSince = null;
     t.segCache = null;
     t.errorStreak = 0;
     t.lastError = null;
@@ -790,8 +912,18 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     const ids = wanted.filter((id) => current.has(id) || id === added);
     const key = ids.join(',');
     if (key === watchedKey) return;
+    // Subscribing or unsubscribing calls into those windows' apps: paced apps (Explorer) count it as
+    // a request and wait for their turn. A window that is gone from `windows` is not paced (nothing to call).
+    const touched = new Set<TabStripAppRule>();
+    for (const id of [...(added !== undefined ? [added] : []), ...[...current].filter((id) => !ids.includes(id))]) {
+      const rule = windows.get(id)?.rule;
+      if (rule) touched.add(rule);
+    }
+    for (const rule of touched) if (!paced(rule, at)) return;
+    for (const rule of touched) noteRequest(rule, at);
+    const timeoutMs = Math.max(0, ...[...touched].map((r) => r.limits?.timeoutMs ?? 0));
     watchInFlight = true;
-    client.request({ op: 'watch', hwnds: ids }, at).then(
+    client.request({ op: 'watch', hwnds: ids }, at, timeoutMs > 0 ? timeoutMs : undefined).then(
       (r) => {
         watchInFlight = false;
         // Remember the set even on failure so a broken subscription does not retry in a loop.
@@ -811,14 +943,18 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
   function scheduleReads(at: number): void {
     let inFlight = 0;
     for (const t of windows.values()) if (t.inFlight) inFlight++;
-    // Windows of interest first, the near ones (normal rate) before the far ones (slow rate).
+    // Windows of interest first, the near ones (normal rate) before the far ones (slow rate); apps
+    // read last (Explorer) after all others in each cycle.
     const rank = (t: Tracked): number => (t.interested ? (t.slow ? 1 : 2) : 0);
-    const order = [...windows.values()].sort((a, b) => rank(b) - rank(a) || b.lastInterestAt - a.lastInterestAt);
+    const lastOf = (t: Tracked): number => (t.rule.limits?.last === true ? 1 : 0);
+    const order = [...windows.values()].sort((a, b) => lastOf(a) - lastOf(b) || rank(b) - rank(a) || b.lastInterestAt - a.lastInterestAt);
     for (const t of order) {
       if (inFlight >= o.maxInFlight) return;
-      // A maximized browser is never asked (its strip has no room above it).
+      // A maximized window is never asked (its strip has no room above it).
       if (t.interested && t.info.maximized) reject(t.id, 'maximized', at);
       if (t.inFlight || !queryable(t) || at < t.retryAt || quarantined(t.id, at)) continue;
+      // Paced apps: one request per period for all their windows; never two in flight.
+      if (t.rule.limits && (!paced(t.rule, at) || [...windows.values()].some((w) => w.inFlight && w.rule === t.rule))) continue;
       const period = t.slow ? o.slowPollIntervalMs : o.pollIntervalMs;
       const due = t.strip === null || (t.dirty ? at - t.lastRequestAt >= o.refreshGapMs : t.interested && at - t.stripAt >= period);
       if (!due) continue;
@@ -920,6 +1056,8 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
 
     updateSettings(settings: Settings): void {
       catSize = settings.appearance.size;
+      // Per-app opt-outs (explorerTabs, terminalTabs): their windows are dropped at the next description.
+      disabled = disabledSetOf(settings);
       const next = tabStripEnabled(settings);
       if (next === enabled) return;
       enabled = next;
@@ -982,7 +1120,18 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         const age = at - t.stripAt;
         // Fresh for two periods of the rate the window is read at.
         const period = t.slow ? o.slowPollIntervalMs : o.pollIntervalMs;
-        const confidence = !sizeMatches ? 0.5 : age <= 2 * period ? 1 : age <= 30_000 ? 0.85 : 0.7;
+        let confidence = !sizeMatches ? 0.5 : age <= 2 * period ? 1 : age <= 30_000 ? 0.85 : 0.7;
+        if (t.retainedSince !== null) {
+          // T6: the last good strip after a failed read, for retainStripMs at most (then the top again).
+          const held = at - t.retainedSince;
+          if (held > o.retainStripMs) {
+            dropStrip(t);
+            continue;
+          }
+          const k = Math.min(1, Math.max(0, held / o.retainStripMs));
+          // In steps of 0.05, so the listed surface changes a few times, not on every call.
+          confidence = Math.round((RETAINED_CONFIDENCE_START + (RETAINED_CONFIDENCE_END - RETAINED_CONFIDENCE_START) * k) * 20) / 20;
+        }
         const next: LedgeSurface = {
           id: tabStripSurfaceId(t.id),
           kind: 'tabStrip',
@@ -1065,15 +1214,26 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         eventsIn: { ...stats.eventsIn },
         eventsOut: stats.eventsOut,
         eventsDropped: stats.eventsDropped,
+        requestsByApp: { ...requestsByApp },
+        explorer: {
+          rule: explorerKill !== 'on' ? 'off' : o.enableExplorerTabs ? 'enabled' : 'shipped',
+          killSwitch: explorerKill,
+          strikes: health.strikes(),
+        },
+        retained: [...windows.values()].filter((t) => t.retainedSince !== null && t.strip !== null).length,
       };
     },
 
     diagnostics(): TabStripDiagnostics {
       let interested = 0;
       let usable = 0;
+      const byKind: Record<TabStripKind, number> = { chromium: 0, tabview: 0 };
       for (const t of windows.values()) {
         if (t.interested) interested++;
-        if (t.strip !== null && queryable(t) && segmentFor(t)?.ok === true) usable++;
+        if (t.strip !== null && queryable(t) && segmentFor(t)?.ok === true) {
+          usable++;
+          byKind[t.rule.kind]++;
+        }
       }
       const on = active();
       return {
@@ -1086,7 +1246,24 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
         lastReadAt: stats.lastReadAt,
         lastRejection: rejection?.code ?? null,
         lastRejectionAt: rejection?.at ?? 0,
+        byKind: on ? byKind : { chromium: 0, tabview: 0 },
       };
+    },
+
+    readsApp(processName: string): boolean {
+      return enabled && tabStripRuleFor(processName, disabled, overrides()) !== null;
+    },
+
+    noteTaskbarCreated(at: number): void {
+      // The shell restarted. Only when we spoke to Explorer recently can our reads be the cause.
+      if (explorerKill !== 'on' || !(at - lastExplorerRequestAt <= o.explorerKillWindowMs)) return;
+      const strike = health.recordExplorerStrike();
+      explorerKill = strike.disabledForVersion ? 'version' : 'session';
+      log.warn('explorer restarted soon after an explorer tab-strip read; explorer tab strips are off', {
+        until: explorerKill === 'version' ? 'next app version' : 'restart',
+        strikes: strike.strikes,
+      });
+      for (const t of [...windows.values()]) if (t.rule.slug === 'explorer') drop(t, 'kill switch');
     },
 
     unusable(id: string, at: number): boolean {

@@ -230,23 +230,24 @@ export function solveLeg(g: LegGeom, rx: number, ry: number, tx: number, ty: num
 }
 
 /**
- * Global pose matrix: roll (y-scale) and rotation about the pivot, then squash about
- * the ground anchor, then offset.
+ * Global pose matrix: turn (x-scale), roll (y-scale) and rotation about the pivot, then squash
+ * about the ground anchor, then offset.
  */
 export function computePoseMatrix(m: Mat, p: Pose): void {
   const c = Math.cos(p.rot);
   const s = Math.sin(p.rot);
   const ry = clamp(p.rollY, -1, 1);
+  const rx = clamp(p.turnX, -1, 1);
   const sx = clamp(p.sqX, 0.3, 2);
   const sy = clamp(p.sqY, 0.3, 2);
   const px = p.pivX;
   const py = p.pivY;
-  m[0] = sx * c;
-  m[1] = -sy * s;
+  m[0] = sx * c * rx;
+  m[1] = -sy * s * rx;
   m[2] = sx * s * ry;
   m[3] = sy * c * ry;
-  m[4] = sx * (px - c * px - s * ry * py) + p.offX;
-  m[5] = sy * (py + s * px - c * ry * py) + p.offY;
+  m[4] = sx * (px - c * rx * px - s * ry * py) + p.offX;
+  m[5] = sy * (py + s * rx * px - c * ry * py) + p.offY;
 }
 
 /** Torso point for clip authoring (same frame as Rig.solve), without a Rig instance. */

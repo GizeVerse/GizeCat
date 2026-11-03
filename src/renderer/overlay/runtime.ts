@@ -10,6 +10,7 @@ import { HIT_REFRESH_MS, HitRegionReporter } from './hitRegion';
 import { attachPointerInput } from './input';
 import { SnapshotInterpolator, type InterpSample } from './interpolation';
 import { CatScene, type DeviceRect, type Layer, type LayerProvider } from './scene';
+import { createSoundPlayer, type SoundPlayer } from './sound';
 import { isOverlayConfig, isRenderState } from './validate';
 
 const MAX_FRAME_DT_MS = 250;
@@ -52,6 +53,8 @@ export class OverlayRuntime {
   private readonly scene = new CatScene(Math.random);
   private readonly pacer = new FramePacer();
   private readonly hits: HitRegionReporter;
+  /** v1.2 (ADR 0003 §10): plays the cues main sends this overlay (only while sound is on). */
+  private readonly sound: SoundPlayer;
   private config: OverlayConfig = { displayId: '', scaleFactor: 1, debug: false };
   private dpr = 1;
   private cssW = 0;
@@ -79,6 +82,7 @@ export class OverlayRuntime {
     if (!ctx) throw new Error('overlay: 2D canvas context unavailable');
     this.ctx = ctx;
     this.hits = new HitRegionReporter((r) => api.sendHitRegion(r));
+    this.sound = createSoundPlayer({ now: () => performance.now() });
     this.sample = { x: 0, y: 0, state: INITIAL_STATE, simTime: 0, snapped: false };
   }
 
@@ -96,6 +100,7 @@ export class OverlayRuntime {
   dispose(): void {
     this.stopLoop();
     this.stopHeartbeat();
+    this.sound.dispose();
     for (const d of this.disposers.splice(0)) d();
   }
 
@@ -128,6 +133,8 @@ export class OverlayRuntime {
 
   private onRender(s: unknown): void {
     if (!isRenderState(s)) return;
+    // The player plays each cue once and drops stale ones, so a duplicate snapshot is harmless.
+    if (s.sound && s.visible) this.sound.play(s.sound, s.t);
     if (!this.interp.push(s, performance.now())) return;
     if (s.visible) this.startHeartbeat();
     else this.stopHeartbeat();

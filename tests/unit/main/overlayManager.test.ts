@@ -824,3 +824,128 @@ describe('overlay manager: surface outlines (v1.1.1 debug aid)', () => {
     expect(outlineFrames('A')).toEqual([[{ kind: 'windowTop', role: 'valid', x0: 100, y0: 400, x1: 500, y1: 400 }]]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// v1.2 (ADR 0003 §6.1, §10; PRV): the hover dwell while the cat clings to a screen edge, and the
+// global sound dedupe. MOCKED Electron, the real overlay manager.
+
+describe('overlay manager v1.2: hover dwell while clinging to a screen edge (T8)', () => {
+  const cling: SimOutput['support'] = { kind: 'surface', surfaceId: 'screenEdge:A:left', surfaceKind: 'screenEdge', orientation: 'wall' };
+  const CAT = { x: 60, y: 500 };
+  const OVER = { x: 60, y: 470 };
+
+  function show(support: SimOutput['support']): void {
+    rig.mgr.render(output(CAT, { support }), 1, false);
+    rig.report('A', CAT.x, CAT.y);
+  }
+  const takes = (p: Point): boolean => {
+    rig.mgr.updateInteractivity(p, false);
+    return !rig.win('A').ignoreMouse;
+  };
+
+  it('stays click-through for a passing cursor and takes the mouse only after a 300 ms rest', () => {
+    show(cling);
+    expect(takes(OVER)).toBe(false);
+    rig.advance(150);
+    expect(takes(OVER)).toBe(false);
+    rig.advance(140);
+    expect(takes(OVER)).toBe(false);
+    rig.advance(20);
+    expect(takes(OVER)).toBe(true);
+    // Once interactive it stays so while the cursor is on the cat (a grab can start).
+    rig.advance(16);
+    expect(takes(OVER)).toBe(true);
+  });
+
+  it('a cursor that leaves the cat restarts the dwell', () => {
+    show(cling);
+    takes(OVER);
+    rig.advance(250);
+    expect(takes({ x: 600, y: 470 })).toBe(false);
+    rig.advance(16);
+    expect(takes(OVER)).toBe(false);
+    rig.advance(250);
+    expect(takes(OVER)).toBe(false);
+    rig.advance(60);
+    expect(takes(OVER)).toBe(true);
+  });
+
+  it('a cat on the floor takes the mouse at once, as in v1.1 (no dwell)', () => {
+    show({ kind: 'floor', displayId: 'A' });
+    expect(takes(OVER)).toBe(true);
+  });
+
+  it('a guard rect over the cat wins after the dwell too, and a blocked overlay never dwells', () => {
+    let guard: Array<{ x: number; y: number; width: number; height: number }> = [];
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    rig = makeRig({ excludedRectsPx: () => guard });
+    show(cling);
+    guard = [{ x: 0, y: 0, width: 400, height: 900 }];
+    takes(OVER);
+    rig.advance(400);
+    expect(takes(OVER)).toBe(false);
+    guard = [];
+    rig.mgr.updateInteractivity(OVER, true);
+    rig.advance(400);
+    rig.mgr.updateInteractivity(OVER, true);
+    expect(rig.win('A').ignoreMouse).toBe(true);
+    // Unblocked, the dwell starts from now.
+    expect(takes(OVER)).toBe(false);
+  });
+});
+
+describe('overlay manager v1.2: each sound cue is sent once, to one overlay (global dedupe)', () => {
+  const soundOn = () => {
+    const s = defaultSettings();
+    return { ...s, sound: { ...s.sound, enabled: true, volume: 0.5 } };
+  };
+  const cuesSent = (id: string): Array<{ kind: string; at: number }> =>
+    rig
+      .win(id)
+      .webContents.sent.filter((m) => m.channel === IPC.overlayRender)
+      .map((m) => (m.payload as { sound?: { kind: string; at: number } | null }).sound)
+      .filter((s): s is { kind: string; at: number } => s !== undefined && s !== null)
+      .map((s) => ({ kind: s.kind, at: s.at }));
+
+  beforeEach(() => {
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    rig = makeRig({ getSettings: soundOn });
+  });
+
+  it('a cat straddling two overlays plays the cue on the anchor overlay only, and only on its first emission', () => {
+    // The anchor is on A, the body reaches over the seam onto B: both overlays draw the cat.
+    const out = output({ x: 1590, y: 860 }, { sound: { kind: 'meow', at: 5000 } });
+    rig.mgr.render(out, 5000, false);
+    rig.mgr.render(out, 5033, false);
+    rig.mgr.render({ ...out, x: 1591 }, 5066, false);
+    expect(rig.win('B').webContents.sent.some((m) => m.channel === IPC.overlayRender)).toBe(true);
+    expect(cuesSent('A')).toEqual([{ kind: 'meow', at: 5000 }]);
+    expect(cuesSent('B')).toEqual([]);
+  });
+
+  it('the same cue is not sent again when the anchor crosses to the other display', () => {
+    rig.mgr.render(output({ x: 1590, y: 860 }, { sound: { kind: 'chirp', at: 7000 } }), 7000, false);
+    rig.mgr.render(output({ x: 1610, y: 860 }, { sound: { kind: 'chirp', at: 7000 } }), 7033, false);
+    expect(cuesSent('A')).toHaveLength(1);
+    expect(cuesSent('B')).toEqual([]);
+    // A new cue later plays on the overlay that holds the anchor then.
+    rig.mgr.render(output({ x: 1610, y: 860 }, { sound: { kind: 'trill', at: 9000 } }), 9000, false);
+    expect(cuesSent('B')).toEqual([{ kind: 'trill', at: 9000 }]);
+  });
+
+  it('a re-sent snapshot (renderer ready again) carries no cue', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }, { sound: { kind: 'purr', at: 1200 } }), 1200, false);
+    rig.mgr.handleReady(rig.win('A').webContents.id);
+    expect(cuesSent('A')).toEqual([{ kind: 'purr', at: 1200 }]);
+  });
+
+  it('nothing is sent while sound is off', () => {
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    rig = makeRig();
+    rig.mgr.render(output({ x: 800, y: 860 }, { sound: { kind: 'hiss', at: 300 } }), 300, false);
+    expect(cuesSent('A')).toEqual([]);
+  });
+});

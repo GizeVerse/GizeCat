@@ -4,14 +4,14 @@
 import { z } from 'zod';
 import type { Rect } from '../../shared/geometry';
 
-export const UIA_PROTOCOL_VERSION = 1;
 /**
  * v1.2 (ADR 0003 §7): protocol 2 adds the WinUI TabView reader. Additive: a strip carries `kind`
  * (absent = 'chromium', so protocol-1 lines parse unchanged) and ping may list the kinds the
- * helper reads. UIA_PROTOCOL_VERSION moves to this value in the same change as the native helper
- * (both ends compare exactly), never before.
+ * helper reads. UIA_PROTOCOL_VERSION moved to this value in the same change as the native helper
+ * (native/uia-helper/Program.cs ProtocolVersion; both ends compare exactly).
  */
 export const UIA_PROTOCOL_VERSION_V2 = 2;
+export const UIA_PROTOCOL_VERSION = UIA_PROTOCOL_VERSION_V2;
 export const TAB_STRIP_KINDS = ['chromium', 'tabview'] as const;
 export type TabStripKind = (typeof TAB_STRIP_KINDS)[number];
 /** Lines from the helper longer than this (bytes) are dropped unparsed. */

@@ -544,12 +544,13 @@ describe('TabStripService: helper failures', () => {
   });
 
   it('a protocol version mismatch makes the feature unavailable at once', async () => {
-    const r = rig({ version: 2 });
+    // v1.2 moved both ends to protocol 2 (ADR 0003 §7.1): a protocol-1 helper is now the mismatch.
+    const r = rig({ version: 1 });
     r.svc.start();
     r.wins.set(A);
     r.svc.setInterest([A], r.clock.now());
     await eventually(() => expect(r.svc.status).toBe('unavailable'));
-    expect(r.svc.statusReason).toBe('helper protocol 2 != 1');
+    expect(r.svc.statusReason).toBe('helper protocol 1 != 2');
     await waitStopped(r);
   });
 
@@ -692,13 +693,25 @@ describe('TabStripService: slow interest and diagnostics (v1.1.1)', () => {
   it('reports counts, the last read and why a window of interest has no usable strip, as codes', async () => {
     const r = rig({ strips: { [A]: wireStrip({ browser: 'edge', vertical: true }), [B]: wireStrip({ browser: 'chrome' }) } });
     r.svc.start();
-    expect(r.svc.diagnostics()).toEqual({ state: 'idle', helperRunning: false, interest: 0, strips: 0, reads: 0, errors: 0, lastReadAt: 0, lastRejection: null, lastRejectionAt: 0 });
+    // v1.2 adds the usable strips by reader kind (byKind) to the same counts.
+    expect(r.svc.diagnostics()).toEqual({ state: 'idle', helperRunning: false, interest: 0, strips: 0, reads: 0, errors: 0, lastReadAt: 0, lastRejection: null, lastRejectionAt: 0, byKind: { chromium: 0, tabview: 0 } });
     r.wins.set(A);
     r.wins.set(B, { processName: 'chrome.exe' });
     r.svc.setInterest([A, B], r.clock.now());
     await waitForStrip(r, B);
     await eventually(() => expect(r.svc.debugInfo().withStrip).toBe(2));
-    expect(r.svc.diagnostics()).toEqual({ state: 'active', helperRunning: true, interest: 2, strips: 1, reads: 2, errors: 0, lastReadAt: r.clock.now(), lastRejection: 'vertical', lastRejectionAt: r.clock.now() });
+    expect(r.svc.diagnostics()).toEqual({
+      state: 'active',
+      helperRunning: true,
+      interest: 2,
+      strips: 1,
+      reads: 2,
+      errors: 0,
+      lastReadAt: r.clock.now(),
+      lastRejection: 'vertical',
+      lastRejectionAt: r.clock.now(),
+      byKind: { chromium: 1, tabview: 0 },
+    });
     // Horizontal tabs again: the reason is cleared once A has a strip.
     r.h.patchState({ strips: { [A]: wireStrip({ browser: 'edge' }), [B]: wireStrip({ browser: 'chrome' }) } });
     await stepAndRead(r, 1100, [A, B], 2);

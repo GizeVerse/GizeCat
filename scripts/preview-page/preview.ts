@@ -1,8 +1,20 @@
 // Preview page for scripts/render-preview.cjs: renders contact sheets of the real
 // overlay rig (same CatScene used by the overlay renderer) into canvases.
-import { ANIM_CLIPS, CAT_BASE_WIDTH_DIP, EMOTES, SKINS, type AnimClip, type BehaviorState, type CatRenderState, type Emote, type SkinId } from '../../src/shared/cat';
+import {
+  ANIM_CLIPS,
+  CAT_BASE_WIDTH_DIP,
+  EMOTES,
+  JUMP_KINDS,
+  SKINS,
+  type AnimClip,
+  type BehaviorState,
+  type CatRenderState,
+  type Emote,
+  type JumpKind,
+  type SkinId,
+} from '../../src/shared/cat';
 import { MOVEMENT } from '../../src/core/movement/constants';
-import { CLIMB_FADE_MS, clipDurationS, gaitHz, loopPeriodS } from '../../src/renderer/overlay/cat/clips';
+import { CLIMB_FADE_MS, clipDurationS, gaitHz, loopPeriodS, SLIP_EDGE_X } from '../../src/renderer/overlay/cat/clips';
 import { seededRandom } from '../../src/renderer/overlay/cat/math';
 import { CatScene, type Layer, type LayerProvider } from '../../src/renderer/overlay/scene';
 
@@ -34,6 +46,15 @@ interface Cell {
   wall?: boolean;
   /** Scripted run with a moving anchor (`t` = seconds into the script); replaces clip/from. */
   script?: Script;
+  /**
+   * Draw a ledge (a window top) instead of the floor line: it spans `from`..`to` DIP along the
+   * facing direction from the anchor (at scale 1) and drops away beyond its ends.
+   */
+  ledge?: { from: number; to: number };
+  /** v1.2 render hints. */
+  jumpKind?: JumpKind | null;
+  impact?: number;
+  balance?: number;
 }
 
 /** One leg of a scripted run: the anchor moves to `to` (cell-local DIP) over `ms`, linearly or eased. */
@@ -92,7 +113,7 @@ function phases(clip: AnimClip, n: number, speed: number): number[] {
     for (let i = 0; i < n; i++) out.push((dur * i) / (n - 1));
     return out;
   }
-  if (clip === 'walk' || clip === 'run' || (clip === 'climb' && speed > 0)) {
+  if (clip === 'walk' || clip === 'run' || clip === 'stalk' || clip === 'slink' || clip === 'sprint' || (clip === 'climb' && speed > 0)) {
     const hz = gaitHz(clip, speed);
     for (let i = 0; i < n; i++) out.push(1 + i / n / hz);
     return out;
@@ -104,12 +125,15 @@ function phases(clip: AnimClip, n: number, speed: number): number[] {
   return out;
 }
 
+/** v1.2 gaits at their paces (ADR 0003 §6.7): stalk 24, slink 84, sprint 360 DIP/s. */
+const V12_SPEED: Partial<Record<AnimClip, number>> = { stalk: 24 / CAT_BASE_WIDTH_DIP, slink: 1, sprint: 360 / CAT_BASE_WIDTH_DIP };
+
 function speedFor(clip: AnimClip): number {
-  return clip === 'walk' ? 0.7 : clip === 'run' ? 2.6 : clip === 'climb' ? 0.5 : 0;
+  return clip === 'walk' ? 0.7 : clip === 'run' ? 2.6 : clip === 'climb' ? 0.5 : (V12_SPEED[clip] ?? 0);
 }
 
 function vyFor(clip: AnimClip): number {
-  return clip === 'jump' ? -400 : clip === 'fall' ? 450 : 0;
+  return clip === 'jump' || clip === 'pounce' ? -400 : clip === 'fall' ? 450 : 0;
 }
 
 function makeState(c: Cell, clip: AnimClip, x: number, y: number, t: number, clipStart: number, seq: number): CatRenderState {
@@ -140,6 +164,9 @@ function makeState(c: Cell, clip: AnimClip, x: number, y: number, t: number, cli
     style: c.style ?? 'smooth',
     shadow: true,
     animSpeed: 1,
+    ...(c.jumpKind !== undefined ? { jumpKind: c.jumpKind } : {}),
+    ...(c.impact !== undefined ? { impact: c.impact } : {}),
+    ...(c.balance !== undefined ? { balance: c.balance } : {}),
   };
 }
 
@@ -260,7 +287,15 @@ function renderSheet(sheet: Sheet, dpr: number): string {
     } else {
       const gy = cy + sheet.cellH * (sheet.ground ?? 0.8);
       const ax = cx + sheet.cellW / 2;
-      if (c.wall) {
+      if (c.ledge) {
+        const f = c.facing ?? 1;
+        const k = c.scale ?? 1;
+        const a = ax + f * c.ledge.from * k;
+        const b = ax + f * c.ledge.to * k;
+        const x0 = Math.max(cx + 4, Math.min(a, b));
+        const x1 = Math.min(cx + sheet.cellW - 4, Math.max(a, b));
+        drawWindow(ctx, x0, gy, x1 - x0, cy + sheet.cellH - 4 - gy, dark);
+      } else if (c.wall) {
         // The wall line runs through the anchor; the window is on the side the cat faces.
         const f = c.facing ?? 1;
         const top = cy + 22;
@@ -292,11 +327,81 @@ function clipRows(clips: readonly AnimClip[], bg: string, fg: string, extra: Par
   const cells: Cell[] = [];
   for (const clip of clips) {
     const speed = speedFor(clip);
+    if (clip === 'pounce') {
+      // Airborne: the pose follows vy from the take-off through the apex down onto the prey.
+      for (let i = 0; i < 6; i++) {
+        const vy = -400 + (800 * i) / 5;
+        cells.push({ label: `pounce vy ${vy.toFixed(0)}`, clip, t: i === 0 ? 0.06 : 0.3, vy, look: { x: 90, y: 0 }, ...extra });
+      }
+      continue;
+    }
     for (const t of phases(clip, 6, speed)) {
-      cells.push({ label: `${clip} ${t.toFixed(2)}s`, clip, t, look: clip === 'pawAt' ? { x: 40, y: -40 } : null, ...extra });
+      const look = clip === 'pawAt' || clip === 'swat' ? { x: 40, y: -40 } : clip === 'edgeSit' ? { x: 50, y: 70 } : null;
+      const ledge = clip === 'slip' ? { from: SLIP_EDGE_X, to: 300 } : clip === 'edgeSit' ? { from: -300, to: 13 } : clip === 'balance' ? { from: -300, to: 300 } : undefined;
+      cells.push({ label: `${clip} ${t.toFixed(2)}s`, clip, t, look, ...(ledge ? { ledge } : {}), ...(clip === 'balance' ? { balance: 0.7 } : {}), ...extra });
     }
   }
   return { cols: 6, cellW: 190, cellH: 165, bg, fg, cells, ground: 0.84 };
+}
+
+// ---------------------------------------------------------------------------
+// v1.2 (ADR 0003 §8): the 14 new clips, the flight kinds and the render hints
+
+const V12_A: AnimClip[] = ['stalk', 'sprint', 'slink', 'pounce', 'slip', 'impact', 'landRecover'];
+const V12_B: AnimClip[] = ['swat', 'hiss', 'grumpy', 'stretch', 'balance', 'tailChase', 'edgeSit'];
+
+/** Rows of v1.2 clips with room below the ground line (the slip hangs below its ledge). */
+function v12Rows(clips: readonly AnimClip[], bg: string, fg: string, extra: Partial<Cell> = {}): Sheet {
+  return { ...clipRows(clips, bg, fg, extra), cellH: 175, ground: 0.7 };
+}
+
+/** jump/fall for every flight kind (none = the v1.1 poses): take-off, rising, apex, falling. */
+function airSheet(style: 'smooth' | 'pixel', scale: number): Sheet {
+  const cells: Cell[] = [];
+  for (const kind of [null, ...JUMP_KINDS] as (JumpKind | null)[]) {
+    const k = kind ?? 'none';
+    cells.push({ label: `${k} jump 0.05s`, clip: 'jump', t: 0.05, vy: -450, jumpKind: kind, style, scale });
+    cells.push({ label: `${k} jump rising`, clip: 'jump', t: 0.25, vy: -450, jumpKind: kind, style, scale });
+    cells.push({ label: `${k} jump apex`, clip: 'jump', t: 0.4, vy: -40, jumpKind: kind, style, scale });
+    cells.push({ label: `${k} fall 200`, clip: 'fall', t: 0.2, vy: 200, jumpKind: kind, style, scale });
+    cells.push({ label: `${k} fall 500`, clip: 'fall', t: 0.3, vy: 500, jumpKind: kind, style, scale });
+  }
+  const k = Math.max(1, scale * 0.8);
+  return { cols: 5, cellW: 190 * k, cellH: 175 * k, bg: LIGHT, fg: '#333', cells, ground: 0.72 };
+}
+
+/** impact and balance hints: landings at 0 / 0.5 / 1, the balance sway, a clinging cat holding on at a top, the crouch wiggle. */
+function hintsSheet(style: 'smooth' | 'pixel'): Sheet {
+  const cells: Cell[] = [];
+  for (const impact of [0, 0.5, 1]) {
+    cells.push({ label: `land ${impact} 0.05s`, clip: 'land', t: 0.05, impact, style });
+    cells.push({ label: `impact ${impact} 0.06s`, clip: 'impact', t: 0.06, impact, style });
+    cells.push({ label: `impact ${impact} 0.45s`, clip: 'impact', t: 0.45, impact, style });
+    cells.push({ label: `recover ${impact} 0.2s`, clip: 'landRecover', t: 0.2, impact, style });
+    cells.push({ label: `recover ${impact} 0.5s`, clip: 'landRecover', t: 0.5, impact, style });
+    cells.push({ label: `recover ${impact} 0.9s`, clip: 'landRecover', t: 0.9, impact, style });
+  }
+  for (const balance of [0, 0.5, 1]) {
+    for (const t of [1.0, 1.45, 1.9, 2.3]) cells.push({ label: `balance ${balance} ${t}s`, clip: 'balance', t, balance, style });
+    cells.push({ label: `cling bal ${balance}`, clip: 'climb', t: 1.3, speed: 0, balance, wall: true, style });
+    const ct = balance === 0 ? 0.05 : balance === 0.5 ? 0.15 : 0.3;
+    cells.push({ label: `crouch ${ct}s`, clip: 'crouch', t: ct, style });
+  }
+  return { cols: 6, cellW: 190, cellH: 175, bg: LIGHT, fg: '#333', cells, ground: 0.72 };
+}
+
+/** The clips that must read as silhouettes in pixel style (hiss, swat), and other v1.2 clips, in every skin. */
+function pixelSkinsSheet(bg: string, fg: string): Sheet {
+  const cells: Cell[] = [];
+  for (const skin of SKINS) {
+    cells.push({ label: `${skin} hiss`, clip: 'hiss', t: 0.5, skin, style: 'pixel' });
+    cells.push({ label: `${skin} swat`, clip: 'swat', t: 0.21, skin, style: 'pixel', look: { x: 60, y: -30 } });
+    cells.push({ label: `${skin} stalk`, clip: 'stalk', t: 1.2, skin, style: 'pixel' });
+    cells.push({ label: `${skin} pounce`, clip: 'pounce', t: 0.3, vy: 250, skin, style: 'pixel' });
+    cells.push({ label: `${skin} grumpy`, clip: 'grumpy', t: 1.5, skin, style: 'pixel' });
+    cells.push({ label: `${skin} slink`, clip: 'slink', t: 1.1, skin, style: 'pixel' });
+  }
+  return { cols: 6, cellW: 170, cellH: 150, bg, fg, cells, ground: 0.74 };
 }
 
 function skinsSheet(bg: string, fg: string, style: 'smooth' | 'pixel'): Sheet {
@@ -597,6 +702,21 @@ const SHEETS: Record<string, () => Sheet> = {
   'climb-strip-late-switch': () => climbStripSheet(LIGHT, 1, 'smooth', 'ginger', 'climb'),
   'climb-strip-down': () => climbDownStripSheet(LIGHT, 1, 'smooth', 'calico'),
   'climb-strip-down-mirror': () => climbDownStripSheet(DARK, -1, 'smooth', 'gray'),
+  // v1.2: render with --dpr=1.25 for the 125 % review (size 1).
+  'v12-clips-smooth-a': () => v12Rows(V12_A, LIGHT, '#333'),
+  'v12-clips-smooth-b': () => v12Rows(V12_B, LIGHT, '#333'),
+  'v12-clips-pixel-a': () => v12Rows(V12_A, LIGHT, '#333', { style: 'pixel' }),
+  'v12-clips-pixel-b': () => v12Rows(V12_B, LIGHT, '#333', { style: 'pixel' }),
+  'v12-clips-dark-pixel': () => v12Rows([...V12_A, ...V12_B], DARK, '#c9d1e0', { style: 'pixel', skin: 'black' }),
+  'v12-focus-a': () => ({ ...focusSheet(V12_A), ground: 0.7 }),
+  'v12-focus-b': () => ({ ...focusSheet(V12_B), ground: 0.7 }),
+  'v12-air-smooth': () => airSheet('smooth', 1),
+  'v12-air-pixel': () => airSheet('pixel', 1),
+  'v12-air-focus': () => airSheet('smooth', 2),
+  'v12-hints-smooth': () => hintsSheet('smooth'),
+  'v12-hints-pixel': () => hintsSheet('pixel'),
+  'v12-pixel-skins-light': () => pixelSkinsSheet(LIGHT, '#333'),
+  'v12-pixel-skins-dark': () => pixelSkinsSheet(DARK, '#c9d1e0'),
 };
 
 /** Average cost of update+draw per frame (ms) over `frames` frames of a walking cat. */

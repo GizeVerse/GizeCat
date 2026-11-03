@@ -7,6 +7,8 @@
 //   events    {"event":"selected"|"structure","hwnd":"<decimal>"}
 // The helper exits when stdin closes or on "quit". It never prints names or any other text read
 // from other processes: only rectangles, flags, counts and fixed protocol strings.
+// Protocol 2 (ADR 0003 §7.1): strips carry "kind" ("chromium" | "tabview") and ping lists "kinds";
+// the app compares the version exactly, so both ends move together.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -18,7 +20,7 @@ namespace DesktopCat.Uia
 {
     internal static class Program
     {
-        internal const int ProtocolVersion = 1;
+        internal const int ProtocolVersion = 2;
         private const int MaxLineChars = 16 * 1024;
         private const int QueueCapacity = 64;
         private const int ExitWatchdogMs = 3000;
@@ -226,7 +228,8 @@ namespace DesktopCat.Uia
                 .Key("version").Value((long)ProtocolVersion).Key("dpi").Value(dpiMode)
                 .Key("watching").Value((long)strips.WatchCount)
                 .Key("prunedRender").Value((long)TabStripReader.PrunedRenderWidgets)
-                .Key("prunedOther").Value((long)TabStripReader.PrunedOtherWindows).EndObject().ToString();
+                .Key("prunedOther").Value((long)TabStripReader.PrunedOtherWindows)
+                .Key("kinds").BeginArray().Value("chromium").Value("tabview").EndArray().EndObject().ToString();
         }
 
         internal static string ErrorLine(long? id, string code, string detail)

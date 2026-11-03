@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 
 export interface FakeHelperState {
-  /** Protocol version answered to ping (default 1). */
+  /** Protocol version answered to ping (default 2, the shipped helper's since v1.2). */
   version?: number;
   dpi?: string;
   /** hwnd -> strip object (sent as `strip`) or { error: code }. Unknown hwnds answer "not-found". */
@@ -110,7 +110,7 @@ function handle(line: string): void {
   if (typeof s.oversizeBefore === 'number') send(`{"id":${req.id ?? 0},"ok":true,"pad":"${'x'.repeat(s.oversizeBefore)}"}`);
   switch (req.op) {
     case 'ping':
-      send({ id: req.id, ok: true, pong: true, version: s.version ?? 1, dpi: s.dpi ?? 'permonitorv2', watching: 0, prunedRender: 0, prunedOther: 0 });
+      send({ id: req.id, ok: true, pong: true, version: s.version ?? 2, dpi: s.dpi ?? 'permonitorv2', watching: 0, prunedRender: 0, prunedOther: 0, ...((s.version ?? 2) >= 2 ? { kinds: ['chromium', 'tabview'] } : {}) });
       return;
     case 'strip': {
       const v = s.strips?.[req.hwnd ?? ''];

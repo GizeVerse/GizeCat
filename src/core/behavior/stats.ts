@@ -1,35 +1,38 @@
 // Need/mood variables over time. Rates are per second; energy and boredom move
 // over tens of minutes to hours, annoyance over minutes, fear over seconds.
+// v1.2 (ADR 0003 §1.2): energy drains recalibrated so a default cat that is active ~30 % of the
+// time keeps its energy at or above 0.5 over hours (with its naps); boredom is a display value
+// the sim sets from the play and explore needs (drives.ts).
 import type { BehaviorState } from '../../shared/cat';
 import type { Stats, Traits } from '../../shared/catState';
 
 type RateTable = Partial<Record<BehaviorState, number>>;
 
 const ENERGY_RATE: RateTable = {
-  sleeping: 0.0007,
+  sleeping: 0.0008,
   fallingAsleep: 0.0001,
-  resting: 0.00003,
+  resting: 0.00004,
   away: 0.00003,
-  idle: -0.00006,
-  wakingUp: -0.00004,
-  grooming: -0.00005,
-  watchingUser: -0.00005,
-  watchingCursor: -0.00005,
-  curious: -0.00006,
-  inspectingWindow: -0.00006,
-  beingPetted: -0.00002,
+  idle: -0.00003,
+  wakingUp: -0.00003,
+  grooming: -0.00003,
+  watchingUser: -0.00003,
+  watchingCursor: -0.00003,
+  curious: -0.00004,
+  inspectingWindow: -0.00004,
+  beingPetted: -0.00001,
   landing: -0.0001,
-  walking: -0.00018,
-  seekingAttention: -0.00015,
-  hiding: -0.00015,
-  annoyed: -0.0002,
-  running: -0.0011,
-  chasingCursor: -0.0011,
-  playing: -0.0011,
-  jumping: -0.0011,
-  falling: -0.0004,
-  held: -0.0003,
-  startled: -0.0006,
+  walking: -0.00012,
+  seekingAttention: -0.0001,
+  hiding: -0.0001,
+  annoyed: -0.00015,
+  running: -0.0007,
+  chasingCursor: -0.0007,
+  playing: -0.0007,
+  jumping: -0.0007,
+  falling: -0.0003,
+  held: -0.0002,
+  startled: -0.0004,
 };
 
 const BOREDOM_RATE: RateTable = {

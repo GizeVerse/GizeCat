@@ -3,7 +3,7 @@
 // in smooth or pixel style. Uses only the Canvas 2D context it is given (no DOM).
 import type { CatRenderState, Emote, RenderStyle } from '../../shared/cat';
 import type { Rect } from '../../shared/geometry';
-import { drawCat, drawShadow, type Ctx2D } from './cat/draw';
+import { drawCat, drawShadow, earCorners, type Ctx2D } from './cat/draw';
 import { drawEmote, EMOTE_RADIUS, EMOTE_SIZE, emoteFrame, type EmoteFrame } from './cat/emotes';
 import { clamp, smooth } from './cat/math';
 import { LEG_COUNT, LEG_FF, LEG_FN } from './cat/pose';
@@ -19,6 +19,11 @@ const DRAW_MARGIN = 5;
 const PIXEL_BLOCK = 3;
 /** Hit rects per frame (main accepts up to 8). */
 const HIT_RECTS = 7;
+/** Points on the head oval of the head's hit rect, and the slack covering the polygon's chords. */
+const HEAD_HIT_STEPS = 12;
+const HEAD_HIT_SLACK = 0.7;
+/** Gap (DIP at size 1) the emote keeps from the overlay's top edge. */
+const EMOTE_EDGE_GAP = 2;
 
 export interface SceneInput {
   /** Interpolated ground anchor, overlay-local DIP. */
@@ -219,6 +224,9 @@ export class CatScene {
         animSpeed: s.animSpeed,
         reaction,
         movementSpeed: s.movementSpeed,
+        jumpKind: s.jumpKind ?? null,
+        impact: s.impact,
+        balance: s.balance,
       },
       input.simTime,
       dt,
@@ -283,6 +291,7 @@ export class CatScene {
   private by0 = 0;
   private bx1 = 0;
   private by1 = 0;
+  private readonly earPts = new Float64Array(6);
 
   /** Adds a posed cat-local point with radius r (cat units) to the bounds and to hit rect `hit` (or none if < 0). */
   private acc(px: number, py: number, r: number, hit: number): void {
@@ -330,16 +339,35 @@ export class CatScene {
     this.acc(rig.hx - rig.hrx, rig.hy, 0, 1);
     this.acc(rig.hx + rig.hrx, rig.hy, 0, 1);
     this.acc(rig.hx, rig.hy + rig.hry, 0, 1);
-    // Head including ears: corners of a rotated box.
+    // Head including ears, drawn bounds: corners of a rotated box.
     const hc = Math.cos(rig.headRot);
     const hs = Math.sin(rig.headRot);
     const hf = rig.headFlip < 0 ? -1 : 1;
     for (let i = 0; i < 4; i++) {
       const lx = i & 1 ? HEAD_RX + 1 : -HEAD_RX - 1;
       const ly = (i & 2 ? HEAD_RY + 1 : -HEAD_RY - 9) * hf;
-      this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 0, 0);
+      this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 0, -1);
     }
-    // Ear tips and whiskers are only drawn bounds, not interactive. Whiskers (drawCat's
+    // Head hit region (v1.2): the head oval and the two ears as drawn. The box above swings its
+    // empty ear-room corners ahead of the face when the head tips down, which put a pouncing or
+    // striking cat's region ~7 DIP closer to the cursor than anything painted (HIT_FRONT_EXTENT_DIP).
+    for (let i = 0; i < HEAD_HIT_STEPS; i++) {
+      const a = (i * 2 * Math.PI) / HEAD_HIT_STEPS;
+      const lx = (HEAD_RX + 1) * Math.cos(a);
+      const ly = (HEAD_RY + 1) * Math.sin(a) * hf;
+      this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, HEAD_HIT_SLACK, 0);
+    }
+    const pose = this.puppet.pose;
+    const ears = this.earPts;
+    for (let e = 0; e < 2; e++) {
+      earCorners(pose, e === 0 ? 0 : 1, ears);
+      for (let i = 0; i < 3; i++) {
+        const lx = ears[i * 2]!;
+        const ly = ears[i * 2 + 1]! * hf;
+        this.acc(rig.headX + lx * hc + ly * hs, rig.headY - lx * hs + ly * hc, 0.5, 0);
+      }
+    }
+    // Room around the ear tips and the whiskers: drawn bounds only, not interactive. Whiskers (drawCat's
     // drawWhiskers) fan out from the face, which shifts with the face turn, and tilt
     // with pose.whisker by up to ~0.6 rad.
     for (let i = 0; i < 2; i++) {
@@ -393,6 +421,11 @@ export class CatScene {
       this.emoteX = hx + 5 * s * Math.sign(this.facingNow || 1);
       this.emoteY = Math.min(hy, this.y) - (HEAD_RY + 17 + this.emoteF.rise) * s;
       const half = (size * EMOTE_RADIUS) / EMOTE_SIZE;
+      // v1.2 (ADR 0003 §8.2): kept inside this overlay at its top edge, so a cat at the top of the
+      // screen (a screen-edge climb, a window near the top) shows its whole emote. Only when the cat
+      // stands in or below this overlay (anchor at or below its top): an overlay the cat is above
+      // must not pull a stray emote in from outside.
+      if (this.y >= 0) this.emoteY = Math.max(this.emoteY, half + EMOTE_EDGE_GAP * s);
       x0 = Math.min(x0, this.emoteX - half);
       y0 = Math.min(y0, this.emoteY - half);
       x1 = Math.max(x1, this.emoteX + half);

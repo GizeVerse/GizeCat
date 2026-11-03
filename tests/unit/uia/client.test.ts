@@ -55,7 +55,8 @@ describe('UiaHelperClient', () => {
     const r = rig({ strips: { [H]: wireStrip({ browser: 'edge' }) } });
     expect(r.client.start()).toBe(true);
     const pong = await r.client.request({ op: 'ping' }, r.clock.now());
-    expect(pong).toMatchObject({ ok: true, pong: true, version: 1, dpi: 'permonitorv2' });
+    // The fake helper speaks protocol 2 like the shipped one (v1.2).
+    expect(pong).toMatchObject({ ok: true, pong: true, version: 2, dpi: 'permonitorv2', kinds: ['chromium', 'tabview'] });
     const [a, b] = await Promise.all([r.client.request({ op: 'strip', hwnd: H }, r.clock.now()), r.client.request({ op: 'strip', hwnd: '999' }, r.clock.now())]);
     expect(a.ok && a.strip?.tabs.length).toBe(3);
     expect(b).toMatchObject({ ok: false, error: 'not-found' });
@@ -96,6 +97,33 @@ describe('UiaHelperClient', () => {
     ]);
     await expect(behind).rejects.toMatchObject({ code: 'timeout' });
     expect(r.client.pendingCount).toBe(1);
+  });
+
+  it('v1.2: a request can carry a longer timeout (Explorer); one queued behind it that expires first takes it along, first', async () => {
+    const r = rig({ strips: { [H]: wireStrip({ browser: 'edge' }) }, hangHwnds: ['888'] });
+    r.client.start();
+    await r.client.request({ op: 'ping' }, r.clock.now());
+    const explorer = r.client.request({ op: 'strip', hwnd: '888' }, r.clock.now(), 2500);
+    explorer.catch(() => undefined);
+    r.clock.advance(1499);
+    expect(r.client.checkTimeouts(r.clock.now())).toBe(0);
+    r.clock.advance(1);
+    // Alone, the long request is not timed out at the default 1.5 s.
+    expect(r.client.checkTimeouts(r.clock.now())).toBe(0);
+    const behind = r.client.request({ op: 'strip', hwnd: H }, r.clock.now());
+    behind.catch(() => undefined);
+    r.clock.advance(800);
+    expect(r.client.checkTimeouts(r.clock.now())).toBe(0);
+    r.clock.advance(700);
+    // At 3.0 s the long one expired on its own; the default one sent at 1.5 s has 1.5 s too.
+    const timedOut: Parameters<UiaHelperClient['request']>[0][] = [];
+    expect(r.client.checkTimeouts(r.clock.now(), timedOut)).toBe(2);
+    expect(timedOut[0]).toEqual({ op: 'strip', hwnd: '888' });
+    // A shorter per-request timeout is raised to the default.
+    const short = r.client.request({ op: 'ping' }, r.clock.now(), 10);
+    short.catch(() => undefined);
+    r.clock.advance(1000);
+    expect(r.client.checkTimeouts(r.clock.now())).toBe(0);
   });
 
   it('treats a long gap between checks as a host stall (sleep/resume), not a helper hang', async () => {

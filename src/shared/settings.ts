@@ -63,19 +63,24 @@ export const OPT_OUT_ID_PATTERN = /^[a-z][A-Za-z0-9]{0,31}$/;
 export const MAX_OPT_OUTS = 64;
 
 /**
- * Tolerant opt-out list: entries are checked one by one, so a bad or unknown entry never costs the
- * others. Malformed entries and duplicates are dropped; well-formed unknown ids (a newer version's
- * opt-outs) are kept, so a v1.3 -> v1.2 -> v1.3 round trip keeps them, and ignored by this version.
+ * The tolerant opt-out list rule: entries are checked one by one, so a bad or unknown entry never
+ * costs the others. Malformed entries and duplicates are dropped; well-formed unknown ids (a newer
+ * version's opt-outs) are kept, so a v1.3 -> v1.2 -> v1.3 round trip keeps them, and ignored by
+ * this version; at most MAX_OPT_OUTS, first ones win. Anything but an array is the empty list.
+ * Also the rule for the downgrade-proof sidecar copy of the list (ADR 0003 §9.3). Pure.
  */
-const OptOutListSchema = z.array(z.unknown()).transform((items) => {
+export function normalizeOptOutList(items: unknown): string[] {
+  if (!Array.isArray(items)) return [];
   const out: string[] = [];
-  for (const it of items) {
+  for (const it of items as unknown[]) {
     if (typeof it !== 'string' || !OPT_OUT_ID_PATTERN.test(it) || out.includes(it)) continue;
     out.push(it);
     if (out.length >= MAX_OPT_OUTS) break;
   }
   return out;
-});
+}
+
+const OptOutListSchema = z.array(z.unknown()).transform((items) => normalizeOptOutList(items));
 
 /**
  * Opt-outs a v2 behaviour implies for the new ones (ADR 0003 §9.4): the new model never re-enables
@@ -358,12 +363,17 @@ export function migrateSettings(raw: unknown): Settings {
     // values match, else 'custom' (an explicit autonomy 0.8 / cursorPlay 0.7 is kept and shown as
     // Custom); the v2 opt-out list is untouched and the new tolerant list starts empty. Consent,
     // privacy, AI and login-item fields are not looked at.
-    const parsed = SettingsSchema.parse({ ...obj, schemaVersion: 3 });
-    const behavior = obj.behavior !== null && typeof obj.behavior === 'object' && !Array.isArray(obj.behavior) ? (obj.behavior as Record<string, unknown>) : {};
-    if (behavior.activityPreset === undefined) parsed.behavior.activityPreset = matchingPreset(parsed) ?? 'custom';
-    return parsed;
+    obj.schemaVersion = 3;
   }
-  return SettingsSchema.parse(obj);
+  // The stored preset name is never trusted over the values (a hand-edited file, or a preset a
+  // newer version added): it is re-derived from them, as main does after every patch.
+  return withReconciledPreset(SettingsSchema.parse(obj));
+}
+
+/** `s` with behavior.activityPreset set to the preset its governed values match, else 'custom' (mutates and returns `s`). */
+function withReconciledPreset(s: Settings): Settings {
+  s.behavior.activityPreset = matchingPreset(s) ?? 'custom';
+  return s;
 }
 
 export type PatchResult = { ok: true; settings: Settings } | { ok: false; error: string };
@@ -400,6 +410,12 @@ export function rejectConsentBypass(patch: unknown): string | null {
  * Applies a patch from an untrusted source (the settings renderer). Unlike loading
  * from disk, invalid values are rejected rather than silently defaulted: every
  * patched leaf must survive parsing unchanged.
+ *
+ * v1.2 (ADR 0003 §9.2): afterwards behavior.activityPreset is re-derived from the governed values
+ * (the matching preset, else 'custom'), whatever the patch said. A renderer sends 'custom' with a
+ * slider change and lets this decide (moving a slider back onto a preset's value selects that
+ * preset again); a patch naming a preset must carry that preset's values (presetPatch), or it is
+ * rejected.
  */
 export function applySettingsPatch(current: Settings, patch: unknown): PatchResult {
   if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) return { ok: false, error: 'patch must be an object' };
@@ -417,5 +433,9 @@ export function applySettingsPatch(current: Settings, patch: unknown): PatchResu
     const got = (parsed as unknown as Record<string, Record<string, unknown> | undefined>)[section]?.[key];
     if (JSON.stringify(got) !== JSON.stringify(value)) return { ok: false, error: `invalid value for ${section}.${key}` };
   }
+  const asked = parsed.behavior.activityPreset;
+  withReconciledPreset(parsed);
+  const named = touched.some(([section, key]) => section === 'behavior' && key === 'activityPreset');
+  if (named && asked !== 'custom' && asked !== parsed.behavior.activityPreset) return { ok: false, error: 'invalid value for behavior.activityPreset' };
   return { ok: true, settings: parsed };
 }

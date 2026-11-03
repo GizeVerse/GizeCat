@@ -7,6 +7,10 @@
 // light/dark), climb-scales, climb-emotes, climb-transitions, climb-strip* (walk, mount, climb,
 // pull-up onto the top) and climb-strip-down* (swing down, climb down, step off), with the mover's
 // timings and speeds.
+// --only=v12* renders the v1.2 sheets (ADR 0003 §8): the 14 new clips in both styles
+// (v12-clips-*, v12-focus-*), every jumpKind's flight (v12-air-*), the impact and balance hints and
+// the crouch wiggle (v12-hints-*), and hiss/swat/stalk/pounce/grumpy/slink in every skin in pixel
+// style (v12-pixel-skins-*). Review them at 125 % with --dpr=1.25.
 //
 // End-to-end overlay smoke (the real preload + overlay runtime in an offscreen window,
 // fed with synthetic CatRenderState snapshots; checks hit-region IPC, including a climbing
@@ -265,6 +269,20 @@ async function overlaySmoke() {
     await sleep(33);
   }
   await capture('pixel-debug');
+  // Phase 3b (v1.2): a pounce with its jumpKind hint, then a hiss whose snapshot carries a sound cue at
+  // volume 0 (exercises the cue path; a silent cue never opens an AudioContext, so nothing is heard).
+  // No config change here: a config resets the hit-region rate limit, which the gap check below measures.
+  const pounceAt = Date.now() - t0 + 10000;
+  for (let i = 0; i < 15; i++) {
+    send({ x: 300 + 6 * i, y: 300 - 30 * Math.sin((Math.PI * i) / 14), clip: 'pounce', state: 'jumping', speed: 0, vy: i < 7 ? -300 : 300, jumpKind: 'pounce', clipStartedAt: pounceAt });
+    await sleep(33);
+  }
+  const hissAt = Date.now() - t0 + 10000;
+  for (let i = 0; i < 20; i++) {
+    send({ x: 390, clip: 'hiss', state: 'startled', speed: 0, clipStartedAt: hissAt, sound: { kind: 'hiss', at: hissAt, volume: 0 }, impact: 0.8, balance: 0.2 });
+    await sleep(33);
+  }
+  await capture('v12-hiss');
   const visibleRegions = regions.length;
   const lastVisible = regions.at(-1);
   for (let i = 0; i < 10; i++) {
@@ -300,7 +318,8 @@ async function overlaySmoke() {
   for (let i = 1; i < regions.length; i++) if (regions[i].r.rects.length > 0) minGap = Math.min(minGap, regions[i].at - regions[i - 1].at);
   if (minGap < 55) problems.push(`hit region sent too often (min gap ${minGap} ms)`);
   const api = JSON.parse(exposed);
-  const expectedKeys = ['onConfig', 'onRender', 'ready', 'reportError', 'sendHitRegion', 'sendPointer'];
+  // onSurfaceLines: the v1.1.1 surface outlines (preload/overlay.ts); this list predates it.
+  const expectedKeys = ['onConfig', 'onRender', 'onSurfaceLines', 'ready', 'reportError', 'sendHitRegion', 'sendPointer'];
   if (JSON.stringify(api.keys) !== JSON.stringify(expectedKeys)) problems.push(`unexpected API surface ${api.keys.join(',')}`);
   if (api.ipc !== 'undefined' || api.req !== 'undefined' || api.proc !== 'undefined') problems.push('Node/IPC globals leaked into the page');
   if (errors.length) problems.push(`overlay reported errors: ${JSON.stringify(errors)}`);

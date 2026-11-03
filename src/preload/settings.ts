@@ -12,6 +12,7 @@ import type {
   SettingsApi,
   SettingsViewState,
 } from '../shared/ipc';
+import type { BehaviorProfileSnapshot } from '../shared/behaviorProfile';
 import type { PatchResult, SettingsPatch } from '../shared/settings';
 import type { SurfaceDiagnostics } from '../shared/surfaceDiagnostics';
 
@@ -24,6 +25,7 @@ type SettingsChannel =
   | 'settingsListModels'
   | 'settingsPreviewPerception'
   | 'settingsGetSurfaceDiagnostics'
+  | 'settingsGetBehaviorProfile'
   | 'settingsStateChanged';
 
 // Importing IPC at runtime would bundle zod (≈440 KB) into the preload, because
@@ -38,6 +40,7 @@ const CH = {
   settingsListModels: 'settings:list-models',
   settingsPreviewPerception: 'settings:preview-perception',
   settingsGetSurfaceDiagnostics: 'settings:get-surface-diagnostics',
+  settingsGetBehaviorProfile: 'settings:get-behavior-profile',
   settingsStateChanged: 'settings:state-changed',
 } as const satisfies Pick<typeof IPC, SettingsChannel>;
 
@@ -54,6 +57,7 @@ const api: SettingsApi = {
   listModels: () => invoke<ModelListResult>(CH.settingsListModels),
   previewPerception: () => invoke<PerceptionPreview>(CH.settingsPreviewPerception),
   getSurfaceDiagnostics: () => invoke<SurfaceDiagnostics>(CH.settingsGetSurfaceDiagnostics),
+  getBehaviorProfile: () => invoke<BehaviorProfileSnapshot>(CH.settingsGetBehaviorProfile),
   onStateChanged(cb: (state: SettingsViewState) => void): () => void {
     if (typeof cb !== 'function') throw new TypeError('onStateChanged expects a function');
     const listener = (_event: IpcRendererEvent, state: SettingsViewState): void => cb(state);

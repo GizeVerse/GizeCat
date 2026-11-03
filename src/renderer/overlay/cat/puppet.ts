@@ -41,7 +41,8 @@ export class CatPuppet {
     // has no ground under it, except the one it just climbed up from: its tail rests on that until
     // the climb lifts it clear. Just after it leaves the wall the anchor is still on its way onto the
     // ledge or down to the floor, so that support stays the only ground until it has arrived.
-    const airborne = input.clip === 'held' || input.clip === 'jump' || input.clip === 'fall';
+    // v1.2: a pounce is airborne, and a cat hanging from a ledge edge (slip) has no ground under it.
+    const airborne = input.clip === 'held' || input.clip === 'jump' || input.clip === 'fall' || input.clip === 'pounce' || input.clip === 'slip';
     const onWall = !airborne && (input.clip === 'climb' || this.animator.leavingWall);
     const upright = !airborne && !onWall && Math.abs(p.rot) < 0.3 && p.rollY > 0.6 && p.offY > -2;
     if (onWall) {

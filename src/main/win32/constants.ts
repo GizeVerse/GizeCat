@@ -23,6 +23,22 @@ export const WIN_EVENT_RANGES: ReadonlyArray<readonly [number, number]> = [
   [EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED],
 ];
 
+/** v1.2 click-guard obstacle cache (ADR 0003 §6.1): window creation and moves also invalidate it. */
+export const EVENT_OBJECT_CREATE = 0x8000;
+export const EVENT_OBJECT_LOCATIONCHANGE = 0x800b;
+/**
+ * Hooked only while the cat is near a screen-edge band. LOCATIONCHANGE is a separate, narrow hook
+ * (it also fires for every cursor and caret move; those are filtered out at once by idObject).
+ */
+export const OBSTACLE_EVENT_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND],
+  [EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND],
+  [EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND],
+  [EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE],
+  [EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE],
+  [EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED],
+];
+
 export const OBJID_WINDOW = 0;
 export const CHILDID_SELF = 0;
 
@@ -49,6 +65,8 @@ export const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
 export const VK_LBUTTON = 0x01;
 export const VK_RBUTTON = 0x02;
+/** v1.2: the middle button (press counter and typing detector; mouse buttons only, never keys). */
+export const VK_MBUTTON = 0x04;
 export const SM_SWAPBUTTON = 23;
 
 /** QUERY_USER_NOTIFICATION_STATE */

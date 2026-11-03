@@ -1,11 +1,16 @@
 // Client-side state for the settings window: holds the last view from main, sends
 // one-leaf patches (debounced for sliders), reverts controls whose patch is
 // rejected, and never overwrites a control the user is interacting with.
+// v1.2: a change may carry more leaves in the same patch (a preset sets eight values at
+// once; a governed slider sends activityPreset 'custom' with its value). Every leaf of a
+// change counts as pending and in flight, so a broadcast never clobbers any of them.
 import type { SettingsApi, SettingsViewState } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import type { FieldId, FieldKey, SectionKey } from './fields';
-import { buildPatch, fieldId, readField, valuesEqual } from './patch';
+import { buildMultiPatch, fieldId, leafId, readField, valuesEqual, type Leaf } from './patch';
 import { S } from './strings';
+
+export type { Leaf } from './patch';
 
 export interface Timers {
   setTimeout(fn: () => void, ms: number): number;
@@ -26,14 +31,22 @@ export interface SetOptions {
   debounceMs?: number;
   /** Binding that shows errors for this change. */
   origin?: FieldBinding;
+  /**
+   * More leaves sent in the same patch (v1.2: activityPreset 'custom' with a preset-governed
+   * value). They ride along: a change whose own value equals the confirmed one is not sent.
+   */
+  with?: readonly Leaf[];
 }
 
-interface Pending {
-  section: SectionKey;
-  key: string;
-  value: unknown;
-  timer: number;
+/** One change: the leaves the user set, plus the ones riding along. */
+interface Change {
+  primary: Leaf[];
+  companions: Leaf[];
   origin: FieldBinding | undefined;
+}
+
+interface Pending extends Change {
+  timer: number;
 }
 
 interface InFlight {
@@ -49,10 +62,13 @@ export function errorText(error: unknown): string {
   return S.errors.unexpected;
 }
 
+const leavesOf = (c: Change): Leaf[] => [...c.primary, ...c.companions];
+
 export class SettingsStore {
   private current: SettingsViewState;
   private readonly bindings = new Set<FieldBinding>();
   private readonly listeners = new Set<ViewListener>();
+  /** Debounced changes, keyed by the field the user set. */
   private readonly pending = new Map<FieldId, Pending>();
   private readonly inflight = new Map<FieldId, InFlight>();
   private readonly sends = new Set<Promise<void>>();
@@ -88,15 +104,15 @@ export class SettingsStore {
   /** Latest value the user asked for (pending or in flight), else the confirmed one. */
   intended<S extends SectionKey, K extends FieldKey<S>>(section: S, key: K): Settings[S][K] {
     const id = fieldId(section, key);
-    const pending = this.pending.get(id);
-    if (pending) return pending.value as Settings[S][K];
+    const pending = this.pendingValue(id);
+    if (pending.found) return pending.value as Settings[S][K];
     const flight = this.inflight.get(id);
     if (flight) return flight.latest as Settings[S][K];
     return readField(this.current.settings, section, key);
   }
 
   isSettling(field: FieldId): boolean {
-    return this.pending.has(field) || this.inflight.has(field);
+    return this.pendingValue(field).found || this.inflight.has(field);
   }
 
   set<S extends SectionKey, K extends FieldKey<S>>(section: S, key: K, value: Settings[S][K], options: SetOptions = {}): void {
@@ -107,18 +123,36 @@ export class SettingsStore {
       this.pending.delete(id);
     }
     options.origin?.showError(null);
+    const change: Change = { primary: [{ section, key, value }], companions: [...(options.with ?? [])], origin: options.origin };
     const delay = options.debounceMs ?? 0;
     if (delay > 0) {
       const timer = this.timers.setTimeout(() => {
         const entry = this.pending.get(id);
         if (!entry || entry.timer !== timer) return;
         this.pending.delete(id);
-        this.dispatch(id, section, key, entry.value, entry.origin);
+        this.dispatch(entry);
       }, delay);
-      this.pending.set(id, { section, key, value, timer, origin: options.origin });
+      this.pending.set(id, { ...change, timer });
     } else {
-      this.dispatch(id, section, key, value, options.origin);
+      this.dispatch(change);
     }
+    this.notify();
+  }
+
+  /**
+   * Sends several leaves as one patch, now (v1.2 presets). Debounced changes that touch any of
+   * these fields are dropped first, so a slider move still waiting cannot land after them.
+   */
+  setMany(leaves: readonly Leaf[], options: Pick<SetOptions, 'origin'> = {}): void {
+    if (leaves.length === 0) return;
+    const ids = new Set(leaves.map(leafId));
+    for (const [id, entry] of [...this.pending]) {
+      if (!leavesOf(entry).some((l) => ids.has(leafId(l)))) continue;
+      this.timers.clearTimeout(entry.timer);
+      this.pending.delete(id);
+    }
+    options.origin?.showError(null);
+    this.dispatch({ primary: [...leaves], companions: [], origin: options.origin });
     this.notify();
   }
 
@@ -127,7 +161,7 @@ export class SettingsStore {
     for (const [id, entry] of [...this.pending]) {
       this.timers.clearTimeout(entry.timer);
       this.pending.delete(id);
-      this.dispatch(id, entry.section, entry.key, entry.value, entry.origin);
+      this.dispatch(entry);
     }
     await this.settled();
   }
@@ -149,33 +183,59 @@ export class SettingsStore {
     if (!binding.isBusy() && !this.isSettling(binding.field)) binding.sync(this.confirmedValue(binding.field));
   }
 
-  private dispatch(id: FieldId, section: SectionKey, key: string, value: unknown, origin: FieldBinding | undefined): void {
-    if (!this.inflight.has(id) && valuesEqual(value, this.confirmedValue(id))) {
-      this.syncField(id);
+  /** The newest pending value of `id` (as the field the user set, or riding along). */
+  private pendingValue(id: FieldId): { found: boolean; value: unknown } {
+    const own = this.pending.get(id);
+    if (own) {
+      const leaf = own.primary.find((l) => leafId(l) === id);
+      if (leaf) return { found: true, value: leaf.value };
+    }
+    let out: { found: boolean; value: unknown } = { found: false, value: undefined };
+    for (const entry of this.pending.values()) {
+      for (const l of leavesOf(entry)) if (leafId(l) === id) out = { found: true, value: l.value };
+    }
+    return out;
+  }
+
+  private dispatch(change: Change): void {
+    const unchanged = change.primary.every((l) => {
+      const id = leafId(l);
+      return !this.inflight.has(id) && valuesEqual(l.value, this.confirmedValue(id));
+    });
+    if (unchanged) {
+      for (const l of change.primary) this.syncField(leafId(l));
       return;
     }
-    const send = this.send(id, section, key, value, origin);
+    const send = this.send(change);
     this.sends.add(send);
     void send.finally(() => this.sends.delete(send));
   }
 
-  private async send(id: FieldId, section: SectionKey, key: string, value: unknown, origin: FieldBinding | undefined): Promise<void> {
-    const flight = this.inflight.get(id) ?? { count: 0, latest: undefined };
-    flight.count += 1;
-    flight.latest = value;
-    this.inflight.set(id, flight);
+  private async send(change: Change): Promise<void> {
+    const leaves = leavesOf(change);
+    for (const l of leaves) {
+      const id = leafId(l);
+      const flight = this.inflight.get(id) ?? { count: 0, latest: undefined };
+      flight.count += 1;
+      flight.latest = l.value;
+      this.inflight.set(id, flight);
+    }
     let error: string | null = null;
     try {
-      const patch = buildPatch(section, key as never, value as never);
-      const result = await this.api.update(patch);
+      const result = await this.api.update(buildMultiPatch(leaves));
       if (result.ok) this.current = { ...this.current, settings: result.settings };
       else error = result.error;
     } catch (e) {
       error = errorText(e);
     }
-    flight.count -= 1;
-    if (flight.count === 0) this.inflight.delete(id);
-    if (error !== null) origin?.showError(S.errors.saveFailed(error));
+    for (const l of leaves) {
+      const id = leafId(l);
+      const flight = this.inflight.get(id);
+      if (!flight) continue;
+      flight.count -= 1;
+      if (flight.count <= 0) this.inflight.delete(id);
+    }
+    if (error !== null) change.origin?.showError(S.errors.saveFailed(error));
     this.syncAll();
     this.notify();
   }

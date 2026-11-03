@@ -4,7 +4,7 @@ import type { Settings } from '../../shared/settings';
 import type { PageContext } from './context';
 import { h, icon, uid, type Child, type GlyphName } from './dom';
 import { formatValue, nearestStopIndex, snapToStep, type BoolKey, type FieldKey, type NumericField, type SectionKey, type StrKey } from './fields';
-import { fieldId } from './patch';
+import { fieldId, type Leaf } from './patch';
 import { errorText, type FieldBinding } from './store';
 import { S } from './strings';
 import type { Validation } from './validate';
@@ -266,6 +266,11 @@ export interface SliderHandle {
   setDisabled(disabled: boolean): void;
 }
 
+export interface SliderOptions extends RowOptions {
+  /** Leaves sent in the same patch as every value change (v1.2: activityPreset 'custom'). */
+  with?: readonly Leaf[];
+}
+
 interface SliderModel {
   min: number;
   max: number;
@@ -275,7 +280,7 @@ interface SliderModel {
   label(value: number): string;
 }
 
-function sliderControl<Sec extends SectionKey>(ctx: PageContext, field: NumericField<Sec>, model: SliderModel, opts: RowOptions): SliderHandle {
+function sliderControl<Sec extends SectionKey>(ctx: PageContext, field: NumericField<Sec>, model: SliderModel, opts: SliderOptions): SliderHandle {
   const parts = row(opts);
   const input = h('input', {
     type: 'range',
@@ -306,7 +311,7 @@ function sliderControl<Sec extends SectionKey>(ctx: PageContext, field: NumericF
   const commit = (debounceMs: number): void => {
     const value = model.fromPosition(Number(input.value));
     show(value);
-    ctx.store.set(field.section, key, value as Settings[Sec][FieldKey<Sec>], { debounceMs, origin: binding });
+    ctx.store.set(field.section, key, value as Settings[Sec][FieldKey<Sec>], { debounceMs, origin: binding, with: opts.with });
   };
   input.addEventListener('pointerdown', () => {
     dragging = true;
@@ -333,7 +338,7 @@ function sliderControl<Sec extends SectionKey>(ctx: PageContext, field: NumericF
 }
 
 /** Linear slider over a numeric field's step grid. */
-export function sliderRow<Sec extends SectionKey>(ctx: PageContext, field: NumericField<Sec>, opts: RowOptions): SliderHandle {
+export function sliderRow<Sec extends SectionKey>(ctx: PageContext, field: NumericField<Sec>, opts: SliderOptions): SliderHandle {
   return sliderControl(ctx, field, {
     min: field.min,
     max: field.max,

@@ -3,6 +3,8 @@
 // schemas before anything acts on it. Secrets never travel back to renderers.
 import type { IpcMain, IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import type { z } from 'zod';
+import type { BehaviorProfileSnapshot } from '../../shared/behaviorProfile';
+import { parseBehaviorProfile } from '../../shared/behaviorProfileSchema';
 import type { HitRegion } from '../../shared/cat';
 import {
   HitRegionSchema,
@@ -70,6 +72,8 @@ export interface IpcDeps {
   onSecretsChanged: () => void;
   /** v1.1.1 surface diagnostics for the Diagnostics page (built and cached in main). */
   getSurfaceDiagnostics?: () => SurfaceDiagnostics;
+  /** v1.2 behaviour profile for Diagnostics -> Behaviour (the sim's session snapshot; validated here). */
+  getBehaviorProfile?: () => BehaviorProfileSnapshot;
   clock: () => number;
 }
 
@@ -79,6 +83,7 @@ export interface IpcRegistration {
 
 const unavailable = 'Screen analysis is not available in this build.';
 const surfacesUnavailable = 'Surface details are not available right now.';
+const behaviorUnavailable = 'Behaviour details are not available right now.';
 const errorText = (err: unknown): string => redactString(err instanceof Error ? err.message : String(err)).slice(0, 300);
 
 export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
@@ -246,6 +251,24 @@ export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
     if (!parsed) {
       warnThrottled('surfaces:invalid', 'surface diagnostics failed validation; not sent');
       throw new Error(surfacesUnavailable);
+    }
+    return parsed;
+  });
+
+  // v1.2 (ADR 0003 §11): the same rule for the behaviour profile. The strict, bounded schema lets
+  // only the contract's kinds, counts and durations through (never an id, title or position).
+  onSettings(IPC.settingsGetBehaviorProfile, (): BehaviorProfileSnapshot => {
+    if (!deps.getBehaviorProfile) throw new Error(behaviorUnavailable);
+    let parsed: BehaviorProfileSnapshot | null;
+    try {
+      parsed = parseBehaviorProfile(deps.getBehaviorProfile());
+    } catch (err) {
+      warnThrottled('behavior:failed', 'building the behaviour profile failed', { error: err });
+      throw new Error(behaviorUnavailable, { cause: err });
+    }
+    if (!parsed) {
+      warnThrottled('behavior:invalid', 'behaviour profile failed validation; not sent');
+      throw new Error(behaviorUnavailable);
     }
     return parsed;
   });

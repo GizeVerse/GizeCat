@@ -96,6 +96,11 @@ export const GLYPH = {
   fullscreen: '\uE740',
   clock: '\uE823',
   more: '\uE712',
+  // v1.2 settings (Personality, Fine-tune, Sound)
+  volume: '\uE767',
+  mapPin: '\uE707',
+  up: '\uE74A',
+  equalizer: '\uE9E9',
 } as const;
 export type GlyphName = keyof typeof GLYPH;
 

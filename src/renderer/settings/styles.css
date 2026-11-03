@@ -952,6 +952,71 @@ p.row-desc {
   color: var(--warn);
 }
 
+/* ---------- v1.2 Personality: preset cards and Fine-tune ---------- */
+
+.preset-cards {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+/* Custom is reached by moving a slider, never picked: no hover, a dashed outline until it is the selection. */
+.option-card[aria-disabled='true'] {
+  cursor: default;
+}
+
+.option-card[aria-disabled='true']:not(.selected) {
+  border-style: dashed;
+  background: transparent;
+}
+
+.option-card[aria-disabled='true']:hover:not(.selected) {
+  background: transparent;
+}
+
+.fine-tune > .fine-tune-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px 16px;
+  min-height: 48px;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* summary allows phrasing content only, so the title and description are spans shown as lines. */
+.fine-tune-summary .row-title,
+.fine-tune-summary .row-desc {
+  display: block;
+}
+
+.fine-tune > .fine-tune-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fine-tune > .fine-tune-summary:hover {
+  background: var(--control-hover);
+}
+
+.fine-tune-chevron {
+  font-size: 12px;
+  transition: transform 0.15s ease;
+}
+
+.fine-tune[open] .fine-tune-chevron {
+  transform: rotate(180deg);
+}
+
+.fine-tune-rows {
+  margin: 3px 0 0 24px;
+}
+
+.fine-tune-extras {
+  margin-top: 10px;
+}
+
+.fine-tune-heading {
+  font: 600 13px/20px var(--font);
+  margin: 0 0 6px 2px;
+}
+
 /* ---------- swatches ---------- */
 
 .swatches {
@@ -1645,6 +1710,10 @@ p.row-desc {
 .surface-card-title {
   font: 600 13px/20px var(--font);
   margin: 0 0 8px;
+}
+
+.surface-card-body .kv + .table-wrap {
+  margin-top: 14px;
 }
 
 .surface-card-body .table-wrap {

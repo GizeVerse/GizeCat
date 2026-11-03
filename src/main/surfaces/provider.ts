@@ -15,7 +15,7 @@
 //   accepts (a quarter of the cat's width). A strip found or lost while the cat stands on the
 //   window's top or clings to one of its sides does not swap the top: the one listed when it got
 //   there stays listed under its id until it leaves (walls name whichever top is listed).
-// - Tab-strip interest (Edge/Chrome only): the browser the cat is attached to, those whose top
+// - Tab-strip interest (allow-listed apps only, v1.2): the window the cat is attached to, those whose top
 //   edge is within reach (interestRadiusDip), and, while the cat is awake and free to move, up to
 //   maxOpenTopInterest more whose top edge is open somewhere on a display the cat may use with
 //   room above it for the cat, nearest first, skipping those the service says cannot give a strip
@@ -37,21 +37,33 @@
 // tracker: process rules always, title rules only while analysis is on); only the surface the
 // cat is on is still served, flagged `excluded`, so it leaves calmly. Tab-strip interest and tab
 // events are never forwarded for them. No window title is read here.
+//
+// v1.2 (ADR 0003 §6.1, §7.2, §15.4):
+// - Tab-strip interest follows the allow-list (allowList.ts: Edge, Chrome, Windows Terminal, File
+//   Explorer once its soak passed) instead of the 'browser' category.
+// - edgeBands(): the outer screen edges' cling bands and where they are clear of every shown
+//   window (the occluder snapshot: app windows, dialogs, tool and topmost windows, our Settings
+//   window, private windows, taskbars), from the cat's real footprint. Rects stay in main.
+// - restrictToPids (E2E only): windows of other processes still occlude, but offer no surface,
+//   no tab-strip interest and no tab events, so the user's windows never join a test run.
 import os from 'node:os';
 import { displayAtPoint, displayForRect, nearestDisplay, primaryDisplay } from '../../core/display/displayMath';
 import { CAT_BASE_WIDTH_DIP } from '../../shared/cat';
 import type { Rect } from '../../shared/geometry';
-import type { Settings } from '../../shared/settings';
+import { disabledBehaviorSet, type Settings } from '../../shared/settings';
 import type { SimEvent } from '../../shared/sim';
 import type { ProviderDiagnostics, ProviderSkipReason } from '../../shared/surfaceDiagnostics';
 import { emptySurfaceCounts } from '../../shared/surfaceDiagnostics';
-import type { LedgeSurface, Surface, SurfacePhase, SurfaceStatus } from '../../shared/surfaces';
+import type { LedgeSurface, ScreenEdgeBand, Surface, SurfacePhase, SurfaceStatus } from '../../shared/surfaces';
 import type { DisplayGeometry, WindowInfo } from '../../shared/world';
 import type { DisplayService, Logger, SurfaceProvider, TabStripService, TaskbarTracker, Unsubscribe, Win32Api, WindowTracker } from '../contracts';
+import { BODY_MARGIN_SIDE_DIP } from '../overlay/renderMapping';
+import { tabStripRuleFor } from '../uia/allowList';
 import { catExtentPx } from '../uia/segment';
-import { hasTabStripExtras, TAB_STRIP_BROWSERS, type TabStripDiagnostics } from '../uia/service';
+import { hasTabStripExtras, type TabStripDiagnostics } from '../uia/service';
 import type { Occluder } from '../win32/platforms';
-import { hasWin32Extensions } from '../win32/win32Api';
+import { hasWin32Extensions, hasWin32InputExtensions } from '../win32/win32Api';
+import { computeEdgeBands, edgeBandStats, type EdgeBandStats } from './edgeBands';
 import type { WindowChange, WindowTrackerExtras } from '../win32/windowTracker';
 import {
   ATTACH_TOLERANCE_PX,
@@ -167,6 +179,9 @@ export type SurfaceProviderDebug = {
   errors: number;
   taskbar: Record<string, unknown> | null;
   tabStrips: Record<string, unknown> | null;
+  /** v1.2 E2E restriction: how many processes are allowed (null: no restriction). */
+  restrictedPids: number | null;
+  edgeBands: EdgeBandStats | null;
 };
 
 export interface SurfaceProviderExtras {
@@ -179,13 +194,34 @@ export interface SurfaceProviderExtras {
    * again with null. Optional until the provider package implements it (the hook then throws).
    */
   restrictToPids?(pids: readonly number[] | null): void;
+  /**
+   * v1.2 (ADR 0003 §6.1): the outer screen edges' cling bands with their clear spans, from the
+   * occluder snapshot and the cat's footprint; null when windows cannot be tracked (no guard
+   * knowledge: the sim then gets no bands and never climbs a screen edge).
+   */
+  edgeBands?(): readonly ScreenEdgeBand[] | null;
+  /** v1.2: the host's click-guard state for the diagnostics (screenEdges.guard / failClosed). */
+  noteClickGuard?(state: ScreenEdgeGuard): void;
   debugInfo(): SurfaceProviderDebug;
+}
+
+/** The host's T8 screen-edge click guard as reported for the diagnostics (counts and a state only). */
+export interface ScreenEdgeGuard {
+  state: 'off' | 'idle' | 'active' | 'failClosed';
+  /** Times the guard failed closed this session. */
+  failClosed: number;
 }
 
 /** What createSurfaceProvider returns: the contract plus the host/test extras (typed debug info). */
 export interface SurfaceProviderHandle extends SurfaceProvider, SurfaceProviderExtras {
+  restrictToPids(pids: readonly number[] | null): void;
+  edgeBands(): readonly ScreenEdgeBand[] | null;
+  noteClickGuard(state: ScreenEdgeGuard): void;
   debugInfo(): SurfaceProviderDebug;
 }
+
+/** Grown by this much (DIP, scaled) around every occluder when deciding whether an edge band is clear (resize borders). */
+export const EDGE_OBSTACLE_MARGIN_DIP = 8;
 
 interface Motion {
   x: number;
@@ -330,6 +366,18 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
   let allowMultiMonitor = deps.settings.behavior.allowMultiMonitor;
   /** Appearance size factor: the cat's extent decides head room and the narrowest usable strip. */
   let catSize = deps.settings.appearance.size;
+  /** v1.2 opt-outs incl. the implied ones (per-app tab strips, screen edges). */
+  let disabledSet = disabledBehaviorSet(deps.settings.behavior);
+
+  // ---- v1.2: E2E process restriction, edge bands, click-guard state
+  const input = hasWin32InputExtensions(win32) ? win32 : null;
+  let restrict: ReadonlySet<number> | null = null;
+  /** Owning process per window id (an HWND never changes process; ids are dropped with their entry). */
+  const pidCache = new Map<string, number | null>();
+  /** Bumped on every change of `order` (edge bands are recomputed only then). */
+  let orderVersion = 0;
+  let bandsCache: { key: string; bands: readonly ScreenEdgeBand[]; stats: EdgeBandStats } | null = null;
+  let guardState: ScreenEdgeGuard = { state: 'off', failClosed: 0 };
 
   let order: Occluder[] = [];
   let entries = new Map<string, Entry>();
@@ -576,6 +624,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
   function applyModelChanges(now: number): void {
     if (dirtyIds.size === 0) return;
     incrementalUpdates++;
+    orderVersion++;
     for (const id of dirtyIds) {
       const info = tracker.windowInfo(id);
       const idx = order.findIndex((o) => o.id === id);
@@ -583,6 +632,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       if (!info || info.minimized || !(info.rect.width > 0 && info.rect.height > 0)) {
         if (idx >= 0) order.splice(idx, 1);
         const e = entries.get(id);
+        pidCache.delete(id);
         if (e) {
           entries.delete(id);
           stripBases.delete(id);
@@ -650,6 +700,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     if (bars.length > 0) next = [...bars, ...next.filter((o) => !barIds.has(o.id))];
     markAffected(...reorderedRects(order, next));
     order = next;
+    orderVersion++;
 
     const nextEntries = new Map<string, Entry>();
     for (const o of order) {
@@ -673,6 +724,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     for (const [id, e] of entries) {
       if (nextEntries.has(id)) continue;
       stripBases.delete(id);
+      pidCache.delete(id);
       if (e.built !== EMPTY_WINDOW_SURFACES) windowVersion++;
     }
     entries = nextEntries;
@@ -701,6 +753,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     const ids = new Set(bars.map((o) => o.id));
     order = [...bars, ...order.filter((o) => !barIds.has(o.id) && !ids.has(o.id))];
     barIds = ids;
+    orderVersion++;
   }
 
   /**
@@ -725,6 +778,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     markAffected(e.rect, r);
     const idx = order.findIndex((o) => o.id === e.id);
     if (idx >= 0) order[idx] = { id: e.id, rect: r };
+    orderVersion++;
     e.rect = r;
     e.readAt = now;
     e.confidence = CONFIDENCE_FRESH;
@@ -838,6 +892,27 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     return s;
   }
 
+  /** The window's owning process id (cached per window), or null when unknown. */
+  function pidOf(id: string): number | null {
+    if (pidCache.has(id)) return pidCache.get(id) ?? null;
+    let pid: number | null = null;
+    try {
+      pid = input ? input.windowProcessId(id) : null;
+    } catch (e) {
+      report('pid', e);
+    }
+    if (pidCache.size >= 1024) pidCache.clear();
+    pidCache.set(id, pid);
+    return pid;
+  }
+
+  /** E2E restriction: the window belongs to an allowed process (fail closed: unknown = not allowed). */
+  function allowedWindow(id: string): boolean {
+    if (restrict === null) return true;
+    const pid = pidOf(id);
+    return pid !== null && restrict.has(pid);
+  }
+
   function windowSurfacesList(): Surface[] {
     if (composedWindows.version === windowVersion) return composedWindows.list;
     const list: Surface[] = [];
@@ -845,6 +920,8 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       const e = entries.get(o.id);
       // Private windows offer nothing (the surface the cat is on is still served live, see header).
       if (!e || e.info.excluded) continue;
+      // E2E restriction: other processes' windows still occlude (above) but offer nothing.
+      if (!allowedWindow(e.id)) continue;
       const b = e.built;
       if (b.top) list.push(b.top);
       if (b.left) list.push(b.left);
@@ -910,6 +987,19 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     return r.y - d.workAreaPx.y >= catExtentPx(catSize, 96 * d.scaleFactor).height;
   }
 
+  /** The app's tab strip is read: the service's verdict when it has one (kill switch, test mode), else the shipped allow-list. */
+  function tabStripApp(processName: string): boolean {
+    if (tabStrips && hasTabStripExtras(tabStrips) && tabStrips.readsApp) {
+      try {
+        return tabStrips.readsApp(processName);
+      } catch (e) {
+        report('interest', e);
+        return false;
+      }
+    }
+    return tabStripRuleFor(processName, disabledSet) !== null;
+  }
+
   /** The service knows this window cannot give a strip for now (false when it cannot tell). */
   function serviceSaysUnusable(id: string, now: number): boolean {
     if (!tabStrips || !hasTabStripExtras(tabStrips) || !tabStrips.unusable) return false;
@@ -944,8 +1034,9 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
         if (far) slow.push(id);
         return true;
       };
+      // The allow-list (and the service's own run-time switches, e.g. the Explorer kill switch) decide.
       const usable = (info: WindowInfo | null): info is WindowInfo =>
-        info !== null && info.category === 'browser' && !info.excluded && !info.minimized && TAB_STRIP_BROWSERS.includes(info.processName);
+        info !== null && !info.excluded && !info.minimized && tabStripApp(info.processName) && allowedWindow(info.id);
       if (cat.surfaceId) {
         const p = parseSurfaceId(cat.surfaceId);
         if (p && p.kind !== 'taskbar' && usable(tracker.windowInfo(p.owner))) add(p.owner, false);
@@ -994,6 +1085,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     const e = entries.get(owner);
     if (!e) return null;
     if (kind === 'windowSide' && !climbWindows) return null;
+    if (!allowedWindow(owner)) return null;
     const attached = attach?.surfaceId === id;
     // A private window offers nothing; the surface the cat is on is still served (flagged and
     // unlisted) so that it leaves calmly instead of losing it all at once.
@@ -1049,6 +1141,13 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
     for (const [id, s] of a) if (!b.has(id)) injectedEvents.push({ type: 'taskbar.hidden', surfaceId: id, displayId: s.displayId, edge: s.edge ?? 'bottom' });
   }
 
+  /** ProviderDiagnostics.screenEdges (counts and a state), or null while screen edges are off or unguarded. */
+  function screenEdgesDiagnostics(): Pick<ProviderDiagnostics, 'screenEdges'> | null {
+    if (disabledSet.has('screenEdges') || input === null || bandsCache === null) return null;
+    const s = bandsCache.stats;
+    return { screenEdges: { bands: s.bands, clearSpans: s.clearSpans, coveredSpans: s.coveredSpans, guard: guardState.state, failClosed: guardState.failClosed } };
+  }
+
   return {
     get status(): SurfaceStatus {
       let count = 0;
@@ -1074,6 +1173,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
           if (entries.size > 0 || order.length > 0) {
             entries = new Map();
             order = [];
+            orderVersion++;
             barIds = new Set();
             stripBases.clear();
             windowVersion++;
@@ -1145,7 +1245,7 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
           if (ev.type !== 'tabs.changed') continue;
           // Fail closed: tab activity of private (or unknown) windows never reaches the sim.
           const info = tracker.windowInfo(ev.ownerId);
-          if (info && !info.excluded) out.push(ev);
+          if (info && !info.excluded && allowedWindow(ev.ownerId)) out.push(ev);
         }
       }
       return out;
@@ -1155,6 +1255,11 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       const climb = isEnabled(settings, 'climbWindows');
       const play = isEnabled(settings, 'taskbarPlay');
       const tabsOn = isEnabled(settings, 'tabStrips');
+      const nextDisabled = disabledBehaviorSet(settings.behavior);
+      if ([...nextDisabled].some((b) => !disabledSet.has(b)) || [...disabledSet].some((b) => !nextDisabled.has(b))) {
+        disabledSet = nextDisabled;
+        interestAt = -Infinity;
+      }
       if (climb !== climbWindows || settings.appearance.size !== catSize) {
         climbWindows = climb;
         catSize = settings.appearance.size;
@@ -1230,6 +1335,49 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       log.info('surfaces injected (test mode)', { count: copy.length });
     },
 
+    restrictToPids(pids: readonly number[] | null): void {
+      const next = pids === null ? null : new Set(pids.filter((p) => Number.isSafeInteger(p) && p > 0));
+      restrict = next;
+      // Every window's listing and the tab-strip interest depend on it.
+      recomputeAll = true;
+      windowVersion++;
+      composed = null;
+      interestAt = -Infinity;
+      log.info(next === null ? 'surface restriction ended' : 'surfaces restricted to test processes (test mode)', { processes: next?.size ?? null });
+    },
+
+    edgeBands(): readonly ScreenEdgeBand[] | null {
+      // Only the full occluder snapshot (listOccluders: dialogs, tool and topmost windows too) can
+      // say a band is clear; the app-window fallback cannot.
+      if (disposed || !windowTracking() || extended === null) return null;
+      const world = display.world;
+      const key = `${orderVersion}|${world.version}|${catSize}`;
+      if (bandsCache?.key === key) return bandsCache.bands;
+      try {
+        const footprint = (displayId: string): number => {
+          const d = world.displays.find((x) => x.id === displayId);
+          const scale = d?.scaleFactor ?? 1;
+          return (CAT_BASE_WIDTH_DIP * catSize + 2 * BODY_MARGIN_SIDE_DIP) * scale;
+        };
+        const obstacles = order.map((o) => {
+          const scale = scaleForRect(world.displays, o.rect);
+          const m = Math.ceil(EDGE_OBSTACLE_MARGIN_DIP * scale);
+          return { x: o.rect.x - m, y: o.rect.y - m, width: o.rect.width + 2 * m, height: o.rect.height + 2 * m };
+        });
+        const bands = Object.freeze(computeEdgeBands(world, obstacles, footprint));
+        bandsCache = { key, bands, stats: edgeBandStats(world, bands) };
+        return bands;
+      } catch (e) {
+        report('edgeBands', e);
+        // Fail closed: no bands, no edge climbs.
+        return null;
+      }
+    },
+
+    noteClickGuard(state: ScreenEdgeGuard): void {
+      guardState = { state: state.state, failClosed: Math.max(0, Math.floor(state.failClosed)) };
+    },
+
     diagnostics(): ProviderDiagnostics {
       const displays = display.world.displays;
       const listed = emptySurfaceCounts();
@@ -1291,7 +1439,10 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
           errors: svc?.errors ?? 0,
           lastReadAt: svc?.lastReadAt ?? 0,
           lastRejection,
+          ...(svc?.byKind ? { byKind: { ...svc.byKind } } : {}),
         },
+        // Counts and a state only; absent while screen edges are off or there is no guard.
+        ...(screenEdgesDiagnostics() ?? {}),
         recentErrors: recentErrors.map((r) => ({ ...r })),
       };
     },
@@ -1326,6 +1477,8 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
         errors,
         taskbar,
         tabStrips: tabs,
+        restrictedPids: restrict === null ? null : restrict.size,
+        edgeBands: bandsCache?.stats ?? null,
       };
     },
 

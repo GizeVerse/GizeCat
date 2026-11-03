@@ -1,4 +1,5 @@
 // Deterministic SettingsViewState for the visual preview harness.
+import type { BehaviorProfileSnapshot } from '../../../../../src/shared/behaviorProfile';
 import type { CatSummary } from '../../../../../src/shared/catState';
 import type { ResourceSample, SettingsViewState } from '../../../../../src/shared/ipc';
 import { defaultSettings } from '../../../../../src/shared/settings';
@@ -151,5 +152,46 @@ export function previewSurfaceDiagnostics(at: number): SurfaceDiagnostics {
       excursions: 0,
     },
     verdict: 'The window in front is maximized, so there is no window edge to climb. Restore it to a normal window and the cat can explore it.',
+  };
+}
+
+/** v1.2 Behaviour section: about 1 h 40 min of a default cat on a desk with a floating browser. */
+export function previewBehaviorProfile(at: number): BehaviorProfileSnapshot {
+  const since = at - 100 * MIN;
+  const stay = (endAgoMin: number, dwellS: number, endReason: 'leave' | 'drag' | 'covered', leaveKind: 'jumpDown' | 'climbDown' | 'hop' | null) => ({
+    phase: 'end' as const,
+    at: at - endAgoMin * MIN,
+    surfaceKind: 'windowTop' as const,
+    arrivedBy: 'climb' as const,
+    plannedMs: dwellS * 1000 + 20_000,
+    dwellMs: dwellS * 1000,
+    endReason,
+    leaveKind,
+    bailOut: endReason === 'covered' ? ('hop' as const) : null,
+  });
+  return {
+    since,
+    at,
+    timeMs: { asleep: 17 * MIN, calm: 54 * MIN, active: 22 * MIN, interaction: 4 * MIN, reaction: 1 * MIN, physical: 2 * MIN, away: 0 },
+    activeShare: 22 / 83,
+    decisions: 412,
+    excursions: {
+      arrivals: 11,
+      byKind: { windowTop: 8, tabStrip: 3 },
+      dwellS: { n: 10, p10: 38, p50: 142, p90: 405, max: 610 },
+      byEnd: { leave: 7, drag: 2, covered: 1 },
+      byLeave: { jumpDown: 3, climbDown: 2, hop: 1, climbLeap: 1 },
+    },
+    hunts: { count: 9, pounces: 4, byOutcome: { caught: 2, missed: 2, lostInterest: 4, interrupted: 1 } },
+    falls: { count: 6, byCause: { thrown: 5, slip: 1 }, byImpact: { soft: 3, medium: 2, hard: 1 } },
+    slips: 2,
+    reactions: { shrug: 2, grumpy: 1, startledJump: 1, playful: 1 },
+    screenEdgeVisits: 2,
+    screenEdgePeeks: 1,
+    sleeps: 2,
+    stuckResets: 0,
+    moodMs: { wary: 3 * MIN, irritable: 40_000, fearful: 25_000 },
+    context: { typing: 31 * MIN, foregroundMaximized: 46 * MIN, cursorInReach: 12 * MIN },
+    recentStays: [stay(70, 95, 'leave', 'jumpDown'), stay(41, 260, 'drag', null), stay(12, 140, 'covered', null)],
   };
 }

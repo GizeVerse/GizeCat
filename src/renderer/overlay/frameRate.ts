@@ -32,6 +32,17 @@ const FULL_RATE_CLIPS: ReadonlySet<AnimClip> = new Set<AnimClip>([
   'pawAt',
   'held',
   'rollOver',
+  // v1.2: gaits, airborne, strikes, hard landings and the spin.
+  'stalk',
+  'sprint',
+  'slink',
+  'pounce',
+  'slip',
+  'impact',
+  'landRecover',
+  'swat',
+  'hiss',
+  'tailChase',
 ]);
 const FULL_RATE_STATES: ReadonlySet<BehaviorState> = new Set<BehaviorState>(['held', 'jumping', 'falling', 'landing']);
 

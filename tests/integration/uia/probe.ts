@@ -120,7 +120,7 @@ const median = (xs: number[]): number => {
 };
 
 /** Every string value in a JSON document (keys excluded). */
-function stringValues(v: unknown, out: Set<string>): void {
+export function stringValues(v: unknown, out: Set<string>): void {
   if (typeof v === 'string') out.add(v);
   else if (Array.isArray(v)) for (const x of v) stringValues(x, out);
   else if (v !== null && typeof v === 'object') for (const x of Object.values(v)) stringValues(x, out);
@@ -130,6 +130,9 @@ function stringValues(v: unknown, out: Set<string>): void {
 const PROTOCOL_WORDS = new Set([
   'class',
   'bfs',
+  // Protocol 2: reader kinds (strip `kind`, ping `kinds`).
+  'chromium',
+  'tabview',
   'selected',
   'structure',
   'permonitorv2',
@@ -150,7 +153,7 @@ const PROTOCOL_WORDS = new Set([
   'unavailable',
   'internal',
 ]);
-const allowedString = (x: string): boolean => PROTOCOL_WORDS.has(x) || /^[0-9]{1,20}$/.test(x) || /^[A-Za-z]{1,56}Exception$/.test(x);
+export const allowedString = (x: string): boolean => PROTOCOL_WORDS.has(x) || /^[0-9]{1,20}$/.test(x) || /^[A-Za-z]{1,56}Exception$/.test(x);
 
 export function consoleLogger(scope = 'probe', verbose = false): Logger {
   const make = (s: string): Logger => ({

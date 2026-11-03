@@ -137,6 +137,11 @@ export class Harness {
       hidden: e.hidden ?? false,
       dragCursor: e.dragCursor ?? null,
       localHour: e.localHour ?? 14,
+      // v1.2 optional fields (ADR 0003 §4.3): passed through only when a test sets them.
+      ...(e.pointerButtonDown !== undefined ? { pointerButtonDown: e.pointerButtonDown } : {}),
+      ...(e.pointerButtonPresses !== undefined ? { pointerButtonPresses: e.pointerButtonPresses } : {}),
+      ...(e.cursorIdleMs !== undefined ? { cursorIdleMs: e.cursorIdleMs } : {}),
+      ...(e.edgeBands !== undefined ? { edgeBands: e.edgeBands } : {}),
     };
   }
 

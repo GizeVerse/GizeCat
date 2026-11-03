@@ -46,7 +46,7 @@ import type { SettingsStore } from './store/settingsStore';
 import { createSurfaceProvider } from './surfaces';
 import { installTestHooks } from './testHooks';
 import { createTrayController, toMenuTemplate } from './tray';
-import { createTabStripService, resolveUiaHelperPath } from './uia';
+import { createTabStripService, resolveUiaHelperPath, UIA_HEALTH_FILE } from './uia';
 import { createActivityMonitor, createWin32Api, createWindowTracker, sameWindowExclusions, windowExclusionsFor } from './win32';
 import { createLoginItemRegistry } from './win32/registry';
 import { createTaskbarTracker } from './win32/taskbar';
@@ -152,6 +152,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
         describeWindow: (id) => win32.describeWindow(id),
         displayAt: (p) => display.displayAt(p),
         now: surfaceClock,
+        // v1.2 (PRV): the File Explorer kill switch's strike counter (ADR 0003 §7.2).
+        healthFile: path.join(boot.userData, UIA_HEALTH_FILE),
+        appVersion: version,
       });
     } catch (err) {
       log.error('tab-strip service unavailable', { error: err });
@@ -411,8 +414,11 @@ export function startApp(boot: AppBootstrap): RunningApp {
       menu.popup({ window: win });
     },
     onSessionEnd: () => sessionEnd.notify('overlay'),
-    // Explorer restarted: new taskbar window handles.
-    onTaskbarCreated: () => taskbars.rediscover('taskbar-created'),
+    // Explorer restarted: new taskbar window handles; v1.2 (PRV) the Explorer tab-strip kill switch.
+    onTaskbarCreated: () => {
+      taskbars.rediscover('taskbar-created');
+      attempt(log, 'tab-strip kill switch', () => tabStrips?.noteTaskbarCreated(surfaceClock()));
+    },
     // Taskbars and auto-hide reveal bands always get the mouse, whatever the cat does there; from
     // v1.2 also the host's guard rects (screen-edge obstacles, a covering window during a bail-out).
     // A throw in either source makes the overlay manager fail closed (click-through everywhere).

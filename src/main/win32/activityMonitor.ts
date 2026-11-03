@@ -1,15 +1,19 @@
 // ActivityMonitor (src/main/contracts.ts): coarse, content-free activity signals.
 //
 // Privacy: no keyboard hook, no key codes, no text. The only inputs are the system idle
-// time (GetLastInputInfo), the cursor position the host samples, and whether the primary
-// mouse button is held. "Keyboard-like" activity is inferred as "some input happened
-// while the cursor did not move and no mouse button was held"; scrolling the wheel,
-// pen/touch input or clicking without moving therefore also count as keyboard-like.
+// time (GetLastInputInfo), the cursor position the host samples, and the mouse buttons.
+// "Keyboard-like" activity is inferred as "some input happened while the cursor did not move
+// and no mouse button was held or pressed". v1.2 (ADR 0003 §4.3, §13 Q2): with the Win32 input
+// extension the left, right and middle buttons are read (mouse buttons only, never keys), and a
+// click between two samples (the content-free press counter moved) no longer counts as typing;
+// without it, only the primary button held at the sample is seen, as before. Scrolling the wheel
+// and pen/touch input still count as keyboard-like.
 import { distance } from '../../shared/geometry';
 import type { Point } from '../../shared/geometry';
 import type { SimEvent } from '../../shared/sim';
 import type { ActivityMonitor, Logger, Win32Api } from '../contracts';
 import { BoundedQueue } from './collections';
+import { hasWin32InputExtensions } from './win32Api';
 
 export interface ActivityMonitorOptions {
   /** Fallback clock (ms) for samples given a non-finite timestamp. */
@@ -49,6 +53,21 @@ export function createActivityMonitor(api: Win32Api, logger: Logger, opts: Activ
   const readIdle = opts.idleProvider ?? (() => api.getIdleMs());
   const events = new BoundedQueue<SimEvent>(64);
   const bucketIdx = new Array<number>(ACTIVITY.intensityBuckets).fill(-1);
+  const input = hasWin32InputExtensions(api) ? api : null;
+  /** Press count at the previous sample (v1.2 input extension), null before the first. */
+  let lastPresses: number | null = null;
+
+  /**
+   * Read once per sample: a mouse button is held now, or was pressed since the previous sample
+   * (clicks are not typing). Without the input extension: the primary button held, as in v1.1.
+   */
+  function mouseActivity(): boolean {
+    if (input === null) return api.isLeftButtonDown();
+    const b = input.mouseButtons();
+    const pressed = lastPresses !== null && b.presses !== lastPresses;
+    lastPresses = b.presses;
+    return b.down || pressed;
+  }
 
   let sleepThresholdMs = opts.sleepThresholdMs ?? ACTIVITY.defaultSleepThresholdMs;
   let running = false;
@@ -140,7 +159,7 @@ export function createActivityMonitor(api: Win32Api, logger: Logger, opts: Activ
     return d > 0;
   }
 
-  function updateIdle(t: number, dt: number, idle: number, cursorMoved: boolean, cursorKnown: boolean): void {
+  function updateIdle(t: number, dt: number, idle: number, cursorMoved: boolean, cursorKnown: boolean, mouse: () => boolean): void {
     if (prevIdle !== null && idle < prevIdle + dt - ACTIVITY.inputEpsilonMs) {
       // New input since the previous sample. The stretch it ended is from the previous
       // last-input time to this one (at most one sample interval too long).
@@ -148,7 +167,7 @@ export function createActivityMonitor(api: Win32Api, logger: Logger, opts: Activ
       if (stretch >= ACTIVITY.idleMs) events.push({ type: 'activity.userReturned', idleMs: Math.round(stretch) });
       idleNotified = false;
       sleepNotified = false;
-      if (cursorKnown && !cursorMoved && !api.isLeftButtonDown()) onKeyboardLike(t);
+      if (cursorKnown && !cursorMoved && !mouse()) onKeyboardLike(t);
     }
     if (!idleNotified && idle >= ACTIVITY.idleMs) {
       idleNotified = true;
@@ -171,8 +190,12 @@ export function createActivityMonitor(api: Win32Api, logger: Logger, opts: Activ
       const cursorMoved = updateCursor(t, dt, validCursor);
       const raw = readIdle();
       const idle = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
+      // With the input extension the buttons are read every sample (so a press counts once, at the
+      // sample after it); v1.1 path: the primary button only when new input is seen.
+      const mouseNow = input !== null ? mouseActivity() : null;
+      const mouse = (): boolean => mouseNow ?? mouseActivity();
       if (idle !== null) {
-        if (prevT !== null) updateIdle(t, dt, idle, cursorMoved, validCursor !== null);
+        if (prevT !== null) updateIdle(t, dt, idle, cursorMoved, validCursor !== null, mouse);
         idleMs = idle;
       }
       updateTyping(t);

@@ -13,14 +13,21 @@
 //   pullUp   up:wall -> its top ledge at the corner
 //   swing    top ledge -> down:wall at the corner (step off the ledge end onto the wall)
 //   dismount down:wall -> first support below the wall's foot (computed on demand)
+//   wallJump up:wall -> a support within reach of a push-off from the wall's top (v1.2, only
+//            with SurfaceGraph.setOptions({ wallJumps: true }); at most
+//            MOVEMENT.wallJumpMaxEdgesPerWall, the cheapest, are expanded per wall)
 // Costs are seconds of effort (walking time plus a per-move effort), scaled by personality.
+// Edges that end below their take-off carry `dropDip`; v1.2 jump-down limits (RouteParams.jumpDown)
+// drop those beyond the maximum and charge a risk penalty between the safe and the maximum height.
 import { clamp } from '../../shared/geometry';
 import { MOVEMENT, ROUTE_EFFORT } from './constants';
+import type { JumpDownLimits } from './limits';
+import { dropRisk, HARD_DROP_DIP } from './limits';
 import type { Surface, WallTrack, WorldModel } from './world';
 import { setDownX } from './world';
 
 export type GraphNodeKind = 'floor' | 'ledge' | 'wallUp' | 'wallDown';
-export type GraphEdgeKind = 'walk' | 'jump' | 'drop' | 'mount' | 'leap' | 'pullUp' | 'swing' | 'dismount';
+export type GraphEdgeKind = 'walk' | 'jump' | 'drop' | 'mount' | 'leap' | 'pullUp' | 'swing' | 'dismount' | 'wallJump';
 
 export interface GraphNode {
   key: string;
@@ -48,6 +55,8 @@ export interface GraphEdge {
   jumpPart?: number;
   /** Leaps: anchor height on the wall where the cat catches it. */
   gripY?: number;
+  /** v1.2: how far the move ends below its take-off, DIP (jumps, drops, a dismount's hop, wall jumps). */
+  dropDip?: number;
 }
 
 export interface RouteStep {
@@ -78,6 +87,10 @@ export interface RouteParams {
   blockedEdge: (e: GraphEdge) => boolean;
   /** Arrival points the cat may not use (a shared floor's off-limits stretch). */
   blockedArrival?: (s: Surface, x: number) => boolean;
+  /** v1.2: jump-down limits (absent or null: unlimited, v1.1.1). */
+  jumpDown?: JumpDownLimits | null;
+  /** v1.2: wall-jump edges may be used (MoverConfig.wallJumps). */
+  allowWallJump?: boolean;
 }
 
 interface SearchLabel {
@@ -107,6 +120,7 @@ export class SurfaceGraph {
   private readonly prevYs = new Map<string, number>();
   private ledgeList: readonly Surface[] = [];
   private wallList: readonly WallTrack[] = [];
+  private wallJumps = false;
   /** Diagnostics: how many nodes the last update recomputed, and totals. */
   lastChanged = 0;
   rebuilds = 0;
@@ -129,6 +143,13 @@ export class SurfaceGraph {
 
   node(key: string): GraphNode | undefined {
     return this.nodeMap.get(key);
+  }
+
+  /** v1.2: build wall-jump edges (MoverConfig.wallJumps). A change rebuilds every edge at the next update. */
+  setOptions(o: { wallJumps: boolean }): void {
+    if (o.wallJumps === this.wallJumps) return;
+    this.wallJumps = o.wallJumps;
+    this.world = null;
   }
 
   /** Height of a ledge at the previous update (undefined when it is new or not a ledge). */
@@ -320,13 +341,18 @@ export class SurfaceGraph {
       for (const e of this.outgoing(node)) {
         if (settled.has(e.to) || p.blockedEdge(e)) continue;
         if (!p.allowClimb && (e.kind === 'mount' || e.kind === 'leap' || e.kind === 'swing')) continue;
+        if (e.kind === 'wallJump' && p.allowWallJump !== true) continue;
+        // v1.2 jump-down limits: never beyond the maximum; a risk penalty above the safe height.
+        const limits = p.jumpDown ?? null;
+        if (limits && e.dropDip !== undefined && e.dropDip > limits.maxDip + 1e-6) continue;
         const target = this.nodeMap.get(e.to);
         if (!target || p.blockedNode(target)) continue;
         const fromX = node.wall ? node.wall.x : clamp(cur.x, e.fromLo, e.fromHi);
         const toX = e.toX ?? (target.surface ? clamp(fromX, target.surface.x0, target.surface.x1) : (target.wall?.x ?? fromX));
         if (target.surface && p.blockedArrival?.(target.surface, toX)) continue;
         const walk = node.wall ? 0 : walkSec(fromX - cur.x);
-        const cost = cur.cost + walk + weighed(e);
+        const risk = limits && e.dropDip !== undefined ? ROUTE_EFFORT.riskPenalty * dropRisk(e.dropDip, limits) + (e.dropDip > HARD_DROP_DIP ? ROUTE_EFFORT.hardLandingPenalty : 0) : 0;
+        const cost = cur.cost + walk + weighed(e) + risk;
         const old = labels.get(e.to);
         if (!old || cost < old.cost) labels.set(e.to, { cost, x: toX, prev: curKey, step: { edge: e, fromX, toX } });
       }
@@ -336,7 +362,15 @@ export class SurfaceGraph {
 
   /** Eager edges plus the on-demand drop/dismount edges of a node. */
   outgoing(n: GraphNode): GraphEdge[] {
-    const eager = this.out.has(n.key) ? this.edgesFrom(n.key) : this.computeOut(n);
+    let eager = this.out.has(n.key) ? this.edgesFrom(n.key) : this.computeOut(n);
+    if (n.kind === 'wallUp' && this.wallJumps) {
+      // Bounded fan-out: only the cheapest wall jumps off one wall are worth expanding.
+      const jumps = eager.filter((e) => e.kind === 'wallJump');
+      if (jumps.length > MOVEMENT.wallJumpMaxEdgesPerWall) {
+        const keep = new Set(jumps.sort((a, b) => a.effort - b.effort).slice(0, MOVEMENT.wallJumpMaxEdgesPerWall));
+        eager = eager.filter((e) => e.kind !== 'wallJump' || keep.has(e));
+      }
+    }
     const extra = this.onDemand(n);
     return extra.length > 0 ? [...eager, ...extra] : eager;
   }
@@ -379,7 +413,49 @@ export class SurfaceGraph {
       const x = this.cornerX(world, b.wall, a.surface);
       return x === null ? [] : [{ kind: 'swing', from: a.key, to: b.key, fromLo: x, fromHi: x, toX: b.wall.x, effort: ROUTE_EFFORT.climbTransition, effortKind: 'climb' }];
     }
+    if (this.wallJumps && a.kind === 'wallUp' && a.wall && b.surface) {
+      const e = this.wallJumpEdge(world, a.key, a.wall, b);
+      return e ? [e] : [];
+    }
     return [];
+  }
+
+  /**
+   * Where a push-off from the wall at anchor height `fromY` lands on `t`: the point of t's stand
+   * range nearest the wall, at least MOVEMENT.wallJumpMinBodyLengths and at most maxJumpAcrossDip
+   * away from the line on the cat's side, at most wallJumpUpFraction x maxJumpUpDip above the grip.
+   * Null when t is out of that reach (or is the wall's own top ledge: that is a pull-up).
+   */
+  wallJumpLanding(world: WorldModel, w: WallTrack, fromY: number, t: Surface): { x: number; y: number } | null {
+    if (t.phase === 'leaving' || w.topLedgeId === t.key) return null;
+    const scale = w.scale;
+    const bw = world.bodyWidth(scale);
+    const outward = w.side === 'left' ? -1 : 1;
+    const near = w.x + outward * MOVEMENT.wallJumpMinBodyLengths * bw;
+    const far = w.x + outward * MOVEMENT.maxJumpAcrossDip * scale;
+    const l0 = Math.max(Math.min(near, far), t.x0);
+    const l1 = Math.min(Math.max(near, far), t.x1);
+    if (l0 > l1) return null;
+    const x = outward > 0 ? l0 : l1;
+    const y = world.yAt(t, x);
+    if (fromY - y > MOVEMENT.wallJumpUpFraction * MOVEMENT.maxJumpUpDip * scale) return null;
+    return { x, y };
+  }
+
+  /** v1.2 wall jump off the top of a wall (screen-edge hold, or a side's top corner) onto a support within reach. */
+  private wallJumpEdge(world: WorldModel, fromKey: string, w: WallTrack, b: GraphNode): GraphEdge | null {
+    const t = b.surface as Surface;
+    const land = this.wallJumpLanding(world, w, w.yTop, t);
+    if (!land) return null;
+    const scale = w.scale;
+    const maxUp = MOVEMENT.maxJumpUpDip * scale;
+    const up = w.yTop - land.y;
+    const effort =
+      ROUTE_EFFORT.wallJumpBase +
+      MOVEMENT.wallJumpCrouchMs / 1000 +
+      (up > 0 ? (ROUTE_EFFORT.jumpUpPerMax * up) / maxUp : (ROUTE_EFFORT.jumpDownPerMax * -up) / maxUp) +
+      (ROUTE_EFFORT.jumpAcrossPerMax * Math.abs(land.x - w.x)) / (MOVEMENT.maxJumpAcrossDip * scale);
+    return { kind: 'wallJump', from: fromKey, to: b.key, fromLo: w.x, fromHi: w.x, toX: land.x, effort, effortKind: 'jump', dropDip: Math.max(0, -up) / scale };
   }
 
   /**
@@ -456,7 +532,7 @@ export class SurfaceGraph {
       MOVEMENT.crouchMs / 1000 +
       (up > 0 ? (ROUTE_EFFORT.jumpUpPerMax * up) / maxUp : (ROUTE_EFFORT.jumpDownPerMax * -up) / maxUp) +
       (ROUTE_EFFORT.jumpAcrossPerMax * across) / maxAcross;
-    return { kind: 'jump', from: a.key, to: b.key, fromLo: lo, fromHi: hi, toX: null, effort, effortKind: 'jump' };
+    return { kind: 'jump', from: a.key, to: b.key, fromLo: lo, fromHi: hi, toX: null, effort, effortKind: 'jump', ...(up < 0 ? { dropDip: -up / scale } : {}) };
   }
 
   private mountEdge(world: WorldModel, a: GraphNode, w: WallTrack): GraphEdge | null {
@@ -517,7 +593,7 @@ export class SurfaceGraph {
       const below = world.surfaceBelow(endX + dir * bw * 0.6, s.y + 1, others);
       if (!below || below.y <= s.y + 1 || !this.nodeMap.has(below.surface.key)) continue;
       const effort = ROUTE_EFFORT.dropBase + (ROUTE_EFFORT.dropPerMax * (below.y - s.y)) / maxUp;
-      out.push({ kind: 'drop', from: s.key, to: below.surface.key, fromLo: endX, fromHi: endX, toX: below.x, effort, effortKind: 'jump' });
+      out.push({ kind: 'drop', from: s.key, to: below.surface.key, fromLo: endX, fromHi: endX, toX: below.x, effort, effortKind: 'jump', dropDip: (below.y - s.y) / scale });
     }
     return out;
   }
@@ -540,7 +616,18 @@ export class SurfaceGraph {
     const bh = world.bodyHeight(w.scale);
     const exitY = Math.min(t.y, w.yBottom);
     const climb = (exitY - w.yTop) / w.scale / MOVEMENT.climbDownDip;
-    const hop = t.y - w.yBottom > bh * MOVEMENT.wallReachBodyHeights ? ROUTE_EFFORT.dropBase : 0;
-    return { kind: 'dismount', from: downKey(w), to: t.surface.key, fromLo: w.x, fromHi: w.x, toX: t.x, effort: MOVEMENT.dismountMs / 1000 + climb + hop, effortKind: 'climb' };
+    const hopsDown = t.y - w.yBottom > bh * MOVEMENT.wallReachBodyHeights;
+    const hop = hopsDown ? ROUTE_EFFORT.dropBase : 0;
+    return {
+      kind: 'dismount',
+      from: downKey(w),
+      to: t.surface.key,
+      fromLo: w.x,
+      fromHi: w.x,
+      toX: t.x,
+      effort: MOVEMENT.dismountMs / 1000 + climb + hop,
+      effortKind: 'climb',
+      ...(hopsDown ? { dropDip: (t.y - w.yBottom) / w.scale } : {}),
+    };
   }
 }

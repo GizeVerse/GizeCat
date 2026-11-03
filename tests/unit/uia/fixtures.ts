@@ -141,6 +141,37 @@ export function wireStrip(o: FixtureOptions): WireStrip {
   };
 }
 
+/**
+ * v1.2 TabView strips as the protocol-2 helper sent them for OUR OWN windows (REAL, 2026-10-29,
+ * Windows 11 26200, 125 %, scripts/uia-probe.mjs --apps terminal,explorer): Windows Terminal with two
+ * tabs and File Explorer with one, frame-relative rects placed at `at` (default: where they were).
+ */
+export function tabviewStrip(o: { app: 'terminal' | 'explorer'; at?: { x: number; y: number }; kind?: 'tabview' | 'chromium' | null }): WireStrip {
+  const t = o.app === 'terminal';
+  const frame = t ? { x: 299, y: 200, w: 1243, h: 624 } : { x: 411, y: 290, w: 1080, h: 665 };
+  const fx = o.at?.x ?? frame.x;
+  const fy = o.at?.y ?? frame.y;
+  const place = (x: number, y: number, w: number, h: number) => ({ x: fx + x, y: fy + y, w, h });
+  const strip: WireStrip = {
+    frame: { x: fx, y: fy, w: frame.w, h: frame.h },
+    work: { x: 0, y: 0, w: 1920, h: 1200 },
+    dpi: 120,
+    container: t ? place(32, 11, 615, 40) : place(4, 3, 313, 48),
+    tabs: t ? [{ ...place(40, 11, 299, 40), selected: false }, { ...place(334, 11, 310, 40), selected: true }] : [{ ...place(7, 11, 310, 40), selected: true }],
+    count: t ? 2 : 1,
+    leftButton: null,
+    newTab: t ? place(647, 16, 79, 30) : place(321, 17, 40, 30),
+    grab: t ? place(726, 1, 516, 50) : place(361, 0, 718, 43),
+    captions: t ? place(1064, 1, 179, 37) : place(901, 1, 179, 37),
+    maximized: false,
+    vertical: false,
+    path: 'class',
+    ms: t ? 1.4 : 1.25,
+  };
+  if (o.kind === null) return strip;
+  return { ...strip, kind: o.kind ?? 'tabview' };
+}
+
 const rect = (r: { x: number; y: number; w: number; h: number } | null) => (r === null ? null : { x: r.x, y: r.y, width: r.w, height: r.h });
 
 export function geometry(o: FixtureOptions): StripGeometry {

@@ -1,5 +1,7 @@
+import type { BehaviorProfileSnapshot } from '../../../shared/behaviorProfile';
 import type { LoginItemStatus, ResourceSample, SettingsAction, SettingsApi, SettingsViewState } from '../../../shared/ipc';
 import type { SurfaceDiagnostics } from '../../../shared/surfaceDiagnostics';
+import { huntEntries, moodEntries, physicsEntries, reactionSummary, stayEntries, summaryEntries, timeRows } from '../behaviorView';
 import type { PageContext, PageView } from '../context';
 import { bullets, button, group, keyValues, page, row, runAction, segmentedRow, setNote, toggleRow, toggleSwitch } from '../controls';
 import { h, icon, svg, uid } from '../dom';
@@ -13,8 +15,11 @@ import { catEntries, coordinateEntries, countRows, errorItems, seenEntries, tabS
 
 const D = S.diagnostics;
 const V = D.surfaces;
+const BV = D.behavior;
 /** The Surfaces section re-reads main at most this often, only while the page is shown. */
 export const SURFACES_REFRESH_MS = 1000;
+/** The Behaviour section (v1.2) changes slowly: re-read every few seconds while the page is shown. */
+export const BEHAVIOR_REFRESH_MS = 3000;
 const SPARK_W = 240;
 const SPARK_H = 48;
 const TABLE_ROWS = 6;
@@ -138,6 +143,28 @@ export function surfacesPoll(
   });
 }
 
+/** The poll of the Behaviour section: same rules as the Surfaces poll, at BEHAVIOR_REFRESH_MS. */
+export function behaviorPoll(
+  api: Pick<SettingsApi, 'getBehaviorProfile'>,
+  timers: Timers,
+  element: Pick<HTMLElement, 'hidden'>,
+  onResult: (p: BehaviorProfileSnapshot | null) => void,
+  doc: Pick<Document, 'visibilityState'> = document,
+): LivePoll {
+  return livePoll({
+    timers,
+    intervalMs: BEHAVIOR_REFRESH_MS,
+    isVisible: () => !element.hidden && doc.visibilityState !== 'hidden',
+    refresh: async () => {
+      try {
+        onResult(await api.getBehaviorProfile());
+      } catch {
+        onResult(null);
+      }
+    },
+  });
+}
+
 /** The action behind the outline switch (session-only state in main, never a setting). */
 export function outlineAction(on: boolean): SettingsAction {
   return on ? 'showSurfaceOutlines' : 'hideSurfaceOutlines';
@@ -242,6 +269,51 @@ function surfacesSection(ctx: PageContext): SurfacesSection {
   };
 }
 
+function timeTable(p: BehaviorProfileSnapshot): HTMLElement {
+  return h('table', { class: 'table' }, [
+    h('caption', { text: BV.tableCaption }),
+    h('thead', {}, [h('tr', {}, [h('th', { scope: 'col', text: BV.colActivity }), h('th', { scope: 'col', text: BV.colTime }), h('th', { scope: 'col', text: BV.colShare })])]),
+    h(
+      'tbody',
+      {},
+      timeRows(p).map((r) => h('tr', {}, [h('th', { scope: 'row', text: r.label }), h('td', { class: 'num', text: r.time }), h('td', { class: 'num', text: r.share })])),
+    ),
+  ]);
+}
+
+/** v1.2 (ADR 0003 §11): what the cat did this session, from the profile main validated. */
+function behaviorSection(): { rows: HTMLElement[]; render(p: BehaviorProfileSnapshot | null): void } {
+  const statusText = h('p', { class: 'muted', role: 'status', text: BV.loading });
+  const card = (title: string): { root: HTMLElement; body: HTMLElement } => {
+    const body = h('div', { class: 'surface-card-body' });
+    return { root: h('div', { class: 'row row-block', hidden: true }, [h('h3', { class: 'surface-card-title', text: title }), body]), body };
+  };
+  const session = card(BV.summaryTitle);
+  const stays = card(BV.staysTitle);
+  const hunts = card(BV.huntsTitle);
+  const physics = card(BV.physicsTitle);
+  const reactions = card(BV.reactionsTitle);
+  const moods = card(BV.moodTitle);
+  const cards = [session, stays, hunts, physics, reactions, moods];
+  const status = h('div', { class: 'row row-block' }, [statusText]);
+  return {
+    rows: [status, ...cards.map((c) => c.root)],
+    render(p) {
+      status.hidden = p !== null;
+      // Only a changed sentence is announced (the section refreshes every few seconds).
+      if (p === null && statusText.textContent !== BV.unavailable) statusText.textContent = BV.unavailable;
+      for (const c of cards) c.root.hidden = p === null;
+      if (!p) return;
+      session.body.replaceChildren(keyValues(summaryEntries(p)), h('div', { class: 'table-wrap' }, [timeTable(p)]));
+      stays.body.replaceChildren(keyValues(stayEntries(p)));
+      hunts.body.replaceChildren(keyValues(huntEntries(p)));
+      physics.body.replaceChildren(keyValues(physicsEntries(p)));
+      reactions.body.replaceChildren(h('p', { class: 'row-desc', text: reactionSummary(p) }));
+      moods.body.replaceChildren(keyValues(moodEntries(p)));
+    },
+  };
+}
+
 export function diagnosticsPage(ctx: PageContext): PageView {
   const statusCard = h('div', { class: 'row row-block' });
   const resources = h('div', { class: 'spark-row' });
@@ -268,10 +340,12 @@ export function diagnosticsPage(ctx: PageContext): PageView {
   logsBtn.addEventListener('click', () => void runAction(ctx, 'openLogsFolder', logsBtn, logs.note));
   const versions = h('div', { class: 'row row-block' });
   const surfaces = surfacesSection(ctx);
+  const behavior = behaviorSection();
 
   const element = page(D.title, [
     group(D.groupStatus, [statusCard]),
     group(V.group, surfaces.rows, V.groupDesc),
+    group(BV.group, behavior.rows, BV.groupDesc),
     group(D.groupResources, [resourcesCard]),
     group(D.groupLogging, [logLevel.parts.row, hw.parts.row, exp.row, logs.row]),
     group(D.groupVersions, [versions]),
@@ -304,6 +378,7 @@ export function diagnosticsPage(ctx: PageContext): PageView {
   // Main broadcasts only on state changes, so uptime and resource samples are re-read while this page is open.
   const poll = pagePoll(ctx, element);
   const surfacePoll = surfacesPoll(ctx.api, ctx.timers, element, (d) => surfaces.render(d));
+  const profilePoll = behaviorPoll(ctx.api, ctx.timers, element, (p) => behavior.render(p));
   return {
     id: 'diagnostics',
     title: D.title,
@@ -312,10 +387,12 @@ export function diagnosticsPage(ctx: PageContext): PageView {
       render(ctx.store.view);
       poll.start();
       surfacePoll.start();
+      profilePoll.start();
     },
     onHide: () => {
       poll.stop();
       surfacePoll.stop();
+      profilePoll.stop();
     },
   };
 }

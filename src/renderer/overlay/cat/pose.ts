@@ -4,7 +4,8 @@
 
 export const POSE_KEYS = [
   // Global transform: offset, squash about the ground anchor, rotation and roll
-  // (y-scale, cos of the roll angle about the spine) about a pivot.
+  // (y-scale, cos of the roll angle about the spine) about a pivot, and turn (x-scale about the
+  // pivot, cos of a turn about the vertical axis: -1 is the mirror image; v1.2 tailChase spins with it).
   'offX',
   'offY',
   'sqX',
@@ -13,6 +14,7 @@ export const POSE_KEYS = [
   'pivX',
   'pivY',
   'rollY',
+  'turnX',
   // Torso: centre, half-length/half-height multipliers, tilt (+ = front up),
   // back arch 0..1, curl (sleeping roundness) 0..1, haunch (sitting thigh) 0..1.
   'bodyX',
@@ -108,6 +110,7 @@ const BASE: Pose = {
   pivX: 0,
   pivY: -22,
   rollY: 1,
+  turnX: 1,
   bodyX: -2,
   bodyY: -23,
   bodyLen: 1,

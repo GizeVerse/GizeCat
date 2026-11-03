@@ -6,17 +6,31 @@
 // sampling (it returns its own next delay), so no extra timer or busy loop exists.
 // Environment surfaces (v1.1) are read once per host tick for env.surfaces; the surface
 // the cat rides is re-read live through env.getSurface.
+//
+// v1.2 (ADR 0003 §3, §4.3, §6.1):
+// - env.pointerButtonDown / pointerButtonPresses: the left, right and middle mouse buttons (held,
+//   and a content-free press count), sampled on the cursor poll and every tick; env.cursorIdleMs.
+// - env.edgeBands only from a host that has the click guard (the Win32 obstacle source): without
+//   it the sim never climbs a screen edge.
+// - clickGuardRectsPx(): the T8 guard. Whenever the cat's bounds come within one body width of a
+//   cling band, while it flies to or from a screen edge, and while it bails out of a covered or
+//   vanished window ledge, every obstacle window meeting its bounds (GetWindowRect grown by 8 DIP)
+//   is cut out of its hit region. Fail closed: a stale, incomplete or failing obstacle source makes
+//   the whole cat click-through.
 import { distanceToRect } from '../core/display/displayMath';
-import { suggestPollIntervalMs } from '../core/interaction/clickThrough';
-import type { BehaviorState } from '../shared/cat';
+import { suggestPollIntervalMs, wallGuardRects } from '../core/interaction/clickThrough';
+import { CAT_BASE_WIDTH_DIP, type BehaviorState } from '../shared/cat';
 import type { Point, Rect } from '../shared/geometry';
 import type { Settings } from '../shared/settings';
 import type { CatSim, SimEnv, SimEvent, SimOutput, SimRequest } from '../shared/sim';
-import type { Surface } from '../shared/surfaces';
+import { SCREEN_EDGE_KIND, type ScreenEdgeBand, type Surface } from '../shared/surfaces';
 import type { WorldGeometry } from '../shared/world';
 import { simWorld } from '../core/display/simWorld';
 import type { ActivityMonitor, DisplayService, Logger, PerceptionService, SurfaceProvider, TaskbarTracker, Win32Api, WindowTracker } from './contracts';
-import type { CatPosition } from './surfaces';
+import { BODY_MARGIN_SIDE_DIP } from './overlay/renderMapping';
+import type { CatPosition, ScreenEdgeGuard } from './surfaces';
+import { bandXRange } from './surfaces/edgeBands';
+import { hasWin32InputExtensions, type Win32InputExtensions } from './win32/win32Api';
 
 export const MIN_TICK_MS = 16;
 export const MAX_TICK_MS = 1000;
@@ -44,9 +58,26 @@ export const MOVING_SURFACE_TICK_MS = 33;
 export const TASKBAR_REVEAL_BAND_DIP = 6;
 const ASLEEP: ReadonlySet<BehaviorState> = new Set<BehaviorState>(['sleeping', 'fallingAsleep']);
 const NO_SURFACES: readonly Surface[] = Object.freeze([]);
+/** The cursor counts as moved beyond this (DIP, scaled) for env.cursorIdleMs. */
+export const CURSOR_IDLE_MOVE_DIP = 2;
+/** v1.2 T8 guard: obstacles are grown by this much (DIP, scaled): resize borders and shadows. */
+export const GUARD_OBSTACLE_MARGIN_DIP = 8;
+/** The guard is on while the cat's bounds are within this many body widths of a cling band. */
+export const GUARD_BAND_REACH_BW = 1;
+/** Failing closed, the whole cat plus this margin (px) is cut out (the hit zone grows by a hysteresis margin). */
+const FAIL_CLOSED_MARGIN_PX = 16;
+/** Obstacle hooks stay installed this long after the guard was last needed (no hook churn). */
+const GUARD_DISARM_AFTER_MS = 2000;
+/** Window surfaces whose loss (covered, gone) starts a bail-out guard. */
+const WINDOW_SURFACE_KINDS: ReadonlySet<string> = new Set(['windowTop', 'tabStrip', 'windowSide']);
+const BAIL_SPAN_TOLERANCE_PX = 2;
 
-/** The surface provider as the host uses it (noteCat is the provider's host-feedback extra). */
-export type HostSurfaceProvider = SurfaceProvider & { noteCat?(cat: CatPosition | null): void };
+/** The surface provider as the host uses it (noteCat is the provider's host-feedback extra; v1.2 edge bands and guard state). */
+export type HostSurfaceProvider = SurfaceProvider & {
+  noteCat?(cat: CatPosition | null): void;
+  edgeBands?(): readonly ScreenEdgeBand[] | null;
+  noteClickGuard?(state: ScreenEdgeGuard): void;
+};
 
 export interface HostOverlays {
   render(out: SimOutput, simNow: number, hidden: boolean): void;
@@ -103,6 +134,10 @@ export interface CatHostDebug {
   taskbarSamples: number;
   /** Delay before the next taskbar sample (ms), null without a taskbar tracker. */
   taskbarDelayMs: number | null;
+  /** v1.2 T8 screen-edge click guard: state, why it is on, and how often it failed closed. */
+  clickGuard: { state: ScreenEdgeGuard['state']; reason: 'band' | 'edgeFlight' | 'bailOut' | null; failClosed: number; rects: number; armed: boolean };
+  /** v1.2: edge bands handed to the sim on the last tick (null: none, the host has no guard). */
+  edgeBands: number | null;
 }
 
 export interface CatHost {
@@ -148,8 +183,17 @@ export interface CatHost {
   debug(): CatHostDebug;
 }
 
-/** The contract stub's click guard (no extra rects until the provider package implements it). */
+/** No extra click-guard rects (the guard is not needed right now). */
 const NO_GUARD_RECTS: readonly Rect[] = Object.freeze([]);
+
+const growRect = (r: Rect, m: number): Rect => ({ x: r.x - m, y: r.y - m, width: r.width + 2 * m, height: r.height + 2 * m });
+
+/** Distance between two rects (0 when they touch or overlap). */
+function rectGap(a: Rect, b: Rect): number {
+  const dx = Math.max(0, a.x - (b.x + b.width), b.x - (a.x + a.width));
+  const dy = Math.max(0, a.y - (b.y + b.height), b.y - (a.y + a.height));
+  return Math.hypot(dx, dy);
+}
 
 const clampNum = (v: number, lo: number, hi: number): number => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : hi);
 
@@ -196,6 +240,147 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   let lastSurfaces: readonly Surface[] = NO_SURFACES;
   const surfaces = opts.surfaces ?? null;
   const taskbars = opts.taskbars ?? null;
+
+  // ---- v1.2 input and the T8 click guard
+  /** Mouse buttons, the obstacle source and window pids (null: an older or test Win32 facade). */
+  const input: (Win32Api & Win32InputExtensions) | null = hasWin32InputExtensions(win32) ? win32 : null;
+  let buttons: { down: boolean; presses: number } | null = null;
+  let cursorMovedAt = Number.NEGATIVE_INFINITY;
+  let cursorMovePoint: Point | null = null;
+  /** Edge bands handed to the sim on the last tick (null: none). */
+  let edgeBands: readonly ScreenEdgeBand[] | null = null;
+  /** The cat flies to or from a screen edge (left one, or a leap / wall jump near a band) until it lands. */
+  let edgeFlight = false;
+  /** The window ledge or side under the cat is covered or gone: guarded from then until it lands. */
+  let bailGuard = false;
+  let guard: ScreenEdgeGuard = { state: input === null ? 'off' : 'idle', failClosed: 0 };
+  let guardReason: CatHostDebug['clickGuard']['reason'] = null;
+  let guardRects = 0;
+  let armed = false;
+  let guardNeededAt = Number.NEGATIVE_INFINITY;
+
+  function sampleButtons(): void {
+    if (input === null || !input.available) return;
+    try {
+      buttons = input.mouseButtons();
+    } catch (err) {
+      log.warn('mouse buttons failed', { error: err });
+      buttons = null;
+    }
+  }
+
+  /** env.cursorIdleMs bookkeeping: the last time the cursor moved more than CURSOR_IDLE_MOVE_DIP. */
+  function noteCursorMove(p: Point | null, t: number): void {
+    if (!p) return;
+    const scale = displayScale(safe(() => opts.display.displayAt(p), null, 'display at cursor'));
+    if (cursorMovePoint === null || Math.hypot(p.x - cursorMovePoint.x, p.y - cursorMovePoint.y) > CURSOR_IDLE_MOVE_DIP * scale) {
+      cursorMovePoint = { x: p.x, y: p.y };
+      cursorMovedAt = t;
+    }
+  }
+
+  /** The cat's real width on a display (body width x size plus both side margins), px. */
+  function footprintPx(displayId: string): number {
+    return (CAT_BASE_WIDTH_DIP * opts.getSettings().appearance.size + 2 * BODY_MARGIN_SIDE_DIP) * displayScale(displayId);
+  }
+
+  /** The cat's bounds come within GUARD_BAND_REACH_BW body widths of a cling band. */
+  function nearBand(bounds: Rect): boolean {
+    const bands = edgeBands;
+    if (!bands || bands.length === 0) return false;
+    for (const b of bands) {
+      const d = opts.display.world.displays.find((x) => x.id === b.displayId);
+      if (!d) continue;
+      const work = d.workAreaPx;
+      const reach = GUARD_BAND_REACH_BW * CAT_BASE_WIDTH_DIP * opts.getSettings().appearance.size * d.scaleFactor;
+      const x = bandXRange(work, b.side, footprintPx(b.displayId));
+      const band: Rect = { x: x.x0, y: work.y, width: x.x1 - x.x0, height: work.height };
+      if (rectGap(band, bounds) <= reach) return true;
+    }
+    return false;
+  }
+
+  /** The surface the cat stands on is a window surface no longer listed with the cat's spot on it. */
+  function supportLost(out: SimOutput, listed: readonly Surface[]): boolean {
+    const s = out.support;
+    if (s.kind !== 'surface' || !WINDOW_SURFACE_KINDS.has(s.surfaceKind)) return false;
+    const l = listed.find((x) => x.id === s.surfaceId);
+    if (!l) return true;
+    if (l.orientation === 'ledge') return out.x < l.x0 - BAIL_SPAN_TOLERANCE_PX || out.x > l.x1 + BAIL_SPAN_TOLERANCE_PX;
+    return out.y < l.y0 - BAIL_SPAN_TOLERANCE_PX || out.y > l.y1 + BAIL_SPAN_TOLERANCE_PX;
+  }
+
+  /** After each tick: edge flights and bail-outs start and end with the support. */
+  function trackGuardPhases(prev: SimOutput | null, out: SimOutput): void {
+    const airborne = out.support.kind === 'air';
+    const wasEdge = prev?.support.kind === 'surface' && prev.support.surfaceKind === SCREEN_EDGE_KIND;
+    if (airborne) {
+      const k = out.jumpKind ?? null;
+      if (wasEdge || ((k === 'leap' || k === 'wallJump') && out.visible && nearBand(out.boundsPx))) edgeFlight = true;
+    } else edgeFlight = false;
+    if (supportLost(out, lastSurfaces)) bailGuard = true;
+    else if (!airborne) bailGuard = false;
+  }
+
+  function setGuard(state: ScreenEdgeGuard['state'], reason: CatHostDebug['clickGuard']['reason']): void {
+    guardReason = reason;
+    if (state === guard.state) return;
+    guard = { state, failClosed: guard.failClosed + (state === 'failClosed' ? 1 : 0) };
+    if (state === 'failClosed') log.debug('click guard failed closed (obstacle source stale)');
+    attempt(() => surfaces?.noteClickGuard?.(guard), 'click guard state');
+  }
+
+  function setArmed(next: boolean, t: number): void {
+    if (input === null) return;
+    if (next) guardNeededAt = t;
+    // Disarm only after a quiet spell, so a cat moving along the band does not churn the hooks.
+    const want = next || t - guardNeededAt < GUARD_DISARM_AFTER_MS;
+    if (want === armed) return;
+    armed = want;
+    attempt(() => input.setObstacleWatch(want), 'obstacle watch');
+  }
+
+  /** The T8 guard (see the header). Never throws: every failure fails closed. */
+  function clickGuardRects(): readonly Rect[] {
+    const t = clock();
+    if (input === null) {
+      guardRects = 0;
+      return NO_GUARD_RECTS;
+    }
+    const out = lastOutput;
+    const bounds = out && out.visible && !hidden ? out.boundsPx : null;
+    const reason: CatHostDebug['clickGuard']['reason'] = !bounds ? null : bailGuard ? 'bailOut' : edgeFlight ? 'edgeFlight' : nearBand(bounds) || (out?.support.kind === 'surface' && out.support.surfaceKind === SCREEN_EDGE_KIND) ? 'band' : null;
+    if (!bounds || reason === null) {
+      setArmed(false, t);
+      setGuard('idle', null);
+      guardRects = 0;
+      return NO_GUARD_RECTS;
+    }
+    setArmed(true, t);
+    let obstacles: { rects: readonly Rect[]; fresh: boolean } | null = null;
+    try {
+      obstacles = input.clickObstaclesPx();
+    } catch (err) {
+      log.warn('click-guard obstacles failed', { error: err });
+    }
+    if (obstacles === null || !obstacles.fresh) {
+      // Fail closed: the whole cat is click-through until the obstacle list is current again.
+      setGuard('failClosed', reason);
+      guardRects = 1;
+      return [growRect(bounds, FAIL_CLOSED_MARGIN_PX)];
+    }
+    // 8 DIP at the largest scale of the displays the window touches.
+    const displays = opts.display.world.displays;
+    const grown = obstacles.rects.map((r) => {
+      let scale = 1;
+      for (const d of displays) if (rectGap(d.boundsPx, r) === 0 && d.scaleFactor > scale) scale = d.scaleFactor;
+      return growRect(r, Math.ceil(GUARD_OBSTACLE_MARGIN_DIP * scale));
+    });
+    const rects = wallGuardRects(growRect(bounds, FAIL_CLOSED_MARGIN_PX), grown);
+    setGuard('active', reason);
+    guardRects = rects.length;
+    return rects;
+  }
 
   /** Live geometry of one surface (the sim calls it for the surface it rides). */
   const getSurface = (id: string): Surface | null => {
@@ -345,6 +530,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   function sampleCursor(): Point | null {
     if (injectedCursor) {
       lastCursor = injectedCursor;
+      noteCursorMove(injectedCursor, clock());
       return injectedCursor;
     }
     let p: Point | null = null;
@@ -357,6 +543,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       }
     }
     lastCursor = p;
+    noteCursorMove(p, clock());
     return p;
   }
 
@@ -425,6 +612,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     const dt = simDelta / steps;
 
     const cursor = sampleCursor();
+    sampleButtons();
     attempt(() => activity.sample(nowReal, cursor), 'activity sample');
     const events = collectEvents();
     const world = opts.display.world;
@@ -433,9 +621,17 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       fullscreenAt = nowReal;
     }
     const envSurfaces = readSurfaces(nowReal);
+    // Edge bands only with the click guard behind them (absent: the sim never climbs a screen edge).
+    edgeBands = input !== null && input.available && surfaces?.edgeBands ? safe(() => surfaces.edgeBands?.() ?? null, null, 'edge bands') : null;
     const foreground = safe(() => tracker.getForeground(), null, 'foreground');
     const wall = wallClock();
+    const v12: Partial<SimEnv> = {
+      ...(buttons !== null ? { pointerButtonDown: buttons.down, pointerButtonPresses: buttons.presses } : {}),
+      ...(cursor !== null && Number.isFinite(cursorMovedAt) ? { cursorIdleMs: Math.max(0, nowReal - cursorMovedAt) } : {}),
+      ...(edgeBands !== null ? { edgeBands } : {}),
+    };
     const base: Omit<SimEnv, 'now' | 'dt'> = {
+      ...v12,
       cursor: cursor ? { x: cursor.x, y: cursor.y, speed: activity.cursorSpeed } : null,
       cursorOverCat: overlays.isCursorOverCat(cursor),
       userIdleMs: activity.idleMs,
@@ -459,6 +655,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
     if (!out) return MAX_TICK_MS;
     ticks++;
+    attempt(() => trackGuardPhases(lastOutput, out), 'click guard phases');
     lastOutput = out;
     overlays.render(out, simNow, hidden);
     opts.catStore.markDirty();
@@ -495,6 +692,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     let cursor: Point | null = null;
     try {
       cursor = sampleCursor();
+      // Presses between ticks are counted here too (the poll runs at 8-60 Hz).
+      sampleButtons();
       if (t >= cursorDueAt) {
         const blocked = hidden || paused || locked || !opts.getSettings().interaction.enabled;
         overlays.updateInteractivity(cursor, blocked);
@@ -643,7 +842,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     catDisplayId: () => lastOutput?.displayId ?? null,
     catAnchor: () => (lastOutput ? { x: lastOutput.x, y: lastOutput.y } : null),
     fullscreenDisplayIds: () => [...fullscreenIds],
-    clickGuardRectsPx: () => NO_GUARD_RECTS,
+    clickGuardRectsPx: () => clickGuardRects(),
     setInjectedCursor(p) {
       injectedCursor = p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;
       log.info(injectedCursor ? 'cursor injected (test mode)' : 'cursor injection ended');
@@ -661,6 +860,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       surfaces: lastSurfaces.length,
       taskbarSamples,
       taskbarDelayMs,
+      clickGuard: { state: guard.state, reason: guardReason, failClosed: guard.failClosed, rects: guardRects, armed },
+      edgeBands: edgeBands === null ? null : edgeBands.length,
     }),
   };
 }

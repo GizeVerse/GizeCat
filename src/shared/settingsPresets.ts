@@ -62,6 +62,18 @@ export function matchingPreset(s: PresetReadable): ActivityPresetId | null {
   return null;
 }
 
+/** What the Personality selector shows for `s`: the matching preset, else 'custom' (main stores the same). */
+export function presetChoiceFor(s: PresetReadable): ActivityPresetChoice {
+  return matchingPreset(s) ?? 'custom';
+}
+
+/** True for a settings leaf a preset sets: changing it alone makes the activity values custom. */
+export function isPresetGoverned(section: string, key: string): boolean {
+  if (section === 'behavior') return (PRESET_BEHAVIOR_KEYS as readonly string[]).includes(key);
+  if (section === 'interaction') return (PRESET_INTERACTION_KEYS as readonly string[]).includes(key);
+  return false;
+}
+
 /** A multi-section settings patch that applies preset `id` (main applies it atomically). */
 export function presetPatch(id: ActivityPresetId): {
   behavior: Record<PresetBehaviorKey, number> & { activityPreset: ActivityPresetId };

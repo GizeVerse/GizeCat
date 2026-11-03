@@ -2,6 +2,7 @@
 // crosses into main is validated with these schemas; senders are also checked
 // against the known webContents/origin in main.
 import { z } from 'zod';
+import type { BehaviorProfileSnapshot } from './behaviorProfile';
 import type { BehaviorState, CatRenderState, HitRegion } from './cat';
 import type { CatSummary } from './catState';
 import type { PerceptionStatus, SceneReport, VisualEventKind, VisualFeatures } from './perception';
@@ -35,6 +36,8 @@ export const IPC = {
   settingsListModels: 'settings:list-models',
   settingsPreviewPerception: 'settings:preview-perception',
   settingsGetSurfaceDiagnostics: 'settings:get-surface-diagnostics',
+  /** v1.2 behaviour profile for Diagnostics -> Behaviour (validated in main; kinds, counts and durations only). */
+  settingsGetBehaviorProfile: 'settings:get-behavior-profile',
   // main -> settings
   settingsStateChanged: 'settings:state-changed',
 } as const;
@@ -220,5 +223,7 @@ export interface SettingsApi {
   previewPerception(): Promise<PerceptionPreview>;
   /** v1.1.1: why the cat can or cannot get off the floor (validated in main; no titles or ids). */
   getSurfaceDiagnostics(): Promise<SurfaceDiagnostics>;
+  /** v1.2: what the cat did this session (validated in main against BehaviorProfileSchema; no ids, titles or positions). */
+  getBehaviorProfile(): Promise<BehaviorProfileSnapshot>;
   onStateChanged(cb: (state: SettingsViewState) => void): () => void;
 }

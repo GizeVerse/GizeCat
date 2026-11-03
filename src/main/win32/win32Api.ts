@@ -4,7 +4,9 @@ import { rectContains, type Point, type Rect } from '../../shared/geometry';
 import { DEFAULT_EXCLUDED_PROCESSES } from '../../shared/settings';
 import type { WindowInfo } from '../../shared/world';
 import type { Logger, RawWinEvent, Unsubscribe, Win32Api } from '../contracts';
+import { createClickObstacleSource, type ClickObstacles, type ClickObstacleSource, type ClickObstacleStats } from './clickObstacles';
 import { LruCache } from './collections';
+import { createMouseButtonSampler, type MouseButtonState } from './mouseButtons';
 import {
   CHILDID_SELF,
   DESKTOP_WINDOW_CLASSES,
@@ -103,6 +105,25 @@ export interface Win32ApiExtensions {
 
 export type ExtendedWin32Api = Win32Api & Win32ApiExtensions;
 
+/**
+ * v1.2 input and click-guard capabilities (ADR 0003 §4.3, §6.1, §13). A separate interface (with its
+ * own guard) so existing Win32Api fakes and extensions stay valid.
+ */
+export interface Win32InputExtensions {
+  /** Owning process id of a top-level window (E2E restriction to the test's own windows), null when gone. */
+  windowProcessId(id: string): number | null;
+  /**
+   * Samples the left, right and middle mouse buttons (GetAsyncKeyState, mouse buttons only, never
+   * keys): whether one is held and a monotonic, content-free press count. One sampler for the process.
+   */
+  mouseButtons(): MouseButtonState;
+  /** The click-guard obstacle list (WinEvent-invalidated cache; fresh = false means fail closed). */
+  clickObstaclesPx(): ClickObstacles;
+  /** Hooks the obstacle invalidation events while the cat is near a screen-edge band. */
+  setObstacleWatch(armed: boolean): void;
+  obstacleStats(): ClickObstacleStats | null;
+}
+
 const EXTENSION_METHODS: ReadonlyArray<keyof Win32ApiExtensions> = [
   'setExclusions',
   'isWindowExcluded',
@@ -112,9 +133,16 @@ const EXTENSION_METHODS: ReadonlyArray<keyof Win32ApiExtensions> = [
   'listOccluders',
 ];
 
+const INPUT_EXTENSION_METHODS: ReadonlyArray<keyof Win32InputExtensions> = ['windowProcessId', 'mouseButtons', 'clickObstaclesPx', 'setObstacleWatch', 'obstacleStats'];
+
 export function hasWin32Extensions(api: Win32Api): api is ExtendedWin32Api {
   const a = api as Partial<ExtendedWin32Api>;
   return EXTENSION_METHODS.every((m) => typeof a[m] === 'function');
+}
+
+export function hasWin32InputExtensions(api: Win32Api): api is Win32Api & Win32InputExtensions {
+  const a = api as Partial<Win32InputExtensions>;
+  return INPUT_EXTENSION_METHODS.every((m) => typeof a[m] === 'function');
 }
 
 const EVENT_KINDS: ReadonlyMap<number, RawWinEvent['kind']> = new Map<number, RawWinEvent['kind']>([
@@ -152,7 +180,7 @@ interface CachedName {
   at: number;
 }
 
-export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: Win32ApiOptions = {}): ExtendedWin32Api {
+export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: Win32ApiOptions = {}): ExtendedWin32Api & Win32InputExtensions {
   const log = logger.child('win32');
   const includeOwn = opts.includeOwnProcess === true;
   const now = opts.now ?? (() => performance.now());
@@ -170,6 +198,11 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
   const subscriptions = new Set<() => void>();
   const errorCounts = new Map<string, number>();
   let disposed = false;
+  // v1.2: one mouse-button sampler for the process (see mouseButtons.ts) and the lazily created
+  // click-guard obstacle cache.
+  const buttons = createMouseButtonSampler((vk) => native.getAsyncKeyState(vk));
+  let obstacles: ClickObstacleSource | null = null;
+  const obstacleSource = (): ClickObstacleSource => (obstacles ??= createClickObstacleSource(native, log, { now }));
 
   function noteFailure(op: string, e: unknown): void {
     const n = (errorCounts.get(op) ?? 0) + 1;
@@ -528,9 +561,27 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
         return out;
       }),
 
+    windowProcessId: (id) =>
+      guard<number | null>('windowProcessId', null, () => {
+        const h = parseWindowId(id);
+        if (h === null || !native.isWindow(h)) return null;
+        const pid = native.getWindowProcessId(h);
+        return pid === 0 ? null : pid;
+      }),
+
+    // Mouse buttons only (VK_LBUTTON, VK_RBUTTON, VK_MBUTTON); keyboard state is never read.
+    mouseButtons: () => guard<MouseButtonState>('mouseButtons', buttons.last, () => buttons.sample()),
+
+    clickObstaclesPx: () => guard<ClickObstacles>('clickObstacles', { rects: [], fresh: false }, () => obstacleSource().get()),
+
+    setObstacleWatch: (armed) => guard('setObstacleWatch', undefined, () => (disposed ? undefined : obstacleSource().setArmed(armed))),
+
+    obstacleStats: () => obstacles?.stats() ?? null,
+
     dispose() {
       disposed = true;
       for (const unsubscribe of [...subscriptions]) unsubscribe();
+      obstacles?.dispose();
       processNames.clear();
       appWindowIds.clear();
       lastRects.clear();
@@ -539,8 +590,14 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
 }
 
 /** Safe stand-in when koffi or a system DLL cannot be loaded (or off Windows). */
-export function createUnavailableWin32Api(): ExtendedWin32Api {
+export function createUnavailableWin32Api(): ExtendedWin32Api & Win32InputExtensions {
   return {
+    windowProcessId: () => null,
+    mouseButtons: () => ({ down: false, presses: 0 }),
+    // No obstacle knowledge: always stale (the guard fails closed).
+    clickObstaclesPx: () => ({ rects: [], fresh: false }),
+    setObstacleWatch: () => undefined,
+    obstacleStats: () => null,
     available: false,
     getCursorPos: () => null,
     getIdleMs: () => null,

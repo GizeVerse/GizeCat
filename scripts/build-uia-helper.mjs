@@ -17,6 +17,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const HELPER_EXE = 'DesktopCatUia.exe';
+/** Protocol version the helper must report (src/main/uia/protocol.ts UIA_PROTOCOL_VERSION; ADR 0003 §7.1). */
+export const HELPER_PROTOCOL_VERSION = 2;
 const SOURCE_DIR = path.join(root, 'native', 'uia-helper');
 
 /** Framework directory holding csc.exe and the WPF UI Automation assemblies, or null. */
@@ -121,7 +123,7 @@ export function buildUiaHelper({ outDir = path.join(root, 'out', 'native'), log 
   // the next run compiles and checks again instead of reporting a broken exe as up to date.
   try {
     const version = execFileSync(tmpFile, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 }).trim();
-    if (JSON.parse(version)?.version !== 1) throw new Error(`unexpected protocol version ${version}`);
+    if (JSON.parse(version)?.version !== HELPER_PROTOCOL_VERSION) throw new Error(`unexpected protocol version ${version}`);
   } catch (e) {
     for (const f of [tmpFile, stampFile, outFile]) fs.rmSync(f, { force: true });
     throw new Error(`build-uia-helper: the new helper failed its --version smoke check (${e instanceof Error ? e.message : String(e)})`);

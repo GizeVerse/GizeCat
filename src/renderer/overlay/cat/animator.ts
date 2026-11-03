@@ -2,7 +2,7 @@
 // clip changes, and procedural layers (breathing, blinks, ear twitches, glances,
 // look-at, one-off reactions, mood on tail/ears/pupils, purr vibration, pendulum
 // swing while held).
-import type { AnimClip, CatReaction, CatReactionKind } from '../../../shared/cat';
+import type { AnimClip, CatReaction, CatReactionKind, JumpKind } from '../../../shared/cat';
 import { climbEngagement, crossFadeMs, gaitHz, isGait, isWallManoeuvre, sampleClip, wallTimeScale, type ClipContext } from './clips';
 import { clamp, clamp01, damp, easeOut, lerp, noise1, pulse, smooth, sseg, TAU } from './math';
 import { blendPose, copyPose, createPose, sanitizePose, type Pose } from './pose';
@@ -29,6 +29,10 @@ export interface AnimInput {
    * as long, and so do the fades onto and off the wall and the off-wall shadow delay.
    */
   movementSpeed?: number;
+  /** v1.2 render hints (ADR 0003 §8): flight kind, landing hardness 0..1, balance 0..1; absent = defaults. */
+  jumpKind?: JumpKind | null;
+  impact?: number;
+  balance?: number;
 }
 
 /** Length (s at animation speed 1) of each reaction layer. */
@@ -57,6 +61,19 @@ const TAIL_AUTHORED: ReadonlySet<AnimClip> = new Set<AnimClip>([
   'rollOver',
   'land',
   'climb',
+  // v1.2
+  'stalk',
+  'sprint',
+  'slink',
+  'pounce',
+  'slip',
+  'impact',
+  'swat',
+  'hiss',
+  'grumpy',
+  'stretch',
+  'balance',
+  'tailChase',
 ]);
 
 const MAX_LAYER_DT_S = 0.1;
@@ -247,6 +264,9 @@ export class CatAnimator {
     c.lookY = c.hasLook ? input.lookY : 0;
     c.arousal = clamp01(Number.isFinite(input.arousal) ? input.arousal : 0);
     c.contentment = clamp01(Number.isFinite(input.contentment) ? input.contentment : 0);
+    c.jumpKind = input.jumpKind ?? null;
+    c.impact = input.impact;
+    c.balance = input.balance;
 
     sampleClip(input.clip, c, this.clipPose);
     sanitizePose(this.clipPose);

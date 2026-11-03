@@ -30,7 +30,8 @@ vi.mock('node:child_process', async (importOriginal) => {
       if (args[0] === '--version') {
         exec.calls.push(`version:${path.basename(file)}`);
         if (exec.smoke === 'crash') throw new Error('helper crashed at startup');
-        return exec.smoke === 'garbage' ? 'not json\n' : '{"version":1,"dpi":"permonitorv2"}\n';
+        // v1.2: the helper speaks protocol 2 (scripts/build-uia-helper.mjs HELPER_PROTOCOL_VERSION).
+        return exec.smoke === 'garbage' ? 'not json\n' : '{"version":2,"dpi":"permonitorv2"}\n';
       }
       throw new Error(`unexpected execFileSync ${file}`);
     },

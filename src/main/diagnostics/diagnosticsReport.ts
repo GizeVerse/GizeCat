@@ -3,6 +3,7 @@
 // account name); exclusion lists are reduced to counts and the whole report is
 // passed through redaction once more. Pure.
 import type { BehaviorProfileSnapshot } from '../../shared/behaviorProfile';
+import { parseBehaviorProfile } from '../../shared/behaviorProfileSchema';
 import type { AppStatus, ResourceSample } from '../../shared/ipc';
 import { DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS, type Settings } from '../../shared/settings';
 import type { SurfaceDiagnostics } from '../../shared/surfaceDiagnostics';
@@ -26,9 +27,9 @@ export interface DiagnosticsInput {
   /** v1.1.1: why the cat can or cannot leave the floor (counts, kinds, reasons, geometry; no titles or ids). */
   surfaces?: SurfaceDiagnostics | null;
   /**
-   * v1.2 (ADR 0003 §11, review C2 seam): the sim's behaviour profile. The settings/diagnostics
-   * package adds it as the `behaviorProfile` section once it validates it against
-   * BehaviorProfileSchema (and PRIVACY.md lists it); until then it is not exported.
+   * v1.2 (ADR 0003 §11): the sim's behaviour profile, exported as the `behaviorProfile` section
+   * after validation against the strict BehaviorProfileSchema (kinds, counts and durations of this
+   * session; never which windows or apps). Missing or invalid: the section is null.
    */
   behaviorProfile?: BehaviorProfileSnapshot | null;
   services: Record<string, unknown>;
@@ -78,6 +79,16 @@ function mapStrings(value: unknown, fn: (s: string) => string): unknown {
   return value;
 }
 
+/** The validated profile for the export, or null (absent, or it failed the strict schema). Never throws. */
+export function exportedBehaviorProfile(profile: unknown): BehaviorProfileSnapshot | null {
+  if (profile === null || profile === undefined) return null;
+  try {
+    return parseBehaviorProfile(profile);
+  } catch {
+    return null;
+  }
+}
+
 export function buildDiagnosticsReport(input: DiagnosticsInput): Record<string, unknown> {
   const logs = input.logs.slice(-DIAGNOSTICS_LOG_LINES).map((e) => redactString(formatEntry(e)));
   const report = {
@@ -100,6 +111,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): Record<string, 
     status: input.status,
     cat: input.cat,
     surfaces: input.surfaces ?? null,
+    behaviorProfile: exportedBehaviorProfile(input.behaviorProfile),
     services: input.services,
   };
   // Resource samples are plain numbers and would be truncated by the generic redactor.

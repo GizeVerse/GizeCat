@@ -123,6 +123,43 @@ export const MOVEMENT = {
    * climbing pose (about 100 DIP above the anchor) and the ears stay on screen.
    */
   screenEdgeTopClearanceDip: 120,
+  /** Screen-edge walls only on displays whose climbable stretch is at least this tall (body heights). */
+  screenEdgeMinBodyHeights: 2,
+  /** How long the reported plan-cancel backoff lasts: 3 s, then 4 s, then 5 s for back-to-back backoffs (deterministic). */
+  planCancelBackoffMinMs: 3000,
+  planCancelBackoffMaxMs: 5000,
+  /** A take-off target moved more than this (body lengths) during the crouch: the plan is stale (cancelled). */
+  planStaleBodyLengths: 0.5,
+  /** A take-off target served with less confidence than this is treated as covered (stale plan). */
+  planCoveredConfidence: 0.25,
+  /** Every pace is clamped to this multiple of its clip's clean-gait limit (GAIT_LIMIT_DIP), whatever movementSpeed says. */
+  gaitLimitFactor: 1.1,
+  /** On a narrow ledge the cat walks at this fraction of its walking pace and never runs. */
+  narrowWalkFactor: 0.6,
+  /** Balance shown while holding on a wall (screen-edge top corner). */
+  wallHoldBalance: 0.6,
+  /** A deliberate 'scramble' slip: front paws on the edge, hind legs paddling, then the pull-up. */
+  slipScrambleMs: 900,
+  /** Slip risk terms (ADR 0003 §6.6): narrow landing span, long gap, high jump, moving target. */
+  slipRiskSpanBodyLengths: 1.2,
+  slipRiskGapFraction: 0.7,
+  slipRiskUpFraction: 0.7,
+  slipRiskMovingDip: 50,
+  /** Covered or vanished support: the bail-out crouch before take-off, and the latest take-off after the cover. */
+  bailOutCrouchMs: 120,
+  bailOutMaxDelayMs: 600,
+  /** Emergency way off: hanging from the edge (lowering by emergencyHangBodyHeights) before letting go. */
+  emergencyHangMs: 360,
+  /** Anticipation before a jump off a wall the cat clings to (a push-off, shorter than a ground crouch). */
+  wallJumpCrouchMs: 200,
+  /** Highest a wall jump may land above the grip, as a share of maxJumpUpDip (it pushes off, mostly across or down). */
+  wallJumpUpFraction: 0.5,
+  /** Shortest wall jump, body lengths away from the wall line. */
+  wallJumpMinBodyLengths: 0.8,
+  /** Wall-jump edges kept per wall node in the surface graph (nearest first): bounds the graph cost. */
+  wallJumpMaxEdgesPerWall: 8,
+  /** A pounce never lands closer than this to a ledge end it would otherwise run past (body lengths). */
+  pounceEndMarginBodyLengths: 0.2,
 } as const;
 
 /** Route effort weights (seconds of walking one leg is worth), before personality multipliers. */
@@ -138,6 +175,18 @@ export const ROUTE_EFFORT = {
   /** Climbing is slower and harder than jumping: cats only climb when they choose to or must. */
   climbMultiplier: 1.6,
   climbTransition: 0.6,
+  /**
+   * v1.2 jump-down limits: a leg between the safe and the maximum height costs this many extra
+   * seconds at full risk (risk = (drop - safe) / (max - safe)), so a safer way is preferred.
+   */
+  riskPenalty: 20,
+  /**
+   * A leg whose drop would land hard (above HARD_DROP_DIP) costs this much more: with the default
+   * limits the cat lands hard only where no other way exists (ADR 0003 D8, §6.4).
+   */
+  hardLandingPenalty: 40,
+  /** A wall jump is a jump: weighed like one, plus the push-off. */
+  wallJumpBase: 1.2,
 } as const;
 
 /** Arrival tolerance when walking to a point, in DIP. */

@@ -15,13 +15,14 @@ import type { DisplayGeometry } from '../../shared/world';
  * (to ~37 DIP while climbing, pixel style), and pixel style rounds every edge out to whole
  * blocks. An overlay draws the cat whenever this rect touches its display, so nothing is
  * clipped at a monitor seam (tests/unit/renderer/presence.test.ts measures the drawn
- * extent of every clip).
+ * extent of every clip). v1.2 (ADR 0003 §8.2): larger, so every clip (the stretch, the
+ * sprint, the slip's hanging body, the flight poses) keeps at least 6 DIP of headroom.
  */
-export const BODY_MARGIN_SIDE_DIP = 32;
-export const BODY_MARGIN_TOP_DIP = 36;
-export const BODY_MARGIN_BOTTOM_DIP = 40;
+export const BODY_MARGIN_SIDE_DIP = 44;
+export const BODY_MARGIN_TOP_DIP = 60;
+export const BODY_MARGIN_BOTTOM_DIP = 48;
 /** Top margin while emotes are enabled (an emote floats above the held cat's head). */
-export const EMOTE_MARGIN_TOP_DIP = 64;
+export const EMOTE_MARGIN_TOP_DIP = 84;
 
 export type Appearance = Settings['appearance'];
 
