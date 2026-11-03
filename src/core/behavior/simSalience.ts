@@ -367,6 +367,7 @@ export abstract class SimSalience extends SimReactions {
     const look = { x: focus.x, y: strip.y + 0.4 * m.bodyHeight };
     if (change === 'selected') {
       if (onIt || this.ledgeDistanceBl({ y: strip.y, x0: focus.x, x1: focus.x }) < 4) this.react('earFlick');
+      if (onIt && !PHYSICAL_STATES.has(s)) this.setGlance(look, 1500);
       if (onIt && m.grounded && CALM_STATES.has(s) && !this.typingGate() && habituation < 0.6) {
         const rest = strip.rest ?? { x0: strip.x0, x1: strip.x1 };
         const x = clamp(focus.x, rest.x0, rest.x1);
@@ -379,6 +380,8 @@ export abstract class SimSalience extends SimReactions {
     if (!ACTIVE_STATES.has(s)) {
       this.setGlance(look, 1500);
       if (onIt) this.mover.faceToward(focus.x, this.now);
+    } else if (s === 'walking' && onIt) {
+      this.setGlance(look, 1500);
     }
   }
 

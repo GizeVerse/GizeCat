@@ -294,13 +294,15 @@ describe('interaction', () => {
   });
 
   it('a throw ends with a startle or annoyed reaction; a gentle drop does not', () => {
+    // ADR 0003 §5.2: a hard impact from a high drop gets a surprise now, so the gentle drop is a low one.
     const throwIt = (vx: number, seed: number): BehaviorState[] => {
       const h = new Harness({ seed });
+      const y = vx === 0 ? 850 : 300;
       h.run(2000);
       h.step([{ type: 'pointer.dragStart', at: catPoint(h.last) }]);
-      h.env.dragCursor = { x: 900, y: 300 };
+      h.env.dragCursor = { x: 900, y };
       h.step();
-      h.step([{ type: 'pointer.dragEnd', at: { x: 900, y: 300 }, velocity: { x: vx, y: vx === 0 ? 0 : -1500 } }]);
+      h.step([{ type: 'pointer.dragEnd', at: { x: 900, y }, velocity: { x: vx, y: vx === 0 ? 0 : -1500 } }]);
       h.env.dragCursor = null;
       const states: BehaviorState[] = [];
       h.run(4000, 33, (hh) => void states.push(hh.last!.state));
@@ -442,10 +444,14 @@ describe('memory learning', () => {
       const h = new Harness({ seed: 72, settings: settingsWith({ behavior: { cursorPlay: 1 } }) });
       h.run(2000);
       const before = h.sim.serialize().memory.preferences.cursorPlayAcceptance;
+      // ADR 0003 §4.1: a still cursor starts no hunt, so the ignored case stops moving once the chase is on.
+      let chasing = false;
       h.run(10 * MIN, 50, (hh, i) => {
-        const x = moving ? 900 + 500 * Math.sin(i / 15) : 1200;
-        hh.env.cursor = { x, y: 1000, speed: moving ? 900 : 0 };
-        return i % 400 === 0 ? [{ type: 'cursor.flick', speed: 4000, at: { x, y: 1000 } }] : [];
+        chasing ||= hh.last!.state === 'chasingCursor';
+        const go = moving || !chasing;
+        const x = go ? 900 + 500 * Math.sin(i / 15) : 1200;
+        hh.env.cursor = { x, y: 1000, speed: go ? 900 : 0 };
+        return go && i % 400 === 0 ? [{ type: 'cursor.flick', speed: 4000, at: { x, y: 1000 } }] : [];
       });
       const p = h.sim.serialize();
       expect(p.memory.counters.chasesStarted).toBeGreaterThan(0);

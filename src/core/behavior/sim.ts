@@ -48,8 +48,10 @@ export class CatSimImpl extends SimActivities implements CatSim {
       this.notePrivacy(env.foreground.id, env.foreground.excluded);
       if (!env.foreground.minimized) this.noteWindowRect(env.foreground.id, env.foreground.rect);
     }
+    this.syncEdges(env);
     this.indexSurfaces(env);
     this.mover.sense(this.usableSurfaces());
+    this.noteCursorSample();
     // The raw keyboard-like signal drives every "never in the way" gate whatever 'React to typing'
     // says (ADR 0003 §4.3); with the setting off the cat shows no typing reactions (calming down,
     // watching the user).
@@ -102,6 +104,8 @@ export class CatSimImpl extends SimActivities implements CatSim {
       snap = true;
     }
     this.reconcilePhysical();
+    this.drawClimbSlip();
+    this.trackEdgeVisit();
     this.trackElevation();
     this.updateUrge(dt);
     this.drives();
@@ -269,7 +273,8 @@ export class CatSimImpl extends SimActivities implements CatSim {
   protected computeLook(): Point | null {
     const s = this.act.state;
     if (ASLEEP_STATES.has(s) || s === 'away' || s === 'held' || s === 'beingPetted' || PHYSICAL_STATES.has(s)) return null;
-    if (this.glance && this.now < this.glance.until && !ACTIVE_STATES.has(s)) return this.glance.target;
+    // A cat walking along a window top or strip can still turn its head (a tab change, §1.8).
+    if (this.glance && this.now < this.glance.until && (!ACTIVE_STATES.has(s) || (s === 'walking' && this.onStay()))) return this.glance.target;
     const p = this.lookForState();
     return isFinitePoint(p) ? p : null;
   }
@@ -278,6 +283,8 @@ export class CatSimImpl extends SimActivities implements CatSim {
     const a = this.act;
     const m = this.mover;
     if (this.oneShot && this.now >= this.oneShot.until) this.oneShot = null;
+    // v1.2: the scramble of a deliberate slip (front paws catch the edge, then it pulls up).
+    if (this.now < this.slipClipUntil && !m.airborne && !m.held) return 'slip';
     // On a wall the body is in the vertical climbing pose while getting on and climbing. During
     // the corner pull-up and the step-off the renderer cross-fades back to a ground clip (its
     // off-wall fade is tuned to the pull-up duration), so the cat does not glide rigidly.
@@ -414,7 +421,7 @@ export class CatSimImpl extends SimActivities implements CatSim {
       requests,
       reaction: visible && this.reaction && now - this.reaction.at < REACTION_HOLD_MS ? { ...this.reaction } : null,
       // v1.2 render hints (ADR 0003 §6, §8, §10).
-      jumpKind: m.airborne ? m.jumpKind : null,
+      jumpKind: m.jumpKind,
       impact: s === 'landing' ? clamp(this.impactHint, 0, 1) : 0,
       balance: clamp(m.balance, 0, 1),
       sound: visible ? this.sound : null,

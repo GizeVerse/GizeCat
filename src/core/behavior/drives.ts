@@ -171,6 +171,8 @@ export type DriveImpulse =
   | 'missedPounce'
   | 'cursorLost'
   | 'tripFailed'
+  /** A deliberate slip that missed its take-off (ADR 0003 §6.6). */
+  | 'slipMiss'
   /** Arrived on a window top or tab strip. */
   | 'arrivedUp'
   /** A full screen-edge climb with the top hold. */
@@ -219,6 +221,9 @@ export function applyImpulse(d: Drives, kind: DriveImpulse): void {
       break;
     case 'tripFailed':
       d.frustration += 0.15;
+      break;
+    case 'slipMiss':
+      d.frustration += 0.1;
       break;
     case 'arrivedUp':
       d.exploreNeed -= 0.25;

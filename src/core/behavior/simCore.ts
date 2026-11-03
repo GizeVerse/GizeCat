@@ -6,6 +6,7 @@
 import type { AnimClip, BehaviorState, CatReaction, CatReactionKind, CatSoundCue, SoundCue } from '../../shared/cat';
 import type {
   ArrivalRoute,
+  BailOutKind,
   DecisionRecord,
   EdgeVisitRecord,
   ExcursionRecord,
@@ -30,12 +31,12 @@ import { disabledBehaviorSet } from '../../shared/settings';
 import type { CatSimOptions, SimEnv, SimRequest } from '../../shared/sim';
 import type { DecisionTarget, TargetAvailability } from '../../shared/surfaceDiagnostics';
 import type { LedgeSurface, Surface as EnvSurface, WallSurface } from '../../shared/surfaces';
-import type { MoverConfig, MoverStep, Pace, RoutePreference, SupportLoss } from '../movement';
-import { Mover } from '../movement';
+import type { LeaveOption, MoverConfig, MoverStep, Pace, RoutePreference, SlipKind, SupportLoss } from '../movement';
+import { MOVEMENT, Mover } from '../movement';
 import type { Activity, ActivityInit, FollowUp } from './activity';
 import { makeActivity } from './activity';
 import type { Phase } from './clips';
-import type { Candidate, DecisionView, Variant } from './decide';
+import type { Candidate, DecisionView, EdgeTarget, Variant } from './decide';
 import { sleepiness, userIdleForSleep } from './decide';
 import { decayForDowntime } from './drives';
 import { EmoteController } from './emotes';
@@ -53,6 +54,7 @@ import { ROUGH_MEMORY_MS as ROUGH_LIST_MS, RoughMemory } from './reactions';
 import { Rhythm } from './rhythm';
 import { EventDedupe } from './salience';
 import { ACTIVE_STATES, ASLEEP_STATES, canTransition, findPath, guardsFor, isCountedTransition, MAX_STATE_CHANGES_PER_WINDOW, mayInterrupt, PHYSICAL_STATES, REACTION_STATES, STATE_CHANGE_WINDOW_MS, STATE_SPECS } from './states';
+import { jumpDownLimitsFor } from './stay';
 import { Cooldowns, Habituation, RecentIds } from './stimuli';
 import { candidateKey, pickWithVariety, scoreAll, variantAllowed } from './utility';
 import { ProgressMonitor } from './watchdog';
@@ -145,6 +147,8 @@ export const TASKBAR_WAKE_COOLDOWN_MS = 10 * 60_000;
 export const CLIMB_COOLDOWN_MS: readonly [number, number] = [90_000, 240_000];
 export const TAB_VISIT_COOLDOWN_MS = 120_000;
 export const TAB_INVESTIGATE_COOLDOWN_MS = 60_000;
+/** Between two hides the cat decides on by itself (rough-handling memory); reactions are not limited by it. */
+export const AUTO_HIDE_COOLDOWN_MS: readonly [number, number] = [6 * 60_000, 12 * 60_000];
 /**
  * v1.1.1: a trip up that failed (unreachable when tried, timed out, turned back on the side, let
  * go, target lost) is retried after this instead of the full climb / tab-strip visit cooldown.
@@ -188,6 +192,7 @@ export const HOLD_STILL_MAX_MS = 3000;
 export const SELF_TIMED: ReadonlySet<BehaviorState> = new Set<BehaviorState>([
   'walking',
   'running',
+  'chasingCursor',
   'sleeping',
   'wakingUp',
   'fallingAsleep',
@@ -269,7 +274,7 @@ export interface StayTrack {
   since: number;
   lastOnAt: number;
   arrivedBy: ArrivalRoute;
-  via: 'none' | 'held' | 'wall' | 'jump' | 'step' | 'fall' | 'covered' | 'gone';
+  via: 'none' | 'held' | 'wall' | 'jump' | 'step' | 'fall' | 'covered' | 'gone' | 'disabled' | 'slip';
   /** The stay intent (ms), extended by naps up there (never beyond the hard cap). */
   plannedMs: number;
   /** Time asleep on the stay so far (naps extend the plan). */
@@ -280,10 +285,34 @@ export interface StayTrack {
   failures: number[];
   /** The leave under way (its kind once it is known), or null. */
   leaving: LeaveKind | null;
+  /** The chosen option, until the walking:leave activity starts it (the transition may take a stepping stone). */
+  pendingLeave: LeaveOption | null;
   /** The Mover carries out the leave (Mover.leaveBy); the activity only waits for it. */
   byMover: boolean;
+  /** How a covered or vanished support was left (ADR 0003 §3). */
+  bailOut: BailOutKind | null;
+  /** A resumed stay (ADR 0003 §2.4). */
+  resumed: boolean;
   /** 'stay overdue' was counted for this stay. */
   overdue: boolean;
+}
+
+/** v1.2: the screen-edge visit under way (ADR 0003 §6.1); one EdgeVisitRecord when the cat is off the wall. */
+export interface EdgeVisit {
+  target: EdgeTarget | null;
+  /** The activity that went there (null: a bail-out put the cat on the edge). */
+  act: Activity | null;
+  startedAt: number;
+  /** Clinging to the edge since (null: still on its way). */
+  mountedAt: number | null;
+  holdMs: number;
+  /** When the hold began and when it ends (null: not yet). */
+  holdFrom: number | null;
+  holdUntil: number | null;
+  /** Leaving the wall: climbing down, or the leave option taken. */
+  leaving: LeaveOption['kind'] | 'retreat' | null;
+  /** How the visit is going to be recorded when it ends. */
+  side: 'left' | 'right';
 }
 
 /** v1.2: the hunt being played (ADR 0003 §4.2); one HuntRecord when it ends. */
@@ -497,6 +526,24 @@ export abstract class SimCore {
   protected lastSoundAt = -Infinity;
   /** Render hint: 0..1 hardness of the landing being played. */
   protected impactHint = 0;
+  /** A cut-short stay's surface and the time it has left (ADR 0003 §2.4). */
+  protected resumeToken: { surfaceId: string; place: string | null; remainingMs: number; until: number } | null = null;
+  /** env.edgeBands present and the opt-outs allow edges: what the Mover was last told (fail closed). */
+  protected edgesOn = false;
+  /** The H_safe the Mover was last given (re-sent when energy moved it noticeably). */
+  protected safeDipNow = 0;
+  protected edgePlan: EdgeTarget | null = null;
+  protected edgeVisit: EdgeVisit | null = null;
+  protected nextEdgeAt = -Infinity;
+  protected nextHideAt = -Infinity;
+  protected readonly edgePeeks: number[] = [];
+  /** Recent cursor positions (the cursor moving toward a band within the last second). */
+  protected readonly cursorSamples: Array<{ at: number; x: number }> = [];
+  /** Slips (ADR 0003 §6.6): the armed slip's risk, the climb it was drawn for, the scramble's clip, a retry after a miss. */
+  protected slipRisk = 0;
+  protected slipDrawnOnWall = false;
+  protected slipClipUntil = -Infinity;
+  protected slipRetry: { at: number; state: BehaviorState; variant: Variant | null; target: Point | null; windowId: string | null } | null = null;
 
   constructor(opts: CatSimOptions, hooks: SimHooks = {}) {
     this.hooks = hooks;
@@ -566,6 +613,8 @@ export abstract class SimCore {
   protected moverConfig(): MoverConfig {
     const b = this.settings.behavior;
     const t = this.cat.traits;
+    const limits = jumpDownLimitsFor(b.heights, t.confidence, this.cat.stats.energy);
+    this.safeDipNow = limits.safeDip;
     return {
       size: this.settings.appearance.size,
       movementSpeed: b.movementSpeed,
@@ -577,7 +626,30 @@ export abstract class SimCore {
       // A confident cat jumps more readily; an energetic, curious one minds climbing less.
       jumpEffort: 1.3 - 0.6 * clamp(t.confidence, 0, 1),
       climbEffort: 1.4 - 0.5 * clamp(t.energyLevel, 0, 1) - 0.2 * clamp(t.curiosity, 0, 1),
+      // v1.2 (ADR 0003 §6): screen edges only with the host's bands (the click guard, fail closed).
+      screenEdges: this.edgesOn,
+      jumpDownSafeDip: limits.safeDip,
+      jumpDownMaxDip: limits.maxDip,
+      narrowLedges: true,
+      bailOut: true,
+      wallJumps: subBehaviorAllowed('windowWallJump', this.disabled),
     };
+  }
+
+  /** Screen edges follow env.edgeBands and the opt-outs: a host without the guard never gets edge climbs. */
+  protected syncEdges(env: SimEnv): void {
+    const on = Array.isArray(env.edgeBands) && this.subAllowed('screenEdgeClimb');
+    if (on === this.edgesOn) return;
+    this.edgesOn = on;
+    if (this.mover.setConfig(this.moverConfig())) this.snapNext = true;
+  }
+
+  /** The jump-down limits follow the energy (ADR 0003 §6.3): re-sent when H_safe moved noticeably. */
+  protected syncJumpLimits(): void {
+    const b = this.settings.behavior;
+    const limits = jumpDownLimitsFor(b.heights, this.cat.traits.confidence, this.cat.stats.energy);
+    if (Math.abs(limits.safeDip - this.safeDipNow) < 20) return;
+    if (this.mover.setConfig(this.moverConfig())) this.snapNext = true;
   }
 
   /** Indexes this tick's surfaces (bounded, malformed entries skipped). */
@@ -1045,6 +1117,15 @@ export abstract class SimCore {
     if (!this.budgetAvailable()) return;
     // On a wall the cat finishes the climb before deciding anything new.
     if (this.mover.onWall) return;
+    // v1.2 (ADR 0003 §6.6): the retry after a missed take-off.
+    const retry = this.slipRetry;
+    if (retry && this.now >= retry.at) {
+      this.slipRetry = null;
+      if (this.request(retry.state, 'autonomous', { variant: retry.variant, target: retry.target, windowId: retry.windowId }) === 'ok') {
+        this.recordDecision(retry.state, retry.variant, 'autonomous');
+        return;
+      }
+    }
     // v1.2 (ADR 0003 §1.3-§1.5): every feasible candidate scored, softmax at τ = 0.5.
     const view = this.decisionView();
     const scored = scoreAll(view);
@@ -1128,7 +1209,6 @@ export abstract class SimCore {
     this.hooks.onHunt?.(r);
   }
 
-  /** v1.2 slip entry point (not called before the behaviour package lands). */
   protected emitSlip(r: SlipRecord): void {
     this.profile.slip(r);
     this.hooks.onSlip?.(r);
@@ -1285,10 +1365,15 @@ export abstract class SimCore {
 
   protected onMoverStep(step: MoverStep): void {
     if (step.supportLost) this.lastLossReason = step.supportLost.reason;
+    if (step.supportLost?.reason === 'disabled' && this.stay?.surfaceId === step.supportLost.surfaceId) this.stay.via = 'disabled';
+    if (step.bailedOut) this.onBailedOut(step);
     if (step.crouchStarted) {
-      if (this.request('jumping', 'physical', { suspend: true }) === 'ok') this.fallReason = 'jump';
-      else this.mover.cancelCrouch();
+      if (this.request('jumping', 'physical', { suspend: true }) === 'ok') {
+        this.fallReason = 'jump';
+        this.drawSlip();
+      } else this.mover.cancelCrouch();
     }
+    if (step.slipped) this.onSlipped(step.slipped);
     if (step.steppedOff) {
       this.fallReason = 'step';
       this.request('falling', 'physical', { suspend: true });
@@ -1312,6 +1397,72 @@ export abstract class SimCore {
       return;
     }
     if (!PHYSICAL_STATES.has(this.act.state)) this.act.goalStatus = step.goal;
+  }
+
+  /**
+   * The support was covered or vanished and the Mover left it with a controlled bail-out (ADR 0003
+   * §3): calm (an ear flick, a glance at what covered it, no startle); the stay ends covered or gone.
+   */
+  protected onBailedOut(step: MoverStep): void {
+    const st = this.stay;
+    const m = this.mover;
+    if (st && step.supportLost?.surfaceId === st.surfaceId) {
+      st.via = step.supportLost.reason === 'gone' ? 'gone' : 'covered';
+      st.bailOut = m.bailOutKind;
+    }
+    if (this.mode === 'normal') {
+      this.react('earFlick');
+      const fg = this.env?.foreground;
+      if (fg && isFiniteRect(fg.rect) && !fg.minimized) this.setGlance({ x: fg.rect.x + fg.rect.width / 2, y: fg.rect.y + fg.rect.height / 2 }, 1200);
+    }
+    this.fallReason = 'jump';
+    if (m.airborne && !PHYSICAL_STATES.has(this.act.state)) this.enterPlannedFlight();
+  }
+
+  /**
+   * A planned flight the Mover started without a crouch report (a bail-out, a wall jump): 'jumping'
+   * where the state table allows it, else 'falling'; either way the interrupted activity resumes.
+   */
+  protected enterPlannedFlight(): void {
+    this.request(canTransition(this.act.state, 'jumping') ? 'jumping' : 'falling', 'physical', { suspend: true });
+  }
+
+  /** Draws a deliberate slip for the take-off being prepared (ADR 0003 §6.6; the sub-act 'slip'). */
+  protected drawSlip(): void {
+    if (!this.subAllowed('slip')) return;
+    const m = this.mover;
+    const risk = clamp(m.nextLegRisk, 0, 1);
+    const conf = clamp(this.cat.traits.confidence, 0, 1);
+    const tired = 1 - clamp(this.cat.stats.energy, 0, 1);
+    const p = Math.min(0.2, (0.03 + 0.15 * risk) * (1.3 - conf) * (0.7 + 0.6 * tired));
+    if (!chance(this.random, p)) return;
+    const kind: SlipKind = chance(this.random, 0.7) ? 'scramble' : 'miss';
+    if (m.armSlip(kind)) this.slipRisk = risk;
+  }
+
+  /** A pull-up onto a strip or a wall jump may slip too: drawn once per climb, when one is prepared. */
+  protected drawClimbSlip(): void {
+    const m = this.mover;
+    if (!m.onWall) {
+      this.slipDrawnOnWall = false;
+      return;
+    }
+    if (this.slipDrawnOnWall || m.climbPhase !== 'climb' || !(m.nextLegRisk > 0)) return;
+    this.slipDrawnOnWall = true;
+    this.drawSlip();
+  }
+
+  /** The armed slip happened: a scramble plays its clip, a miss slides off to the support below. */
+  protected onSlipped(kind: SlipKind): void {
+    this.emitSlip({ at: this.now, kind, risk: this.slipRisk });
+    if (kind === 'scramble') {
+      this.slipClipUntil = this.now + MOVEMENT.slipScrambleMs;
+      this.react('earFlick');
+      return;
+    }
+    if (this.stay) this.stay.via = 'slip';
+    this.fallReason = 'jump';
+    if (this.mover.airborne && this.act.state !== 'jumping') this.request('falling', 'physical', { suspend: true });
   }
 
   /**
@@ -1360,8 +1511,14 @@ export abstract class SimCore {
       this.fallReason ??= 'drop';
       this.request(m.airborne ? 'falling' : 'landing', 'physical', { landing: null });
     } else if (m.airborne && !PHYSICAL_STATES.has(s)) {
-      this.fallReason ??= 'perch';
-      this.request('falling', 'physical');
+      // A planned take-off from a wall (a wall jump) reports no crouch on the ground: not a fall.
+      if (m.jumpKind !== null) {
+        this.fallReason ??= 'jump';
+        this.enterPlannedFlight();
+      } else {
+        this.fallReason ??= 'perch';
+        this.request('falling', 'physical');
+      }
     } else if (s === 'jumping' && m.onWall && m.climbPhase !== 'leap') {
       // Clinging to a side after a leap whose catch was not reported this tick.
       this.resumeAfterLeap();

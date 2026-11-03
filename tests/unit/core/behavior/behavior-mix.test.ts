@@ -129,7 +129,8 @@ describe('behaviour mix with v1.1 surfaces (default settings)', () => {
       `surface mix: on surfaces ${(100 * surfaceShare).toFixed(1)} % of the time ${JSON.stringify(byKind)} (%); per hour: ${perHour(taskbarShows).toFixed(1)} taskbar shows, ${perHour(taskbarReactions).toFixed(1)} taskbar reactions, ${perHour(tabReactions).toFixed(1)} tab reactions, ${perHour(climbs).toFixed(1)} climbs, ${perHour(jumps).toFixed(1)} jumps; calm ${(100 * calm / ticks).toFixed(1)} %`,
     );
     expect(calm / ticks).toBeGreaterThan(0.75);
-    expect(surfaceShare).toBeLessThan(0.45);
+    // ADR 0003 B2 x B3: long stays on window tops and strips are the point of v1.2 (the v1.1.1 ceiling was 45 %).
+    expect(surfaceShare).toBeLessThan(0.8);
     // Climbing happens, but only now and then (cooldown 1.5-4 min, low utility for a default cat).
     expect(climbs).toBeGreaterThan(0);
     expect(perHour(climbs)).toBeLessThanOrEqual(12);

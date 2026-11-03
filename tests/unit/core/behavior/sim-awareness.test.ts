@@ -168,21 +168,45 @@ describe('F9: switches turn their reactions fully off', () => {
     expect(scoreOf(decisionView({ behavior, typing: true }), 'watchingUser')).toBeCloseTo(scoreOf(decisionView({ behavior, typing: false }), 'watchingUser'), 9);
   });
 
-  it('"React to typing" off: the cat still plays with the pointer while you type', () => {
+  // ADR 0003 §1.1, §4.3, B6: the setting governs the typing reactions only; hunts read the raw signal whatever it says.
+  it('"React to typing" off: no typing reactions, still no hunt while you type; it plays once you stopped', () => {
     let chased = false;
+    let activeTyping = 0;
+    let activeCalmed = 0;
     for (const seed of [1, 2, 3, 4, 5, 6]) {
-      const h = new Harness({ seed, settings: settingsWith({ behavior: { cursorPlay: 1, reactToTyping: false } }) });
-      h.env.typing = true;
-      h.env.typingIntensity = 0.9;
-      h.run(WAKE_MS);
-      const x0 = h.last!.x;
-      h.run(30_000, 33, (hh, i) => {
-        if (hh.last!.state === 'chasingCursor') chased = true;
+      const off = new Harness({ seed, settings: settingsWith({ behavior: { cursorPlay: 1, reactToTyping: false } }) });
+      off.env.typing = true;
+      off.env.typingIntensity = 0.9;
+      off.run(WAKE_MS);
+      const x0 = off.last!.x;
+      const play = (hh: Harness, i: number): SimEvent[] => {
         hh.env.cursor = { x: x0 + 300 * Math.sin(i / 10), y: 1000, speed: 1200 };
         return i % 60 === 0 ? [{ type: 'cursor.flick', speed: 3000, at: { x: x0 + 200, y: 1000 } }] : [];
+      };
+      off.run(30_000, 33, (hh, i) => {
+        expect(hh.last!.state).not.toBe('chasingCursor');
+        return play(hh, i);
       });
+      off.env.typing = false;
+      off.env.typingIntensity = 0;
+      off.run(60_000, 33, (hh, i) => {
+        if (hh.last!.state === 'chasingCursor') chased = true;
+        return play(hh, i);
+      });
+      // The typing reaction (calming down) is what the setting switches off.
+      const quiet = new Harness({ seed, settings: settingsWith({ behavior: { reactToTyping: false } }) });
+      const calmed = new Harness({ seed, settings: settingsWith({ behavior: { reactToTyping: true } }) });
+      for (const h of [quiet, calmed]) {
+        h.env.typing = true;
+        h.env.typingIntensity = 0.9;
+      }
+      quiet.run(30 * MIN, 100);
+      calmed.run(30 * MIN, 100);
+      activeTyping += quiet.sim.behaviorProfile().timeMs.active;
+      activeCalmed += calmed.sim.behaviorProfile().timeMs.active;
     }
     expect(chased).toBe(true);
+    expect(activeCalmed).toBeLessThan(activeTyping);
   });
 
   it('"React to windows" off: fast app switching does not make it stop and watch', () => {

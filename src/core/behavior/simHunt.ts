@@ -43,6 +43,12 @@ import { activityClassOf } from '../../shared/behaviorProfile';
 
 /** Mischief swat: a cursor passing this close (body widths) while the cat sits. */
 const MISCHIEF_SWAT_BW = 1;
+/** In the petting zone below this speed (DIP/s) the cursor is aiming at the cat. */
+const PETTING_AIM_DIP_S = 300;
+/** However fast, this many evaluations (1.5 s at 4 Hz) in the petting zone end a hunt. */
+const PETTING_ZONE_MAX_EVALS = 6;
+/** Added to the hunt threshold with video or fast app switching in front. */
+const QUIET_CONTEXT_THETA = 0.2;
 /** A cursor counts as moving above this speed, DIP/s. */
 const MOVING_DIP_S = 30;
 
@@ -182,7 +188,7 @@ export abstract class SimHunt extends SimStay {
     }
     const cursorInFg = this.cursorInForeground(p);
     d.huntDrive = stepHuntDrive(d.huntDrive, gate === 'typing' || gate === 'button' ? 0 : qHat, huntGain(H, this.cat.traits.playfulness, d.playNeed), huntBaseline(H), dtS, gateIn.pettingZone);
-    this.huntThetaNow = huntThreshold(H, d.mischief, b.workDisruption, cursorInFg);
+    this.huntThetaNow = huntThreshold(H, d.mischief, b.workDisruption, cursorInFg) + (this.quietContext() ? QUIET_CONTEXT_THETA : 0);
     // The cursor resting in the petting zone (not one passing through it) ends a running hunt.
     this.pettingZoneEvals = gate === 'petting' ? this.pettingZoneEvals + 1 : 0;
     if (run) {
@@ -190,12 +196,21 @@ export abstract class SimHunt extends SimStay {
       if (PHYSICAL_STATES.has(this.act.state)) return;
       if (gate === 'petting') {
         const petted = this.act.state === 'beingPetted' || this.now - this.lastPetEventAt < PETTING_HOLD_MS;
-        if (petted || this.pettingZoneEvals >= 2) this.interruptHunt('petting');
+        // A hand slowing down over the cat is aiming at it; prey darting past is not (and lingering ends it anyway).
+        const slow = !c || !Number.isFinite(c.speed) || c.speed / this.mover.scale < PETTING_AIM_DIP_S;
+        if (petted || (this.pettingZoneEvals >= 2 && slow) || this.pettingZoneEvals >= PETTING_ZONE_MAX_EVALS) this.interruptHunt('petting');
       } else if (gate !== null) this.interruptHunt(gate === 'button' && this.now - this.lastPressAt < 1000 ? 'click' : gate);
       return;
     }
     if (this.huntStartable()) this.startHunt();
     else this.checkMischiefSwat(p);
+  }
+
+  /** Video or fast app switching in front (ADR 0003 §1.4 C_c: every active candidate damped). */
+  protected quietContext(): boolean {
+    const fg = this.env?.foreground;
+    const media = fg !== null && fg !== undefined && !fg.minimized && (fg.category === 'video' || fg.category === 'game' || fg.category === 'media');
+    return media || this.screenIsVideo() || this.now < this.busyUntil;
   }
 
   protected cursorInForeground(p: Point | null): boolean {
@@ -235,8 +250,14 @@ export abstract class SimHunt extends SimStay {
     bumpCounter(this.cat.memory, 'hunts');
     bumpCounter(this.cat.memory, 'chasesStarted');
     this.phase(a, 'notice', range(this.random, 400, 1200));
-    // The activity's own dwell never ends a hunt: its phases, budget and gates do.
-    a.dwellMs = 10 * 60_000;
+    // The hunt's phases, budget and gates end it (self-timed); its dwell is one cycle's budget (§4.2).
+    a.dwellMs = this.huntCycleBudgetMs();
+  }
+
+  /** Budget of one stalk-to-bat cycle: 1.5 x chaseDurationSec (ADR 0003 §4.2). */
+  protected huntCycleBudgetMs(): number {
+    const sec = this.settings.behavior.chaseDurationSec;
+    return 1.5 * clamp(Number.isFinite(sec) ? sec : 4.5, 1, 20) * 1000;
   }
 
   /** The outcome so far. */
@@ -310,8 +331,7 @@ export abstract class SimHunt extends SimStay {
     }
     // Budget (ADR 0003 §4.2): each stalk-to-bat cycle ends at 1.5 x chaseDurationSec. Past it the
     // cycle closes at once: a stalk turns into the crouch, a crouch into its pounce, a bat ends.
-    const budget = 1.5 * clamp(Number.isFinite(this.settings.behavior.chaseDurationSec) ? this.settings.behavior.chaseDurationSec : 4.5, 1, 20) * 1000;
-    const over = this.now - run.cycleStartedAt > budget;
+    const over = this.now - run.cycleStartedAt > this.huntCycleBudgetMs();
     if (over && a.phase === 'stalk') {
       this.stop();
       this.phase(a, 'crouch', 600);
@@ -387,7 +407,13 @@ export abstract class SimHunt extends SimStay {
       case 'look':
         this.stop();
         m.faceToward(cur.x, this.now);
-        if (this.phaseElapsed(a)) this.nextCycle(a, cur);
+        if (!this.phaseElapsed(a)) return;
+        // A cycle lasts as long as its budget allows (chaseDurationSec): a prey still moving is stalked on.
+        if (!over && this.cursorIdle() < 1000 && this.huntGateNow === null) {
+          run.pauseFromX = m.x;
+          run.pauseUntil = -Infinity;
+          this.phase(a, 'stalk');
+        } else this.nextCycle(a, cur);
         return;
       default:
         this.startCycle(a, cur);

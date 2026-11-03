@@ -71,7 +71,8 @@ describe('window stimuli', () => {
     expect(moving).toBeLessThan(0.05);
   });
 
-  it('falls and startles when the window it sits on is closed', () => {
+  // ADR 0003 §3: a vanished support is a calm controlled bail-out in v1.2, no fall and no start.
+  it('bails out calmly when the window it sits on is closed', () => {
     const h = new Harness({ seed: 11 });
     h.run(2000);
     const rect = { x: Math.max(0, h.last!.x - 300), y: 800, width: 600, height: 240 };
@@ -80,9 +81,9 @@ describe('window stimuli', () => {
     expect(h.runUntil((o) => onWindowTop(o.support) && o.state === 'idle', 30_000)).toBe(true);
     h.env.windows = {};
     const states = collect(h, 4000);
-    expect(states).toContain('falling');
+    expect(states.some((s) => s === 'jumping' || s === 'falling')).toBe(true);
     expect(states).toContain('landing');
-    expect(states).toContain('startled');
+    expect(states).not.toContain('startled');
     expect(h.last!.support.kind).toBe('floor');
   });
 });
@@ -94,7 +95,8 @@ describe('cursor and pointer', () => {
       const h = new Harness({ seed, settings: settingsWith({ behavior: { cursorPlay: 1 } }) });
       h.run(WAKE_MS);
       const x0 = h.last!.x;
-      const states = collect(h, 15_000, (hh, i) => {
+      // ADR 0003 §4.2: a hunt runs up to 3 stalk-to-bat cycles of 1.5 x chaseDurationSec, so it ends within 45 s.
+      const states = collect(h, 45_000, (hh, i) => {
         hh.env.cursor = { x: x0 + 300 * Math.sin(i / 10), y: 1000, speed: 1200 };
         return i % 60 === 0 ? [{ type: 'cursor.flick', speed: 3000, at: { x: x0 + 200, y: 1000 } }] : [];
       });

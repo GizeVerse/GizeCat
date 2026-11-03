@@ -59,7 +59,8 @@ describe('petting a reacting cat', () => {
       reactions++;
       const reaction = h.last!.state;
       const enteredAt = h.transitions.filter((t) => t.to === reaction).at(-1)!.at;
-      h.run(4000, 33, (hh, i) => (i % 3 === 0 ? [{ type: 'pointer.pet', at: catPoint(hh.last), strength: 1 }] : []));
+      // ADR 0003 §5.1: a grumpy stare lasts up to 8 s, so the strokes go on long enough to see it end.
+      h.run(10_000, 33, (hh, i) => (i % 3 === 0 ? [{ type: 'pointer.pet', at: catPoint(hh.last), strength: 1 }] : []));
       const left = h.transitions.find((t) => t.from === reaction && t.at >= enteredAt)!;
       expect(left).toBeDefined();
       expect(left.fromDone).toBe(true);

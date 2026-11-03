@@ -7,7 +7,7 @@ import { userIdleForSleep } from './decide';
 import { boredomDisplay, DRIVE_STEP_MS, stepDrives, zEff } from './drives';
 import { decayRate, learnSpot } from './memory';
 import type { RhythmContext } from './rhythm';
-import { ACTIVE_STATES, ASLEEP_STATES, CALM_STATES, PHYSICAL_STATES } from './states';
+import { ACTIVE_STATES, ASLEEP_STATES, CALM_STATES, PHYSICAL_STATES, STATE_SPECS } from './states';
 import { SimCore } from './simCore';
 import { PET_RATE_TAU_MS, PLACE_RECENT_MS, SPOT_LEARN_MIN_MS, SPOT_FLUSH_MS } from './simCore';
 
@@ -76,6 +76,7 @@ export abstract class SimDrives extends SimCore {
     // v1.1 boredom stays a display value (a 1.1.1 downgrade reads a sensible number).
     this.cat.stats.boredom = boredomDisplay(d);
     if (this.mode === 'normal' && this.rhythm.update(this.random, this.now, this.rhythmContext())) this.onEpisodeStart();
+    this.syncJumpLimits();
   }
 
   /** A novel reachable elevated target exists (the explore need grows x1, else x0.3). */
@@ -86,8 +87,10 @@ export abstract class SimDrives extends SimCore {
       const at = this.placeVisits.get(`w:${owner}`);
       return at === undefined || this.now - at > PLACE_RECENT_MS;
     };
-    return (sc.perch !== null && fresh(sc.perch.windowId)) || (sc.climb?.dir === 'up' && fresh(sc.climb.ownerId)) || (sc.strip !== null && fresh(sc.strip.ownerId));
+    return (sc.perch !== null && fresh(sc.perch.windowId)) || (sc.climb?.dir === 'up' && fresh(sc.climb.ownerId)) || (sc.strip !== null && fresh(sc.strip.ownerId)) || this.clearEdgeBand();
   }
+
+  protected abstract clearEdgeBand(): boolean;
 
   protected rhythmContext(): RhythmContext {
     const d = this.cat.drives;
@@ -125,7 +128,7 @@ export abstract class SimDrives extends SimCore {
     const a = this.act;
     if (this.rhythm.episode !== 'active' || a.done || a.cause !== 'autonomous') return;
     if (activityClassOf(a.state, a.variant) !== 'calm') return;
-    a.dwellMs = Math.min(a.dwellMs, this.now - a.startedAt);
+    a.dwellMs = Math.min(a.dwellMs, Math.max(this.now - a.startedAt, STATE_SPECS[a.state].dwellMs[0]));
   }
 
   /** Contiguous rest or sleep (a stretch after >= 60 s of it). */
@@ -167,7 +170,7 @@ export abstract class SimDrives extends SimCore {
       return;
     }
     // While the user types the cat settles down instead of running around.
-    if (this.typing && ACTIVE_STATES.has(s) && a.cause !== 'command' && a.cause !== 'interaction' && this.now - a.startedAt > 1500 && !a.done) {
+    if (this.typing && ACTIVE_STATES.has(s) && a.cause !== 'command' && a.cause !== 'interaction' && this.now - a.startedAt > 1500 && !a.done && !(s === 'walking' && (a.variant === 'leave' || a.variant === 'screenEdge'))) {
       this.finish();
     }
   }

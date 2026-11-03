@@ -196,7 +196,8 @@ describe('behaviour profile contract', () => {
     expect(total).toBeLessThan(105_000);
     expect(decisions.length).toBeGreaterThan(0);
     expect(p.decisions).toBe(decisions.length);
-    expect(decisions.every((d) => d.cause === 'autonomous' && d.episode === 'none')).toBe(true);
+    // BEH switched the rhythm on (ADR 0003 §1.6): decisions carry the episode they were taken in.
+    expect(decisions.every((d) => d.cause === 'autonomous' && (d.episode === 'active' || d.episode === 'calm'))).toBe(true);
     expect(falls.map((f) => f.cause)).toContain('thrown');
     expect(p.falls.byCause.thrown).toBeGreaterThanOrEqual(1);
   });

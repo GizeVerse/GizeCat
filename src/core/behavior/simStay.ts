@@ -7,7 +7,7 @@ import type { DecisionTarget, TargetAvailability } from '../../shared/surfaceDia
 import type { Pace } from '../movement';
 import { MOVEMENT } from '../movement';
 import type { Activity } from './activity';
-import type { StayView } from './decide';
+import type { EdgeTarget, StayView } from './decide';
 import { applyImpulse } from './drives';
 import { arrivalRouteOf } from './profile';
 import { chance, range } from './random';
@@ -18,15 +18,31 @@ import {
   LEAVE_FAILURE_WINDOW_MS,
   LEAVE_FAILURES_FOR_EMERGENCY,
   leaveBackoffMs,
-  leaveKindWeight,
   PATROL_MIN_GAP_MS,
   STAY_HARD_CAP_MS,
   STAY_OVERDUE_MS,
+  STAY_RESUME_MIN_MS,
+  STAY_RESUME_WINDOW_MS,
 } from './stay';
-import { ASLEEP_STATES, PHYSICAL_STATES } from './states';
+import { ASLEEP_STATES, PHYSICAL_STATES, STATE_SPECS } from './states';
 import { SimDrives } from './simDrives';
-import type { StayTrack, TargetScan } from './simCore';
-import { EXCURSION_RETRY_MS, APPROACH_MIN_MS, APPROACH_MAX_MS, PERCH_CANDIDATES, STRIP_CANDIDATES, URGE_SCAN_MS, TOP_MIN_STAY_MS, TOP_PATROL_BL, TOP_MAX_EXPLORE_MS, isElevatedKind } from './simCore';
+import type { EdgeVisit, StayTrack, TargetScan } from './simCore';
+import { EXCURSION_RETRY_MS, APPROACH_MIN_MS, APPROACH_MAX_MS, PERCH_CANDIDATES, STRIP_CANDIDATES, TRAVEL_TIMEOUT_MS, URGE_SCAN_MS, TOP_PATROL_BL, isElevatedKind } from './simCore';
+
+/** ADR 0003 §6.1(b): how far the cursor must be from the band to start a climb, or a peek, body widths. */
+const EDGE_START_CURSOR_BW = 3;
+const EDGE_PEEK_CURSOR_BW = 6;
+/** The cat climbs down when the cursor comes this close, body widths. */
+const EDGE_CLIMB_DOWN_CURSOR_BW = 2;
+/** A peek: at most this high, at most this many per hour, a hold short enough for <= 8 s in all. */
+const EDGE_PEEK_BH = 2;
+const EDGE_PEEKS_PER_HOUR = 4;
+const EDGE_PEEK_HOLD_MS: readonly [number, number] = [1500, 3000];
+/** A full climb's hold at the top, and the least clear height worth a full climb, body heights. */
+const EDGE_HOLD_MS: readonly [number, number] = [3000, 12_000];
+const EDGE_MIN_FULL_BH = 2;
+/** Between two visits. */
+const EDGE_COOLDOWN_MS: readonly [number, number] = [5 * 60_000, 10 * 60_000];
 
 export abstract class SimStay extends SimDrives {
   /**
@@ -43,7 +59,9 @@ export abstract class SimStay extends SimDrives {
     const st = this.stay;
     if (st) {
       if (on && on.surfaceId === st.surfaceId) {
+        // Back on its own surface (a hop, a bail-out onto the visible stretch of the same edge).
         st.via = 'none';
+        st.bailOut = null;
         st.lastOnAt = this.now;
       } else if (attach !== 'ground') {
         if (attach === 'held') st.via = 'held';
@@ -78,14 +96,27 @@ export abstract class SimStay extends SimDrives {
           case 'gone':
             endReason = 'gone';
             break;
+          case 'disabled':
+            endReason = 'disabled';
+            break;
+          case 'slip':
+            endReason = 'slip';
+            break;
           case 'fall':
             endReason = 'other';
             break;
         }
+        // The leave intent knows which way it took (a climb-then-leap also starts on the wall).
+        if (endReason === 'leave' && st.leaving !== null) leaveKind = st.leaving;
         // A way off that was not the leave intent is an imposed end (right-censored in B3).
         if (endReason === 'leave' && st.leaving === null) {
           const cause = this.act.cause;
-          endReason = cause === 'command' ? 'called' : cause === 'stimulus' || cause === 'interaction' ? 'stimulus' : 'other';
+          endReason = cause === 'command' ? 'called' : cause === 'stimulus' || cause === 'interaction' ? 'stimulus' : this.onFullscreenDisplay() ? 'fullscreen' : 'other';
+        }
+        // A covered or vanished stay may resume when its surface comes back (ADR 0003 §2.4).
+        if (endReason === 'covered' || endReason === 'gone') {
+          const left = st.plannedMs - Math.max(0, st.lastOnAt - st.since);
+          this.resumeToken = { surfaceId: st.surfaceId, place: st.ownerId ? `w:${st.ownerId}` : null, remainingMs: Math.max(STAY_RESUME_MIN_MS, left), until: this.now + STAY_RESUME_WINDOW_MS };
         }
         if (endReason === 'leave' && leaveKind) {
           this.leaveHistory.push(leaveKind);
@@ -100,6 +131,7 @@ export abstract class SimStay extends SimDrives {
           dwellMs: Math.max(0, st.lastOnAt - st.since),
           endReason,
           leaveKind: endReason === 'leave' ? leaveKind : null,
+          ...(endReason === 'covered' || endReason === 'gone' ? { bailOut: st.bailOut } : {}),
         });
         this.stay = null;
       }
@@ -118,10 +150,15 @@ export abstract class SimStay extends SimDrives {
         typing: this.typingRaw,
       });
       const ownerId = on.ownerId ?? null;
-      this.stay = { kind, surfaceId: on.surfaceId, ownerId, since: this.now, lastOnAt: this.now, arrivedBy, via: 'none', plannedMs: intent.plannedMs, napMs: 0, nextLeaveAt: -Infinity, failures: [], leaving: null, byMover: false, overdue: false };
+      // The resume token (ADR 0003 §2.4): at least the time the cut-short stay had left.
+      const tok = this.resumeToken && this.now <= this.resumeToken.until ? this.resumeToken : null;
+      const resumed = tok !== null && (tok.surfaceId === on.surfaceId || (ownerId !== null && tok.place === `w:${ownerId}`));
+      const plannedMs = resumed ? Math.min(STAY_HARD_CAP_MS, Math.max(intent.plannedMs, tok.remainingMs)) : intent.plannedMs;
+      if (resumed) this.resumeToken = null;
+      this.stay = { kind, surfaceId: on.surfaceId, ownerId, since: this.now, lastOnAt: this.now, arrivedBy, via: 'none', plannedMs, napMs: 0, nextLeaveAt: -Infinity, failures: [], leaving: null, pendingLeave: null, byMover: false, bailOut: null, resumed, overdue: false };
       if (ownerId) this.placeVisits.set(`w:${ownerId}`, this.now);
       applyImpulse(this.cat.drives, 'arrivedUp');
-      this.emitExcursion({ phase: 'arrive', at: this.now, surfaceKind: kind, arrivedBy, plannedMs: Math.round(intent.plannedMs), dwellMs: 0, endReason: null, leaveKind: null });
+      this.emitExcursion({ phase: 'arrive', at: this.now, surfaceKind: kind, arrivedBy, plannedMs: Math.round(plannedMs), dwellMs: 0, endReason: null, leaveKind: null, ...(resumed ? { resumed: true } : {}) });
     }
     this.prevAttach = attach;
     if (attach === 'ground' || attach === 'held') this.lastFlightReason = null;
@@ -137,9 +174,8 @@ export abstract class SimStay extends SimDrives {
   /**
    * The leave intent (ADR 0003 §2.3): once the stay's planned time is up (or its 30 min hard cap),
    * one decision over the Mover's leave options; a failed leave is retried after 2 -> 4 -> 8 s,
-   * after three failures in 30 s the emergency option. Deferred 10-20 s while being petted.
-   * Until the Mover offers leave options (BEH-b, wave 2) the cat leaves by the v1.1.1 descent
-   * (a climb down the window side, else down to the floor below by the planner's own route).
+   * after three failures in 30 s the emergency option. Deferred 10-20 s while being petted, and
+   * while the cursor hotspot is right at the cat (no take-off in the hold-still zone).
    */
   protected updateStay(): void {
     const st = this.stay;
@@ -154,8 +190,9 @@ export abstract class SimStay extends SimDrives {
     if (st.leaving !== null) {
       // Still up there with the leave no longer under way: it failed (retry with the backoff).
       const a = this.act;
-      if (PHYSICAL_STATES.has(a.state) || (a.state === 'walking' && (a.variant === 'leave' || a.variant === 'climb'))) return;
+      if (PHYSICAL_STATES.has(a.state) || (a.state === 'walking' && a.variant === 'leave') || this.pending?.init.variant === 'leave') return;
       st.leaving = null;
+      st.pendingLeave = null;
       st.byMover = false;
       st.failures = st.failures.filter((t) => t > this.now - LEAVE_FAILURE_WINDOW_MS);
       st.failures.push(this.now);
@@ -171,6 +208,9 @@ export abstract class SimStay extends SimDrives {
       st.nextLeaveAt = this.now + range(this.random, LEAVE_DEFER_PETTED_MS[0], LEAVE_DEFER_PETTED_MS[1]);
       return;
     }
+    if (this.holdingStill()) return;
+    // Like any autonomous decision: only once the running activity is done or past its minimum dwell.
+    if (!this.act.done && this.now - this.act.startedAt < STATE_SPECS[s].dwellMs[0]) return;
     const a = this.act;
     if (PHYSICAL_STATES.has(s) || a.cause === 'command' || a.cause === 'interaction' || s === 'startled' || s === 'annoyed' || s === 'hiding' || this.mover.onWall) return;
     if (!this.budgetAvailable()) return;
@@ -181,42 +221,45 @@ export abstract class SimStay extends SimDrives {
     st.nextLeaveAt = this.now + leaveBackoffMs(st.failures.length);
   }
 
-  /** One leave attempt: the scored leave options, or (none offered) the v1.1.1 descent. */
+  /** One leave attempt: the single decision over the Mover's leave options (ADR 0003 §2.3); the activity runs it. */
   protected leaveStay(st: StayTrack): boolean {
-    const m = this.mover;
     const t = this.cat.traits;
-    const opts = m.leaveOptions();
     const emergencyOnly = st.failures.filter((x) => x > this.now - LEAVE_FAILURE_WINDOW_MS).length >= LEAVE_FAILURES_FOR_EMERGENCY;
-    if (opts.length > 0) {
-      const choice = chooseLeave(
-        this.random,
-        opts,
-        { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw, disabled: this.disabled },
-        this.leaveHistory,
-        emergencyOnly,
-      );
-      if (!choice) return false;
-      if (this.request('walking', 'autonomous', { variant: 'leave', target: choice.target }) !== 'ok') return false;
-      if (!m.leaveBy(choice, 'walk')) {
-        this.act.done = true;
-        return false;
-      }
-      st.leaving = choice.kind;
-      st.byMover = true;
-      this.recordDecision('walking', 'leave', 'leave');
-      return true;
+    const choice = chooseLeave(
+      this.random,
+      this.mover.leaveOptions(),
+      { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw, disabled: this.disabled },
+      this.leaveHistory,
+      emergencyOnly,
+    );
+    if (!choice) return false;
+    st.pendingLeave = choice;
+    st.leaving = choice.kind;
+    if (this.request('walking', 'autonomous', { variant: 'leave', target: choice.target }) !== 'ok') {
+      st.pendingLeave = null;
+      st.leaving = null;
+      return false;
     }
-    // v1.1.1 descent while the Mover offers no leave options (stub Mover until BEH-b).
-    const climbDown = this.climbAllowed() ? m.climbOptions().find((o) => o.dir === 'down' && !this.excludedWindows.has(o.ownerId)) : undefined;
-    const climbW = climbDown ? leaveKindWeight({ kind: 'climbDown', impact: null }, { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw }) : 0;
-    const jumpW = leaveKindWeight({ kind: 'jumpDown', impact: 'medium' }, { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw });
-    const viaClimb = climbDown !== undefined && this.random() < climbW / (climbW + jumpW);
-    const fp = m.world.nearestFloorPoint({ x: m.x, y: m.y + 1 });
-    const target = viaClimb && climbDown ? { x: climbDown.target.x, y: climbDown.target.y } : { x: fp.x, y: fp.y };
-    if (this.request('walking', 'autonomous', { variant: viaClimb ? 'climb' : 'leave', target }) !== 'ok') return false;
-    st.leaving = viaClimb ? 'climbDown' : 'jumpDown';
-    this.recordDecision('walking', viaClimb ? 'climb' : 'leave', 'leave');
+    this.recordDecision('walking', 'leave', 'leave');
     return true;
+  }
+
+  /** The walking:leave activity: starts the chosen option, then waits until the cat is off the stay. */
+  protected updLeave(a: Activity): void {
+    const st = this.stay;
+    const m = this.mover;
+    if (!st) {
+      this.finish();
+      return;
+    }
+    if (st.pendingLeave) {
+      const o = st.pendingLeave;
+      st.pendingLeave = null;
+      if (m.leaveBy(o, 'walk')) st.byMover = true;
+      else this.finish();
+      return;
+    }
+    if ((!this.onStay() && m.grounded) || a.goalStatus === 'unreachable' || this.now - a.startedAt > TRAVEL_TIMEOUT_MS) this.finish();
   }
 
   /** What the decision sees of the stay (the on-surface plan's inputs), or null off a stay. */
@@ -285,7 +328,7 @@ export abstract class SimStay extends SimDrives {
   protected updEdge(a: Activity): void {
     const m = this.mover;
     const on = m.attachedSurface;
-    if (!a.windowId || !on || on.ownerId !== a.windowId || on.surfaceKind !== 'windowTop' || !m.grounded) {
+    if (!a.windowId || !on || on.ownerId !== a.windowId || !isElevatedKind(on.surfaceKind) || !m.grounded) {
       this.finish();
       return;
     }
@@ -295,7 +338,7 @@ export abstract class SimStay extends SimDrives {
         this.phase(a, 'look', range(this.random, 4000, 9000));
         return;
       }
-      this.goTo(a.target, 'slow', false);
+      this.goTo(a.target, 'slow', false, undefined, { surfaceId: on.surfaceId });
       return;
     }
     this.stop();
@@ -406,8 +449,8 @@ export abstract class SimStay extends SimDrives {
   }
 
   /**
-   * The nearest climb that can start from where the cat stands: up a window side (stepping or
-   * leaping onto it), or down from the top it is on once it has explored that top.
+   * The nearest climb up that can start from where the cat stands: a window side (stepping or
+   * leaping onto it). The way down is the stay's leave intent (ADR 0003 §2.4).
    */
   protected scanClimb(): { target: TargetScan['climb']; status: TargetAvailability } {
     const m = this.mover;
@@ -419,7 +462,7 @@ export abstract class SimStay extends SimDrives {
     let options = 0;
     let excluded = 0;
     for (const o of m.climbOptions()) {
-      if (o.dir === 'down' && !this.topExplored()) continue;
+      if (o.dir === 'down' || o.wallKind === 'screenEdge') continue;
       options++;
       if (this.excludedWindows.has(o.ownerId)) {
         excluded++;
@@ -556,26 +599,6 @@ export abstract class SimStay extends SimDrives {
     this.wasElevated = elevated;
   }
 
-  /** Up on a top, it has explored it (stayed a while and walked along it) and may head back down. */
-  protected topExplored(): boolean {
-    const v = this.topVisit;
-    if (!v) return true;
-    const stay = this.now - v.since;
-    if (stay >= TOP_MAX_EXPLORE_MS) return true;
-    if (stay < TOP_MIN_STAY_MS) return false;
-    if (v.walked >= TOP_PATROL_BL * this.bl) return true;
-    const r = this.mover.walkRange;
-    return !r || r.x1 - r.x0 < (TOP_PATROL_BL + 0.5) * this.bl;
-  }
-
-  /** Up on a top it has explored: the floor below, to head back down to. */
-  protected downTarget(): Point | null {
-    const m = this.mover;
-    if (!this.topVisit || !m.grounded || !isElevatedKind(m.attachedSurface?.surfaceKind) || !this.topExplored()) return null;
-    const fp = m.world.nearestFloorPoint({ x: m.x, y: m.y + 1 });
-    return { x: fp.x, y: fp.y };
-  }
-
   /** A point a few body lengths along the top the cat stands on, toward the side with more room. */
   protected patrolTarget(): Point | null {
     const m = this.mover;
@@ -640,14 +663,212 @@ export abstract class SimStay extends SimDrives {
     return this.approachTimeoutMs({ x: clamp(m.x, top.x0, top.x1), y: top.y }, 'walk', top.x1 - top.x0);
   }
 
-  /** Standing on a window top: a spot along it where the cat may sit at the edge and look down into the window. */
+  /**
+   * Standing on a window top or a tab strip: a spot where the cat may sit at the edge and look down
+   * into the window (near where it is, or at the end of the surface; on a strip its open end).
+   */
   protected edgeLookTarget(): { windowId: string; point: Point } | null {
     const m = this.mover;
     const on = m.attachedSurface;
     const r = m.walkRange;
-    if (!m.grounded || !r || !on || on.surfaceKind !== 'windowTop' || on.ownerId.length === 0) return null;
+    if (!m.grounded || !r || !on || !isElevatedKind(on.surfaceKind) || on.ownerId.length === 0) return null;
     if (this.disabled.has('perchOnWindows') || this.disabled.has('inspectWindows') || this.excludedWindows.has(on.ownerId)) return null;
-    const x = clamp(m.x + (chance(this.random, 0.5) ? 1 : -1) * range(this.random, 0, 2) * this.bl, r.x0, r.x1);
-    return { windowId: on.ownerId, point: { x, y: m.y } };
+    const inset = 0.3 * this.bl;
+    let x: number;
+    if (on.surfaceKind === 'tabStrip') {
+      // A strip's open end is the far end of its tabs (the side away from the window controls).
+      const strip = m.ledgeById(on.surfaceId);
+      const rest = strip?.rest ?? r;
+      x = clamp(rest.x1 - inset, r.x0, r.x1);
+    } else if (chance(this.random, 0.5)) {
+      x = m.x - r.x0 < r.x1 - m.x ? r.x0 + inset : r.x1 - inset;
+    } else {
+      x = clamp(m.x + (chance(this.random, 0.5) ? 1 : -1) * range(this.random, 0, 2) * this.bl, r.x0, r.x1);
+    }
+    return { windowId: on.ownerId, point: { x: clamp(x, r.x0, r.x1), y: m.y } };
+  }
+
+  // ---- screen edges (ADR 0003 §6.1) -------------------------------------------------------
+
+  /** Keeps a second of cursor positions: "moving toward the band in the last second". */
+  protected noteCursorSample(): void {
+    const c = this.env?.cursor;
+    const s = this.cursorSamples;
+    if (!c || !Number.isFinite(c.x)) {
+      s.length = 0;
+      return;
+    }
+    s.push({ at: this.now, x: c.x });
+    while (s.length > 1 && (s[0] as { at: number }).at < this.now - 1000) s.shift();
+    if (s.length > 64) s.shift();
+  }
+
+  /** ADR 0003 §6.1(b): no climb starts with the cursor near the band or moving toward it. */
+  protected edgeCursorClear(wallX: number, peek: boolean): boolean {
+    const c = this.env?.cursor;
+    if (!c || !Number.isFinite(c.x)) return true;
+    const dist = Math.abs(c.x - wallX);
+    if (dist < (peek ? EDGE_PEEK_CURSOR_BW : EDGE_START_CURSOR_BW) * this.bl) return false;
+    const first = this.cursorSamples[0];
+    return !(first && dist < Math.abs(first.x - wallX) - 8 * this.mover.scale);
+  }
+
+  /**
+   * The screen-edge visit possible from here (ADR 0003 §6.1(b), §18 Q1), or null: fail closed
+   * without env.edgeBands or without a band for that edge. A full climb only within the clear span
+   * that holds the wall's foot; a covered band, and the left edge of a visible desktop, only peeks
+   * (<= 2 bh, <= 8 s, <= 4 per hour, cursor > 6 bw away). With a maximized window in front the left
+   * edge is preferred (scrollbars are on the right); over the desktop the right edge.
+   */
+  protected scanEdge(): EdgeTarget | null {
+    const env = this.env;
+    const m = this.mover;
+    if (!this.edgesOn || !env || !Array.isArray(env.edgeBands) || !m.grounded || this.typingGate() || this.now < this.nextEdgeAt) return null;
+    if (isElevatedKind(m.attachedSurface?.surfaceKind)) return null;
+    while (this.edgePeeks.length > 0 && (this.edgePeeks[0] as number) < this.now - 3600_000) this.edgePeeks.shift();
+    const peekOk = this.edgePeeks.length < EDGE_PEEKS_PER_HOUR;
+    const bh = m.bodyHeight;
+    const maximized = env.foreground?.maximized === true && !env.foreground.minimized;
+    let best: EdgeTarget | null = null;
+    let bestRank = -1;
+    for (const o of m.climbOptions()) {
+      if (o.wallKind !== 'screenEdge') continue;
+      const w = m.wallTracks.find((t) => t.key === o.wallId);
+      const side = w?.screenSide;
+      if (!w || !side) continue;
+      const band = env.edgeBands.find((b) => b && b.displayId === w.displayId && b.side === side);
+      if (!band || !Array.isArray(band.clearSpans)) continue;
+      const foot = w.yBottom;
+      const span = band.clearSpans.find((s) => s.y0 <= foot && s.y1 >= foot - 2);
+      const grip = span ? Math.max(w.yTop, span.y0 + this.bl) : foot;
+      const clear = span !== undefined && foot - grip >= EDGE_MIN_FULL_BH * bh;
+      const peek = !clear || side === 'left';
+      if (peek && !peekOk) continue;
+      if (!this.edgeCursorClear(w.x, peek)) continue;
+      // Preferences of §6.1(b): full climbs before peeks; the left edge under a maximized window.
+      const rank = (peek ? 0 : 2) + ((maximized ? side === 'left' : side === 'right') ? 1 : 0);
+      if (rank <= bestRank) continue;
+      bestRank = rank;
+      best = {
+        wallId: w.key,
+        side,
+        point: { x: o.startX, y: foot },
+        gripY: peek ? Math.max(w.yTop, foot - EDGE_PEEK_BH * bh) : grip,
+        peek,
+        covered: !clear,
+      };
+    }
+    this.edgePlan = best;
+    return best;
+  }
+
+  /** A clear band reachable from where the cat stands (the explore need grows x1, ADR 0003 §1.2). */
+  protected override clearEdgeBand(): boolean {
+    const env = this.env;
+    if (!this.edgesOn || !env || !Array.isArray(env.edgeBands)) return false;
+    for (const w of this.mover.wallTracks) {
+      if (w.kind !== 'screenEdge') continue;
+      const band = env.edgeBands.find((b) => b && b.displayId === w.displayId && b.side === w.screenSide);
+      const span = band?.clearSpans?.find((s) => s.y0 <= w.yBottom && s.y1 >= w.yBottom - 2);
+      if (span && w.yBottom - Math.max(w.yTop, span.y0 + this.bl) >= EDGE_MIN_FULL_BH * this.mover.bodyHeight) return true;
+    }
+    return false;
+  }
+
+  /** walking:screenEdge entered: the plan the decision saw becomes the visit under way. */
+  protected beginEdgeVisit(a: Activity): void {
+    const t = this.edgePlan;
+    this.edgePlan = null;
+    if (!t) {
+      this.finish();
+      return;
+    }
+    a.target = { x: t.point.x, y: t.gripY };
+    const holdMs = t.peek ? range(this.random, EDGE_PEEK_HOLD_MS[0], EDGE_PEEK_HOLD_MS[1]) : range(this.random, EDGE_HOLD_MS[0], EDGE_HOLD_MS[1]);
+    this.edgeVisit = { target: t, act: a, startedAt: this.now, mountedAt: null, holdMs, holdFrom: null, holdUntil: null, leaving: null, side: t.side };
+    this.nextEdgeAt = this.now + range(this.random, EDGE_COOLDOWN_MS[0], EDGE_COOLDOWN_MS[1]);
+    if (t.peek) this.edgePeeks.push(this.now);
+  }
+
+  /** The visit: on to the wall, up to the grip, the hold, and a way off; the cursor coming close ends it. */
+  protected updEdgeClimb(a: Activity): void {
+    const v = this.edgeVisit;
+    const m = this.mover;
+    const t = v?.target ?? null;
+    if (!v || v.act !== a || !t) {
+      if (!m.onWall) this.finish();
+      return;
+    }
+    if (!m.onWall) {
+      // Back off the wall (the visit's record is emitted by trackEdgeVisit), or not there yet.
+      if (v.mountedAt !== null || a.goalStatus === 'unreachable' || this.now - a.startedAt > TRAVEL_TIMEOUT_MS || this.typingGate() || !this.edgeCursorClear(m.wallTracks.find((w) => w.key === t.wallId)?.x ?? m.x, t.peek)) {
+        this.finish();
+        return;
+      }
+      if (m.grounded) this.goTo({ x: t.point.x, y: t.gripY }, 'walk', true, undefined, { surfaceId: t.wallId });
+      return;
+    }
+    if (m.climbPhase === 'leap') return;
+    v.mountedAt ??= this.now;
+    if (v.leaving !== null) return;
+    const c = this.env?.cursor;
+    const close = c && Number.isFinite(c.x) && Number.isFinite(c.y) && Math.hypot(c.x - m.x, c.y - m.y) < EDGE_CLIMB_DOWN_CURSOR_BW * this.bl;
+    if (close || this.typingGate()) {
+      this.edgeLeave(v, true);
+      return;
+    }
+    if (!m.holdingOnWall) return;
+    if (v.holdUntil === null) {
+      v.holdFrom = this.now;
+      v.holdUntil = this.now + v.holdMs;
+      m.holdOnWall(v.holdUntil);
+      return;
+    }
+    if (this.now >= v.holdUntil) this.edgeLeave(v, t.peek);
+  }
+
+  /** Off the wall: climbing down (`down`), else the leave options there (climb down, or a wall jump). */
+  protected edgeLeave(v: EdgeVisit, down: boolean): void {
+    const m = this.mover;
+    const t = this.cat.traits;
+    const opts = m.leaveOptions();
+    let pick = opts.find((o) => o.kind === 'climbDown') ?? null;
+    if (!down && this.subAllowed('screenEdgeWallJump')) {
+      const scored = opts.filter((o) => o.kind !== 'climbLeap' || !(o.toKind === 'taskbar' && !this.subAllowed('taskbarTarget')));
+      pick = chooseLeave(this.random, scored, { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw, disabled: this.disabled }, []) ?? pick;
+    }
+    if (pick && m.leaveBy(pick, 'walk')) {
+      v.leaving = pick.kind;
+      return;
+    }
+    // Nothing offered: the hold's end lets it climb down by itself.
+    m.holdOnWall(null);
+    v.leaving = 'retreat';
+  }
+
+  /** The visit's record, once the cat is off the wall; a clinging cat with no visit (a bail-out) gets one too. */
+  protected trackEdgeVisit(): void {
+    const m = this.mover;
+    const v = this.edgeVisit;
+    const wall = m.wall;
+    if (m.onScreenEdge && wall && m.climbPhase !== 'leap') {
+      if (!v) this.edgeVisit = { target: null, act: null, startedAt: this.now, mountedAt: this.now, holdMs: 0, holdFrom: null, holdUntil: null, leaving: null, side: wall.screenSide ?? 'left' };
+      else v.mountedAt ??= this.now;
+      if (m.holdingOnWall && this.edgeVisit) this.edgeVisit.holdFrom ??= this.now;
+      return;
+    }
+    if (!v || m.onWall) return;
+    if (v.mountedAt === null) {
+      // It never got onto the wall: the visit is over once its activity is.
+      if (v.act !== this.act && !PHYSICAL_STATES.has(this.act.state)) this.edgeVisit = null;
+      return;
+    }
+    const peek = v.target?.peek ?? false;
+    const covered = v.target?.covered ?? false;
+    const held = v.holdFrom === null ? 0 : Math.max(0, (v.holdUntil !== null ? Math.min(this.now, v.holdUntil) : this.now) - v.holdFrom);
+    const leave = m.held ? 'drag' : m.jumpKind === 'wallJump' || v.leaving === 'climbLeap' ? 'wallJump' : this.lastLossReason === 'gone' ? 'gone' : m.grounded || v.leaving !== null ? 'climbDown' : 'other';
+    this.emitEdgeVisit({ at: this.now, side: v.side, covered, topReached: !peek && v.holdFrom !== null, holdMs: Math.round(held), leave });
+    if (v.holdFrom !== null) applyImpulse(this.cat.drives, peek ? 'edgePeek' : 'edgeClimb');
+    this.edgeVisit = null;
   }
 }

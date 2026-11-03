@@ -54,6 +54,7 @@ export abstract class SimActivities extends SimUtility {
         if (a.variant === 'tabStrip' && a.target && this.mover.attachedSurface?.surfaceKind !== 'tabStrip') {
           a.approachMs = Math.max(TRAVEL_TIMEOUT_MS, this.approachTimeoutMs(a.target, 'walk', 0));
         }
+        if (a.variant === 'screenEdge') this.beginEdgeVisit(a);
         this.beginExcursion(a);
         break;
       case 'chasingCursor':
@@ -90,6 +91,7 @@ export abstract class SimActivities extends SimUtility {
       case 'beingPetted':
         a.lastPetAt = this.now;
         this.emotes.show('heart', this.now, true);
+        this.playSound('purr');
         break;
       case 'startled':
         // An occasional surprise at nothing in particular is a mild start, not a fright.
@@ -113,6 +115,7 @@ export abstract class SimActivities extends SimUtility {
       case 'seekingAttention':
         if (a.variant !== 'greet') bumpCounter(this.cat.memory, 'attentionRequests');
         this.phase(a, 'approach');
+        this.playSound(a.variant === 'greet' ? 'trill' : 'meow');
         break;
       case 'resting':
         this.phase(a, chance(this.random, 0.7) ? 'loaf' : 'sit');
@@ -305,11 +308,9 @@ export abstract class SimActivities extends SimUtility {
       this.finish();
       return;
     }
-    if (a.variant === 'leave' && this.stay?.byMover) {
-      // The Mover carries out the chosen leave (Mover.leaveBy): wait until it is off the stay.
-      if ((!this.onStay() && this.mover.grounded) || this.now - a.startedAt > TRAVEL_TIMEOUT_MS) this.finish();
-      return;
-    }
+    // The Mover carries out the chosen leave (Mover.leaveBy) and the screen-edge visit's phases.
+    if (a.variant === 'leave') return this.updLeave(a);
+    if (a.variant === 'screenEdge') return this.updEdgeClimb(a);
     const timeout = a.variant === 'climb' ? CLIMB_TIMEOUT_MS : a.approachMs > 0 ? a.approachMs : TRAVEL_TIMEOUT_MS;
     if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.startedAt > timeout) {
       // A trip up that did not get there (a goal whose top vanished ends on the floor below it): no
@@ -352,16 +353,25 @@ export abstract class SimActivities extends SimUtility {
     }
   }
 
-  /** On a tab strip: face the active tab (the strip's focusX). */
+  /** On a tab strip: face the active tab (the strip's focusX), now and then moving within 1 bw of it. */
   protected updWatchTab(a: Activity): void {
-    const on = this.mover.attachedSurface;
+    const m = this.mover;
+    const on = m.attachedSurface;
     if (!on || on.surfaceKind !== 'tabStrip') {
       this.finish();
       return;
     }
-    const strip = this.mover.ledgeById(on.surfaceId);
+    const strip = m.ledgeById(on.surfaceId);
     const fx = strip?.focusX ?? a.target?.x ?? null;
-    if (fx !== null && Number.isFinite(fx)) this.mover.faceToward(fx, this.now);
+    if (fx === null || !Number.isFinite(fx)) return;
+    m.faceToward(fx, this.now);
+    if (a.counter !== 0) return;
+    a.counter = 1;
+    const off = fx - m.x;
+    if (strip && Math.abs(off) > 1.5 * this.bl && chance(this.random, 0.4)) {
+      const x = fx - Math.sign(off) * range(this.random, 0.3, 1) * this.bl;
+      this.finish({ state: 'walking', init: { variant: 'tabStrip', target: { x: clamp(x, strip.x0, strip.x1), y: strip.y }, then: { state: 'idle', init: { variant: 'watchTab', target: { x: fx, y: strip.y } } } } });
+    }
   }
 
   protected updCurious(a: Activity): void {
@@ -373,9 +383,13 @@ export abstract class SimActivities extends SimUtility {
     if (a.phase === 'approach') {
       if (a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 12_000) {
         this.stop();
-        this.phase(a, 'look', range(this.random, 3000, 7000));
+        const look = range(this.random, 3000, 7000);
+        this.phase(a, 'look', look);
+        // It went over to look: the next decision can wait for that.
+        a.dwellMs = Math.max(a.dwellMs, this.now - a.startedAt + look + 500);
         return;
       }
+      a.dwellMs = Math.max(a.dwellMs, this.now - a.startedAt + 1000);
       const side = Math.sign(t.x - this.mover.x) || 1;
       this.goTo({ x: t.x - side * 1.2 * this.bl, y: t.y }, 'walk', true);
       return;

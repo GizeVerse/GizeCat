@@ -12,7 +12,7 @@ import { PHYSICAL_STATES } from './states';
 import { candidateKey } from './utility';
 import { SimSalience } from './simSalience';
 import type { RequestStatus } from './simCore';
-import { CLIMB_COOLDOWN_MS, PLACE_RECENT_MS, TAB_VISIT_COOLDOWN_MS } from './simCore';
+import { AUTO_HIDE_COOLDOWN_MS, CLIMB_COOLDOWN_MS, PLACE_RECENT_MS, TAB_VISIT_COOLDOWN_MS } from './simCore';
 
 export abstract class SimUtility extends SimSalience {
   protected override requestCandidate(c: Candidate, cause: TransitionCause): RequestStatus {
@@ -22,6 +22,8 @@ export abstract class SimUtility extends SimSalience {
       // Surface excursions are occasional: each kind has its own cooldown.
       if (c.variant === 'climb') this.reactions.set('climb', this.now, range(this.random, CLIMB_COOLDOWN_MS[0], CLIMB_COOLDOWN_MS[1]));
       else if (c.variant === 'tabStrip') this.reactions.set('tabStripVisit', this.now, TAB_VISIT_COOLDOWN_MS);
+      // A wary cat keeps out of the way now and then, not again and again (a few short hides an hour).
+      else if (c.state === 'hiding') this.nextHideAt = this.now + range(this.random, AUTO_HIDE_COOLDOWN_MS[0], AUTO_HIDE_COOLDOWN_MS[1]);
     }
     return r;
   }
@@ -54,6 +56,9 @@ export abstract class SimUtility extends SimSalience {
       foreground: fg ? { center: rectCenter(fg.rect), distBodyLengths: Math.abs(rectCenter(fg.rect).x - this.mover.x) / this.bl } : null,
       favoriteSpot: this.favoriteSpotTarget(),
       perchTarget: scan.status.perch === 'available' ? scan.perch : null,
+      tabStripOwner: scan.strip?.ownerId ?? null,
+      edgeTarget: this.stay ? null : this.scanEdge(),
+      resumePlace: this.resumeToken && this.now <= this.resumeToken.until ? this.resumeToken.place : null,
       wanderTarget: this.wanderTarget(),
       cornerTarget: this.cornerTarget(),
       typingIntensity: this.settings.behavior.reactToTyping && Number.isFinite(env.typingIntensity) ? clamp(env.typingIntensity, 0, 1) : 0,
@@ -63,11 +68,11 @@ export abstract class SimUtility extends SimSalience {
       edgeLook: this.edgeLookTarget(),
       surpriseReady: this.reactions.ready('surprise', this.now),
       exploreUrge: this.exploreUrge,
-      downTarget: this.downTarget(),
+      downTarget: null,
       elevatedMs: this.topVisit ? this.now - this.topVisit.since : 0,
       recentStates: this.recentStates,
       current: this.act.state,
-      isCoolingDown: (s) => this.coolingDown(s),
+      isCoolingDown: (s) => this.coolingDown(s) || (s === 'hiding' && this.now < this.nextHideAt),
       // ---- v1.2 (ADR 0003 §1.4) ----
       drives: this.cat.drives,
       zEff: this.zEffNow(),

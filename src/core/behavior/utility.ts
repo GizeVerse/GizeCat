@@ -31,6 +31,7 @@ const REPEAT_DECAY = 0.7;
 const FAMILY_SIMILARITY = 0.35;
 const CURRENT_KEY_MUL = 0.4;
 const RECENT_PLACE_MUL = 0.7;
+const QUIET_CALM_MUL = 3;
 
 /** Variants that should not repeat back to back share a family (ADR 0003 §1.5). */
 export type Family = 'observe' | 'rest' | 'groom' | 'explore' | 'tripUp' | 'hunt' | 'play' | 'social' | 'wary' | 'leave' | 'other';
@@ -64,6 +65,7 @@ export function familyOf(state: BehaviorState, variant: string | null): Family {
       switch (variant) {
         case 'climb':
         case 'tabStrip':
+        case 'screenEdge':
           return 'tripUp';
         case 'favorite':
           return 'rest';
@@ -154,6 +156,8 @@ export function subActsOf(state: BehaviorState, variant: string | null): SubBeha
       return ['defensiveHiss'];
     case 'walking:taskbar':
       return ['taskbarTarget'];
+    case 'walking:screenEdge':
+      return ['screenEdgeClimb'];
     case 'grooming:':
     case 'grooming:displacement':
       return ['groom'];
@@ -256,7 +260,7 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
       if (night) C *= 0.75;
     }
     if (family === 'observe' && typingReact) C *= 1.2;
-    if (typingRaw && (family === 'hunt' || c.variant === 'pawAt' || c.variant === 'rollOver' || c.variant === 'ambush')) C = 0;
+    if (typingRaw && (family === 'hunt' || family === 'play' || c.variant === 'ambush')) C = 0;
     if (c.target && cursor && cat && (cls === 'active' || family === 'hunt') && distBl(c.target, cursor, cat.bw) < 3) C *= 0.2 + 0.8 * W;
     if (v.avoidCursor && c.target && cursor && cat && cls === 'active' && family !== 'leave' && distBl(c.target, cursor, cat.bw) < 4) C = 0;
     // Place novelty for trips (and the mischief bonus for the foreground window's top).
@@ -266,9 +270,13 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
       P = seen === 'recent' ? RECENT_PLACE_MUL : seen === 'never' ? 1 + 0.3 * clamp01(t.curiosity) : 1;
     }
     if (family === 'tripUp' && m > 0.15 && c.windowId !== null && c.windowId === v.foregroundId) P += 0.4 * m * (0.5 + W);
+    // The stay a cover or a vanished window cut short (ADR 0003 §2.4).
+    if (family === 'tripUp' && c.place && c.place === v.resumePlace) P *= 2;
     const N = repetitionFactor(candidateKey(c), recent, currentKey);
     const E = Math.exp(-2 * energyKappa(c, family, cls) * (1 - energy));
-    const R = rhythmWeight(episode, cls, m, onStay);
+    let R = rhythmWeight(episode, cls, m, onStay);
+    // Typing, video or fast switching: calm picks keep their chance even in an active episode (§1.4 C_c).
+    if (episode === 'active' && cls !== 'active' && (typingReact || video || v.busySwitching)) R *= QUIET_CALM_MUL;
     const u = base * interest * F * C * N * E * R * P;
     if (Number.isFinite(u) && u > 0) out.push({ item: c, score: u });
   };
@@ -296,7 +304,7 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
   const st = v.stay;
   if (st) {
     if (st.patrolReady && st.walkRangeBl >= 2 && st.patrolTarget) add(cand('walking', { variant: 'patrol', target: st.patrolTarget }), 0.2, 0.3 + 0.4 * nE);
-    if (st.kind === 'windowTop' && v.edgeLook) add(cand('inspectingWindow', { variant: 'edge', windowId: v.edgeLook.windowId, target: v.edgeLook.point }), 0.25, 0.3 + 0.4 * clamp01(t.curiosity));
+    if (v.edgeLook) add(cand('inspectingWindow', { variant: 'edge', windowId: v.edgeLook.windowId, target: v.edgeLook.point }), 0.25, 0.3 + 0.4 * clamp01(t.curiosity));
     if (st.kind === 'tabStrip' && st.watchTab) add(cand('idle', { variant: 'watchTab', target: st.watchTab }), 0.25, 0.4);
     return out;
   }
@@ -321,10 +329,16 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
     add(cand('inspectingWindow', { variant: 'explore', windowId: p.windowId, target: p.point, surfaceKind: 'windowTop', place: `w:${p.windowId}` }), 0.25, trip(false));
   }
   if (v.climbTarget && v.climbTarget.dir === 'up') {
-    add(cand('walking', { variant: 'climb', target: v.climbTarget.point, then: 'walking', thenVariant: 'patrol', surfaceKind: 'windowTop', place: `c:${Math.round(v.climbTarget.point.x)}:${Math.round(v.climbTarget.point.y)}` }), 0.25, trip(false));
+    const owner = v.climbTarget.ownerId;
+    add(cand('walking', { variant: 'climb', target: v.climbTarget.point, then: 'walking', thenVariant: 'patrol', surfaceKind: 'windowTop', place: owner ? `w:${owner}` : `c:${Math.round(v.climbTarget.point.x)}` }), 0.25, trip(false));
   }
   if (v.tabStripTarget && v.standingOn !== 'tabStrip') {
-    add(cand('walking', { variant: 'tabStrip', target: v.tabStripTarget, then: 'resting', surfaceKind: 'tabStrip', place: `s:${Math.round(v.tabStripTarget.y)}` }), 0.25, trip(true));
+    add(cand('walking', { variant: 'tabStrip', target: v.tabStripTarget, then: 'resting', surfaceKind: 'tabStrip', place: v.tabStripOwner ? `w:${v.tabStripOwner}` : `s:${Math.round(v.tabStripTarget.y)}` }), 0.25, trip(true));
+  }
+  if (v.edgeTarget) {
+    // ADR 0003 §1.4: x2 when no other elevated target exists.
+    const alone = !v.perchTarget && !(v.climbTarget && v.climbTarget.dir === 'up') && !v.tabStripTarget;
+    add(cand('walking', { variant: 'screenEdge', target: v.edgeTarget.point, surfaceKind: 'screenEdge', place: `e:${v.edgeTarget.side}` }), 0.15, (0.2 + 0.6 * nE) * (alone ? 2 : 1));
   }
 
   // ---- play ----

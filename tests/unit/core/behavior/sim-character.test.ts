@@ -224,11 +224,13 @@ describe('F12: corners, surprises and boredom play', () => {
     for (const seed of seeds) {
       const h = new Harness({ seed, settings: settingsWith({ behavior: { autonomy: 1 } }) });
       let wasCorner = false;
-      h.run(hours * 60 * MIN, 100, (hh) => {
+      // ADR 0003 §1.4: the surprise is only a candidate while a recent stimulus exists; a window comes and goes.
+      h.run(hours * 60 * MIN, 100, (hh, i) => {
         const info = hh.sim.debugInfo();
         const inCorner = info.state === 'walking' && info.variant === 'corner';
         if (inCorner && !wasCorner) corners++;
         wasCorner = inCorner;
+        return i % 300 === 0 ? [{ type: 'window.shown', window: { id: `w${i}`, rect: { x: 1500, y: 100, width: 300, height: 200 }, processName: 'app.exe', category: 'browser', minimized: false, maximized: false, fullscreen: false, excluded: false } }] : [];
       });
       const startles = h.transitions.filter((t) => t.to === 'startled' && t.cause === 'autonomous').map((t) => t.at);
       surprises += startles.length;

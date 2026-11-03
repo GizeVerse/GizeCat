@@ -42,8 +42,8 @@ describe('liveness: the default cat gets off the floor (v1.1.1)', () => {
     // Most trips are visits, not touch-and-go.
     expect(long / ex.length).toBeGreaterThanOrEqual(0.8);
     expect(walked / ex.length).toBeGreaterThanOrEqual(0.7);
-    // Not living up there either.
-    expect(share).toBeLessThan(0.5);
+    // Not living up there either. ADR 0003 B2 x B3 (arrivals 4-15 /h, stays of 90-300 s): the v1.1.1 ceiling of 50 % is gone.
+    expect(share).toBeLessThan(0.8);
   });
 
   it('with a browser whose tab strip is listed (provider-shaped, with its open edge), >= 70 % of seeds reach the strip within 20 sim-minutes', () => {

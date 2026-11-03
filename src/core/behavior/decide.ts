@@ -61,8 +61,10 @@ export type Variant =
   | 'watchTab'
   /** curious: a look at the new top of a window that was restored or un-maximized. */
   | 'restored'
-  /** walking or running: the stay's leave intent on its way down (the legacy descent while the Mover offers no leave option). */
+  /** walking or running: the stay's leave intent on its way down (Mover.leaveBy). */
   | 'leave'
+  /** walking: a visit to an outer screen edge (a climb to the top hold, or a short low peek). */
+  | 'screenEdge'
   /** grooming: a displacement groom after losing interest or a surprise. */
   | 'displacement'
   // reactions to rough handling (ReactionRecord.kind); 'jolt' = the surprise reaction's short startle
@@ -92,6 +94,19 @@ export interface Candidate {
 }
 
 /** v1.2: the stay the cat is on (ADR 0003 §2.2): the decision pool holds only the on-surface plan. */
+/** v1.2: an outer screen edge the cat may visit (ADR 0003 §6.1(b)); `point` is the wall's foot. */
+export interface EdgeTarget {
+  wallId: string;
+  side: 'left' | 'right';
+  point: Point;
+  /** Anchor height to hold at, px. */
+  gripY: number;
+  /** A short, low peek (covered band, or the left edge of a visible desktop), not a full climb. */
+  peek: boolean;
+  /** The band is covered by a window. */
+  covered: boolean;
+}
+
 export interface StayView {
   kind: 'windowTop' | 'tabStrip';
   /** Walkable span on the surface, body widths. */
@@ -164,6 +179,12 @@ export interface DecisionView {
   current: BehaviorState;
   isCoolingDown: (s: BehaviorState) => boolean;
   // ---- v1.2 (ADR 0003 §1.4), optional: absent = derived from the v1.1 fields above ----------
+  /** The window of `tabStripTarget`, for place novelty (in memory only). */
+  tabStripOwner?: string | null;
+  /** An outer screen edge the cat may visit now (gated on env.edgeBands, ADR 0003 §6.1(b)). */
+  edgeTarget?: EdgeTarget | null;
+  /** The place (`w:<window id>`) a covered or vanished stay can resume on (trip x2, ADR 0003 §2.4). */
+  resumePlace?: string | null;
   drives?: Drives;
   /** Effective sleepiness (drives.ts zEff). */
   zEff?: number;

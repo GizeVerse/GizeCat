@@ -22,7 +22,7 @@ import type { DisplayService, Logger } from '../../../src/main/contracts';
 import { assembleSurfaceDiagnostics, type AssembledSurfaceDiagnostics } from '../../../src/main/diagnostics/surfaceDiagnostics';
 import { createSurfaceProvider, type SurfaceProviderHandle } from '../../../src/main/surfaces';
 import type { ChildProcessLike } from '../../../src/main/uia/client';
-import type { WireStrip } from '../../../src/main/uia/protocol';
+import { UIA_PROTOCOL_VERSION, type WireStrip } from '../../../src/main/uia/protocol';
 import { createTabStripService, type TabStripServiceImpl } from '../../../src/main/uia';
 import { createActivityMonitor } from '../../../src/main/win32/activityMonitor';
 import {
@@ -305,7 +305,7 @@ function fakeHelperSpawn(mode: HelperMode, native: FakeNative, vt: VirtualTime, 
         return;
       }
       if (stuck) return;
-      if (op === 'ping') send({ id: req.id, ok: true, pong: true, version: 1, dpi: 'permonitorv2', watching: 0, prunedRender: 0, prunedOther: 0 });
+      if (op === 'ping') send({ id: req.id, ok: true, pong: true, version: UIA_PROTOCOL_VERSION, dpi: 'permonitorv2', watching: 0, prunedRender: 0, prunedOther: 0 });
       else if (op === 'watch') send({ id: req.id, ok: true, watching: (req.hwnds ?? []).length, failed: [] });
       else if (op === 'strip') {
         const hwnd = req.hwnd ?? '';

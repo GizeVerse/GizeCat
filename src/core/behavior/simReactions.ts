@@ -341,7 +341,9 @@ export abstract class SimReactions extends SimHunt {
     const release = this.pendingRelease;
     this.pendingRelease = null;
     if (this.pounceFlight) this.onPounceLanded();
-    const planned = reason === 'jump' || reason === 'step';
+    const slipped = info?.slipped === true;
+    const planned = (reason === 'jump' || reason === 'step') && !slipped;
+    if (info?.impact === 'hard') this.playSound('thud');
     if (info) {
       if (planned) {
         if (info.impact === 'hard') this.phase(a, 'impact', 300);
@@ -363,6 +365,14 @@ export abstract class SimReactions extends SimHunt {
     if (this.mode !== 'normal' || !info) return;
     // Planned moves and calm drops (a retracting taskbar) resume what the cat was doing.
     if (planned || reason === 'retracted') return;
+    if (slipped) {
+      // A missed take-off (ADR 0003 §6.6): frustrated a little, a retry with p 0.5 after 10-30 s.
+      applyImpulse(this.cat.drives, 'slipMiss');
+      const s = this.suspended;
+      this.slipRetry = s && s.target && chance(this.random, 0.5) ? { at: this.now + range(this.random, 10_000, 30_000), state: s.state, variant: s.variant, target: s.target, windowId: s.windowId } : null;
+      this.discardSuspended();
+      return;
+    }
     this.discardSuspended();
     if (info.forced) return;
     // v1.2: a throw, or a rough drag released slowly, gets one of the nine reactions.
@@ -494,7 +504,7 @@ export abstract class SimReactions extends SimHunt {
       bout.swatRolled = true;
       const M = clamp(Number.isFinite(this.settings.behavior.mischief) ? this.settings.behavior.mischief : 0, 0, 1);
       const m = this.cat.drives.mischief;
-      if (M > 0 && m > 0.15 && this.subAllowed('overstimSwat') && chance(this.random, clamp(((0.1 + 0.3 * this.cat.drives.irritability) * m) / M, 0, 1))) {
+      if (M > 0 && m > 0.15 && this.subAllowed('overstimSwat') && !this.typingGate() && chance(this.random, clamp(((0.1 + 0.3 * this.cat.drives.irritability) * m) / M, 0, 1))) {
         applyImpulse(this.cat.drives, 'mischiefAct');
         this.playOneShot('swat', 450);
         const away = this.awayFromCursor(1, 1.5);

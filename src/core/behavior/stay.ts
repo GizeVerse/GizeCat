@@ -5,6 +5,7 @@ import type { LeaveKind } from '../../shared/behaviorProfile';
 import { subBehaviorAllowed } from '../../shared/behaviorGates';
 import type { BehaviorId } from '../../shared/settings';
 import type { LeaveOption } from '../movement';
+import { HARD_DROP_DIP } from '../movement';
 import type { Random, Scored } from './random';
 import { range } from './random';
 import { logNormalDraw } from './rhythm';
@@ -25,6 +26,9 @@ export const LEAVE_FAILURE_WINDOW_MS = 30_000;
 export const STAY_OVERDUE_MS = 2 * 60_000;
 /** A patrol along the surface at most this often. */
 export const PATROL_MIN_GAP_MS = 45_000;
+/** The resume token (ADR 0003 §2.4): the surface must come back within this long, the new stay lasts at least this. */
+export const STAY_RESUME_WINDOW_MS = 3 * 60_000;
+export const STAY_RESUME_MIN_MS = 60_000;
 /** Leave kinds remembered for N_leave. */
 export const LEAVE_HISTORY = 4;
 
@@ -75,6 +79,16 @@ export function drawStayIntent(r: Random, c: StayContext): { plannedMs: number; 
   if (c.typing) ms *= 1.3;
   if (!Number.isFinite(ms) || ms <= 0) ms = 60_000;
   return { plannedMs: Math.min(STAY_HARD_CAP_MS, ms), branch };
+}
+
+/**
+ * Jump-down limits of ADR 0003 §6.3, DIP below the feet: H_safe = min((240 + 520 Ht)(0.7 + 0.6
+ * confidence)(0.6 + 0.4 energy), 0.95 h_hard (0.8 + 0.4 Ht)), H_max = min(1.35 H_safe, 900).
+ */
+export function jumpDownLimitsFor(heights: number, confidence: number, energy: number): { safeDip: number; maxDip: number } {
+  const Ht = clamp01(heights);
+  const safe = Math.min((240 + 520 * Ht) * (0.7 + 0.6 * clamp01(confidence)) * (0.6 + 0.4 * clamp01(energy)), 0.95 * HARD_DROP_DIP * (0.8 + 0.4 * Ht));
+  return { safeDip: safe, maxDip: Math.min(1.35 * safe, 900) };
 }
 
 export interface LeaveContext {

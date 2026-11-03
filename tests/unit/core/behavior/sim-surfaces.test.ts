@@ -326,23 +326,23 @@ describe('window tops and sides', () => {
     ['closed', (h: Harness): SimEvent[] => ((h.env.windows = {}), [{ type: 'window.closed', id: 'w', rect: RECT, category: 'browser' }])],
     ['minimized', (h: Harness): SimEvent[] => ((h.env.windows = {}), [{ type: 'window.minimized', id: 'w' }])],
     ['maximized', (h: Harness): SimEvent[] => ((h.env.windows = { w: { x: 0, y: 0, width: 1920, height: 1040 } }), [])],
-  ])('a window %s under the cat: it drops with a short start (lost footing), not a fright', (_label, change) => {
+    // ADR 0003 §3: v1.2 leaves a vanished support with a calm controlled bail-out (ear flick, glance), no start.
+  ])('a window %s under the cat: it bails out calmly, no start and no fright', (_label, change) => {
     const h = perched();
     const fear0 = h.sim.serialize().stats.fear;
     const from = h.transitions.length;
     h.step(change(h));
-    const variants: unknown[] = [];
-    h.run(4000, 33, (hh) => {
-      if (hh.last!.state === 'startled') variants.push(hh.sim.debugInfo().variant);
-    });
+    h.run(4000, 33);
     const to = h.transitions.slice(from).map((t) => t.to);
-    expect(to.slice(0, 3)).toEqual(['falling', 'landing', 'startled']);
-    expect(new Set(variants)).toEqual(new Set(['lostFooting']));
-    expect(h.sim.serialize().stats.fear - fear0).toBeLessThanOrEqual(0.16);
+    expect(['jumping', 'falling']).toContain(to[0]);
+    expect(to[1]).toBe('landing');
+    expect(to).not.toContain('startled');
+    expect(h.sim.serialize().stats.fear - fear0).toBeLessThan(0.05);
     expect(h.last!.support.kind).toBe('floor');
   });
 
-  it('a window brought in front over its spot (the host serves the part of the top left open): a calm drop, no start', () => {
+  // ADR 0003 §3: the calm drop is now a single controlled hop or jump.
+  it('a window brought in front over its spot (the host serves the part of the top left open): a calm bail-out, no start', () => {
     const h = perched();
     const fear0 = h.sim.serialize().stats.fear;
     const from = h.transitions.length;
@@ -354,10 +354,13 @@ describe('window tops and sides', () => {
     h.env.getSurface = (id) => h.env.surfaces?.find((s) => s.id === id) ?? null;
     h.run(4000);
     const to = h.transitions.slice(from).map((t) => t.to);
-    expect(to.slice(0, 2)).toEqual(['falling', 'landing']);
+    expect(['jumping', 'falling']).toContain(to[0]);
+    expect(to[1]).toBe('landing');
     expect(to).not.toContain('startled');
     expect(h.sim.serialize().stats.fear - fear0).toBeLessThan(0.05);
-    expect(h.last!.support.kind).toBe('floor');
+    // A hop onto the still-visible stretch of the same top, or a jump to another visible support: never the covered part.
+    const o = h.last!;
+    if (onWindowTop(o.support, 'w')) expect(o.x).toBeLessThanOrEqual(900 + BW * 0.15);
   });
 
   it('on a wall its bounds (the click-through fallback before the renderer reports) stay outside the window but for the paws', () => {
@@ -624,23 +627,20 @@ describe('output and persistence', () => {
 });
 
 describe('typing keeps the cat off surfaces', () => {
+  // ADR 0003 §2.1, B6: time up there now follows the stay intent (which typing lengthens); typing makes trips rarer.
   it('intensive typing means fewer surface excursions', () => {
-    const share = (typingIntensity: number): number => {
-      let on = 0;
-      let total = 0;
-      for (const seed of [1, 2, 3]) {
-        const h = new Harness({ seed, persisted: catWith(seed, CURIOUS, { energy: 1 }), settings: settingsWith({ behavior: { autonomy: 1 } }) });
+    const trips = (typingIntensity: number): number => {
+      let n = 0;
+      for (const seed of [1, 2, 3, 4]) {
+        const h = new Harness({ seed, persisted: catWith(seed, CURIOUS, { energy: 1 }), settings: settingsWith({ behavior: { autonomy: 1 } }), hooks: { onExcursion: (r) => void (r.phase === 'arrive' && n++) } });
         h.env.windows = { a: { x: 300, y: 760, width: 500, height: 280 }, t: { x: 1100, y: 400, width: 600, height: 640 } };
         h.env.typingIntensity = typingIntensity;
-        h.run(30 * MIN, 100, (hh) => {
-          total++;
-          if (hh.last!.support.kind === 'surface') on++;
-        });
+        h.run(45 * MIN, 100);
       }
-      return on / total;
+      return n;
     };
-    const calm = share(0.95);
-    const free = share(0);
+    const calm = trips(0.95);
+    const free = trips(0);
     expect(free).toBeGreaterThan(0);
     expect(calm).toBeLessThan(free * 0.7);
   }, 120_000);

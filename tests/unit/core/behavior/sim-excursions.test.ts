@@ -39,12 +39,19 @@ describe('exploration urge (v1.1.1)', () => {
     h.env.typing = typing;
     h.run(WAKE_MS, 100);
     const u0 = decision(h).exploreUrge;
-    let up = false;
+    // ADR 0003 §1.4: the need-driven picker may start a trip before the urge is high, so the rate is
+    // measured over the time the cat really is on the floor (at least 15 s) and scaled to `ms`.
+    const t0 = h.now;
+    let u1 = u0;
+    let until = t0;
     drive(h, ms, (o) => {
-      up ||= elevated(o) || o.support.kind !== 'floor';
+      if (elevated(o) || o.support.kind !== 'floor') return true;
+      u1 = decision(h).exploreUrge;
+      until = h.now;
+      return false;
     });
-    expect(up, `seed ${seed} left the floor during the measurement`).toBe(false);
-    return decision(h).exploreUrge - u0;
+    expect(until - t0, `seed ${seed} left the floor too soon to measure`).toBeGreaterThanOrEqual(15_000);
+    return ((u1 - u0) * ms) / (until - t0);
   }
 
   it('grows on the floor with a way up in reach: 0 to 1 in 3-8 min, faster for a curious, playful cat, slower for a lazy one', () => {
@@ -89,7 +96,8 @@ describe('exploration urge (v1.1.1)', () => {
         return false;
       }, 33),
     ).toBe(true);
-    expect(before).toBeGreaterThan(0.2);
+    // ADR 0003 §1.4: trips follow the explore need too, so the urge need not be high at the arrival.
+    expect(before).toBeGreaterThan(0);
     const d = decision(h);
     expect(d.exploreUrge).toBe(0);
     expect(d.excursions).toBe(1);
@@ -121,13 +129,9 @@ describe('cooldowns after a trip up (v1.1.1 RC7)', () => {
     let phase: 'wait' | 'climbing' | 'failed' | 'cooling' = 'wait';
     let failedAt = 0;
     let delay: number | null = null;
-    let decisions = 0;
     drive(h, ms, (o) => {
       const climbing = o.state === 'walking' && variant(h) === 'climb';
-      // The diagnostics hold the availability seen by the last decision: read them after one.
-      const n = h.transitions.filter((t) => t.cause === 'autonomous').length;
-      const decided = n > decisions;
-      decisions = n;
+      // The diagnostics follow the look for ways up (every 2 s on the floor), decisions or not (calm dwells are longer in v1.2, ADR 0003 §1.6).
       if (phase === 'wait' && climbing && o.support.kind === 'floor') {
         phase = 'climbing';
         serve(broken);
@@ -135,11 +139,15 @@ describe('cooldowns after a trip up (v1.1.1 RC7)', () => {
         phase = 'failed';
         failedAt = h.now;
         serve(intact);
-      } else if (phase === 'failed' && decided && o.support.kind === 'floor') {
-        // The next decision sees the (short) cooldown.
-        expect(decision(h).targets.climb).toBe('cooldown');
+      } else if (phase === 'failed' && h.now - failedAt >= 3000 && o.support.kind === 'floor') {
+        // Right after the failure the (short) cooldown holds.
+        expect(decision(h).targets.climb).not.toBe('available');
         phase = 'cooling';
-      } else if (phase === 'cooling' && decided && o.support.kind === 'floor' && decision(h).targets.climb === 'available') {
+      } else if (phase === 'cooling' && o.support.kind !== 'floor') {
+        // It went up some other way meanwhile (a jump onto the top): no measurement from this seed.
+        delay = null;
+        return true;
+      } else if (phase === 'cooling' && o.support.kind === 'floor' && decision(h).targets.climb === 'available') {
         delay = h.now - failedAt;
         return true;
       }
