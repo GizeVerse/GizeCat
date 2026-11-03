@@ -79,7 +79,7 @@ async function stepAndRead(r: Rig, ms: number, ids: string[], reads = 1): Promis
 
 function withOptOut(...ids: string[]): Settings {
   const s = settingsWith({ tabStrips: true });
-  return { ...s, behavior: { ...s.behavior, disabledExtras: ids } } as Settings;
+  return { ...s, behavior: { ...s.behavior, disabledExtras: ids } };
 }
 
 describe('v1.2 allow-list: Terminal on, Explorer behind its soak gate, others never queried', () => {
@@ -117,7 +117,7 @@ describe('v1.2 allow-list: Terminal on, Explorer behind its soak gate, others ne
     expect(listed(on, EXPL)).toMatchObject({ x0: 411 + 67.5, x1: 411 + 256.5 });
   });
 
-  it('never queries VS Code, Firefox or Notepad, and says why', async () => {
+  it('never queries VS Code, Firefox or Notepad, and says why', () => {
     const r = rig({ strips: {} });
     r.svc.start();
     r.wins.set(CODE, { processName: 'code.exe', category: 'code' });
@@ -128,7 +128,7 @@ describe('v1.2 allow-list: Terminal on, Explorer behind its soak gate, others ne
     expect(r.h.ops('strip')).toHaveLength(0);
   });
 
-  it('the terminalTabs opt-out (and tabStrips) switch Terminal off: never queried', async () => {
+  it('the terminalTabs opt-out (and tabStrips) switch Terminal off: never queried', () => {
     const r = rig({ strips: { [TERM]: tabviewStrip({ app: 'terminal' }) } }, { settings: withOptOut('terminalTabs') });
     r.svc.start();
     r.wins.set(TERM, TERMINAL);

@@ -36,7 +36,7 @@ export function createMouseButtonSampler(readKey: (vk: number) => number): Mouse
       let down = false;
       let presses = state.presses;
       for (const vk of MOUSE_BUTTON_VKS) {
-        let v = 0;
+        let v: number;
         try {
           v = readKey(vk);
         } catch {

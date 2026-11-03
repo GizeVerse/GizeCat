@@ -249,9 +249,9 @@ describe('UIA protocol 2 and the tab-strip allow-list', () => {
     expect(tabStripRuleFor('msedge.exe', none)?.kind).toBe('chromium');
     expect(tabStripRuleFor('CHROME.EXE', none)?.kind).toBe('chromium');
     expect(tabStripRuleFor('chrome.exe', new Set(['tabStrips']))).toBeNull();
-    // TabView rules stay off until the protocol-2 helper ships with them.
+    // The protocol-2 helper ships the TabView reader: Terminal is on, Explorer stays behind its soak gate.
     expect(tabStripRuleFor('explorer.exe', none)).toBeNull();
-    expect(tabStripRuleFor('windowsterminal.exe', none)).toBeNull();
+    expect(tabStripRuleFor('windowsterminal.exe', none)?.kind).toBe('tabview');
     for (const exe of ['firefox.exe', 'code.exe', 'notepad.exe', 'obsidian.exe']) expect(tabStripRuleFor(exe, none), exe).toBeNull();
     expect(TAB_STRIP_APPS.every((r) => r.optOuts.includes('tabStrips'))).toBe(true);
   });

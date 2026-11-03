@@ -70,7 +70,7 @@ describe('uia health (Explorer kill switch memory)', () => {
         renameSync: () => undefined,
         mkdirSync: () => undefined,
         rmSync: () => undefined,
-      } as never,
+      },
     });
     expect(failing.recordExplorerStrike().strikes).toBe(1);
     expect(log.entries.some((e) => e.level === 'warn' && e.msg === 'uia health file not written')).toBe(true);

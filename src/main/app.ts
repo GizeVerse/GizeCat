@@ -545,6 +545,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       refreshUi();
     },
     getSurfaceDiagnostics: () => surfaceDiagnostics.get().diagnostics,
+    getBehaviorProfile: () => sim.behaviorProfile(),
     clock: () => performance.now(),
   });
 

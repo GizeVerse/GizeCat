@@ -87,7 +87,7 @@ let posting: PostFn | null = null;
 function postMessage(h: Hwnd, msg: number, w: number, l: number): boolean {
   if (posting === null) {
     const user32 = koffi.load('user32.dll');
-    posting = user32.func('int __stdcall PostMessageW(void *h, uint32_t msg, uintptr_t w, intptr_t l)') as unknown as PostFn;
+    posting = user32.func('int __stdcall PostMessageW(void *h, uint32_t msg, uintptr_t w, intptr_t l)');
   }
   return posting(h, msg, w, l) !== 0;
 }
