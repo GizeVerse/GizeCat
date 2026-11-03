@@ -12,12 +12,17 @@ import type { Activity, FollowUp } from './activity';
 import { applyImpulse } from './drives';
 import type { HuntGateInput } from './hunt';
 import {
+  CROUCH_MAX_MS,
+  CROUCH_MIN_MS,
   CROUCH_STILL_MAX_MS,
+  HUNT_LOST_GRACE_MS,
   HUNT_STEP_MS,
   MAX_HUNT_CYCLES,
   MAX_POUNCES_PER_HUNT,
   POUNCE_COOLDOWN_MS,
   PETTING_HOLD_MS,
+  PRESS_HOLD_MS,
+  STALK_IN_REACH_MS,
   STALK_MAX_MS,
   TASKBAR_HIDE_HOLD_MS,
   hitFrontPx,
@@ -315,10 +320,17 @@ export abstract class SimHunt extends SimStay {
       const g = this.preyGeometry(cur);
       if (g.sameDisplay && inStartBand(g.dxBw, g.dyBh)) run.seenAt = this.now;
     }
-    if (!cur || this.now - run.seenAt > 1000) {
-      // The cursor left (or rose out of reach): a lost stalk frustrates a little.
-      if (a.phase === 'stalk' || a.phase === 'crouch' || a.phase === 'approach') applyImpulse(this.cat.drives, 'cursorLost');
+    // The prey hopped out of the start band: the cat lies low for it (the crouch's own window bounds
+    // the wait); only a cursor gone altogether, or lost mid-strike, ends the hunt at once.
+    const lost = !cur || this.now - run.seenAt > HUNT_LOST_GRACE_MS;
+    if (lost && (!cur || (a.phase !== 'notice' && a.phase !== 'approach' && a.phase !== 'stalk' && a.phase !== 'crouch'))) {
       this.loseInterest(a);
+      return;
+    }
+    if (!cur) return;
+    if (lost && (a.phase === 'approach' || a.phase === 'stalk')) {
+      this.stop();
+      this.phase(a, 'crouch', CROUCH_MIN_MS);
       return;
     }
     const dir: Facing = cur.x >= m.x ? 1 : -1;
@@ -338,7 +350,7 @@ export abstract class SimHunt extends SimStay {
     const over = this.now - run.cycleStartedAt > this.huntCycleBudgetMs();
     if (over && a.phase === 'stalk') {
       this.stop();
-      this.phase(a, 'crouch', 600);
+      this.phase(a, 'crouch', CROUCH_MIN_MS);
       return;
     }
     if (over && (a.phase === 'bat' || a.phase === 'swat' || a.phase === 'look')) {
@@ -352,6 +364,7 @@ export abstract class SimHunt extends SimStay {
         if (this.phaseElapsed(a)) {
           run.startedAt = this.now;
           this.startCycle(a, cur);
+          if (lost) this.phase(a, 'crouch', CROUCH_MIN_MS);
         }
         return;
       case 'approach': {
@@ -370,9 +383,11 @@ export abstract class SimHunt extends SimStay {
         const tx = cur.x - dir * (front + standoff);
         const r = m.walkRange;
         const x = r ? clamp(tx, r.x0, r.x1) : tx;
-        if (Math.abs(x - m.x) < 0.25 * bw || this.now - a.phaseAt > STALK_MAX_MS || a.goalStatus === 'unreachable') {
+        // Prey already within a pounce's reach is only crept up on for a moment: it will not wait.
+        const inReach = this.now - a.phaseAt > STALK_IN_REACH_MS && this.pounceLanding(cur).dist <= MOVEMENT.pounceReachBodyLengths * m.bodyWidth;
+        if (inReach || Math.abs(x - m.x) < 0.25 * bw || this.now - a.phaseAt > STALK_MAX_MS || a.goalStatus === 'unreachable') {
           this.stop();
-          this.phase(a, 'crouch', range(this.random, 600, 1600));
+          this.phase(a, 'crouch', range(this.random, CROUCH_MIN_MS, CROUCH_MAX_MS));
           return;
         }
         if (this.now < run.pauseUntil) {
@@ -396,10 +411,11 @@ export abstract class SimHunt extends SimStay {
         m.faceToward(cur.x, this.now);
         const elapsed = this.now - a.phaseAt;
         if (elapsed < a.phaseMs) return;
-        const moving = this.cursorIdle() < 300;
-        // A still cursor keeps the crouch alive (wiggling) up to 6 s; its next movement triggers the pounce.
-        if (!moving && elapsed < CROUCH_STILL_MAX_MS && !over) return;
-        if (!moving) {
+        // A still or absent prey keeps the crouch alive (wiggling) up to 6 s; its next movement in the start band triggers the pounce.
+        if (lost || this.cursorIdle() >= 300) {
+          if (elapsed < CROUCH_STILL_MAX_MS && !over) return;
+          // Waited for it in vain: a lost stalk frustrates a little.
+          if (lost) applyImpulse(this.cat.drives, 'cursorLost');
           this.loseInterest(a);
           return;
         }
@@ -472,23 +488,33 @@ export abstract class SimHunt extends SimStay {
     this.finish(next);
   }
 
+  /** How far a pounce at `cur` would carry the anchor if nothing limited it, and the geometry it lands with. */
+  private pounceLanding(cur: Point): { dist: number; front: number; shortPx: number } {
+    const m = this.mover;
+    const front = hitFrontPx('pounce', this.settings.appearance.size, m.scale);
+    const shortPx = pounceShortPx(m.bodyWidth, m.scale);
+    const dir: Facing = cur.x >= m.x ? 1 : -1;
+    return { dist: Math.abs(cur.x - dir * (front + shortPx) - m.x), front, shortPx };
+  }
+
   /** The ballistic pounce, landing short of the hotspot (hit region clearance, T8). */
   protected tryHuntPounce(cur: Point): boolean {
     const run = this.hunt;
     const m = this.mover;
     if (!run || !this.subAllowed('huntPounce') || this.disabled.has('chaseCursor')) return false;
     if (run.pounces >= MAX_POUNCES_PER_HUNT || this.now - this.lastPounceAt < POUNCE_COOLDOWN_MS || this.holdingStill() || this.huntGateNow !== null || this.typingGate()) return false;
+    // The 4 Hz gate may not have seen a press of this very tick: a pounce never follows one (B5b).
+    if (this.env?.pointerButtonDown === true || this.now - this.lastPressAt < PRESS_HOLD_MS) return false;
     if (m.balance > 0) return false;
     const dir: Facing = cur.x >= m.x ? 1 : -1;
     const size = this.settings.appearance.size;
     const scale = m.scale;
-    const front = hitFrontPx('pounce', size, scale);
-    const shortPx = pounceShortPx(m.bodyWidth, scale);
+    const { dist, front, shortPx } = this.pounceLanding(cur);
     const maxDist = MOVEMENT.pounceReachBodyLengths * m.bodyWidth;
     const r = m.walkRange;
-    const landX = cur.x - dir * (front + shortPx);
-    const dist = Math.abs(landX - m.x);
-    if (dist < 0.3 * m.bodyWidth || dist > maxDist || (r && (landX < r.x0 || landX > r.x1))) return false;
+    // Prey beyond the reach gets a leap after it, landing short (Mover.pounceAt clamps the same way).
+    const landX = m.x + dir * Math.min(dist, maxDist);
+    if (dist < 0.3 * m.bodyWidth || (r && (landX < r.x0 || landX > r.x1))) return false;
     const clearance = strikeClearancePx('pounce', { x: landX, y: m.y }, dir, cur, scale, size, { bw: m.bodyWidth, bh: m.bodyHeight });
     if (clearance < requiredClearancePx(scale)) return false;
     if (!m.pounceAt(this.now, { x: cur.x, y: m.y }, { crouchMs: MOVEMENT.pounceCrouchMinMs, shortPx, maxDistPx: maxDist, frontExtentPx: front })) return false;

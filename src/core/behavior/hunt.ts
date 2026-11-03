@@ -33,6 +33,13 @@ export const MAX_HUNT_CYCLES = 3;
 /** Stalk at most this long per cycle; a still cursor keeps the crouch alive (wiggling) up to this long. */
 export const STALK_MAX_MS = 6000;
 export const CROUCH_STILL_MAX_MS = 6000;
+/** The crouch before a pounce. */
+export const CROUCH_MIN_MS = 600;
+export const CROUCH_MAX_MS = 1600;
+/** Prey already within a pounce's reach is crept up on for this long, then the crouch. */
+export const STALK_IN_REACH_MS = 1200;
+/** Prey out of the start band for this long counts as lost: a stalk turns into lying low for it. */
+export const HUNT_LOST_GRACE_MS = 1000;
 /** Watch band: half-width in body widths, and how far below / above the feet in body heights. */
 export const WATCH_BAND_HALF_BW = 7;
 export const WATCH_BAND_BELOW_BH = 0.6;
