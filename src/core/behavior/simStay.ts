@@ -4,6 +4,7 @@ import type { ArrivalRoute, LeaveKind, StayEndReason } from '../../shared/behavi
 import type { Point } from '../../shared/geometry';
 import { clamp, rectCenter } from '../../shared/geometry';
 import type { DecisionTarget, TargetAvailability } from '../../shared/surfaceDiagnostics';
+import type { ScreenEdgeBand } from '../../shared/surfaces';
 import type { Pace } from '../movement';
 import { MOVEMENT } from '../movement';
 import type { Activity } from './activity';
@@ -20,6 +21,8 @@ import {
   leaveBackoffMs,
   PATROL_MIN_GAP_MS,
   STAY_HARD_CAP_MS,
+  STAY_LONELY_MIN_MS,
+  STAY_LONELY_NEED,
   STAY_OVERDUE_MS,
   STAY_RESUME_MIN_MS,
   STAY_RESUME_WINDOW_MS,
@@ -42,7 +45,13 @@ const EDGE_PEEK_HOLD_MS: readonly [number, number] = [1500, 3000];
 const EDGE_HOLD_MS: readonly [number, number] = [3000, 12_000];
 const EDGE_MIN_FULL_BH = 2;
 /** Between two visits. */
-const EDGE_COOLDOWN_MS: readonly [number, number] = [5 * 60_000, 10 * 60_000];
+const EDGE_COOLDOWN_MS: readonly [number, number] = [4 * 60_000, 8 * 60_000];
+
+/** The clear span of a band that holds the wall's foot. */
+function clearSpanAt(band: ScreenEdgeBand, foot: number): { y0: number; y1: number } | undefined {
+  const spans: ReadonlyArray<{ y0: number; y1: number }> | undefined = band.clearSpans;
+  return spans?.find((s) => s.y0 <= foot && s.y1 >= foot - 2);
+}
 
 export abstract class SimStay extends SimDrives {
   /**
@@ -108,6 +117,7 @@ export abstract class SimStay extends SimDrives {
         }
         // The leave intent knows which way it took (a climb-then-leap also starts on the wall).
         if (endReason === 'leave' && st.leaving !== null) leaveKind = st.leaving;
+        if (endReason === 'leave' && st.forcedLeave) endReason = 'stimulus';
         // A way off that was not the leave intent is an imposed end (right-censored in B3).
         if (endReason === 'leave' && st.leaving === null) {
           const cause = this.act.cause;
@@ -155,7 +165,7 @@ export abstract class SimStay extends SimDrives {
       const resumed = tok !== null && (tok.surfaceId === on.surfaceId || (ownerId !== null && tok.place === `w:${ownerId}`));
       const plannedMs = resumed ? Math.min(STAY_HARD_CAP_MS, Math.max(intent.plannedMs, tok.remainingMs)) : intent.plannedMs;
       if (resumed) this.resumeToken = null;
-      this.stay = { kind, surfaceId: on.surfaceId, ownerId, since: this.now, lastOnAt: this.now, arrivedBy, via: 'none', plannedMs, napMs: 0, nextLeaveAt: -Infinity, failures: [], leaving: null, pendingLeave: null, byMover: false, bailOut: null, resumed, overdue: false };
+      this.stay = { kind, surfaceId: on.surfaceId, ownerId, since: this.now, lastOnAt: this.now, arrivedBy, via: 'none', plannedMs, napMs: 0, nextLeaveAt: -Infinity, failures: [], leaving: null, pendingLeave: null, byMover: false, bailOut: null, resumed, forcedLeave: false, overdue: false };
       if (ownerId) this.placeVisits.set(`w:${ownerId}`, this.now);
       applyImpulse(this.cat.drives, 'arrivedUp');
       this.emitExcursion({ phase: 'arrive', at: this.now, surfaceKind: kind, arrivedBy, plannedMs: Math.round(plannedMs), dwellMs: 0, endReason: null, leaveKind: null, ...(resumed ? { resumed: true } : {}) });
@@ -200,7 +210,10 @@ export abstract class SimStay extends SimDrives {
       return;
     }
     const elapsed = this.now - st.since;
-    if (elapsed < Math.min(st.plannedMs, STAY_HARD_CAP_MS) || this.now < st.nextLeaveAt) {
+    // A strong social need ends the stay early, at least 60 s in (ADR 0003 §2.4).
+    const lonely = elapsed >= STAY_LONELY_MIN_MS && this.cat.drives.socialNeed > STAY_LONELY_NEED && !this.disabled.has('seekAttention');
+    st.forcedLeave = lonely && elapsed < st.plannedMs;
+    if ((elapsed < Math.min(st.plannedMs, STAY_HARD_CAP_MS) && !lonely) || this.now < st.nextLeaveAt) {
       if (!st.overdue && elapsed > st.plannedMs + STAY_OVERDUE_MS) st.overdue = true;
       return;
     }
@@ -610,7 +623,7 @@ export abstract class SimStay extends SimDrives {
     const room = Math.max(roomLeft, roomRight);
     if (room < 0.75 * this.bl) return null;
     const dir = roomRight >= roomLeft ? 1 : -1;
-    return { x: m.x + dir * Math.min(room, range(this.random, 2.5, 6) * this.bl), y: m.y };
+    return { x: m.x + dir * Math.min(room, range(this.random, 3, 10) * this.bl), y: m.y };
   }
 
   /** Starts tracking a trip up: exploring a top, climbing up a side, or visiting a tab strip from elsewhere. */
@@ -690,6 +703,12 @@ export abstract class SimStay extends SimDrives {
 
   // ---- screen edges (ADR 0003 §6.1) -------------------------------------------------------
 
+  /** The host's bands, or null: without them there are no screen edges at all (fail closed). */
+  protected edgeBandsNow(): readonly ScreenEdgeBand[] | null {
+    const list = this.env?.edgeBands;
+    return this.edgesOn && Array.isArray(list) ? (list as readonly ScreenEdgeBand[]) : null;
+  }
+
   /** Keeps a second of cursor positions: "moving toward the band in the last second". */
   protected noteCursorSample(): void {
     const c = this.env?.cursor;
@@ -723,7 +742,8 @@ export abstract class SimStay extends SimDrives {
   protected scanEdge(): EdgeTarget | null {
     const env = this.env;
     const m = this.mover;
-    if (!this.edgesOn || !env || !Array.isArray(env.edgeBands) || !m.grounded || this.typingGate() || this.now < this.nextEdgeAt) return null;
+    const bands = this.edgeBandsNow();
+    if (!bands || !env || !m.grounded || this.typingGate() || this.now < this.nextEdgeAt) return null;
     if (isElevatedKind(m.attachedSurface?.surfaceKind)) return null;
     while (this.edgePeeks.length > 0 && (this.edgePeeks[0] as number) < this.now - 3600_000) this.edgePeeks.shift();
     const peekOk = this.edgePeeks.length < EDGE_PEEKS_PER_HOUR;
@@ -736,10 +756,10 @@ export abstract class SimStay extends SimDrives {
       const w = m.wallTracks.find((t) => t.key === o.wallId);
       const side = w?.screenSide;
       if (!w || !side) continue;
-      const band = env.edgeBands.find((b) => b && b.displayId === w.displayId && b.side === side);
-      if (!band || !Array.isArray(band.clearSpans)) continue;
+      const band = bands.find((b) => b && b.displayId === w.displayId && b.side === side);
+      if (!band) continue;
       const foot = w.yBottom;
-      const span = band.clearSpans.find((s) => s.y0 <= foot && s.y1 >= foot - 2);
+      const span = clearSpanAt(band, foot);
       const grip = span ? Math.max(w.yTop, span.y0 + this.bl) : foot;
       const clear = span !== undefined && foot - grip >= EDGE_MIN_FULL_BH * bh;
       const peek = !clear || side === 'left';
@@ -764,12 +784,12 @@ export abstract class SimStay extends SimDrives {
 
   /** A clear band reachable from where the cat stands (the explore need grows x1, ADR 0003 §1.2). */
   protected override clearEdgeBand(): boolean {
-    const env = this.env;
-    if (!this.edgesOn || !env || !Array.isArray(env.edgeBands)) return false;
+    const bands = this.edgeBandsNow();
+    if (!bands) return false;
     for (const w of this.mover.wallTracks) {
       if (w.kind !== 'screenEdge') continue;
-      const band = env.edgeBands.find((b) => b && b.displayId === w.displayId && b.side === w.screenSide);
-      const span = band?.clearSpans?.find((s) => s.y0 <= w.yBottom && s.y1 >= w.yBottom - 2);
+      const band = bands.find((b) => b && b.displayId === w.displayId && b.side === w.screenSide);
+      const span = band ? clearSpanAt(band, w.yBottom) : undefined;
       if (span && w.yBottom - Math.max(w.yTop, span.y0 + this.bl) >= EDGE_MIN_FULL_BH * this.mover.bodyHeight) return true;
     }
     return false;

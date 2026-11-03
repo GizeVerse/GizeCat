@@ -613,6 +613,8 @@ export class Mover {
         return { kind: 'air' };
       default:
         if (this.attach) return { kind: 'surface', surfaceId: this.attach.surfaceId, surfaceKind: this.attach.surfaceKind, orientation: 'ledge' };
+        // The bail-out crouch on a ledge that just vanished: not on the floor yet.
+        if (this.modeValue === 'crouch' && this.surface.kind === 'ledge') return { kind: 'air' };
         return { kind: 'floor', displayId: this.navWorld.displayIdOn(this.surface, this.x) };
     }
   }
@@ -2528,7 +2530,8 @@ export class Mover {
     const limits = leaveLimits(this.cfg);
     if (b.reason === 'occluded') {
       const live = this.liveLedge(input, b.surfaceId);
-      const s = live ? (this.ledges.find((l) => l.key === b.surfaceId) ?? this.navWorld.ledgeSurface(live, false)) : null;
+      // Only a listed stretch is visible: a covered window's bare edge is served but never listed (provider).
+      const s = live ? (this.ledges.find((l) => l.key === b.surfaceId) ?? null) : null;
       if (s && s.phase !== 'leaving') {
         const lx = clamp(from.x, s.x0, s.x1);
         const plan = Math.abs(lx - from.x) <= maxAcross ? this.solveChecked(from, { x: lx, y: s.y }, null) : null;
@@ -2553,6 +2556,8 @@ export class Mover {
       if (plan) return { kind: 'jump', plan, target: c.t };
     }
     for (const w of this.walls) {
+      // A screen edge is the behaviour's to use (gated on the bands, ADR 0003 §6.1(b)), never a way out here.
+      if (w.kind === 'screenEdge') continue;
       if (b.reason === 'gone' && w.ownerId !== '' && w.ownerId === b.ownerId) continue;
       const outward = w.side === 'left' ? -1 : 1;
       if ((from.x - w.x) * outward < -1 || Math.abs(w.x - from.x) > maxAcross) continue;

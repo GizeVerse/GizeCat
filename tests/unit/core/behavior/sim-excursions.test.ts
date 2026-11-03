@@ -35,23 +35,25 @@ function drive(h: Harness, ms: number, each: (o: SimOutput) => boolean | void = 
 describe('exploration urge (v1.1.1)', () => {
   /** Growth of the urge over `ms` right after waking up, while the cat stays on the floor. */
   function growth(seed: number, traits: Partial<Traits>, ms: number, typing = false): number {
-    const h = userHarness(seed, traits);
-    h.env.typing = typing;
-    h.run(WAKE_MS, 100);
-    const u0 = decision(h).exploreUrge;
     // ADR 0003 §1.4: the need-driven picker may start a trip before the urge is high, so the rate is
-    // measured over the time the cat really is on the floor (at least 15 s) and scaled to `ms`.
-    const t0 = h.now;
-    let u1 = u0;
-    let until = t0;
-    drive(h, ms, (o) => {
-      if (elevated(o) || o.support.kind !== 'floor') return true;
-      u1 = decision(h).exploreUrge;
-      until = h.now;
-      return false;
-    });
-    expect(until - t0, `seed ${seed} left the floor too soon to measure`).toBeGreaterThanOrEqual(15_000);
-    return ((u1 - u0) * ms) / (until - t0);
+    // measured over the time the cat really is on the floor (at least 15 s, the next seed otherwise) and scaled to `ms`.
+    for (let k = 0; k < 12; k++) {
+      const h = userHarness(seed + 100 * k, traits);
+      h.env.typing = typing;
+      h.run(WAKE_MS, 100);
+      const u0 = decision(h).exploreUrge;
+      const t0 = h.now;
+      let u1 = u0;
+      let until = t0;
+      drive(h, ms, (o) => {
+        if (elevated(o) || o.support.kind !== 'floor') return true;
+        u1 = decision(h).exploreUrge;
+        until = h.now;
+        return false;
+      });
+      if (until - t0 >= 15_000) return ((u1 - u0) * ms) / (until - t0);
+    }
+    throw new Error(`seed ${seed}: the cat never stayed on the floor long enough to measure`);
   }
 
   it('grows on the floor with a way up in reach: 0 to 1 in 3-8 min, faster for a curious, playful cat, slower for a lazy one', () => {

@@ -72,7 +72,7 @@ function verdicts(id: BandId): Array<[string, unknown, string]> {
 const failing = (v: Array<[string, unknown, string]>): Array<[string, unknown, string]> => v.filter(([, , s]) => s === 'fail');
 
 describe(`ADR 0003 §14 short subset: ${KEY}, ${SEEDS.length} seeds x ${HOURS} sim-h (SIMULATED, widened)`, () => {
-  it.skip(
+  it(
     `budget: the subset's sim runs take <= ${BUDGET_MS / 1000} s of wall time`,
     () => {
       short();
@@ -81,13 +81,13 @@ describe(`ADR 0003 §14 short subset: ${KEY}, ${SEEDS.length} seeds x ${HOURS} s
     60_000,
   );
 
-  it.skip(`B1: ${BAND_TEXT.B1} (widened to ${SHORT_LIMITS.activeShare.join('-')})`, () => {
+  it(`B1: ${BAND_TEXT.B1} (widened to ${SHORT_LIMITS.activeShare.join('-')})`, () => {
     const v = verdicts('B1');
     expect(v).toHaveLength(1);
     expect(failing(v)).toEqual([]);
   });
 
-  it.skip(`B2: ${BAND_TEXT.B2} (arrivals widened to ${SHORT_LIMITS.arrivalsPerHour.join('-')} /h, climbs <= ${SHORT_LIMITS.windowClimbsMaxPerHour} /h)`, () => {
+  it(`B2: ${BAND_TEXT.B2} (arrivals widened to ${SHORT_LIMITS.arrivalsPerHour.join('-')} /h, climbs <= ${SHORT_LIMITS.windowClimbsMaxPerHour} /h)`, () => {
     const v = [...verdicts('B2'), ...verdicts('C-climbs')];
     expect(v).toHaveLength(2);
     expect(failing(v)).toEqual([]);
@@ -100,39 +100,39 @@ describe(`ADR 0003 §14 short subset: ${KEY}, ${SEEDS.length} seeds x ${HOURS} s
     expect(failing(verdicts('B3'))).toEqual([]);
   });
 
-  it.skip(`B4: ${BAND_TEXT.B4} (widened: no kind > ${SHORT_LIMITS.leaveMaxShare * 100} %, >= ${SHORT_LIMITS.leaveMinKinds} kinds)`, () => {
+  it(`B4: ${BAND_TEXT.B4} (widened: no kind > ${SHORT_LIMITS.leaveMaxShare * 100} %, >= ${SHORT_LIMITS.leaveMinKinds} kinds)`, () => {
     expect(short().stays.leave.departures).toBeGreaterThanOrEqual(8);
     expect(failing(verdicts('B4'))).toEqual([]);
   });
 
-  it.skip(`B8b: ${BAND_TEXT.B8b} (widened: w ${SHORT_LIMITS.waryMax * 100} %, i ${SHORT_LIMITS.irritableMax * 100} %)`, () => {
+  it(`B8b: ${BAND_TEXT.B8b} (widened: w ${SHORT_LIMITS.waryMax * 100} %, i ${SHORT_LIMITS.irritableMax * 100} %)`, () => {
     expect(failing(verdicts('B8b'))).toEqual([]);
   });
 
-  it.skip(`B9: ${BAND_TEXT.B9}`, () => {
+  it(`B9: ${BAND_TEXT.B9}`, () => {
     const c = short();
     expect(c.falls.physicsErrors).toBe(0);
     expect(c.falls.byCause.physics ?? 0).toBe(0);
     expect(c.falls.byCause.covered ?? 0).toBe(0);
   });
 
-  it.skip(`B10: ${BAND_TEXT.B10} (widened to ${SHORT_LIMITS.slipsPerAwakeHour.join('-')} per awake hour: at ~2 sim-h the Poisson floor is 0, so the floor itself is asserted in bands-full)`, () => {
+  it(`B10: ${BAND_TEXT.B10} (widened to ${SHORT_LIMITS.slipsPerAwakeHour.join('-')} per awake hour: at ~2 sim-h the Poisson floor is 0, so the floor itself is asserted in bands-full)`, () => {
     expect(failing(verdicts('B10'))).toEqual([]);
   });
 
-  it.skip(`B14: ${BAND_TEXT.B14}`, () => {
+  it(`B14: ${BAND_TEXT.B14}`, () => {
     const c = short();
     expect(c.stuckResets).toBe(0);
     expect(c.watchdogDecisions).toBe(0);
   });
 
-  it.skip(`B15: ${BAND_TEXT.B15} (widened: asleep ${SHORT_LIMITS.asleepShareOfPresent.join('-')}, naps ${SHORT_LIMITS.napsPerPresentHour.join('-')} /h; the nap floor is asserted in bands-full)`, () => {
+  it(`B15: ${BAND_TEXT.B15} (widened: asleep ${SHORT_LIMITS.asleepShareOfPresent.join('-')}, naps ${SHORT_LIMITS.napsPerPresentHour.join('-')} /h; the nap floor is asserted in bands-full)`, () => {
     const v = verdicts('B15');
     expect(v).toHaveLength(2);
     expect(failing(v)).toEqual([]);
   });
 
-  it.skip(`C-typing: ${BAND_TEXT['C-typing']}`, () => {
+  it(`C-typing: ${BAND_TEXT['C-typing']}`, () => {
     const c = short();
     expect(c.hunts.startedWhileTyping).toBe(0);
     expect(c.hunts.pouncesWhileTyping).toBe(0);

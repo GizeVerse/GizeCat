@@ -64,7 +64,8 @@ describe('surface verdict: window sides that lead to no top (real sim)', () => {
   });
 
   it('the snapped window beside a window high up: a top the cat knows but cannot reach, a side that leads nowhere: not "exploring"', () => {
-    const { left, assembled } = verdictFor({ snap: { x: 0, y: 0, width: 960, height: 1200 }, high: { x: 1150, y: 150, width: 600, height: 300 } }, 13, 3 * MIN);
+    // ADR 0003 §6.2: a wall jump now bridges a gap within reach of the snapped side, so the high window sits farther off.
+    const { left, assembled } = verdictFor({ snap: { x: 0, y: 0, width: 960, height: 1200 }, high: { x: 1720, y: 150, width: 190, height: 300 } }, 13, 3 * MIN);
     const d = assembled.diagnostics;
     expect(left).toBe(false);
     expect(d.nav.accepted.windowTop).toBe(1);

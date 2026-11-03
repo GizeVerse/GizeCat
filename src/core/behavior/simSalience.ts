@@ -472,7 +472,8 @@ export abstract class SimSalience extends SimReactions {
     if (!Number.isFinite(idleMs) || idleMs < 60_000) return;
     const s = this.act.state;
     if (ASLEEP_STATES.has(s)) {
-      this.request('wakingUp', 'stimulus', { then: this.greetFollowUp() });
+      // Only the sleep that waited for the user ends with their return; a nap of its own runs its course (B15).
+      if (this.act.variant === 'idleSleep' || this.act.variant === 'forced') this.request('wakingUp', 'stimulus', { then: this.greetFollowUp() });
       return;
     }
     if (idleMs >= 120_000 && !PHYSICAL_STATES.has(s)) {

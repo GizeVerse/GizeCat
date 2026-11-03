@@ -27,6 +27,8 @@ export interface RhythmContext {
   busySwitching: boolean;
   video: boolean;
   night: boolean;
+  /** A maximized window in front. */
+  maximized?: boolean;
 }
 
 /**
@@ -35,7 +37,17 @@ export interface RhythmContext {
  * episodes are calm-leaning; without the offset the default cat measured 10-16 % active against
  * B1's 20-35 % (SIMULATED, 2 seeds x 1 sim-h, L1).
  */
-export const RHYTHM_D_OFFSET = 0.1;
+export const RHYTHM_D_OFFSET = 0.19;
+/**
+ * A maximized window in front (the user's commonest state, B1b): nothing to explore but the floor and
+ * the screen edges, so the cat leans calm there; its active share stays at or below the floating-window one.
+ */
+export const RHYTHM_MAXIMIZED_DAMP = 0.22;
+/**
+ * Active episodes run this much longer than the ADR's starting U(25, 75) s: with the cat up on window tops a
+ * third or more of the time the default cat measured 17-18 % against B1's 20-35 % (SIMULATED, 3 seeds x 2 sim-h).
+ */
+export const ACTIVE_EPISODE_MUL = 1.3;
 
 /** D = 0.25A + 0.2 energy + 0.25 max(nP, nE, m) + 0.1 h + 0.1 (1 - zEff) - 0.45 zEff - c_ctx (+ RHYTHM_D_OFFSET). */
 export function rhythmDrive(c: RhythmContext): number {
@@ -49,7 +61,8 @@ export function rhythmDrive(c: RhythmContext): number {
     0.1 * clamp01(c.huntDrive) +
     0.1 * (1 - z) -
     0.45 * z -
-    ctx
+    ctx -
+    (c.maximized === true ? RHYTHM_MAXIMIZED_DAMP : 0)
   );
 }
 
@@ -80,7 +93,7 @@ export const CALM_EPISODE_MAX_MS = 600_000;
  */
 export function episodeLengthMs(r: Random, kind: Episode, c: Pick<RhythmContext, 'autonomy' | 'energyLevel'>): number {
   const A = clamp01(c.autonomy);
-  if (kind === 'active') return range(r, 25_000, 75_000) * (0.7 + 0.6 * clamp01(c.energyLevel)) * (0.8 + 0.4 * A);
+  if (kind === 'active') return ACTIVE_EPISODE_MUL * range(r, 25_000, 75_000) * (0.7 + 0.6 * clamp01(c.energyLevel)) * (0.8 + 0.4 * A);
   const ms = logNormalDraw(r, 100_000 * (1.3 - 0.6 * A), 0.5);
   return Number.isFinite(ms) ? Math.min(CALM_EPISODE_MAX_MS, Math.max(CALM_EPISODE_MIN_MS, ms)) : CALM_EPISODE_MIN_MS;
 }

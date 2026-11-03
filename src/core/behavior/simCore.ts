@@ -149,6 +149,8 @@ export const TAB_VISIT_COOLDOWN_MS = 120_000;
 export const TAB_INVESTIGATE_COOLDOWN_MS = 60_000;
 /** Between two hides the cat decides on by itself (rough-handling memory); reactions are not limited by it. */
 export const AUTO_HIDE_COOLDOWN_MS: readonly [number, number] = [6 * 60_000, 12 * 60_000];
+/** After a nap the cat does not settle down for another one this soon (B15: 0.8-2.5 naps per hour; interrupted naps do not stack up). */
+export const NAP_COOLDOWN_MS: readonly [number, number] = [12 * 60_000, 22 * 60_000];
 /**
  * v1.1.1: a trip up that failed (unreachable when tried, timed out, turned back on the side, let
  * go, target lost) is retried after this instead of the full climb / tab-strip visit cooldown.
@@ -293,6 +295,8 @@ export interface StayTrack {
   bailOut: BailOutKind | null;
   /** A resumed stay (ADR 0003 §2.4). */
   resumed: boolean;
+  /** The leave was forced by a need, not by the plan's end (end reason 'stimulus', ADR 0003 §2.4). */
+  forcedLeave: boolean;
   /** 'stay overdue' was counted for this stay. */
   overdue: boolean;
 }
@@ -536,6 +540,7 @@ export abstract class SimCore {
   protected edgeVisit: EdgeVisit | null = null;
   protected nextEdgeAt = -Infinity;
   protected nextHideAt = -Infinity;
+  protected nextNapAt = -Infinity;
   protected readonly edgePeeks: number[] = [];
   /** Recent cursor positions (the cursor moving toward a band within the last second). */
   protected readonly cursorSamples: Array<{ at: number; x: number }> = [];
@@ -1434,7 +1439,8 @@ export abstract class SimCore {
     const risk = clamp(m.nextLegRisk, 0, 1);
     const conf = clamp(this.cat.traits.confidence, 0, 1);
     const tired = 1 - clamp(this.cat.stats.energy, 0, 1);
-    const p = Math.min(0.2, (0.03 + 0.15 * risk) * (1.3 - conf) * (0.7 + 0.6 * tired));
+    // The ADR's base 0.03 measured below B10's floor (0.2-0.3 /h at ~10-20 take-offs/h, SIMULATED): the band wins.
+    const p = Math.min(0.2, (0.07 + 0.15 * risk) * (1.3 - conf) * (0.7 + 0.6 * tired));
     if (!chance(this.random, p)) return;
     const kind: SlipKind = chance(this.random, 0.7) ? 'scramble' : 'miss';
     if (m.armSlip(kind)) this.slipRisk = risk;

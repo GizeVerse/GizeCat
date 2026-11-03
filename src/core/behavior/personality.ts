@@ -2,7 +2,7 @@
 import type { PersistedCat, Stats, Traits } from '../../shared/catState';
 import { CAT_STATE_SCHEMA_VERSION, DrivesSchema, MemorySchema, StatsSchema } from '../../shared/catState';
 import type { Random } from './random';
-import { randomHex, safeRandom } from './random';
+import { mulberry32, randomHex, safeRandom } from './random';
 
 /** Traits never leave this band, so every cat is a believable cat (never 0 or 1). */
 export const TRAIT_MIN = 0.12;
@@ -45,6 +45,17 @@ export function randomTraits(random: Random): Traits {
   };
 }
 
+/**
+ * ADR 0003 §1.2: a new cat's startle sensitivity, 0.5 u + 0.5 (1 - confidence), with u from a separate
+ * generator seeded by a hash of `bornAt`: the main stream, and every seeded cat's other traits, stay as they are.
+ */
+export function startleSensitivityFor(bornAt: number, confidence: number): number {
+  let h = 0x811c9dc5;
+  const s = String(Math.floor(Number.isFinite(bornAt) ? bornAt : 0));
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  return clampTrait(0.5 * mulberry32(h >>> 0)() + 0.5 * (1 - confidence));
+}
+
 export function defaultStats(): Stats {
   return StatsSchema.parse({ bond: 0.15 });
 }
@@ -58,11 +69,14 @@ export function newPersistedCat(random: Random, nowEpochMs: number): PersistedCa
   const now = Number.isFinite(nowEpochMs) && nowEpochMs > 0 ? nowEpochMs : 0;
   const memory = MemorySchema.parse({});
   memory.lastSeenAt = now;
+  const catId = newCatId(random);
+  const traits = randomTraits(random);
+  traits.startleSensitivity = startleSensitivityFor(now, traits.confidence);
   return {
     schemaVersion: CAT_STATE_SCHEMA_VERSION,
-    catId: newCatId(random),
+    catId,
     bornAt: now,
-    traits: randomTraits(random),
+    traits,
     stats: defaultStats(),
     memory,
     drives: DrivesSchema.parse({}),

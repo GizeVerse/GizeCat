@@ -31,7 +31,11 @@ const REPEAT_DECAY = 0.7;
 const FAMILY_SIMILARITY = 0.35;
 const CURRENT_KEY_MUL = 0.4;
 const RECENT_PLACE_MUL = 0.7;
-const QUIET_CALM_MUL = 3;
+const QUIET_CALM_MUL = 5;
+/** The ADR's starting 0.25 measured 12-13 window climbs an hour for P1 once B1 was met (ceiling 12, SIMULATED). */
+const TRIP_BASE = 0.2;
+const TYPING_TRIP_MUL = 0.6;
+const PATROL_MIN_RHYTHM = 0.8;
 
 /** Variants that should not repeat back to back share a family (ADR 0003 §1.5). */
 export type Family = 'observe' | 'rest' | 'groom' | 'explore' | 'tripUp' | 'hunt' | 'play' | 'social' | 'wary' | 'leave' | 'other';
@@ -255,11 +259,14 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
     let C = 1;
     if (cls === 'active') {
       if (typingReact) C *= 0.35;
-      if (v.busySwitching) C *= 0.4;
+      // The ADR's 0.4 measured 6-8 % moving under fast switching with B1's rhythm (the cat is meant to stop and watch).
+      if (v.busySwitching) C *= 0.25;
       if (video) C *= 0.4;
       if (night) C *= 0.75;
     }
     if (family === 'observe' && typingReact) C *= 1.2;
+    // Typing: trips up are rarer on top of that (B6: 0.2-0.6 x the rate of a user who is not typing).
+    if (family === 'tripUp' && typingRaw) C *= TYPING_TRIP_MUL;
     if (typingRaw && (family === 'hunt' || family === 'play' || c.variant === 'ambush')) C = 0;
     if (c.target && cursor && cat && (cls === 'active' || family === 'hunt') && distBl(c.target, cursor, cat.bw) < 3) C *= 0.2 + 0.8 * W;
     if (v.avoidCursor && c.target && cursor && cat && cls === 'active' && family !== 'leave' && distBl(c.target, cursor, cat.bw) < 4) C = 0;
@@ -277,6 +284,8 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
     let R = rhythmWeight(episode, cls, m, onStay);
     // Typing, video or fast switching: calm picks keep their chance even in an active episode (§1.4 C_c).
     if (episode === 'active' && cls !== 'active' && (typingReact || video || v.busySwitching)) R *= QUIET_CALM_MUL;
+    // The walk along a top or strip is what keeps a long stay alive, whatever the episode (at most once per 45 s anyway).
+    if (c.variant === 'patrol' && onStay && !typingRaw) R = Math.max(R, PATROL_MIN_RHYTHM);
     const u = base * interest * F * C * N * E * R * P;
     if (Number.isFinite(u) && u > 0) out.push({ item: c, score: u });
   };
@@ -326,14 +335,14 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
   const trip = (stripBonus: boolean): number => 0.2 + 0.5 * nE + (stripBonus ? 0.2 * m : 0) + urge;
   if (v.perchTarget) {
     const p = v.perchTarget;
-    add(cand('inspectingWindow', { variant: 'explore', windowId: p.windowId, target: p.point, surfaceKind: 'windowTop', place: `w:${p.windowId}` }), 0.25, trip(false));
+    add(cand('inspectingWindow', { variant: 'explore', windowId: p.windowId, target: p.point, surfaceKind: 'windowTop', place: `w:${p.windowId}` }), TRIP_BASE, trip(false));
   }
   if (v.climbTarget && v.climbTarget.dir === 'up') {
     const owner = v.climbTarget.ownerId;
-    add(cand('walking', { variant: 'climb', target: v.climbTarget.point, then: 'walking', thenVariant: 'patrol', surfaceKind: 'windowTop', place: owner ? `w:${owner}` : `c:${Math.round(v.climbTarget.point.x)}` }), 0.25, trip(false));
+    add(cand('walking', { variant: 'climb', target: v.climbTarget.point, then: 'walking', thenVariant: 'patrol', surfaceKind: 'windowTop', place: owner ? `w:${owner}` : `c:${Math.round(v.climbTarget.point.x)}` }), TRIP_BASE, trip(false));
   }
   if (v.tabStripTarget && v.standingOn !== 'tabStrip') {
-    add(cand('walking', { variant: 'tabStrip', target: v.tabStripTarget, then: 'resting', surfaceKind: 'tabStrip', place: v.tabStripOwner ? `w:${v.tabStripOwner}` : `s:${Math.round(v.tabStripTarget.y)}` }), 0.25, trip(true));
+    add(cand('walking', { variant: 'tabStrip', target: v.tabStripTarget, then: 'resting', surfaceKind: 'tabStrip', place: v.tabStripOwner ? `w:${v.tabStripOwner}` : `s:${Math.round(v.tabStripTarget.y)}` }), TRIP_BASE, trip(true));
   }
   if (v.edgeTarget) {
     // ADR 0003 §1.4: x2 when no other elevated target exists.

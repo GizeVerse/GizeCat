@@ -10,7 +10,7 @@ import { chance, range } from './random';
 import { PHYSICAL_STATES, STATE_SPECS } from './states';
 import { addStat } from './stats';
 import { SimUtility } from './simUtility';
-import { SURPRISE_COOLDOWN_MS, LANDING_MS, TRAVEL_TIMEOUT_MS, CLIMB_TIMEOUT_MS } from './simCore';
+import { SURPRISE_COOLDOWN_MS, LANDING_MS, NAP_COOLDOWN_MS, TRAVEL_TIMEOUT_MS, CLIMB_TIMEOUT_MS } from './simCore';
 
 export abstract class SimActivities extends SimUtility {
   // ---- activities -----------------------------------------------------------------
@@ -177,6 +177,7 @@ export abstract class SimActivities extends SimUtility {
         }
         break;
       case 'sleeping':
+        if (a.variant !== 'intro') this.nextNapAt = this.now + range(this.random, NAP_COOLDOWN_MS[0], NAP_COOLDOWN_MS[1]);
         if (this.now - a.startedAt >= 30_000) {
           bumpCounter(this.cat.memory, 'naps');
           this.rememberEvent('nap');

@@ -113,6 +113,7 @@ export abstract class SimDrives extends SimCore {
       busySwitching: this.now < this.busyUntil,
       video,
       night: hour >= 23 || hour < 6,
+      maximized: fg?.maximized === true,
     };
   }
 

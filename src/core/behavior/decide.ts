@@ -155,7 +155,7 @@ export interface DecisionView {
   /** What the cat stands on. */
   standingOn: 'floor' | SurfaceKind;
   /** A climb up a window side to its top corner, or down from the window top the cat stands on (null: none, off or cooling down). */
-  climbTarget: { point: Point; dir: 'up' | 'down' } | null;
+  climbTarget: { point: Point; dir: 'up' | 'down'; ownerId?: string } | null;
   /** A tab-strip rest point worth a visit, or a walk along the strip the cat stands on (null: none, off or cooling down). */
   tabStripTarget: Point | null;
   /** Standing on a window top: sit on its edge and look down into the window. */

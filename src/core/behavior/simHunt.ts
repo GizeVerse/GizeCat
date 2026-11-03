@@ -43,6 +43,8 @@ import { activityClassOf } from '../../shared/behaviorProfile';
 
 /** Mischief swat: a cursor passing this close (body widths) while the cat sits. */
 const MISCHIEF_SWAT_BW = 1;
+/** The cooldown after a hunt a gate cut off before its first pounce. */
+const ABORTED_HUNT_COOLDOWN_MS: readonly [number, number] = [45_000, 90_000];
 /** In the petting zone below this speed (DIP/s) the cursor is aiming at the cat. */
 const PETTING_AIM_DIP_S = 300;
 /** However fast, this many evaluations (1.5 s at 4 Hz) in the petting zone end a hunt. */
@@ -287,6 +289,8 @@ export abstract class SimHunt extends SimStay {
 
   /** A gate ended the hunt: interrupted, then a calm sit (no startle). */
   protected interruptHunt(gate: HuntGate): void {
+    // Cut off before it got to pounce (the cursor over the cat, a taskbar): the long cooldown is not used up.
+    if (this.hunt && this.hunt.pounces === 0) this.huntReadyAt = Math.min(this.huntReadyAt, this.now + range(this.random, ABORTED_HUNT_COOLDOWN_MS[0], ABORTED_HUNT_COOLDOWN_MS[1]));
     this.endHunt('interrupted', gate);
     if (this.act.state === 'chasingCursor') this.finish({ state: 'idle', init: {} });
   }

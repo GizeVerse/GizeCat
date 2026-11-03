@@ -6,6 +6,7 @@ import { clamp, isFiniteRect, rectCenter } from '../../shared/geometry';
 import type { SimEnv } from '../../shared/sim';
 import type { FollowUp } from './activity';
 import type { Candidate, DecisionView } from './decide';
+import { userIdleForSleep } from './decide';
 import { range } from './random';
 import type { TransitionCause } from './states';
 import { PHYSICAL_STATES } from './states';
@@ -72,7 +73,7 @@ export abstract class SimUtility extends SimSalience {
       elevatedMs: this.topVisit ? this.now - this.topVisit.since : 0,
       recentStates: this.recentStates,
       current: this.act.state,
-      isCoolingDown: (s) => this.coolingDown(s) || (s === 'hiding' && this.now < this.nextHideAt),
+      isCoolingDown: (s) => this.coolingDown(s) || (s === 'hiding' && this.now < this.nextHideAt) || (s === 'fallingAsleep' && this.now < this.nextNapAt && !userIdleForSleep({ userIdleMs: env.userIdleMs, behavior: this.settings.behavior })),
       // ---- v1.2 (ADR 0003 §1.4) ----
       drives: this.cat.drives,
       zEff: this.zEffNow(),

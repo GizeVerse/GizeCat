@@ -29,6 +29,9 @@ export const PATROL_MIN_GAP_MS = 45_000;
 /** The resume token (ADR 0003 §2.4): the surface must come back within this long, the new stay lasts at least this. */
 export const STAY_RESUME_WINDOW_MS = 3 * 60_000;
 export const STAY_RESUME_MIN_MS = 60_000;
+/** A social need above this, this far into the stay, ends it early (end reason 'stimulus'). */
+export const STAY_LONELY_NEED = 0.9;
+export const STAY_LONELY_MIN_MS = 60_000;
 /** Leave kinds remembered for N_leave. */
 export const LEAVE_HISTORY = 4;
 

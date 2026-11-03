@@ -47,14 +47,17 @@ export function huntBaseline(cursorPlay: number): number {
   return 0.05 * clamp01(cursorPlay);
 }
 
-/** k_h = 0.2 H (0.6 + 0.8 playfulness)(0.6 + 0.8 playNeed). */
+/**
+ * k_h = 0.28 H (0.6 + 0.8 playfulness)(0.6 + 0.8 playNeed). The ADR's starting 0.2 (with the foreground
+ * term below at 0.3) measured 3.2-3.5 hunts/h in U-play against B5's 4-12 (SIMULATED): the band wins.
+ */
 export function huntGain(cursorPlay: number, playfulness: number, playNeed: number): number {
-  return 0.2 * clamp01(cursorPlay) * (0.6 + 0.8 * clamp01(playfulness)) * (0.6 + 0.8 * clamp01(playNeed));
+  return 0.28 * clamp01(cursorPlay) * (0.6 + 0.8 * clamp01(playfulness)) * (0.6 + 0.8 * clamp01(playNeed));
 }
 
-/** θ_h = 0.55 - 0.15 H - 0.05 m, + 0.3 (1 - W) while the cursor is inside the foreground window. */
+/** θ_h = 0.55 - 0.15 H - 0.05 m, + 0.2 (1 - W) while the cursor is inside the foreground window. */
 export function huntThreshold(cursorPlay: number, mischief: number, workDisruption: number, cursorInForeground: boolean): number {
-  return 0.55 - 0.15 * clamp01(cursorPlay) - 0.05 * clamp01(mischief) + (cursorInForeground ? 0.3 * (1 - clamp01(workDisruption)) : 0);
+  return 0.55 - 0.15 * clamp01(cursorPlay) - 0.05 * clamp01(mischief) + (cursorInForeground ? 0.2 * (1 - clamp01(workDisruption)) : 0);
 }
 
 /** Time between hunt starts: U(4, 7) min x (1.6 - H). */
