@@ -115,7 +115,7 @@ describe('screen edges (ADR 0003 §6.1)', () => {
     for (const seed of [1, 2, 3]) expect(run(seed, 40 * MIN, left, { cursorX: 4 * BW }).samples).toEqual([]);
   }, 120_000);
 
-  it('the cat climbs down when the cursor comes within 2 bw; a stray climb never lasts past the hold cap', () => {
+  it('the cat climbs down when the cursor comes within 2 bw', () => {
     let tested = 0;
     for (const seed of [1, 2, 3, 4, 5, 6]) {
       const h = new Harness({ seed, persisted: catWith(seed) });
@@ -292,8 +292,8 @@ describe('deliberate slips (ADR 0003 §6.6)', () => {
 });
 
 describe('landings and render hints (ADR 0003 §6.2, §6.4)', () => {
-  function drop(y: number): { clips: string[]; impact: number; seed: number } {
-    const h = new Harness({ seed: 4 });
+  function drop(y: number): { clips: string[]; impact: number; sounds: string[] } {
+    const h = new Harness({ seed: 4, settings: settingsWith({ sound: { enabled: true } }) });
     h.run(WAKE_MS);
     const o0 = h.last!;
     h.step([{ type: 'pointer.dragStart', at: { x: o0.x, y: o0.y - 30 } }]);
@@ -303,20 +303,25 @@ describe('landings and render hints (ADR 0003 §6.2, §6.4)', () => {
     h.env.dragCursor = null;
     const clips: string[] = [];
     let impact = 0;
+    const sounds: string[] = [];
     h.run(4000, 33, (hh) => {
       if (clips.at(-1) !== hh.last!.clip) clips.push(hh.last!.clip);
       impact = Math.max(impact, hh.last!.impact ?? 0);
+      if (hh.last!.sound) sounds.push(hh.last!.sound.kind);
     });
-    return { clips, impact, seed: 4 };
+    return { clips, impact, sounds };
   }
 
   it('a low drop lands softly; a high one plays the impact, then the recovery', () => {
     const low = drop(950);
     expect(low.clips).toContain('land');
     expect(low.clips).not.toContain('impact');
+    expect(low.sounds).not.toContain('thud');
     const high = drop(100);
-    expect(high.clips).toContain('impact');
+    expect(high.clips.indexOf('impact')).toBeGreaterThanOrEqual(0);
+    expect(high.clips.indexOf('landRecover')).toBeGreaterThan(high.clips.indexOf('impact'));
     expect(high.impact).toBeGreaterThan(low.impact);
+    expect(high.sounds).toContain('thud');
   });
 
   it('jumps report their kind in the air; a narrow ledge reports balance', () => {
@@ -341,7 +346,7 @@ describe('landings and render hints (ADR 0003 §6.2, §6.4)', () => {
 describe('on a tab strip (ADR 0003 §2.2, §7.4, §1.8)', () => {
   const STRIP = tabStrip('b', 700, 600, 1500, { x0: 700, x1: 1400 }, 1000);
 
-  it('walks along it at most once per 45 s, watches the active tab, sits at its end, and never leaves it for a plan of its own before its time', () => {
+  it('walks along it at most once per 45 s, watches the active tab and sits at its end', () => {
     const seen = new Set<string>();
     const patrols: number[] = [];
     for (const seed of [1, 2, 3, 4]) {

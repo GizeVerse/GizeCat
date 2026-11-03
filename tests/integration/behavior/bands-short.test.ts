@@ -93,7 +93,7 @@ describe(`ADR 0003 §14 short subset: ${KEY}, ${SEEDS.length} seeds x ${HOURS} s
     expect(failing(v)).toEqual([]);
   });
 
-  it.skip(`B3: ${BAND_TEXT.B3} (KM median ${SHORT_LIMITS.kmMedianS.join('-')} s, p10 >= ${SHORT_LIMITS.kmP10MinS} s, plannedMs median ${SHORT_LIMITS.plannedMedianS.join('-')} s, p10 >= ${SHORT_LIMITS.plannedP10MinS} s; tails in the full tier)`, () => {
+  it(`B3: ${BAND_TEXT.B3} (KM median ${SHORT_LIMITS.kmMedianS.join('-')} s, p10 >= ${SHORT_LIMITS.kmP10MinS} s, plannedMs median ${SHORT_LIMITS.plannedMedianS.join('-')} s, p10 >= ${SHORT_LIMITS.plannedP10MinS} s; tails in the full tier)`, () => {
     const c = short();
     expect(c.stays.km.events).toBeGreaterThanOrEqual(8);
     expect(c.stays.planned.n).toBeGreaterThanOrEqual(8);
