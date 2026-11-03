@@ -150,13 +150,13 @@ export const CLIMB_COOLDOWN_MS: readonly [number, number] = [90_000, 240_000];
 export const TAB_VISIT_COOLDOWN_MS = 120_000;
 export const TAB_INVESTIGATE_COOLDOWN_MS = 60_000;
 /** "Never in the way" (ADR 0003 §14): trips up in any rolling hour, so window churn cannot push climbs past the ceiling of 12. */
-export const TRIPS_PER_HOUR_MAX = 9;
-/** While the user is typing (or typed in the last 30 s) trips up keep at least this far apart (B6: 0.2-0.6 x the rate of a user who is not typing). */
-export const TYPING_TRIP_GAP_MS = 15 * 60_000;
+export const TRIPS_PER_HOUR_MAX = 8;
+/** While the user is typing (or typed in the last minute) trips up keep at least this far apart (B6: 0.2-0.6 x the rate of a user who is not typing). */
+export const TYPING_TRIP_GAP_MS = 20 * 60_000;
 /** Between two hides the cat decides on by itself (rough-handling memory); reactions are not limited by it. */
 export const AUTO_HIDE_COOLDOWN_MS: readonly [number, number] = [6 * 60_000, 12 * 60_000];
 /** After a nap the cat does not settle down for another one this soon (B15: 0.8-2.5 naps per hour; interrupted naps do not stack up). */
-export const NAP_COOLDOWN_MS: readonly [number, number] = [16 * 60_000, 28 * 60_000];
+export const NAP_COOLDOWN_MS: readonly [number, number] = [13 * 60_000, 24 * 60_000];
 /** A nap of its own runs this much longer than the state's dwell (B15: handling at the REAL rate wakes many early). */
 export const NAP_DWELL_MUL = 1.6;
 /**

@@ -33,7 +33,7 @@ import type { EdgeVisit, StayTrack, TargetScan } from './simCore';
 import { EXCURSION_RETRY_MS, APPROACH_MIN_MS, APPROACH_MAX_MS, PERCH_CANDIDATES, STRIP_CANDIDATES, TRAVEL_TIMEOUT_MS, TRIPS_PER_HOUR_MAX, TYPING_TRIP_GAP_MS, URGE_SCAN_MS, TOP_PATROL_BL, isElevatedKind } from './simCore';
 
 /** Typing counts as recent this long after the last key-like input (the spacing of trips up). */
-const TYPING_RECENT_MS = 30_000;
+const TYPING_RECENT_MS = 60_000;
 /** ADR 0003 §6.1(b): how far the cursor must be from the band to start a climb, or a peek, body widths. */
 const EDGE_START_CURSOR_BW = 3;
 const EDGE_PEEK_CURSOR_BW = 6;
