@@ -30,8 +30,10 @@ import {
 import { ASLEEP_STATES, PHYSICAL_STATES, STATE_SPECS } from './states';
 import { SimDrives } from './simDrives';
 import type { EdgeVisit, StayTrack, TargetScan } from './simCore';
-import { EXCURSION_RETRY_MS, APPROACH_MIN_MS, APPROACH_MAX_MS, PERCH_CANDIDATES, STRIP_CANDIDATES, TRAVEL_TIMEOUT_MS, URGE_SCAN_MS, TOP_PATROL_BL, isElevatedKind } from './simCore';
+import { EXCURSION_RETRY_MS, APPROACH_MIN_MS, APPROACH_MAX_MS, PERCH_CANDIDATES, STRIP_CANDIDATES, TRAVEL_TIMEOUT_MS, TRIPS_PER_HOUR_MAX, TYPING_TRIP_GAP_MS, URGE_SCAN_MS, TOP_PATROL_BL, isElevatedKind } from './simCore';
 
+/** Typing counts as recent this long after the last key-like input (the spacing of trips up). */
+const TYPING_RECENT_MS = 30_000;
 /** ADR 0003 §6.1(b): how far the cursor must be from the band to start a climb, or a peek, body widths. */
 const EDGE_START_CURSOR_BW = 3;
 const EDGE_PEEK_CURSOR_BW = 6;
@@ -626,6 +628,15 @@ export abstract class SimStay extends SimDrives {
     return { x: m.x + dir * Math.min(room, range(this.random, 3, 10) * this.bl), y: m.y };
   }
 
+  /** The hour's trips up are used up (TRIPS_PER_HOUR_MAX). */
+  protected tripsExhausted(): boolean {
+    const t = this.tripStarts;
+    while (t.length > 0 && (t[0] as number) <= this.now - 3600_000) t.shift();
+    if (t.length >= TRIPS_PER_HOUR_MAX) return true;
+    const last = t[t.length - 1];
+    return last !== undefined && this.now - this.lastTypingRawAt < TYPING_RECENT_MS && this.now - last < TYPING_TRIP_GAP_MS;
+  }
+
   /** Starts tracking a trip up: exploring a top, climbing up a side, or visiting a tab strip from elsewhere. */
   protected beginExcursion(a: Activity): void {
     const m = this.mover;
@@ -635,6 +646,7 @@ export abstract class SimStay extends SimDrives {
     else if (a.state === 'walking' && a.variant === 'climb' && a.target && a.target.y < m.y - m.bodyHeight) kind = 'climb';
     else if (a.state === 'walking' && a.variant === 'tabStrip' && on?.surfaceKind !== 'tabStrip') kind = 'tabStrip';
     if (!kind) return;
+    this.tripStarts.push(this.now);
     this.excursion = { kind, act: a, from: on?.surfaceId ?? null, fromElevated: on !== null && isElevatedKind(on.surfaceKind), leftGround: false, arrived: false };
   }
 

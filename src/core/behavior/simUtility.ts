@@ -36,6 +36,7 @@ export abstract class SimUtility extends SimSalience {
     this.scan = scan;
     this.decisionTargets = { ...scan.status };
     const fg = env.foreground && !env.foreground.minimized && isFiniteRect(env.foreground.rect) ? env.foreground : null;
+    const noTrips = this.tripsExhausted();
     const media = fg !== null && (fg.category === 'video' || fg.category === 'game' || fg.category === 'media');
     return {
       traits: this.cat.traits,
@@ -56,7 +57,7 @@ export abstract class SimUtility extends SimSalience {
       cursor: cur,
       foreground: fg ? { center: rectCenter(fg.rect), distBodyLengths: Math.abs(rectCenter(fg.rect).x - this.mover.x) / this.bl } : null,
       favoriteSpot: this.favoriteSpotTarget(),
-      perchTarget: scan.status.perch === 'available' ? scan.perch : null,
+      perchTarget: scan.status.perch === 'available' && !noTrips ? scan.perch : null,
       tabStripOwner: scan.strip?.ownerId ?? null,
       edgeTarget: this.stay ? null : this.scanEdge(),
       resumePlace: this.resumeToken && this.now <= this.resumeToken.until ? this.resumeToken.place : null,
@@ -64,8 +65,8 @@ export abstract class SimUtility extends SimSalience {
       cornerTarget: this.cornerTarget(),
       typingIntensity: this.settings.behavior.reactToTyping && Number.isFinite(env.typingIntensity) ? clamp(env.typingIntensity, 0, 1) : 0,
       standingOn: this.mover.attachedSurface?.surfaceKind ?? 'floor',
-      climbTarget: scan.status.climb === 'available' ? scan.climb : null,
-      tabStripTarget: this.tabStripTarget(scan),
+      climbTarget: scan.status.climb === 'available' && !noTrips ? scan.climb : null,
+      tabStripTarget: noTrips && this.mover.attachedSurface?.surfaceKind !== 'tabStrip' ? null : this.tabStripTarget(scan),
       edgeLook: this.edgeLookTarget(),
       surpriseReady: this.reactions.ready('surprise', this.now),
       exploreUrge: this.exploreUrge,
@@ -78,6 +79,7 @@ export abstract class SimUtility extends SimSalience {
       drives: this.cat.drives,
       zEff: this.zEffNow(),
       typingRaw: this.typingGate(),
+      sinceTypingMs: this.now - this.lastTypingRawAt,
       episode: this.rhythm.started ? this.rhythm.episode : 'none',
       stay: this.stayView(),
       recentKeys: this.recentKeys,

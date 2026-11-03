@@ -179,6 +179,8 @@ export interface DecisionView {
   current: BehaviorState;
   isCoolingDown: (s: BehaviorState) => boolean;
   // ---- v1.2 (ADR 0003 §1.4), optional: absent = derived from the v1.1 fields above ----------
+  /** ms since the last raw keyboard-like input (Infinity: none yet). */
+  sinceTypingMs?: number;
   /** The window of `tabStripTarget`, for place novelty (in memory only). */
   tabStripOwner?: string | null;
   /** An outer screen edge the cat may visit now (gated on env.edgeBands, ADR 0003 §6.1(b)). */

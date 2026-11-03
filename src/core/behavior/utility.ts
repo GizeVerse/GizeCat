@@ -35,6 +35,10 @@ const QUIET_CALM_MUL = 5;
 /** The ADR's starting 0.25 measured 12-13 window climbs an hour for P1 once B1 was met (ceiling 12, SIMULATED). */
 const TRIP_BASE = 0.2;
 const TYPING_TRIP_MUL = 0.6;
+/** With 'React to typing' off nothing else damps a trip while the user types (§1.4 reads the raw signal here). */
+const TYPING_TRIP_RAW_MUL = 0.25;
+const TYPING_TRIP_RECENT_MS = 30_000;
+const TYPING_TRIP_RECENT_MUL = 0.35;
 const PATROL_MIN_RHYTHM = 0.8;
 
 /** Variants that should not repeat back to back share a family (ADR 0003 §1.5). */
@@ -266,7 +270,9 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
     }
     if (family === 'observe' && typingReact) C *= 1.2;
     // Typing: trips up are rarer on top of that (B6: 0.2-0.6 x the rate of a user who is not typing).
-    if (family === 'tripUp' && typingRaw) C *= TYPING_TRIP_MUL;
+    if (family === 'tripUp' && typingRaw) C *= typingReact ? TYPING_TRIP_MUL : TYPING_TRIP_RAW_MUL;
+    // ... and for a while after: a pause between sentences is no invitation to climb the window being written in.
+    else if (family === 'tripUp' && (v.sinceTypingMs ?? Infinity) < TYPING_TRIP_RECENT_MS) C *= TYPING_TRIP_RECENT_MUL;
     if (typingRaw && (family === 'hunt' || family === 'play' || c.variant === 'ambush')) C = 0;
     if (c.target && cursor && cat && (cls === 'active' || family === 'hunt') && distBl(c.target, cursor, cat.bw) < 3) C *= 0.2 + 0.8 * W;
     if (v.avoidCursor && c.target && cursor && cat && cls === 'active' && family !== 'leave' && distBl(c.target, cursor, cat.bw) < 4) C = 0;
@@ -294,6 +300,7 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
   const idleSleep = userIdleForSleep(v);
   let nap = idleSleep ? 4 : 2 * Math.pow(Math.max(0, zE - 0.25), 1.5);
   if (onStay && !idleSleep && zE <= 0.5) nap = 0;
+  if (!idleSleep && v.isCoolingDown('fallingAsleep')) nap = 0;
   const spot = v.favoriteSpot;
   if (!onStay && spot && spot.distBodyLengths > 1.5 && (zE > 0.3 || idleSleep) && nap > 0) {
     add(cand('walking', { variant: 'favorite', target: spot.point, then: 'fallingAsleep' }), 0.6, nap * 1.1);

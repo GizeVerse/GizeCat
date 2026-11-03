@@ -317,7 +317,8 @@ function fuzz(seed: number, ticks: number, opts: { disabledAll?: boolean } = {})
     }
     for (const req of out.requests) {
       if (req.type === 'perception') {
-        check(h.now - lastPerception >= 30_000, 'perception requested too often');
+        // The sim honours settings.perception.minIntervalSec (20 s by default); curious and watching spells follow each other more often in v1.2.
+        check(h.now - lastPerception >= settings.perception.minIntervalSec * 1000, 'perception requested too often');
         lastPerception = h.now;
       } else if (req.type === 'save') {
         check(h.now - lastSave >= 60_000, 'save requested too often');

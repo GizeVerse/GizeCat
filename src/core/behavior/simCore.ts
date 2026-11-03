@@ -121,6 +121,8 @@ export const PET_RATE_TAU_MS = 2 * 3600_000;
 export const PET_SESSION_GAP_MS = 10_000;
 /** Annoyance one full-strength stroke adds to a reacting or irritated cat (scaled by 1.3 - patience). */
 export const PET_IRRITATION = 0.15;
+/** At most this much annoyance from one petting bout of a reacting or irritated cat. */
+export const PET_BOUT_ANNOYANCE_MAX = 0.1;
 /** At least this annoyed, the cat hides after a reaction and refuses to be stroked. */
 export const IRRITATED_ANNOYANCE = 0.6;
 export const TAP_WINDOW_MS = 8000;
@@ -147,10 +149,16 @@ export const TASKBAR_WAKE_COOLDOWN_MS = 10 * 60_000;
 export const CLIMB_COOLDOWN_MS: readonly [number, number] = [90_000, 240_000];
 export const TAB_VISIT_COOLDOWN_MS = 120_000;
 export const TAB_INVESTIGATE_COOLDOWN_MS = 60_000;
+/** "Never in the way" (ADR 0003 §14): trips up in any rolling hour, so window churn cannot push climbs past the ceiling of 12. */
+export const TRIPS_PER_HOUR_MAX = 9;
+/** While the user is typing (or typed in the last 30 s) trips up keep at least this far apart (B6: 0.2-0.6 x the rate of a user who is not typing). */
+export const TYPING_TRIP_GAP_MS = 15 * 60_000;
 /** Between two hides the cat decides on by itself (rough-handling memory); reactions are not limited by it. */
 export const AUTO_HIDE_COOLDOWN_MS: readonly [number, number] = [6 * 60_000, 12 * 60_000];
 /** After a nap the cat does not settle down for another one this soon (B15: 0.8-2.5 naps per hour; interrupted naps do not stack up). */
-export const NAP_COOLDOWN_MS: readonly [number, number] = [12 * 60_000, 22 * 60_000];
+export const NAP_COOLDOWN_MS: readonly [number, number] = [16 * 60_000, 28 * 60_000];
+/** A nap of its own runs this much longer than the state's dwell (B15: handling at the REAL rate wakes many early). */
+export const NAP_DWELL_MUL = 1.6;
 /**
  * v1.1.1: a trip up that failed (unreachable when tried, timed out, turned back on the side, let
  * go, target lost) is retried after this instead of the full climb / tab-strip visit cooldown.
@@ -511,7 +519,7 @@ export abstract class SimCore {
   protected readonly dragTrace: Array<{ at: number; speedDip: number }> = [];
   protected lastDragPoint: Point | null = null;
   /** The petting bout: strokes (sim time), irritability added, whether the overstimulation roll was made. */
-  protected petBout = { lastAt: -Infinity, strokes: [] as number[], count: 0, irritation: 0, swatRolled: false };
+  protected petBout = { lastAt: -Infinity, strokes: [] as number[], count: 0, irritation: 0, annoyed: 0, swatRolled: false };
   /** Leave kinds of the last stays (N_leave). */
   protected readonly leaveHistory: LeaveKind[] = [];
   protected lastPatrolAt = -Infinity;
@@ -539,6 +547,7 @@ export abstract class SimCore {
   protected edgePlan: EdgeTarget | null = null;
   protected edgeVisit: EdgeVisit | null = null;
   protected nextEdgeAt = -Infinity;
+  protected readonly tripStarts: number[] = [];
   protected nextHideAt = -Infinity;
   protected nextNapAt = -Infinity;
   protected readonly edgePeeks: number[] = [];
@@ -1415,6 +1424,8 @@ export abstract class SimCore {
       st.via = step.supportLost.reason === 'gone' ? 'gone' : 'covered';
       st.bailOut = m.bailOutKind;
     }
+    // A bail-out onto a window side is a climb too (the ceiling of 12 an hour holds under window churn).
+    if (m.bailOutKind === 'wall') this.tripStarts.push(this.now);
     if (this.mode === 'normal') {
       this.react('earFlick');
       const fg = this.env?.foreground;

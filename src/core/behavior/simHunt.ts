@@ -477,7 +477,7 @@ export abstract class SimHunt extends SimStay {
     const run = this.hunt;
     const m = this.mover;
     if (!run || !this.subAllowed('huntPounce') || this.disabled.has('chaseCursor')) return false;
-    if (run.pounces >= MAX_POUNCES_PER_HUNT || this.now - this.lastPounceAt < POUNCE_COOLDOWN_MS || this.holdingStill() || this.huntGateNow !== null) return false;
+    if (run.pounces >= MAX_POUNCES_PER_HUNT || this.now - this.lastPounceAt < POUNCE_COOLDOWN_MS || this.holdingStill() || this.huntGateNow !== null || this.typingGate()) return false;
     if (m.balance > 0) return false;
     const dir: Facing = cur.x >= m.x ? 1 : -1;
     const size = this.settings.appearance.size;

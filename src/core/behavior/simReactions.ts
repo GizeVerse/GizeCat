@@ -10,7 +10,7 @@ import { clamp } from '../../shared/geometry';
 import type { LandingInfo } from '../movement';
 import { impactLevel } from '../movement';
 import type { Activity, FollowUp } from './activity';
-import { addFear, applyImpulse, applyStroke, applyThrowIrritation, raiseWariness } from './drives';
+import { FRANTIC_STROKES_PER_S, addFear, applyImpulse, applyStroke, applyThrowIrritation, raiseWariness } from './drives';
 import { requiredClearancePx, strikeClearancePx } from './hunt';
 import { addRateEvent, bumpCounter } from './memory';
 import { fallCauseOf } from './profile';
@@ -31,7 +31,7 @@ import {
 import { ASLEEP_STATES, CALM_STATES, PHYSICAL_STATES, REACTION_STATES } from './states';
 import { addStat, applyPet } from './stats';
 import { SimHunt } from './simHunt';
-import { PET_RATE_TAU_MS, PET_SESSION_GAP_MS, PET_IRRITATION, IRRITATED_ANNOYANCE, TAP_WINDOW_MS, DRAG_LOST_MS, LANDING_MS, ZERO, isFinitePoint } from './simCore';
+import { PET_BOUT_ANNOYANCE_MAX, PET_RATE_TAU_MS, PET_SESSION_GAP_MS, PET_IRRITATION, IRRITATED_ANNOYANCE, TAP_WINDOW_MS, DRAG_LOST_MS, LANDING_MS, ZERO, isFinitePoint } from './simCore';
 
 /** Reactions that count as recent startles (st). */
 const STARTLE_LIKE: ReadonlySet<ThrowReactionKind> = new Set<ThrowReactionKind>(['surprise', 'startledJump', 'flight']);
@@ -473,9 +473,8 @@ export abstract class SimReactions extends SimHunt {
     this.noteInteraction();
     const st = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5;
     const irritated = this.irritatedByPetting();
-    // Stroking a reacting or irritated cat does not soothe it, it irritates it further.
-    if (irritated) addStat(this.cat.stats, 'annoyance', PET_IRRITATION * st * (1.3 - i.patience));
-    else applyPet(this.cat.stats, this.cat.traits, st);
+    // Stroking a reacting or irritated cat does not soothe it (it irritates it further, below).
+    if (!irritated) applyPet(this.cat.stats, this.cat.traits, st);
     // v1.2 drives (ADR 0003 §1.2): a stroke satisfies the social need (never the play need); gentle
     // strokes soothe wariness, fear and irritability; frantic ones, or strokes right after a throw,
     // irritate a little (at most +0.1 per bout).
@@ -484,7 +483,17 @@ export abstract class SimReactions extends SimHunt {
       bout.strokes = [];
       bout.count = 0;
       bout.irritation = 0;
+      bout.annoyed = 0;
       bout.swatRolled = false;
+    }
+    // Stroking a reacting or irritated cat irritates it further: without limit when frantic, a bounded amount per
+    // calm bout (B8: it recovers with petting at the real rate).
+    if (irritated) {
+      const frantic = bout.strokes.filter((t) => t > this.now - 1000).length + 1 > FRANTIC_STROKES_PER_S;
+      const more = PET_IRRITATION * st * (1.3 - i.patience);
+      const allowed = frantic ? more : Math.min(more, Math.max(0, PET_BOUT_ANNOYANCE_MAX - bout.annoyed));
+      addStat(this.cat.stats, 'annoyance', allowed);
+      bout.annoyed += allowed;
     }
     bout.lastAt = this.now;
     bout.strokes = bout.strokes.filter((t) => t > this.now - 1000);

@@ -10,7 +10,7 @@ import { chance, range } from './random';
 import { PHYSICAL_STATES, STATE_SPECS } from './states';
 import { addStat } from './stats';
 import { SimUtility } from './simUtility';
-import { SURPRISE_COOLDOWN_MS, LANDING_MS, NAP_COOLDOWN_MS, TRAVEL_TIMEOUT_MS, CLIMB_TIMEOUT_MS } from './simCore';
+import { SURPRISE_COOLDOWN_MS, LANDING_MS, NAP_COOLDOWN_MS, NAP_DWELL_MUL, TRAVEL_TIMEOUT_MS, CLIMB_TIMEOUT_MS } from './simCore';
 
 export abstract class SimActivities extends SimUtility {
   // ---- activities -----------------------------------------------------------------
@@ -21,6 +21,7 @@ export abstract class SimActivities extends SimUtility {
     switch (s) {
       case 'sleeping':
         this.oneShot = null;
+        if (a.variant === null) a.dwellMs *= NAP_DWELL_MUL * (1 + 0.3 * this.darkBias());
         break;
       case 'wakingUp':
         this.phase(a, 'stretch', a.quick ? 600 : 1600);
@@ -177,7 +178,7 @@ export abstract class SimActivities extends SimUtility {
         }
         break;
       case 'sleeping':
-        if (a.variant !== 'intro') this.nextNapAt = this.now + range(this.random, NAP_COOLDOWN_MS[0], NAP_COOLDOWN_MS[1]);
+        if (a.variant !== 'intro') this.nextNapAt = this.now + range(this.random, NAP_COOLDOWN_MS[0], NAP_COOLDOWN_MS[1]) * (1 - 0.5 * this.darkBias());
         if (this.now - a.startedAt >= 30_000) {
           bumpCounter(this.cat.memory, 'naps');
           this.rememberEvent('nap');
@@ -490,6 +491,11 @@ export abstract class SimActivities extends SimUtility {
         return;
       default:
         this.stop();
+        // Typing started: no paw at the air near the cursor (B6), whatever 'React to typing' says.
+        if (a.cause !== 'command' && a.cause !== 'interaction' && this.typingGate()) {
+          this.finish();
+          return;
+        }
         if (a.phase === 'crouch' && this.phaseElapsed(a)) this.phase(a, 'pawAt', range(this.random, 2000, 5000));
         else if (a.phase === 'pawAt' && this.phaseElapsed(a)) this.finish();
     }

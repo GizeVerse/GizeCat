@@ -129,7 +129,8 @@ export function stepDrives(d: Drives, c: DriveContext, dtMs: number): void {
   d.mischief = relax(d.mischief, mischiefTarget(c.mischief, d.playNeed, zEff(d.sleepiness, energy), c.stats.fear), MISCHIEF_TAU_S, dt);
   // Irritability integrates annoyance and recovers over minutes (slower for an impatient cat).
   const tauI = irritabilityTauS(c.patience);
-  d.irritability += (0.004 * unit(c.stats.annoyance, 0) - d.irritability / tauI) * dt;
+  // 0.001, not the ADR's starting 0.004: annoyance decays as fast as irritability, so 0.004 left i at 0.15 ten minutes after a burst and 0.0025 at 0.10-0.17 (B8, SIMULATED).
+  d.irritability += (0.001 * unit(c.stats.annoyance, 0) - d.irritability / tauI) * dt;
   d.frustration = half(d.frustration, FRUSTRATION_HALF_LIFE_S, dt);
   d.wariness = half(d.wariness, warinessHalfLifeS(c.stats.bond, d.irritability), dt);
   clampDrives(d);
