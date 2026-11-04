@@ -1,5 +1,6 @@
 // ADR 0003 §15.1: the pure v1.2 models, without the sim: jump-down limits, the stay intent and the
-// leave decision, the scorer, the sub-act gate property (§9.4), startle sensitivity, rough memory.
+// leave decision, the scorer, the sub-act gate property (§9.4), the rhythm with nothing to climb,
+// startle sensitivity, rough memory.
 import { describe, expect, it } from 'vitest';
 import type { BehaviorId } from '../../../../src/shared/settings';
 import { SUB_BEHAVIOR_GATES, SUB_BEHAVIORS, subBehaviorAllowed } from '../../../../src/shared/behaviorGates';
@@ -8,9 +9,10 @@ import type { LeaveOption } from '../../../../src/core/movement';
 import type { Candidate, DecisionView } from '../../../../src/core/behavior/decide';
 import { startleSensitivityFor } from '../../../../src/core/behavior/personality';
 import { RoughMemory } from '../../../../src/core/behavior/reactions';
+import { activeEpisodeProbability, RHYTHM_NOTHING_TO_CLIMB_DAMP, rhythmDrive, type RhythmContext } from '../../../../src/core/behavior/rhythm';
 import { chooseLeave, drawStayIntent, jumpDownLimitsFor, leaveAllowed, leaveBackoffMs, scoreLeaveOptions } from '../../../../src/core/behavior/stay';
 import { pickProbabilities, scoreAll, subActsOf } from '../../../../src/core/behavior/utility';
-import { decisionView } from './fixtures';
+import { decisionView, Harness, WAKE_MS } from './fixtures';
 
 const quantile = (sorted: readonly number[], q: number): number => sorted[Math.floor(q * (sorted.length - 1))] as number;
 const DAY = 24 * 3600_000;
@@ -190,6 +192,45 @@ describe('scorer (ADR 0003 §1.3-§1.5)', () => {
       }
     }
     expect(checked).toBeGreaterThan(10_000);
+  });
+});
+
+describe('the rhythm with nothing to climb (ADR 0003 §1.6, B1c)', () => {
+  const ctx = (o: Partial<RhythmContext> = {}): RhythmContext => ({ autonomy: 0.8, energy: 0.8, energyLevel: 0.6, playNeed: 0.3, exploreNeed: 0.3, mischief: 0.2, huntDrive: 0.1, zEff: 0.2, typing: false, typingIntensity: 0, busySwitching: false, video: false, night: false, ...o });
+
+  it('nothing to climb leans the episodes calm', () => {
+    expect(rhythmDrive(ctx({ nothingToClimb: true }))).toBeCloseTo(rhythmDrive(ctx()) - RHYTHM_NOTHING_TO_CLIMB_DAMP, 9);
+    expect(activeEpisodeProbability(ctx({ nothingToClimb: true }))).toBeLessThan(activeEpisodeProbability(ctx()));
+  });
+
+  /** A cat on the floor with a saturated explore need, as the sim hands it to the rhythm. */
+  const seen = (env: (h: Harness) => void): RhythmContext => {
+    const h = new Harness({ seed: 3 });
+    env(h);
+    h.run(WAKE_MS + 4000);
+    const sim = h.sim as unknown as { rhythmContext(): RhythmContext; cat: { drives: { exploreNeed: number } } };
+    sim.cat.drives.exploreNeed = 1;
+    return sim.rhythmContext();
+  };
+
+  it('a need nothing around can satisfy does not make the cat restless: an empty desktop, a maximized window', () => {
+    const empty = seen(() => {});
+    expect(empty.nothingToClimb).toBe(true);
+    expect(empty.exploreNeed).toBe(0);
+    const max = seen((h) => {
+      h.env.foreground = { id: 'w', rect: { x: 0, y: 0, width: 1920, height: 1040 }, processName: 'app.exe', category: 'code', minimized: false, maximized: true, fullscreen: false, title: '' } as never;
+    });
+    expect(max.nothingToClimb).toBe(true);
+    expect(max.exploreNeed).toBe(0);
+  });
+
+  it('with a window to climb the need counts in full', () => {
+    const open = seen((h) => {
+      h.env.windows = { w: { x: 300, y: 500, width: 900, height: 540 } };
+    });
+    expect(open.nothingToClimb).toBe(false);
+    expect(open.exploreNeed).toBe(1);
+    expect(rhythmDrive(open)).toBeGreaterThan(rhythmDrive(seen(() => {})));
   });
 });
 

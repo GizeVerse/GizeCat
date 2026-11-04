@@ -112,12 +112,14 @@ export abstract class SimDrives extends SimCore {
     const fg = env?.foreground && !env.foreground.minimized ? env.foreground : null;
     const video = (fg !== null && (fg.category === 'video' || fg.category === 'game' || fg.category === 'media')) || this.screenIsVideo();
     const hour = env?.localHour ?? 12;
+    const nothingToClimb = fg?.maximized === true || this.nothingWithinReach();
     return {
       autonomy: unit(b.autonomy, 0.6),
       energy: this.cat.stats.energy,
       energyLevel: this.cat.traits.energyLevel,
       playNeed: d.playNeed,
-      exploreNeed: d.exploreNeed,
+      // A need that nothing around can satisfy saturates and must not make the cat restless (B1c).
+      exploreNeed: nothingToClimb ? 0 : d.exploreNeed,
       mischief: d.mischief,
       huntDrive: d.huntDrive,
       zEff: this.zEffNow(),
@@ -126,7 +128,7 @@ export abstract class SimDrives extends SimCore {
       busySwitching: this.now < this.busyUntil,
       video,
       night: hour >= 23 || hour < 6,
-      nothingToClimb: fg?.maximized === true || this.nothingWithinReach(),
+      nothingToClimb,
     };
   }
 

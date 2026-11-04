@@ -14,7 +14,9 @@ import type { HuntGateInput } from './hunt';
 import {
   CROUCH_MAX_MS,
   CROUCH_MIN_MS,
+  CROUCH_PRESS_GRACE_MS,
   CROUCH_STILL_MAX_MS,
+  CROUCH_WAIT_MIN_MS,
   HUNT_LOST_GRACE_MS,
   HUNT_STEP_MS,
   MAX_HUNT_CYCLES,
@@ -280,7 +282,7 @@ export abstract class SimHunt extends SimStay {
   protected beginHunt(a: Activity): void {
     const H = clamp(Number.isFinite(this.settings.behavior.cursorPlay) ? this.settings.behavior.cursorPlay : 0, 0, 1);
     this.huntReadyAt = this.now + huntCooldownMs(this.random, H);
-    this.hunt = { startedAt: this.now, cycles: 0, cycleStartedAt: this.now, pounces: 0, pounceTimes: [], minClearancePx: null, caught: false, seenAt: this.now, seenAtPoint: null, ended: false, standoffBw: 2, pauseUntil: -Infinity, pauseFromX: this.mover.x, pauseEveryBw: 1.5 };
+    this.hunt = { startedAt: this.now, cycles: 0, cycleStartedAt: this.now, pounces: 0, pounceTimes: [], minClearancePx: null, caught: false, seenAt: this.now, seenAtPoint: null, ended: false, standoffBw: 2, crouchWaitMs: CROUCH_STILL_MAX_MS, pauseUntil: -Infinity, pauseFromX: this.mover.x, pauseEveryBw: 1.5 };
     this.huntLanded = null;
     bumpCounter(this.cat.memory, 'hunts');
     bumpCounter(this.cat.memory, 'chasesStarted');
@@ -444,7 +446,9 @@ export abstract class SimHunt extends SimStay {
         if (elapsed < a.phaseMs) return;
         // A still or absent prey keeps the crouch alive (wiggling) up to 6 s; its next movement in the start band triggers the pounce.
         if (lost || this.cursorIdle() >= 300) {
-          if (elapsed < CROUCH_STILL_MAX_MS && !over) return;
+          if (elapsed < run.crouchWaitMs && !over) return;
+          // The leap would follow a press too closely: it holds on a little, it does not give up over that.
+          if (this.pounceHeld() && elapsed < run.crouchWaitMs + CROUCH_PRESS_GRACE_MS) return;
           // Waited for it in vain: a lost stalk frustrates a little. Often it leaps anyway, at the prey that never
           // moved or at the place the prey vanished from; a hunter's leap at nothing is a miss like any other.
           if (lost) applyImpulse(this.cat.drives, 'cursorLost');
@@ -482,6 +486,7 @@ export abstract class SimHunt extends SimStay {
     run.cycles++;
     run.cycleStartedAt = this.now;
     run.standoffBw = range(this.random, 1.5, 2.5);
+    run.crouchWaitMs = range(this.random, CROUCH_WAIT_MIN_MS, CROUCH_STILL_MAX_MS);
     run.pauseUntil = -Infinity;
     run.pauseFromX = this.mover.x;
     run.pauseEveryBw = range(this.random, 1, 2);
@@ -556,9 +561,12 @@ export abstract class SimHunt extends SimStay {
     const { dist, front, shortPx } = this.pounceLanding(cur);
     const maxDist = MOVEMENT.pounceReachBodyLengths * m.bodyWidth;
     const r = m.walkRange;
-    // Prey beyond the reach gets a leap after it, landing short (Mover.pounceAt clamps the same way).
+    // Prey beyond the reach, or past the end of what it stands on, gets a leap after it that lands short
+    // (Mover.pounceAt clamps the same way). The clearance below takes the full leap, the closest it can get.
     const landX = m.x + dir * Math.min(dist, maxDist);
-    if (dist < 0.3 * m.bodyWidth || (r && (landX < r.x0 || landX > r.x1))) return false;
+    const margin = MOVEMENT.pounceEndMarginBodyLengths * m.bodyWidth;
+    const leap = r ? (clamp(landX, r.x0 + margin, r.x1 - margin) - m.x) * dir : (landX - m.x) * dir;
+    if (dist < 0.3 * m.bodyWidth || leap < 0.3 * m.bodyWidth) return false;
     // The clearance from the aim, and from the real hotspot when the aim is the place the prey left.
     const body = { bw: m.bodyWidth, bh: m.bodyHeight };
     const toAim = strikeClearancePx('pounce', { x: landX, y: m.y }, dir, cur, scale, size, body);

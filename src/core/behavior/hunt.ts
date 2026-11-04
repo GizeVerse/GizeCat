@@ -31,8 +31,8 @@ export const BUSY_HAND_REST_MS = 3000;
 export const PRESS_NEAR_BW = 4;
 /** After petting the cursor is not prey for this long. */
 export const PETTING_HOLD_MS = 3000;
-/** A taskbar that just slid away still blocks hunts this long. */
-export const TASKBAR_HIDE_HOLD_MS = 1000;
+/** A taskbar that just slid away still blocks hunts this long: the hand that used it is at work (ADR 0003 §4.3). */
+export const TASKBAR_HIDE_HOLD_MS = 10_000;
 /** A cursor still for longer than this stops being prey (except during a running crouch). */
 export const STILL_CURSOR_MS = 1500;
 /** A cursor resting in the watch band stays of interest this long after its last movement. */
@@ -48,13 +48,17 @@ export const MAX_HUNT_CYCLES = 3;
 /** Stalk at most this long per cycle; a still cursor keeps the crouch alive (wiggling) up to this long. */
 export const STALK_MAX_MS = 6000;
 export const CROUCH_STILL_MAX_MS = 6000;
+/** How long one crouch waits for a still prey: from this much up to CROUCH_STILL_MAX_MS, drawn per cycle. */
+export const CROUCH_WAIT_MIN_MS = 2500;
 /** The crouch before a pounce. */
 export const CROUCH_MIN_MS = 600;
 export const CROUCH_MAX_MS = 1600;
 /** Prey already within a pounce's reach is crept up on for this long, then the crouch. */
 export const STALK_IN_REACH_MS = 1200;
 /** A crouch that waited in vain (the prey sat still or left) still ends in the leap this often; else the cat loses interest. */
-export const WAITED_POUNCE_P = 0.6;
+export const WAITED_POUNCE_P = 0.85;
+/** A crouch whose wait ended with a press still too recent for the leap wiggles on this much longer. */
+export const CROUCH_PRESS_GRACE_MS = 3000;
 /** Prey out of the start band for this long counts as lost: a stalk turns into lying low for it. */
 export const HUNT_LOST_GRACE_MS = 1000;
 /** Watch band: half-width in body widths, and how far below / above the feet in body heights. */
@@ -72,11 +76,12 @@ export function huntBaseline(cursorPlay: number): number {
 }
 
 /**
- * k_h = 0.28 H (0.6 + 0.8 playfulness)(0.6 + 0.8 playNeed). The ADR's starting 0.2 (with the foreground
- * term below at 0.3) measured 3.2-3.5 hunts/h in U-play against B5's 4-12 (SIMULATED): the band wins.
+ * k_h = 0.34 H (0.6 + 0.8 playfulness)(0.6 + 0.8 playNeed). The ADR's starting 0.2 (with the foreground
+ * term below at 0.3) measured 3.2-3.5 hunts/h in U-play against B5's 4-12, and 0.28 left ordinary use short
+ * of B5d's pounces (SIMULATED): the bands win.
  */
 export function huntGain(cursorPlay: number, playfulness: number, playNeed: number): number {
-  return 0.28 * clamp01(cursorPlay) * (0.6 + 0.8 * clamp01(playfulness)) * (0.6 + 0.8 * clamp01(playNeed));
+  return 0.34 * clamp01(cursorPlay) * (0.6 + 0.8 * clamp01(playfulness)) * (0.6 + 0.8 * clamp01(playNeed));
 }
 
 /** θ_h = 0.4 - 0.15 H - 0.05 m, + 0.1 (1 - W) while the cursor is inside the foreground window. */

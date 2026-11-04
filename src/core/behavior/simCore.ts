@@ -347,6 +347,8 @@ export interface HuntRun {
   ended: boolean;
   /** This cycle's stalk stand-off from the hotspot, body widths (1.5-2.5), and the current stalk pause's end. */
   standoffBw: number;
+  /** How long this cycle's crouch waits for a still prey, ms. */
+  crouchWaitMs: number;
   pauseUntil: number;
   /** Where the last stalk pause ended (x, px) and after how many body widths of creeping the next one comes (1-2). */
   pauseFromX: number;

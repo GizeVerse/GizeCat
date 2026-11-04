@@ -1,4 +1,4 @@
-// ADR 0003 §14, the short band subset in `verify fast` (SIMULATED): L1 / P2 / U-active, 2 seeds x 1
+// ADR 0003 §14, the short band subset in `verify fast` (SIMULATED): L1 / P2 / U-active, 2 seeds x 2
 // sim-h through the profile harness (tests/profile, hook records only), each band binomially /
 // Poisson widened for the short run (tests/profile/metrics.ts widenShare, widenRate), wall-time
 // budget <= 20 s. Over budget, the subset moves to the profile tier (bands-full.test.ts).
@@ -12,7 +12,8 @@ import { runProfile, summarizeCell, type CellSummary } from '../../profile/behav
 import { widenRate, widenShare } from '../../profile/metrics';
 
 const SEEDS = [1, 2];
-const HOURS = 1;
+// Two sim-hours: most stays end by the user's hand at the REAL handling rate, one hour holds too few own departures.
+const HOURS = 2;
 const SIM_HOURS = SEEDS.length * HOURS;
 /** Wall-time budget of the whole subset (ADR 0003 §14). */
 const BUDGET_MS = 20_000;
@@ -28,7 +29,7 @@ const rate = (b: readonly [number, number], hours = SIM_HOURS): [number, number]
   return [Math.round(w.lo * 100) / 100, Math.round(w.hi * 100) / 100];
 };
 
-/** The §14 limits widened for 2 seeds x 1 sim-h (the stays: ~15-30 per cell). */
+/** The §14 limits widened for 2 seeds x 2 sim-h (the stays: ~30 per cell). */
 const SHORT_LIMITS: BandLimits = {
   ...FULL_LIMITS,
   activeShare: share(FULL_LIMITS.activeShare),

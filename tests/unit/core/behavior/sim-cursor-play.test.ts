@@ -114,8 +114,8 @@ describe('F6: pouncing at the pointer', () => {
         const o = hh.last as SimOutput;
         if (o.state === 'jumping' && jumpFrom === null) jumpFrom = o.x;
         if (o.state === 'landing' && jumpFrom !== null) {
-          // A pounce, not a leap: at most pounceMaxBodyLengths.
-          expect(Math.abs(o.x - jumpFrom)).toBeLessThanOrEqual(MOVEMENT.pounceMaxBodyLengths * BL + 2);
+          // A pounce, not a leap: within the hunting pounce's reach (ADR 0003 §4.2, at most 3.2 body widths).
+          expect(Math.abs(o.x - jumpFrom)).toBeLessThanOrEqual(MOVEMENT.pounceReachBodyLengths * BL + 2);
           // Back on the floor (the work-area bottom less the app's floor inset).
           expect(o.y).toBe(hh.floorY());
           jumpFrom = null;
