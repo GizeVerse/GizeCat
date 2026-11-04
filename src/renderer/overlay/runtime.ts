@@ -135,6 +135,8 @@ export class OverlayRuntime {
     if (!isRenderState(s)) return;
     // The player plays each cue once and drops stale ones, so a duplicate snapshot is harmless.
     if (s.sound && s.visible) this.sound.play(s.sound, s.t);
+    // Hidden or away: a cue already playing ends now, not at its own end (ADR 0003 §10).
+    if (!s.visible) this.sound.close();
     if (!this.interp.push(s, performance.now())) return;
     if (s.visible) this.startHeartbeat();
     else this.stopHeartbeat();

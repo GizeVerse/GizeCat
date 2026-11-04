@@ -143,6 +143,23 @@ describe('overlay runtime sound', () => {
     expect(a.starts).toBe(starts);
   });
 
+  it('a playing cue ends when the cat is hidden: the context closes at once, once, and a later cue opens a new one (RES-7)', () => {
+    onRender!(snapshot(1, 10_000, true, { kind: 'purr', at: 10_000 }));
+    const a = StubAudio.made[0]!;
+    expect(a.closed).toBe(0);
+    onRender!(snapshot(2, 10_033, true));
+    expect(a.closed, 'still shown').toBe(0);
+    onRender!(snapshot(3, 10_066, false));
+    expect(a.closed, 'hidden').toBe(1);
+    onRender!(snapshot(4, 10_099, false));
+    expect(a.closed).toBe(1);
+    expect(StubAudio.made).toHaveLength(1);
+    vi.advanceTimersByTime(2000);
+    onRender!(snapshot(5, 12_100, true, { kind: 'trill', at: 12_100 }));
+    expect(StubAudio.made).toHaveLength(2);
+    expect(StubAudio.made[1]!.closed).toBe(0);
+  });
+
   it('closes the context after 10 s of silence, and on dispose', () => {
     onRender!(snapshot(1, 10_000, true, { kind: 'meow', at: 10_000 }));
     const a = StubAudio.made[0]!;
