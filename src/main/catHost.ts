@@ -12,11 +12,11 @@
 //   and a content-free press count), sampled on the cursor poll and every tick; env.cursorIdleMs.
 // - env.edgeBands only from a host that has the click guard (the Win32 obstacle source): without
 //   it the sim never climbs a screen edge.
-// - clickGuardRectsPx(): the T8 guard. Whenever the cat's bounds come within one body width of a
-//   cling band, while it flies to or from a screen edge, and while it bails out of a covered or
-//   vanished window ledge, every obstacle window meeting its bounds (GetWindowRect grown by 8 DIP)
-//   is cut out of its hit region. Fail closed: a stale, incomplete or failing obstacle source makes
-//   the whole cat click-through.
+// - clickGuardRectsPx(): the T8 guard. While the cat clings to a screen edge, while it flies to or
+//   from one, and while it bails out of a covered or vanished window ledge, every obstacle window
+//   meeting its bounds (GetWindowRect grown by 8 DIP) is cut out of its hit region. Anywhere else,
+//   the floor next to a screen side included, it takes the mouse as usual. Fail closed: a stale,
+//   incomplete or failing obstacle source makes the whole cat click-through in those states.
 import { distanceToRect } from '../core/display/displayMath';
 import { suggestPollIntervalMs, wallGuardRects } from '../core/interaction/clickThrough';
 import { CAT_BASE_WIDTH_DIP, type BehaviorState } from '../shared/cat';
@@ -62,7 +62,7 @@ const NO_SURFACES: readonly Surface[] = Object.freeze([]);
 export const CURSOR_IDLE_MOVE_DIP = 2;
 /** v1.2 T8 guard: obstacles are grown by this much (DIP, scaled): resize borders and shadows. */
 export const GUARD_OBSTACLE_MARGIN_DIP = 8;
-/** The guard is on while the cat's bounds are within this many body widths of a cling band. */
+/** A leap or wall jump counts as an edge flight while the cat's bounds are within this many body widths of a cling band. */
 export const GUARD_BAND_REACH_BW = 1;
 /** Failing closed, the whole cat plus this margin (px) is cut out (the hit zone grows by a hysteresis margin). */
 const FAIL_CLOSED_MARGIN_PX = 16;
@@ -353,7 +353,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
     const out = lastOutput;
     const bounds = out && out.visible && !hidden ? out.boundsPx : null;
-    const reason: CatHostDebug['clickGuard']['reason'] = !bounds ? null : bailGuard ? 'bailOut' : edgeFlight ? 'edgeFlight' : nearBand(bounds) || (out?.support.kind === 'surface' && out.support.surfaceKind === SCREEN_EDGE_KIND) ? 'band' : null;
+    const clinging = out?.support.kind === 'surface' && out.support.surfaceKind === SCREEN_EDGE_KIND;
+    const reason: CatHostDebug['clickGuard']['reason'] = !bounds ? null : bailGuard ? 'bailOut' : edgeFlight ? 'edgeFlight' : clinging ? 'band' : null;
     if (!bounds || reason === null) {
       setArmed(false, t);
       setGuard('idle', null);
