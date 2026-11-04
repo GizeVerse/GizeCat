@@ -1,6 +1,6 @@
 // ADR 0003 §14, the short band subset in `verify fast` (SIMULATED): L1 / P2 / U-active, 2 seeds x 1.75
 // sim-h through the profile harness (tests/profile, hook records only), each band binomially /
-// Poisson widened for the short run (tests/profile/metrics.ts widenShare, widenRate), wall-time
+// Poisson widened for the short run (tests/profile/metrics.ts widenShare, widenRate), CPU-time
 // budget <= 20 s. Over budget, the subset moves to the profile tier (bands-full.test.ts).
 //
 // Markers: every spec is `it.skip` until the behaviour package (BEH) lands what it asserts; BEH
@@ -15,7 +15,7 @@ const SEEDS = [1, 3];
 // Most stays end by the user's hand at the REAL handling rate: 2 sim-h hold too few own departures for B3 and B4.
 const HOURS = 1.75;
 const SIM_HOURS = SEEDS.length * HOURS;
-/** Wall-time budget of the whole subset (ADR 0003 §14). */
+/** CPU budget of the whole subset (ADR 0003 §14): CPU time, so a busy shared machine does not fail it. */
 const BUDGET_MS = 20_000;
 /** Effective independent observations for the time shares: rhythm episodes (~2.5 min each) in the awake time. */
 const EPISODES = Math.round((SIM_HOURS * 60 * 0.85) / 2.5);
@@ -51,13 +51,14 @@ const SHORT_LIMITS: BandLimits = {
 };
 
 const KEY = 'P2/L1/U-active';
-let cached: { cell: CellSummary; wallMs: number } | null = null;
+let cached: { cell: CellSummary; cpuMs: number } | null = null;
 /** The subset's runs, once (only a non-skipped spec pays for them). */
 function short(): CellSummary {
   if (!cached) {
-    const t0 = Date.now();
+    const t0 = process.cpuUsage();
     const runs = SEEDS.map((seed) => runProfile({ profile: 'P2', layout: 'L1', user: 'U-active', seed, hours: HOURS }));
-    cached = { cell: summarizeCell(runs), wallMs: Date.now() - t0 };
+    const used = process.cpuUsage(t0);
+    cached = { cell: summarizeCell(runs), cpuMs: (used.user + used.system) / 1000 };
   }
   return cached.cell;
 }
@@ -72,10 +73,10 @@ const failing = (v: Array<[string, unknown, string]>): Array<[string, unknown, s
 
 describe(`ADR 0003 §14 short subset: ${KEY}, ${SEEDS.length} seeds x ${HOURS} sim-h (SIMULATED, widened)`, () => {
   it(
-    `budget: the subset's sim runs take <= ${BUDGET_MS / 1000} s of wall time`,
+    `budget: the subset's sim runs take <= ${BUDGET_MS / 1000} s of CPU time`,
     () => {
       short();
-      expect(cached!.wallMs).toBeLessThanOrEqual(BUDGET_MS);
+      expect(cached!.cpuMs).toBeLessThanOrEqual(BUDGET_MS);
     },
     60_000,
   );
