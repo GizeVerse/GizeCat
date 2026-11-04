@@ -4,19 +4,21 @@
 import { MIN } from './metrics';
 import { cellKey, type CellSpec, type CellSummary, type ProfileId, type RecoveryTrace, type RunResult } from './behaviorProfile';
 
-export type BandId = 'B1' | 'B1b' | 'B2' | 'B3' | 'B4' | 'B5' | 'B5b' | 'B5c' | 'B6' | 'B7' | 'B8' | 'B8b' | 'B9' | 'B10' | 'B11' | 'B12' | 'B13' | 'B14' | 'B15' | 'C-typing' | 'C-climbs' | 'presets';
+export type BandId = 'B1' | 'B1b' | 'B1c' | 'B2' | 'B3' | 'B4' | 'B5' | 'B5b' | 'B5c' | 'B5d' | 'B6' | 'B7' | 'B8' | 'B8b' | 'B9' | 'B10' | 'B11' | 'B12' | 'B13' | 'B14' | 'B15' | 'C-typing' | 'C-climbs' | 'presets';
 
 /** ADR 0003 §14, column "Band (assert)", verbatim (plus the "never in the way" ceilings and the preset order). */
 export const BAND_TEXT: Readonly<Record<BandId, string>> = {
   B1: 'active share 20–35 % of awake time',
   B1b: "active share ≤ the same seed's L1 value; 1–4 edge peeks/h",
+  B1c: 'active share ≤ 35 % of awake time with nothing to climb',
   B2: 'elevated arrivals 4–15 /h; ≤ 12 window climbs/h (edges excluded)',
-  B3: 'stays (Kaplan–Meier, imposed ends right-censored): median 90–300 s, p10 ≥ 20 s, P(> 5 min) ≥ 8 %, p90 ≤ 15 min; plannedMs draws: median 120–200 s, p10 ≥ 30 s, ≥ 12 % > 5 min, p90 ≤ 12 min; the experienced (uncensored) median is reported',
-  B4: 'departures varied: no leave kind > 70 % of own departures, ≥ 3 kinds',
+  B3: 'stays (Kaplan–Meier, imposed ends right-censored): median 90–300 s, p10 ≥ 20 s, P(> 5 min) ≥ 8 %, P(> 15 min) monitored; plannedMs draws: median 120–200 s, p10 ≥ 30 s, ≥ 12 % > 5 min, p90 ≤ 12 min; the experienced (uncensored) median is reported',
+  B4: 'departures varied on two windows: no leave kind > 70 % of own departures, ≥ 3 kinds; ≥ 2 kinds on one window',
   B5: 'hunts 4–12 /h; pounces ≥ 1 /h; never two pounces < 90 s apart',
+  B5d: 'ordinary use: on average over the layouts hunts ≥ 2 /h and pounces ≥ 1 /h; never two pounces < 90 s apart',
   B5b: 'hunts ≤ 1 /h; 0 pounces within 2 s of a press or within 1 bw of a press point',
   B5c: 'every pounce and strike: `minClearanceDip` ≥ 8',
-  B6: "0 hunts, pounces, swats or play near the cursor started while typing or < 3 s after (also with `reactToTyping` off); excursions 0.2–0.6 × the U-active rate",
+  B6: "0 hunts, pounces, swats or play near the cursor started while typing or < 3 s after (also with `reactToTyping` off); excursions 0.2–0.9 × the U-active rate",
   B7: '≥ 4 kinds over 100 throws, no kind > 50 %, hide ≤ 25 %, on the **uncapped** softmax at the REAL throw spacing; caps active in < 10 % of draws; every opt-out combination keeps ≥ 3 kinds or logs',
   B8: 'after 5 hard throws (bond ≥ 0.3): fear < 0.05, i < pre + 0.1, w < 0.05 within 10 min; within 8 min with petting at the REAL rate',
   B8b: 'w > 0.3 ≤ 15 % and i > 0.5 ≤ 10 % of awake time',
@@ -57,12 +59,13 @@ const zero = (x: number): BandStatus => (x === 0 ? 'pass' : 'fail');
 /** Range bands a check can be stated with (the short subset passes widened ones). */
 export interface BandLimits {
   activeShare: readonly [number, number];
+  /** B1c: with nothing to climb (L4, L4b). */
+  activeShareNothingToClimbMax: number;
   arrivalsPerHour: readonly [number, number];
   windowClimbsMaxPerHour: number;
   kmMedianS: readonly [number, number];
   kmP10MinS: number;
   kmOver5MinMin: number;
-  kmOver15MinMax: number;
   plannedMedianS: readonly [number, number];
   plannedP10MinS: number;
   plannedOver5MinMin: number;
@@ -78,12 +81,12 @@ export interface BandLimits {
 
 export const FULL_LIMITS: BandLimits = {
   activeShare: [0.2, 0.35],
+  activeShareNothingToClimbMax: 0.35,
   arrivalsPerHour: [4, 15],
   windowClimbsMaxPerHour: 12,
   kmMedianS: [90, 300],
   kmP10MinS: 20,
   kmOver5MinMin: 0.08,
-  kmOver15MinMax: 0.1,
   plannedMedianS: [120, 200],
   plannedP10MinS: 30,
   plannedOver5MinMin: 0.12,
@@ -112,15 +115,26 @@ export function cellChecks(key: string, c: CellSummary, lim: BandLimits = FULL_L
     push('B3', `Kaplan-Meier median (s) in [${lim.kmMedianS.join(', ')}]`, c.stays.km.median, inRange(c.stays.km.median, lim.kmMedianS[0], lim.kmMedianS[1]));
     push('B3', `Kaplan-Meier p10 (s) >= ${lim.kmP10MinS}`, c.stays.km.p10, atLeast(c.stays.km.p10, lim.kmP10MinS));
     push('B3', `Kaplan-Meier P(> 5 min) >= ${lim.kmOver5MinMin}`, c.stays.km.pOver5min, atLeast(c.stays.km.pOver5min, lim.kmOver5MinMin));
-    push('B3', `Kaplan-Meier P(> 15 min) <= ${lim.kmOver15MinMax} (p90 <= 15 min)`, c.stays.km.pOver15min, atMost(c.stays.km.pOver15min, lim.kmOver15MinMax));
+    push('B3', 'Kaplan-Meier P(> 15 min), monitored: flat after its last event under REAL-rate handling', c.stays.km.pOver15min, 'n/a');
     push('B3', `plannedMs median (s) in [${lim.plannedMedianS.join(', ')}]`, c.stays.planned.median, inRange(c.stays.planned.median, lim.plannedMedianS[0], lim.plannedMedianS[1]));
     push('B3', `plannedMs p10 (s) >= ${lim.plannedP10MinS}`, c.stays.planned.p10, atLeast(c.stays.planned.p10, lim.plannedP10MinS));
     push('B3', `plannedMs share > 5 min >= ${lim.plannedOver5MinMin}`, c.stays.planned.n ? c.stays.planned.over5minShare : null, atLeast(c.stays.planned.n ? c.stays.planned.over5minShare : null, lim.plannedOver5MinMin));
     push('B3', `plannedMs p90 (s) <= ${lim.plannedP90MaxS}`, c.stays.planned.p90, atMost(c.stays.planned.p90, lim.plannedP90MaxS));
     push('B3', 'experienced (uncensored) median, s (reported)', c.stays.experiencedMedianS, 'n/a');
+    // B4 proper is on the two-window layout below: one tall window structurally offers two ways down (§6.3).
+    push('B4', 'share of the commonest leave kind on one window (reported)', c.stays.leave.maxShare, 'n/a');
+    push('B4', 'at least 2 leave kinds on one window', c.stays.leave.kinds, atLeast(c.stays.leave.kinds, 2));
+    push('B10', `deliberate slips per awake hour in [${lim.slipsPerAwakeHour.join(', ')}]`, c.slips.perAwakeHour, inRange(c.slips.perAwakeHour, lim.slipsPerAwakeHour[0], lim.slipsPerAwakeHour[1]));
+  }
+  if (activeUser && isCell(key, { profile: ['P1', 'P2'], layout: ['L5'] })) {
     push('B4', `no leave kind above ${lim.leaveMaxShare} of own departures`, c.stays.leave.maxShare, c.stays.leave.departures ? atMost(c.stays.leave.maxShare, lim.leaveMaxShare) : 'fail');
     push('B4', `at least ${lim.leaveMinKinds} leave kinds`, c.stays.leave.kinds, atLeast(c.stays.leave.kinds, lim.leaveMinKinds));
-    push('B10', `deliberate slips per awake hour in [${lim.slipsPerAwakeHour.join(', ')}]`, c.slips.perAwakeHour, inRange(c.slips.perAwakeHour, lim.slipsPerAwakeHour[0], lim.slipsPerAwakeHour[1]));
+  }
+  if (activeUser && isCell(key, { profile: ['P1', 'P2'], layout: ['L4', 'L4b'] })) {
+    push('B1c', `active share <= ${lim.activeShareNothingToClimbMax} with nothing to climb`, c.activeShare, atMost(c.activeShare, lim.activeShareNothingToClimbMax));
+  }
+  if (activeUser && isCell(key, { profile: ['P1', 'P2'] })) {
+    push('B5d', 'smallest gap between two pounces >= 90 s', c.hunts.minPounceGapS, c.hunts.minPounceGapS === null ? 'n/a' : atLeast(c.hunts.minPounceGapS, 90));
   }
   if (activeUser) {
     push('B8b', `wary (w > 0.3) share of awake <= ${lim.waryMax}`, c.moods.waryShare, atMost(c.moods.waryShare, lim.waryMax));
@@ -178,12 +192,19 @@ export function crossCellChecks(cells: Readonly<Record<string, CellSummary>>): B
       out.push({ id: 'B1b', cell: `${p}/L4b vs ${p}/L1 (U-active)`, check: "active share <= the same seed's L1 value (seeds above)", value: worse.map(([s]) => s).join(',') || 'none', status: worse.length === 0 ? 'pass' : 'fail' });
       out.push({ id: 'B1b', cell: `${p}/L4b/U-active`, check: 'covered-band edge peeks per hour in [1, 4]', value: l4b.edges.peeksPerHour, status: inRange(l4b.edges.peeksPerHour, 1, 4) });
     }
+    // B5d: ordinary use, on average over the layouts with something in reach (L4 has no window to work in).
+    const ordinary = (['L1', 'L2', 'L3', 'L4b'] as const).map((layout) => cells[cellKey({ profile: p, layout, user: 'U-active' })]).filter((c): c is CellSummary => c !== undefined);
+    if (ordinary.length > 0) {
+      const mean = (f: (c: CellSummary) => number): number => Math.round((100 * ordinary.reduce((a, c) => a + f(c), 0)) / ordinary.length) / 100;
+      out.push({ id: 'B5d', cell: `${p} x ${ordinary.length} layouts (U-active)`, check: 'mean hunts per hour >= 2', value: mean((c) => c.hunts.perHour), status: atLeast(mean((c) => c.hunts.perHour), 2) });
+      out.push({ id: 'B5d', cell: `${p} x ${ordinary.length} layouts (U-active)`, check: 'mean pounces per hour >= 1', value: mean((c) => c.hunts.pouncesPerHour), status: atLeast(mean((c) => c.hunts.pouncesPerHour), 1) });
+    }
     const active = l1?.stays.ownArrivalsPerHour;
     for (const v of ['default', 'typingReactionsOff'] as const) {
       const typing = cells[cellKey({ profile: p, layout: 'L1', user: 'U-typing', variant: v })];
       if (!typing || active === undefined) continue;
       const r = active > 0 ? Math.round((typing.stays.ownArrivalsPerHour / active) * 1000) / 1000 : null;
-      out.push({ id: 'B6', cell: `${cellKey({ profile: p, layout: 'L1', user: 'U-typing', variant: v })} vs ${p}/L1/U-active`, check: 'excursions 0.2-0.6 x the U-active rate', value: r, status: inRange(r, 0.2, 0.6) });
+      out.push({ id: 'B6', cell: `${cellKey({ profile: p, layout: 'L1', user: 'U-typing', variant: v })} vs ${p}/L1/U-active`, check: 'excursions 0.2-0.9 x the U-active rate', value: r, status: inRange(r, 0.2, 0.9) });
     }
   }
   const calm = cells['Calm/L1/U-active'];

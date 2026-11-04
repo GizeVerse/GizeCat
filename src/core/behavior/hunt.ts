@@ -25,6 +25,8 @@ export const PRESS_HOLD_BUSY_MS = 10_500;
 /** At work: this many presses within BUSY_HAND_WINDOW_MS. */
 export const BUSY_HAND_PRESSES = 3;
 export const BUSY_HAND_WINDOW_MS = 30_000;
+/** ... unless it has come to rest this long: a hand that stops moving has stopped working, whatever it did before. */
+export const BUSY_HAND_REST_MS = 3000;
 /** Far: more than this many body widths from the cat (the approach range, §4.2; a pounce reaches 3.2). */
 export const PRESS_NEAR_BW = 4;
 /** After petting the cursor is not prey for this long. */
@@ -51,6 +53,8 @@ export const CROUCH_MIN_MS = 600;
 export const CROUCH_MAX_MS = 1600;
 /** Prey already within a pounce's reach is crept up on for this long, then the crouch. */
 export const STALK_IN_REACH_MS = 1200;
+/** A crouch that waited in vain (the prey sat still or left) still ends in the leap this often; else the cat loses interest. */
+export const WAITED_POUNCE_P = 0.6;
 /** Prey out of the start band for this long counts as lost: a stalk turns into lying low for it. */
 export const HUNT_LOST_GRACE_MS = 1000;
 /** Watch band: half-width in body widths, and how far below / above the feet in body heights. */
@@ -167,9 +171,14 @@ export interface HuntGateInput {
   unavailable: boolean;
 }
 
-/** How long a press holds hunts and strikes back: the hand at work, else by how far it is from the cat. */
+/** How long a press holds the start of a hunt back: the hand at work, else by how far it is from the cat. */
 export function pressHoldMs(far: boolean, busy: boolean): number {
   return busy ? PRESS_HOLD_BUSY_MS : far ? PRESS_HOLD_FAR_MS : PRESS_HOLD_MS;
+}
+
+/** How long a press holds a running hunt's pounce back: only by how far the hand is, the leap reaches nothing there. */
+export function pounceHoldMs(far: boolean): number {
+  return far ? PRESS_HOLD_FAR_MS : PRESS_HOLD_MS;
 }
 
 /** The first gate that holds (null: none). Every "never in the way" gate reads the raw signals. */

@@ -22,9 +22,11 @@ import {
   POUNCE_COOLDOWN_MS,
   PETTING_HOLD_MS,
   BUSY_HAND_PRESSES,
+  BUSY_HAND_REST_MS,
   BUSY_HAND_WINDOW_MS,
   PRESS_NEAR_BW,
-  pressHoldMs,
+  WAITED_POUNCE_P,
+  pounceHoldMs,
   STALK_IN_REACH_MS,
   STALK_MAX_MS,
   TASKBAR_HIDE_HOLD_MS,
@@ -61,8 +63,6 @@ const PETTING_ZONE_MAX_EVALS = 6;
 const QUIET_CONTEXT_THETA = 0.2;
 /** A cursor counts as moving above this speed, DIP/s. */
 const MOVING_DIP_S = 30;
-/** A crouch that waited in vain (the prey sat still or left) still ends in the leap this often; else the cat loses interest. */
-const WAITED_POUNCE_P = 0.6;
 
 export abstract class SimHunt extends SimStay {
   /** The mischief-swat roll was made for the cursor's current pass. */
@@ -156,10 +156,10 @@ export abstract class SimHunt extends SimStay {
     return p !== null && Math.hypot(p.x - m.x, p.y - m.y) > lim && (q === null || Math.hypot(q.x - m.x, q.y - m.y) > lim);
   }
 
-  /** The hand has been pressing again and again: it is at work, wherever the cursor is. */
+  /** The hand has been pressing again and again and is still moving: it is at work, wherever the cursor is. */
   protected pressBusy(): boolean {
     const t = this.recentPressAt;
-    return t.length >= BUSY_HAND_PRESSES && this.now - (t[0] as number) <= BUSY_HAND_WINDOW_MS;
+    return t.length >= BUSY_HAND_PRESSES && this.now - (t[0] as number) <= BUSY_HAND_WINDOW_MS && this.cursorIdle() < BUSY_HAND_REST_MS;
   }
 
   protected huntGateInput(p: Point | null): HuntGateInput {
@@ -453,7 +453,7 @@ export abstract class SimHunt extends SimStay {
           return;
         }
         // The press hold still runs: it keeps wiggling a little longer.
-        if (this.huntGateNow === 'button' && elapsed < CROUCH_STILL_MAX_MS && !over) return;
+        if (this.pounceHeld() && elapsed < CROUCH_STILL_MAX_MS && !over) return;
         if (!this.tryHuntPounce(cur)) this.tryStrike(a, cur);
         return;
       }
@@ -532,16 +532,23 @@ export abstract class SimHunt extends SimStay {
     return { dist: Math.abs(cur.x - dir * (front + shortPx) - m.x), front, shortPx };
   }
 
+  /** The button is down or a press is too recent for a leap, by where the hand is now. */
+  protected pounceHeld(): boolean {
+    const c = this.env?.cursor;
+    const p = c && Number.isFinite(c.x) && Number.isFinite(c.y) ? { x: c.x, y: c.y } : null;
+    return this.env?.pointerButtonDown === true || this.now - this.lastPressAt < pounceHoldMs(this.pressFar(p));
+  }
+
   /** The ballistic pounce at `cur` (the cursor, or where the prey was last seen), landing short of the hotspot (hit region clearance, T8). */
   protected tryHuntPounce(cur: Point): boolean {
     const run = this.hunt;
     const m = this.mover;
     if (!run || !this.subAllowed('huntPounce') || this.disabled.has('chaseCursor')) return false;
-    if (run.pounces >= MAX_POUNCES_PER_HUNT || this.now - this.lastPounceAt < POUNCE_COOLDOWN_MS || this.holdingStill() || this.huntGateNow !== null || this.typingGate()) return false;
+    if (run.pounces >= MAX_POUNCES_PER_HUNT || this.now - this.lastPounceAt < POUNCE_COOLDOWN_MS || this.holdingStill() || (this.huntGateNow !== null && this.huntGateNow !== 'button') || this.typingGate()) return false;
     // The 4 Hz gate may not have seen a press of this very tick: a pounce never follows one (B5b).
+    if (this.pounceHeld()) return false;
     const hot = this.env?.cursor;
     const hotPoint = hot && Number.isFinite(hot.x) && Number.isFinite(hot.y) ? { x: hot.x, y: hot.y } : null;
-    if (this.env?.pointerButtonDown === true || this.now - this.lastPressAt < pressHoldMs(this.pressFar(hotPoint), this.pressBusy())) return false;
     if (m.balance > 0) return false;
     const dir: Facing = cur.x >= m.x ? 1 : -1;
     const size = this.settings.appearance.size;

@@ -32,18 +32,16 @@ const rate = (b: readonly [number, number], hours = SIM_HOURS): [number, number]
 const SHORT_LIMITS: BandLimits = {
   ...FULL_LIMITS,
   activeShare: share(FULL_LIMITS.activeShare),
+  activeShareNothingToClimbMax: share([0, FULL_LIMITS.activeShareNothingToClimbMax])[1],
   arrivalsPerHour: rate(FULL_LIMITS.arrivalsPerHour),
   windowClimbsMaxPerHour: rate([0, FULL_LIMITS.windowClimbsMaxPerHour])[1],
   kmMedianS: [60, 400],
   kmP10MinS: 10,
   kmOver5MinMin: 0,
-  kmOver15MinMax: 0.25,
   plannedMedianS: [90, 260],
   plannedP10MinS: 20,
   plannedOver5MinMin: 0,
   plannedP90MaxS: 900,
-  leaveMaxShare: 0.8,
-  leaveMinKinds: 2,
   asleepShareOfPresent: share(FULL_LIMITS.asleepShareOfPresent),
   napsPerPresentHour: rate(FULL_LIMITS.napsPerPresentHour, SIM_HOURS * 0.75),
   waryMax: 0.2,
@@ -100,7 +98,7 @@ describe(`ADR 0003 §14 short subset: ${KEY}, ${SEEDS.length} seeds x ${HOURS} s
     expect(failing(verdicts('B3'))).toEqual([]);
   });
 
-  it(`B4: ${BAND_TEXT.B4} (widened: no kind > ${SHORT_LIMITS.leaveMaxShare * 100} %, >= ${SHORT_LIMITS.leaveMinKinds} kinds)`, () => {
+  it(`B4: ${BAND_TEXT.B4} (one window here: >= 2 kinds)`, () => {
     expect(short().stays.leave.departures).toBeGreaterThanOrEqual(8);
     expect(failing(verdicts('B4'))).toEqual([]);
   });

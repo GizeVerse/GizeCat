@@ -8,9 +8,7 @@
 // (run it detached for the whole matrix: --detach); otherwise it runs the matrix itself (minutes).
 // A failing band goes to its owner with the report (ADR 0003 §16.2 INT acceptance).
 //
-// Markers: every spec is `it.skip` until the behaviour package (BEH) lands what it asserts; BEH
-// flips `it.skip` -> `it` (only the marker; INT owns the bodies, ADR 0003 §16.2). B12 is the REAL
-// bench (scripts/bench.mjs, §15.4), never a vitest band.
+// B12 is the REAL bench (scripts/bench.mjs, §15.4), never a vitest band.
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { BAND_TEXT, evaluateBands, recoveryChecks, throwMonteCarloChecks, type BandId, type BandResult } from '../../profile/bands';
@@ -55,26 +53,28 @@ function expectBand(id: BandId, min = 1): void {
 const T = 6 * 3600_000;
 
 describe.skipIf(!enabled)('ADR 0003 §14 target bands, full matrix (DESKTOP_CAT_PROFILE_BANDS=1; SIMULATED)', () => {
-  it.skip(`B1: ${BAND_TEXT.B1} (P1, P2 x L1-L3 x U-active)`, () => expectBand('B1', 6), T);
-  it.skip(`B1b: ${BAND_TEXT.B1b} (L4b vs L1, P1 and P2)`, () => expectBand('B1b', 4), T);
-  it.skip(`B2: ${BAND_TEXT.B2} (L1, L2)`, () => expectBand('B2', 4), T);
-  it.skip(`B3: ${BAND_TEXT.B3} (L1, L2)`, () => expectBand('B3', 4 * 8), T);
-  it.skip(`B4: ${BAND_TEXT.B4} (L1, L2)`, () => expectBand('B4', 8), T);
-  it.skip(`B5: ${BAND_TEXT.B5} (U-play)`, () => expectBand('B5', 6), T);
-  it.skip(`B5b: ${BAND_TEXT.B5b} (U-mouse-work)`, () => expectBand('B5b', 6), T);
-  it.skip(`B5c: ${BAND_TEXT.B5c} (all hunting cells)`, () => expectBand('B5c', 2), T);
-  it.skip(`B6: ${BAND_TEXT.B6} (U-typing, reactToTyping on and off)`, () => expectBand('B6', 16 + 4), T);
-  it.skip(`B7: ${BAND_TEXT.B7} (P1, P2: 100 x 8; P2: 1000)`, () => expectBand('B7', 5 * 17), T);
-  it.skip(`B8: ${BAND_TEXT.B8} (P1, P2, bond 0.3, 8 seeds each, with and without petting)`, () => expectBand('B8', 5 * 32), T);
-  it.skip(`B8b: ${BAND_TEXT.B8b} (U-active cells)`, () => expectBand('B8b', 2 * 10), T);
-  it.skip(`B9: ${BAND_TEXT.B9} (every cell, incl. L3c covered-strip and L1d window-drag churn)`, () => expectBand('B9', MATRICES.bands.length), T);
-  it.skip(`B10: ${BAND_TEXT.B10} (L1, L2)`, () => expectBand('B10', 4), T);
-  it.skip(`B11: ${BAND_TEXT.B11} (L4 on, off, no bands)`, () => expectBand('B11', 4), T);
+  it(`B1: ${BAND_TEXT.B1} (P1, P2 x L1-L3 x U-active)`, () => expectBand('B1', 6), T);
+  it(`B1b: ${BAND_TEXT.B1b} (L4b vs L1, P1 and P2)`, () => expectBand('B1b', 4), T);
+  it(`B2: ${BAND_TEXT.B2} (L1, L2)`, () => expectBand('B2', 4), T);
+  it(`B3: ${BAND_TEXT.B3} (L1, L2)`, () => expectBand('B3', 4 * 8), T);
+  it(`B4: ${BAND_TEXT.B4} (L5; at least two kinds on L1, L2)`, () => expectBand('B4', 8), T);
+  it(`B1c: ${BAND_TEXT.B1c} (L4, L4b, P1 and P2)`, () => expectBand('B1c', 4), T);
+  it(`B5d: ${BAND_TEXT.B5d} (P1, P2 x L1, L2, L3, L4b, U-active)`, () => expectBand('B5d', 4), T);
+  it(`B5: ${BAND_TEXT.B5} (U-play)`, () => expectBand('B5', 6), T);
+  it(`B5b: ${BAND_TEXT.B5b} (U-mouse-work)`, () => expectBand('B5b', 6), T);
+  it(`B5c: ${BAND_TEXT.B5c} (all hunting cells)`, () => expectBand('B5c', 2), T);
+  it(`B6: ${BAND_TEXT.B6} (U-typing, reactToTyping on and off)`, () => expectBand('B6', 16 + 4), T);
+  it(`B7: ${BAND_TEXT.B7} (P1, P2: 100 x 8; P2: 1000)`, () => expectBand('B7', 5 * 17), T);
+  it(`B8: ${BAND_TEXT.B8} (P1, P2, bond 0.3, 8 seeds each, with and without petting)`, () => expectBand('B8', 5 * 32), T);
+  it(`B8b: ${BAND_TEXT.B8b} (U-active cells)`, () => expectBand('B8b', 2 * 10), T);
+  it(`B9: ${BAND_TEXT.B9} (every cell, incl. L3c covered-strip and L1d window-drag churn)`, () => expectBand('B9', MATRICES.bands.length), T);
+  it(`B10: ${BAND_TEXT.B10} (L1, L2)`, () => expectBand('B10', 4), T);
+  it(`B11: ${BAND_TEXT.B11} (L4 on, off, no bands)`, () => expectBand('B11', 4), T);
   it.todo(`B12: ${BAND_TEXT.B12} — REAL, scripts/bench.mjs on the out/ build with the lively phase (ADR 0003 §15.4), not a vitest band`);
-  it.skip(`B13: ${BAND_TEXT.B13} (L3c)`, () => expectBand('B13', 2), T);
-  it.skip(`B14: ${BAND_TEXT.B14} (every cell incl. churn)`, () => expectBand('B14', MATRICES.bands.length), T);
-  it.skip(`B15: ${BAND_TEXT.B15} (P1, P2 x L1-L3 x U-active)`, () => expectBand('B15', 12), T);
-  it.skip(`C-typing: ${BAND_TEXT['C-typing']} (every cell)`, () => expectBand('C-typing', MATRICES.bands.length), T);
-  it.skip(`C-climbs: ${BAND_TEXT['C-climbs']} (every cell)`, () => expectBand('C-climbs', MATRICES.bands.length), T);
-  it.skip(`presets: ${BAND_TEXT.presets}`, () => expectBand('presets', 2), T);
+  it(`B13: ${BAND_TEXT.B13} (L3c)`, () => expectBand('B13', 2), T);
+  it(`B14: ${BAND_TEXT.B14} (every cell incl. churn)`, () => expectBand('B14', MATRICES.bands.length), T);
+  it(`B15: ${BAND_TEXT.B15} (P1, P2 x L1-L3 x U-active)`, () => expectBand('B15', 12), T);
+  it(`C-typing: ${BAND_TEXT['C-typing']} (every cell)`, () => expectBand('C-typing', MATRICES.bands.length), T);
+  it(`C-climbs: ${BAND_TEXT['C-climbs']} (every cell)`, () => expectBand('C-climbs', MATRICES.bands.length), T);
+  it(`presets: ${BAND_TEXT.presets}`, () => expectBand('presets', 2), T);
 });

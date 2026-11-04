@@ -471,7 +471,7 @@ const cross = (profiles: readonly ProfileId[], layouts: readonly LayoutId[], use
  */
 export const MATRICES: Readonly<Record<'bands' | 'diagnosis' | 'short', readonly CellSpec[]>> = {
   bands: [
-    ...cross(['P1', 'P2'], ['L1', 'L2', 'L3', 'L4b'], ['U-active']),
+    ...cross(['P1', 'P2'], ['L1', 'L2', 'L3', 'L4b', 'L5'], ['U-active']),
     ...cross(['P1', 'P2'], ['L1'], ['U-play', 'U-mouse-work']),
     ...cross(['P1', 'P2'], ['L1'], ['U-typing'], ['default', 'typingReactionsOff']),
     ...cross(['P1', 'P2'], ['L4'], ['U-active']),

@@ -35,21 +35,26 @@ export const DISPLAY_ID = WORLD.displays[0]!.id;
  * maximized window in front; L4 nothing reachable but the screen edges (no app window);
  * L4b a maximized window in front most of the time (the user's commonest state);
  * L3c fast churn of the strip's window (covered by another window, maximized, minimized; B13);
- * L1d the browser dragged around every 20-60 s (window-drag churn; B9, B14).
+ * L1d the browser dragged around every 20-60 s (window-drag churn; B9, B14);
+ * L5 two floating windows side by side, low enough to jump from (B4: one tall window offers two ways down, §6.3).
  */
-export type LayoutId = 'L1' | 'L2' | 'L3' | 'L4' | 'L4b' | 'L3c' | 'L1d';
-export const LAYOUT_IDS: readonly LayoutId[] = ['L1', 'L2', 'L3', 'L4', 'L4b', 'L3c', 'L1d'];
+export type LayoutId = 'L1' | 'L2' | 'L3' | 'L4' | 'L4b' | 'L3c' | 'L1d' | 'L5';
+export const LAYOUT_IDS: readonly LayoutId[] = ['L1', 'L2', 'L3', 'L4', 'L4b', 'L3c', 'L1d', 'L5'];
 
 // Not integer-like: providerSurfacesFromWindows reads its windows front first in key order, and JS
 // orders integer-like keys numerically, not by insertion ('1003' would land behind '1001').
 export const CHROME_ID = 'w-browser';
 export const APP_ID = 'w-app';
+export const SECOND_ID = 'w-second';
 export const MAX_ID = 'w-max';
 export const COVER_ID = 'w-cover';
 /** L1/L3: a floating Chrome-like window in front (TYPICAL_FRAME: sides end ~235 px above the floor, top ~1075 px up). */
 export const BROWSER_FRAME: Rect = TYPICAL_FRAME;
 /** L2: a typical floating app window (an editor; its tabs are not discovered): bottom ~155 px above the floor, top ~1035 px up. */
 export const APP_FRAME: Rect = { x: 240, y: 160, width: 1240, height: 880 };
+/** L5: the window in front and the lower one next to it, a hop apart. */
+export const L5_FRONT_FRAME: Rect = { x: 980, y: 715, width: 620, height: 480 };
+export const L5_SECOND_FRAME: Rect = { x: 360, y: 815, width: 520, height: 380 };
 export const FULL: Rect = { x: 0, y: 0, width: SCREEN_W, height: SCREEN_H };
 /** L3: a maximized window comes in front for 10 min, then the browser for 10 min, and so on (browser first). */
 export const L3_SWAP_MS = 10 * MIN;
@@ -70,6 +75,7 @@ export const LAYOUT_DESCRIPTIONS: Readonly<Record<LayoutId, string>> = {
   L4b: 'a maximized window in front U(20,45) min, then L1 for U(3,8) min, alternating (~85 % maximized)',
   L3c: 'L1 with churn every U(30,90) s for U(5,30) s: another window covers the strip (40 %), the browser is maximized (30 %) or minimized (30 %)',
   L1d: 'L1 with the browser dragged every U(20,60) s by U(80,300) px per axis over U(0.6,2) s (moveStart/moveEnd, moving surfaces)',
+  L5: `two floating windows a hop apart [${L5_FRONT_FRAME.x},${L5_FRONT_FRAME.y},${L5_FRONT_FRAME.width}x${L5_FRONT_FRAME.height}] in front, [${L5_SECOND_FRAME.x},${L5_SECOND_FRAME.y},${L5_SECOND_FRAME.width}x${L5_SECOND_FRAME.height}] next to it`,
 };
 
 const info = (id: string, rect: Rect, processName: string, category: WindowInfo['category'], maximized: boolean): WindowInfo => ({
@@ -330,7 +336,11 @@ export class Desktop {
   /** L3 / L4b: a maximized window in front (true) or the floating browser (false). */
   setPhase(maxFront: boolean, initial = false): void {
     this.maximizedFront = maxFront;
-    if (this.layout === 'L2') {
+    if (this.layout === 'L5') {
+      this.windows = { [SECOND_ID]: L5_SECOND_FRAME, [APP_ID]: L5_FRONT_FRAME };
+      this.strips = {};
+      this.foreground = info(APP_ID, L5_FRONT_FRAME, 'code.exe', 'code', false);
+    } else if (this.layout === 'L2') {
       this.windows = { [APP_ID]: APP_FRAME };
       this.strips = {};
       this.foreground = info(APP_ID, APP_FRAME, 'code.exe', 'code', false);
