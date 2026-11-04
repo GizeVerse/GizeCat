@@ -352,6 +352,86 @@ describe('v1.2 T6: a failed read keeps the last good strip for up to 10 s', () =
     expect(listed(r, TERM)).not.toBeNull();
   });
 
+  describe('also after a read that timed out, whose window sits in quarantine unread (TAB-2)', () => {
+    /** A strip is listed, then the window's UI thread blocks once for the 1.5 s read timeout, and recovers. */
+    async function timedOut(): Promise<Rig> {
+      const r = rig({ strips: { [TERM]: tabviewStrip({ app: 'terminal' }) } });
+      r.svc.start();
+      r.wins.set(TERM, TERMINAL);
+      r.svc.setInterest([TERM], r.clock.now());
+      await waitForStrip(r, TERM);
+      r.h.patchState({ hangHwnds: [TERM] });
+      r.svc.setInterest([TERM], r.clock.advance(1000));
+      await eventually(() => expect(stripOps(r, TERM)).toBe(2));
+      r.svc.setInterest([TERM], r.clock.advance(1500));
+      await eventually(() => expect(r.svc.debugInfo().stalled).toBe(1));
+      r.h.patchState({ hangHwnds: [] });
+      return r;
+    }
+
+    it('lists the last good strip as retained, and drops it after 10 s although no read happens', async () => {
+      const r = await timedOut();
+      expect(listed(r, TERM)?.confidence).toBe(0.5);
+      expect(r.svc.debugInfo().retained).toBe(1);
+      r.clock.advance(9900);
+      expect(listed(r, TERM)).not.toBeNull();
+      r.clock.advance(200);
+      expect(listed(r, TERM)).toBeNull();
+      expect(r.svc.debugInfo()).toMatchObject({ retained: 0, stalled: 1 });
+    });
+
+    it('drops it at once on a width change of more than 4 px', async () => {
+      const r = await timedOut();
+      r.wins.set(TERM, { rect: { x: 299, y: 200, width: 943, height: 624 } });
+      r.clock.advance(300);
+      expect(listed(r, TERM)).toBeNull();
+    });
+
+    it('drops it at once on a maximize', async () => {
+      const r = await timedOut();
+      r.wins.set(TERM, { maximized: true });
+      r.clock.advance(300);
+      expect(listed(r, TERM)).toBeNull();
+    });
+
+    it('reads it again after the quarantine: full confidence, and the retention over', async () => {
+      const r = await timedOut();
+      r.clock.advance(15_000);
+      expect(listed(r, TERM)).toBeNull();
+      r.clock.advance(16_000);
+      // The helper was replaced after the timeout: pumped until the replacement has read it.
+      await eventually(() => {
+        r.svc.setInterest([TERM], r.clock.advance(100));
+        expect(listed(r, TERM)?.confidence).toBe(1);
+      });
+      expect(r.svc.debugInfo().retained).toBe(0);
+    });
+
+    it('a window the helper found hung keeps its listing, but not across a width change or a maximize', async () => {
+      const hung = async (): Promise<Rig> => {
+        const r = rig({ strips: { [TERM]: tabviewStrip({ app: 'terminal' }) } });
+        r.svc.start();
+        r.wins.set(TERM, TERMINAL);
+        r.svc.setInterest([TERM], r.clock.now());
+        await waitForStrip(r, TERM);
+        r.h.patchState({ strips: { [TERM]: { error: 'hung' } } });
+        await stepAndRead(r, 1000, [TERM]);
+        expect(r.svc.debugInfo().stalled).toBe(1);
+        return r;
+      };
+      const r = await hung();
+      r.clock.advance(12_000);
+      expect(listed(r, TERM), 'it cannot have moved while hung').not.toBeNull();
+      r.wins.set(TERM, { rect: { x: 299, y: 200, width: 943, height: 624 } });
+      r.clock.advance(300);
+      expect(listed(r, TERM)).toBeNull();
+      const m = await hung();
+      m.wins.set(TERM, { maximized: true });
+      m.clock.advance(300);
+      expect(listed(m, TERM)).toBeNull();
+    });
+  });
+
   it('a strip of the wrong kind is never retained', async () => {
     const r = rig({ strips: { [TERM]: tabviewStrip({ app: 'terminal' }) } });
     r.svc.start();

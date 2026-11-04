@@ -507,8 +507,9 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
       drop(t, reason);
       return false;
     }
-    // T6: a retained strip goes at once when the window is maximized or its width changed.
-    if (t.retainedSince !== null && t.strip !== null && (info.maximized || Math.abs(info.rect.width - t.strip.frameWidth) > o.retainWidthTolerancePx)) {
+    // T6: a retained strip goes at once when the window is maximized or its width changed. So does one
+    // in quarantine: no read will catch up, and a window found hung was not supposed to change at all.
+    if ((t.retainedSince !== null || quarantined(t.id, at)) && t.strip !== null && (info.maximized || Math.abs(info.rect.width - t.strip.frameWidth) > o.retainWidthTolerancePx)) {
       dropStrip(t);
     }
     const dt = at - t.infoAt;
@@ -731,6 +732,13 @@ export function createTabStripService(deps: TabStripServiceDeps): TabStripServic
     for (const id of blamed) {
       stall(id, at);
       reject(id, 'timeout', at);
+      // T6: unread for the whole quarantine although its thread may recover at once, so the last good
+      // strip has the same limits as after a failed read.
+      const t = windows.get(id);
+      if (t && t.strip !== null && t.retainedSince === null) {
+        t.retainedSince = at;
+        t.surface = null;
+      }
     }
     const next = stallBudget.recordFailure(at);
     if (next === null) {
