@@ -23,7 +23,7 @@ import {
   type HuntGateInput,
   type PreyInput,
 } from '../../../../src/core/behavior/hunt';
-import { Harness, settingsWith, WAKE_MS } from './fixtures';
+import { callCat, Harness, onWindowTop, settingsWith, WAKE_MS } from './fixtures';
 
 const MIN = 60_000;
 const BW = 84;
@@ -95,6 +95,10 @@ function rig(seed: number): { h: Harness; hunts: HuntRecord[] } {
   return { h, hunts };
 }
 
+/** What the tests read from inside the sim. */
+interface Inner {
+  cat: { drives: { huntDrive: number } };
+}
 const running = (h: Harness): boolean => h.last!.state === 'chasingCursor';
 const huntPhase = (h: Harness): string | null => h.sim.debugInfo().phase ?? null;
 
@@ -147,6 +151,26 @@ describe('hunting a cursor that hangs around (no flick, no fast movement)', () =
 });
 
 describe('a hand at work is left alone; a hand at rest is not at work', () => {
+  it('interest keeps building through a press hold; a button held down or typing stop it', () => {
+    const drive = (o: { button?: boolean; typing?: boolean }): number => {
+      const { h } = rig(9);
+      const before = (h.sim as unknown as Inner).cat.drives.huntDrive;
+      let n = 0;
+      h.run(12_000, 33, (hh, i) => {
+        hh.env.userIdleMs = 0;
+        hh.env.cursor = { x: hh.last!.x + 2 * BW + 3 * Math.sin(i), y: FLOOR - 40, speed: 60 };
+        if (i % 90 === 0) hh.env.pointerButtonPresses = ++n;
+        if (o.button) hh.env.pointerButtonDown = true;
+        if (o.typing) hh.env.typing = true;
+      });
+      expect(h.last!.state).not.toBe('chasingCursor');
+      return (h.sim as unknown as Inner).cat.drives.huntDrive - before;
+    };
+    expect(drive({})).toBeGreaterThan(0.2);
+    expect(drive({ button: true })).toBeLessThan(0.02);
+    expect(drive({ typing: true })).toBeLessThan(0.02);
+  });
+
   /** The hand commutes through the band with a press every 5 s; `rest` ms of rest after every third press. */
   function hand(seed: number, rest: number, ms: number): { hunts: HuntRecord[]; starts: number[]; h: Harness } {
     const { h, hunts } = rig(seed);
@@ -315,18 +339,31 @@ describe('prey that hops away and a crouch that waits (ADR 0003 §4.2)', () => {
     expect(pounced / hunts).toBeGreaterThanOrEqual(0.5);
   }, 120_000);
 
-  it('a leap past the end of what it stands on is shortened, not given up (the surface end is no reason to stop hunting)', () => {
-    const { h, hunts } = rig(31);
-    // Close to the right end of the floor, the prey beyond the walkable range.
-    h.env.foreground = null;
-    h.run(25 * MIN, 33, (hh, i) => {
-      hh.env.userIdleMs = 0;
-      const right = hh.world.displays[0]!.workAreaPx.x + hh.world.displays[0]!.workAreaPx.width;
-      const moving = i % 120 < 30;
-      hh.env.cursor = { x: right - 8 + (moving ? 4 * Math.sin(i) : 0), y: FLOOR - 30, speed: moving ? 300 : 0 };
-    });
-    expect(hunts.reduce((a, r) => a + r.pounces, 0)).toBeGreaterThan(0);
-    for (const r of hunts) if (r.pounces > 0) expect(r.minClearanceDip ?? -1).toBeGreaterThanOrEqual(8);
+  it('a leap past the end of what it stands on is shortened, not given up, and it stays up there', () => {
+    let pounced = 0;
+    for (const seed of [61, 62, 63, 64]) {
+      const hunts: HuntRecord[] = [];
+      const falls: unknown[] = [];
+      const h = new Harness({ seed, settings: settingsWith({ behavior: { cursorPlay: 1 } }), hooks: { onHunt: (r) => hunts.push(r), onFall: (f) => falls.push(f) } });
+      const w = { x: 800, y: 800, width: 5 * BW, height: 240 };
+      h.env.windows = { w };
+      h.env.pointerButtonPresses = 0;
+      h.run(WAKE_MS);
+      callCat(h, { x: w.x + 2.5 * BW, y: 700 });
+      expect(h.runUntil((o) => onWindowTop(o.support, 'w') && o.state === 'idle', 30_000)).toBe(true);
+      // The prey rests past the window's right end, at the level of its top.
+      h.env.userIdleMs = 0;
+      h.env.cursor = { x: w.x + w.width + 1.5 * BW, y: w.y - 40, speed: 0 };
+      (h.sim as unknown as { request(s: string, c: string, i: object): string }).request('chasingCursor', 'stimulus', { variant: 'hunt' });
+      h.run(14_000);
+      expect(falls).toEqual([]);
+      for (const r of hunts) if (r.pounces > 0) expect(r.minClearanceDip ?? -1).toBeGreaterThanOrEqual(8);
+      if (hunts.some((r) => r.pounces > 0)) {
+        pounced++;
+        expect(onWindowTop(h.last!.support, 'w')).toBe(true);
+      }
+    }
+    expect(pounced).toBeGreaterThanOrEqual(2);
   }, 60_000);
 });
 
@@ -334,13 +371,8 @@ describe('a taskbar just used (ADR 0003 §4.3)', () => {
   it('holds hunts back a good while after it slid away: the hand that used it is at work', () => {
     expect(TASKBAR_HIDE_HOLD_MS).toBeGreaterThanOrEqual(5000);
     const { h } = rig(40);
-    let drive = false;
-    h.run(3 * MIN, 33, (hh, i) => {
-      hh.env.userIdleMs = 0;
-      hh.env.cursor = { x: hh.last!.x + 2.5 * BW + (i % 30 < 10 ? 10 : 0), y: FLOOR - 40, speed: i % 30 < 10 ? 500 : 0 };
-      drive ||= running(hh);
-    });
-    expect(drive || h.sim.debugInfo().huntDrive! > 0).toBe(true);
+    // A hand that has been around: the drive is well above the threshold when the taskbar goes.
+    (h.sim as unknown as Inner).cat.drives.huntDrive = 1;
     h.step([{ type: 'taskbar.hidden', surfaceId: 'taskbar:tb', displayId: '1', edge: 'bottom' }]);
     const at = h.now;
     let startedSoon = false;

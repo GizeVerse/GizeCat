@@ -37,13 +37,14 @@ export interface RhythmContext {
  * episodes are calm-leaning; without the offset the default cat measured 10-16 % active against
  * B1's 20-35 % (SIMULATED, 2 seeds x 1 sim-h, L1).
  */
-export const RHYTHM_D_OFFSET = 0.25;
+export const RHYTHM_D_OFFSET = 0.3;
 /**
  * Nothing to explore but the floor and the screen edges (a maximized window in front, the user's commonest
  * state, B1b; an empty desktop, L4): the cat leans calm there, its active share at or below the floating-window
- * one. Without it, and with no stay to sit through, the empty desktop measured 53 % (P1) and 39 % (P2, SIMULATED).
+ * one. Without it, and with no stay to sit through, the empty desktop measured 53 % (P1) and 39 % (P2, SIMULATED);
+ * the other half of the cause: an explore need nothing can satisfy saturates, so the sim leaves it out of D there.
  */
-export const RHYTHM_NOTHING_TO_CLIMB_DAMP = 0.25;
+export const RHYTHM_NOTHING_TO_CLIMB_DAMP = 0.32;
 /**
  * Active episodes run this much longer than the ADR's starting U(25, 75) s: with the cat up on window tops a
  * third or more of the time the default cat measured 17-18 % against B1's 20-35 % (SIMULATED, 3 seeds x 2 sim-h).
