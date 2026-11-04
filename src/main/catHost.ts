@@ -310,20 +310,38 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     if (s.kind !== 'surface' || !WINDOW_SURFACE_KINDS.has(s.surfaceKind)) return false;
     const l = listed.find((x) => x.id === s.surfaceId);
     if (!l) return true;
-    if (l.orientation === 'ledge') return out.x < l.x0 - BAIL_SPAN_TOLERANCE_PX || out.x > l.x1 + BAIL_SPAN_TOLERANCE_PX;
+    if (l.orientation === 'ledge') {
+      // A tab strip's window top (`land`) holds the cat too.
+      const x0 = Math.min(l.x0, l.land?.x0 ?? l.x0);
+      const x1 = Math.max(l.x1, l.land?.x1 ?? l.x1);
+      return out.x < x0 - BAIL_SPAN_TOLERANCE_PX || out.x > x1 + BAIL_SPAN_TOLERANCE_PX;
+    }
     return out.y < l.y0 - BAIL_SPAN_TOLERANCE_PX || out.y > l.y1 + BAIL_SPAN_TOLERANCE_PX;
+  }
+
+  /**
+   * The Mover lets go of a ledge that vanished or lost its headroom at once, so its support reads as
+   * air from that step on, and without a flight until the take-off (the bail-out crouch). A jump off
+   * a surface that just went from the list is the same bail-out, the crouch fell between two ticks.
+   */
+  function leftLostSupport(prev: SimOutput | null, out: SimOutput): boolean {
+    if (out.support.kind !== 'air' || !prev) return false;
+    const s = prev.support;
+    if (s.kind !== 'surface' || !WINDOW_SURFACE_KINDS.has(s.surfaceKind)) return false;
+    return (s.orientation === 'ledge' && (out.jumpKind ?? null) === null) || supportLost(prev, lastSurfaces);
   }
 
   /** After each tick: edge flights and bail-outs start and end with the support. */
   function trackGuardPhases(prev: SimOutput | null, out: SimOutput): void {
     const airborne = out.support.kind === 'air';
+    const k = out.jumpKind ?? null;
     const wasEdge = prev?.support.kind === 'surface' && prev.support.surfaceKind === SCREEN_EDGE_KIND;
     if (airborne) {
-      const k = out.jumpKind ?? null;
       if (wasEdge || ((k === 'leap' || k === 'wallJump') && out.visible && nearBand(out.boundsPx))) edgeFlight = true;
     } else edgeFlight = false;
-    if (supportLost(out, lastSurfaces)) bailGuard = true;
-    else if (!airborne) bailGuard = false;
+    if (supportLost(out, lastSurfaces) || leftLostSupport(prev, out)) bailGuard = true;
+    // A leap reports the wall as support from the take-off on: it ends at the catch, not before.
+    else if (!airborne && k === null) bailGuard = false;
   }
 
   function setGuard(state: ScreenEdgeGuard['state'], reason: CatHostDebug['clickGuard']['reason']): void {

@@ -14,6 +14,7 @@ import { defaultSettings } from '../../../src/shared/settings';
 import type { CatSim, SimOutput } from '../../../src/shared/sim';
 import type { ScreenEdgeBand, Surface } from '../../../src/shared/surfaces';
 import type { WorldGeometry } from '../../../src/shared/world';
+import { DEFAULT_LIMITS, env, FLOOR_Y, SINGLE, topId, wall, type Env } from '../core/movement/v12Fixtures';
 import { manualTimers, memoryLogger } from './helpers';
 
 /** The reporting user's display: 1920x1200 at 125 %, the taskbar auto-hides. */
@@ -271,5 +272,186 @@ describe('T8 guard: where it still holds, and fails closed', () => {
     expect(r.host.clickGuardRectsPx()).toEqual([]);
     expect(r.guard()).toMatchObject({ state: 'idle', reason: null });
     r.host.stop();
+  });
+});
+
+describe('T8 guard: a bail-out holds it until the landing or the catch (real Mover replayed; SEC-1, SEC-2)', () => {
+  const FULL: Rect = { x: -8, y: -8, width: 1936, height: 1096 };
+  const BAIL = { bailOut: true, ...DEFAULT_LIMITS } as const;
+
+  /** Cat standing on window w's top (x 600..1400, y) at x = 900, as bailOut.test.ts sets it up. */
+  function onWindow(y = 600): Env {
+    const e = env(SINGLE, BAIL, 0.45);
+    e.walls = false;
+    e.windows = { w: { x: 600, y, width: 800, height: FLOOR_Y - y } };
+    e.step();
+    e.placeOn(topId('w'), 900, y);
+    e.m.setGoal(null);
+    for (let i = 0; i < 5; i++) e.step();
+    return e;
+  }
+
+  /** The host over this Mover: one sim tick per host tick, the list as the provider would serve it. */
+  function replay(e: Env): ReturnType<typeof rig> & { step(): SimOutput } {
+    let last = output();
+    const r = rig({
+      world: SINGLE,
+      bands: null,
+      obstacles: [FULL],
+      next: () => {
+        e.step();
+        last = output({ x: e.m.x, y: e.m.y, support: e.m.support, jumpKind: e.m.jumpKind, boundsPx: boundsAt(e.m.x, e.m.y, 1) });
+        return last;
+      },
+      listed: () => e.surfaces().filter((s) => !e.hidden.has(s.id) && !e.gone.has(s.id)),
+    });
+    r.host.start();
+    r.timers.advance(0);
+    return Object.assign(r, {
+      step(): SimOutput {
+        r.timers.advance(16);
+        return last;
+      },
+    });
+  }
+
+  /** Every step until `done`: the cursor on the cat reaches the window, never the cat. */
+  function guardedUntil(r: ReturnType<typeof replay>, done: () => boolean, maxSteps = 800): number {
+    let steps = 0;
+    while (!done()) {
+      expect(++steps, 'it got there').toBeLessThan(maxSteps);
+      const out = r.step();
+      if (done()) break;
+      expect(r.interactiveOver(out.boundsPx), `step ${steps}, support ${out.support.kind}, jump ${out.jumpKind ?? null}`).toBe(false);
+      expect(r.guard(), `step ${steps}`).toMatchObject({ state: 'active', reason: 'bailOut', rects: 1 });
+    }
+    return steps;
+  }
+
+  const vanish = (e: Env): void => {
+    e.windows = {};
+    e.gone.add(topId('w'));
+  };
+
+  it('maximized, minimized or closed support: from the very first tick, also over the bail-out crouch, until the landing', () => {
+    const e = onWindow();
+    const r = replay(e);
+    const before = r.step();
+    expect(before.support).toMatchObject({ kind: 'surface', surfaceId: topId('w') });
+    expect(r.interactiveOver(before.boundsPx), 'on a visible window top the cat takes the mouse').toBe(true);
+    vanish(e);
+    const steps = guardedUntil(r, () => e.m.support.kind === 'floor');
+    expect(steps).toBeGreaterThan(8);
+    const landed = r.step();
+    expect(landed.support.kind).toBe('floor');
+    expect(r.interactiveOver(landed.boundsPx), 'on the floor afterwards it takes the mouse again').toBe(true);
+    expect(r.guard()).toMatchObject({ state: 'idle', reason: null });
+    r.host.stop();
+  });
+
+  it('the guard is armed on the vanish although the support already reads as air', () => {
+    const e = onWindow();
+    const r = replay(e);
+    r.step();
+    vanish(e);
+    const first = r.step();
+    expect(first.support.kind).toBe('air');
+    expect(e.m.bailingOut).toBe(true);
+    expect(r.interactiveOver(first.boundsPx)).toBe(false);
+    expect(r.guard().reason).toBe('bailOut');
+    r.host.stop();
+  });
+
+  it('no headroom any more (the window moved up under the top of the screen, still listed): the same', () => {
+    const e = onWindow();
+    const r = replay(e);
+    r.step();
+    e.windows = { w: { x: 600, y: 20, width: 800, height: FLOOR_Y - 20 } };
+    const first = r.step();
+    expect(e.m.bailingOut).toBe(true);
+    expect(r.interactiveOver(first.boundsPx)).toBe(false);
+    expect(r.guard().reason).toBe('bailOut');
+    guardedUntil(r, () => e.m.support.kind === 'floor');
+    r.host.stop();
+  });
+
+  /** bailOut.test.ts case 3: nothing to jump to within H_max, a window side in reach. */
+  function wallBailOut(): { e: Env; r: ReturnType<typeof replay> } {
+    const e = onWindow(200);
+    e.windows = { w: { x: 500, y: 200, width: 480, height: 840 } };
+    e.extra = [wall('u', 'left', 1000, 150, FLOOR_Y, { topLedgeId: null })];
+    e.step();
+    return { e, r: replay(e) };
+  }
+
+  it.each([
+    ['covered', (e: Env): void => void e.hidden.add(topId('w'))],
+    ['vanished', vanish],
+  ])('%s, the way off a leap onto a window side: through the whole leap (the wall reads as support from the take-off on), gone after the catch', (_name, lose) => {
+    const { e, r } = wallBailOut();
+    r.step();
+    lose(e);
+    let leapSteps = 0;
+    const caught = (): boolean => e.m.bailOutKind === 'wall' && e.m.onWall && e.m.climbPhase !== 'leap';
+    let steps = 0;
+    while (!caught()) {
+      expect(++steps, 'it got there').toBeLessThan(800);
+      const out = r.step();
+      if (caught()) break;
+      if (out.jumpKind === 'leap') {
+        leapSteps++;
+        expect(out.support).toMatchObject({ kind: 'surface', surfaceKind: 'windowSide', orientation: 'wall' });
+      }
+      expect(r.interactiveOver(out.boundsPx), `step ${steps}`).toBe(false);
+      expect(r.guard().reason, `step ${steps}`).toBe('bailOut');
+    }
+    expect(leapSteps, 'the leap was seen').toBeGreaterThan(5);
+    expect(e.m.bailingOut).toBe(false);
+    const held = r.step();
+    expect(held.support).toMatchObject({ surfaceKind: 'windowSide' });
+    expect(r.host.clickGuardRectsPx()).toEqual([]);
+    expect(r.guard()).toMatchObject({ state: 'idle', reason: null });
+    r.host.stop();
+  });
+
+  describe('and only then', () => {
+    const top: Surface = { id: topId('w'), kind: 'windowTop', ownerId: 'w', displayId: '1', orientation: 'ledge', y: 600, x0: 600, x1: 1400, rest: null, focusX: null, phase: 'stable', vx: 0, vy: 0, confidence: 1, validatedAt: 0, excluded: false };
+    const onTop: SimOutput['support'] = { kind: 'surface', surfaceId: top.id, surfaceKind: 'windowTop', orientation: 'ledge' };
+
+    it.each(['hop', 'up', 'across', 'down', 'pounce'] as const)('a voluntary %s off a visible window top is not guarded', (jumpKind) => {
+      const r = started({ listed: () => [top] });
+      r.tick({ x: 900, y: 600, support: onTop, boundsPx: boundsAt(900, 600) });
+      const air = r.tick({ x: 920, y: 590, support: { kind: 'air' }, jumpKind, boundsPx: boundsAt(920, 590) });
+      expect(r.interactiveOver(air.boundsPx)).toBe(true);
+      expect(r.guard()).toMatchObject({ state: 'idle', reason: null });
+      r.host.stop();
+    });
+
+    it('a voluntary hang-and-drop off a window side is not guarded either', () => {
+      const side = wall('w', 'left', 600, 600, 1000);
+      const r = started({ listed: () => [side] });
+      r.tick({ x: 590, y: 800, support: { kind: 'surface', surfaceId: side.id, surfaceKind: 'windowSide', orientation: 'wall' }, boundsPx: boundsAt(590, 800) });
+      const air = r.tick({ x: 580, y: 810, support: { kind: 'air' }, jumpKind: null, boundsPx: boundsAt(580, 810) });
+      expect(r.interactiveOver(air.boundsPx)).toBe(true);
+      r.host.stop();
+    });
+
+    it("a cat on a tab strip's walkable window top (land) has not lost its support", () => {
+      const strip: Surface = { ...top, id: 'tabStrip:w', kind: 'tabStrip', x0: 700, x1: 1000, land: { x0: 600, x1: 1400 } };
+      const r = started({ listed: () => [strip] });
+      const out = r.tick({ x: 1200, y: 600, support: { kind: 'surface', surfaceId: strip.id, surfaceKind: 'tabStrip', orientation: 'ledge' }, boundsPx: boundsAt(1200, 600) });
+      expect(r.interactiveOver(out.boundsPx)).toBe(true);
+      r.host.stop();
+    });
+
+    it('a user drag ends the guard: the grab is the landing', () => {
+      const r = started({ listed: () => [] });
+      r.tick({ x: 900, y: 600, support: onTop, boundsPx: boundsAt(900, 600) });
+      const lost = r.tick({ x: 900, y: 600, support: { kind: 'air' }, boundsPx: boundsAt(900, 600) });
+      expect(r.interactiveOver(lost.boundsPx)).toBe(false);
+      const held = r.tick({ x: 900, y: 600, support: { kind: 'held' }, boundsPx: boundsAt(900, 600) });
+      expect(r.interactiveOver(held.boundsPx)).toBe(true);
+      r.host.stop();
+    });
   });
 });
