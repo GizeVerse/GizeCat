@@ -159,7 +159,7 @@ export abstract class SimActivities extends SimUtility {
         }
         break;
       case 'seekingAttention':
-        // v1.2 drives: a greeting or an answered request satisfies the social need; an unanswered one makes it cheekier.
+        // v1.2 drives: a greeting or an answered request satisfies the social need; an unanswered one relieves it a little and makes it cheekier.
         applyImpulse(this.cat.drives, a.variant === 'greet' || a.answered ? 'socialAnswered' : 'attentionIgnored');
         if (a.variant !== 'greet') {
           const p = this.cat.memory.preferences;

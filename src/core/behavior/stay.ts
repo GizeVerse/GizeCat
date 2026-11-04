@@ -29,9 +29,16 @@ export const PATROL_MIN_GAP_MS = 45_000;
 /** The resume token (ADR 0003 §2.4): the surface must come back within this long, the new stay lasts at least this. */
 export const STAY_RESUME_WINDOW_MS = 3 * 60_000;
 export const STAY_RESUME_MIN_MS = 60_000;
-/** A social need above this, this far into the stay, ends it early (end reason 'stimulus'). */
+/**
+ * A social need above this, this far into the stay, ends it early once (end reason 'stimulus'), and the
+ * cat goes on to ask for attention (ADR 0003 §2.4). One-shot: armed again only after the need fell
+ * below STAY_LONELY_REARM_NEED, and at most one per STAY_LONELY_MIN_GAP_MS, so a need nobody relieves
+ * cannot cut every stay to a minute.
+ */
 export const STAY_LONELY_NEED = 0.9;
 export const STAY_LONELY_MIN_MS = 60_000;
+export const STAY_LONELY_REARM_NEED = 0.7;
+export const STAY_LONELY_MIN_GAP_MS = 20 * 60_000;
 /** Leave kinds remembered for N_leave. */
 export const LEAVE_HISTORY = 4;
 

@@ -4,7 +4,7 @@
 import { MIN } from './metrics';
 import { cellKey, type CellSpec, type CellSummary, type ProfileId, type RecoveryTrace, type RunResult } from './behaviorProfile';
 
-export type BandId = 'B1' | 'B1b' | 'B1c' | 'B2' | 'B3' | 'B4' | 'B5' | 'B5b' | 'B5c' | 'B5d' | 'B6' | 'B7' | 'B8' | 'B8b' | 'B9' | 'B10' | 'B11' | 'B12' | 'B13' | 'B14' | 'B15' | 'C-typing' | 'C-climbs' | 'presets';
+export type BandId = 'B1' | 'B1b' | 'B1c' | 'B2' | 'B3' | 'B3b' | 'B4' | 'B5' | 'B5b' | 'B5c' | 'B5d' | 'B6' | 'B7' | 'B8' | 'B8b' | 'B9' | 'B10' | 'B11' | 'B12' | 'B13' | 'B14' | 'B15' | 'C-typing' | 'C-climbs' | 'presets';
 
 /** ADR 0003 §14, column "Band (assert)", verbatim (plus the "never in the way" ceilings and the preset order). */
 export const BAND_TEXT: Readonly<Record<BandId, string>> = {
@@ -13,6 +13,7 @@ export const BAND_TEXT: Readonly<Record<BandId, string>> = {
   B1c: 'active share ≤ 35 % of awake time with nothing to climb',
   B2: 'elevated arrivals 4–15 /h; ≤ 12 window climbs/h (edges excluded)',
   B3: 'stays (Kaplan–Meier, imposed ends right-censored): median 90–300 s, p10 ≥ 20 s, P(> 5 min) ≥ 8 %, P(> 15 min) monitored; plannedMs draws: median 120–200 s, p10 ≥ 30 s, ≥ 12 % > 5 min, p90 ≤ 12 min; the experienced (uncensored) median is reported',
+  B3b: 'nobody handling the cat: experienced (uncensored) median stay 90–300 s, elevated arrivals 4–15 /h, at most one lonely leave per 20 min',
   B4: 'departures varied on two windows: no leave kind > 70 % of own departures, ≥ 3 kinds; ≥ 2 kinds on one window',
   B5: 'hunts 4–12 /h; pounces ≥ 1 /h; never two pounces < 90 s apart',
   B5d: 'ordinary use: on average over the layouts hunts ≥ 2 /h and pounces ≥ 1 /h; never two pounces < 90 s apart',
@@ -64,6 +65,8 @@ export interface BandLimits {
   arrivalsPerHour: readonly [number, number];
   windowClimbsMaxPerHour: number;
   kmMedianS: readonly [number, number];
+  /** B3b: the experienced median stay of a cat nobody handles (no censoring to hide imposed ends). */
+  handsOffExperiencedMedianS: readonly [number, number];
   kmP10MinS: number;
   kmOver5MinMin: number;
   plannedMedianS: readonly [number, number];
@@ -85,6 +88,7 @@ export const FULL_LIMITS: BandLimits = {
   arrivalsPerHour: [4, 15],
   windowClimbsMaxPerHour: 12,
   kmMedianS: [90, 300],
+  handsOffExperiencedMedianS: [90, 300],
   kmP10MinS: 20,
   kmOver5MinMin: 0.08,
   plannedMedianS: [120, 200],
@@ -125,6 +129,15 @@ export function cellChecks(key: string, c: CellSummary, lim: BandLimits = FULL_L
     push('B4', 'share of the commonest leave kind on one window (reported)', c.stays.leave.maxShare, 'n/a');
     push('B4', 'at least 2 leave kinds on one window', c.stays.leave.kinds, atLeast(c.stays.leave.kinds, 2));
     push('B10', `deliberate slips per awake hour in [${lim.slipsPerAwakeHour.join(', ')}]`, c.slips.perAwakeHour, inRange(c.slips.perAwakeHour, lim.slipsPerAwakeHour[0], lim.slipsPerAwakeHour[1]));
+  }
+  if (isCell(key, { profile: ['P1', 'P2'], layout: ['L1', 'L2'], user: ['U-hands-off'], variant: ['default'] })) {
+    // Kaplan-Meier censors imposed ends, and a user who handles the cat relieves its social need: only here does a need nobody relieves show.
+    const b = lim.handsOffExperiencedMedianS;
+    push('B3b', `experienced median stay (s) in [${b.join(', ')}]`, c.stays.experiencedMedianS, inRange(c.stays.experiencedMedianS, b[0], b[1]));
+    push('B3b', `own elevated arrivals per hour in [${lim.arrivalsPerHour.join(', ')}]`, c.stays.ownArrivalsPerHour, inRange(c.stays.ownArrivalsPerHour, lim.arrivalsPerHour[0], lim.arrivalsPerHour[1]));
+    const lonely = c.stays.byEnd.stimulus ?? 0;
+    const maxLonely = Math.ceil(c.simHours * 3) + c.runs;
+    push('B3b', `stays cut short for company <= ${maxLonely} (one per 20 min per run)`, lonely, atMost(lonely, maxLonely));
   }
   if (activeUser && isCell(key, { profile: ['P1', 'P2'], layout: ['L5'] })) {
     push('B4', `no leave kind above ${lim.leaveMaxShare} of own departures`, c.stays.leave.maxShare, c.stays.leave.departures ? atMost(c.stays.leave.maxShare, lim.leaveMaxShare) : 'fail');

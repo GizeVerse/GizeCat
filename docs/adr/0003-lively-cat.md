@@ -51,7 +51,7 @@ All drives are 0..1 and clamped after every step. Drives step from an **accumula
 
 | Drive | Default | Grows | Satisfied or decays | Used by |
 |---|---|---|---|---|
-| `socialNeed` nₛ | 0.3 | +(0.4 + 0.6·affection)·(0.5 + Att)/1800 per s, awake and not touched | per stroke −0.04·strength; beingPetted −0.004/s; greet or answered attention −0.25; held −0.001/s | seekingAttention (I = nₛ², no baseline); watchingUser |
+| `socialNeed` nₛ | 0.3 | +(0.4 + 0.6·affection)·(0.5 + Att)/1800 per s, awake and not touched | per stroke −0.04·strength; beingPetted −0.004/s; greet or answered attention −0.25; **an unanswered request −0.2** (asking relieves a little, so the need cannot sit at 1); held −0.001/s | seekingAttention (I = nₛ², no baseline); watchingUser |
 | `playNeed` nₚ | 0.4 | +(0.3 + 0.7·playfulness)·(0.5 + A)/1500 per s, awake, not playing or hunting | playing/hunting −0.012/s; pounce −0.08; bat or swat −0.04; zoomies or tail chase −0.02/s. **Petting: no effect** | play, hunt gain, mischief target, rhythm |
 | `exploreNeed` nₑ | 0.4 | +(0.3 + 0.7·curiosity)·(0.5 + X)/1800 per s **×(0.3 + 0.7·o)**, o = 1 when a novel reachable elevated target or a clear screen-edge band exists, else 0 | **per visit**: arrival on a window top or strip −0.25; full screen-edge climb with the top hold −0.2; covered-band peek −0.12; a floor place > 6 bw from the last 5 places −0.05; curious or inspecting −0.002/s | trips, wander, corners, screen edges, rhythm |
 | `sleepiness` z | 0.2 | awake: +1/T per s, T = 3600·(1.4 − 0.8·laziness)·(1.2 − 0.4·energyLevel) s, ×1.4 at night (23–6 h), ×(1 + 0.3·darkBias) | asleep −1/720 per s; resting −1/5400 per s | z_eff = clamp(z + 0.6·max(0, 0.55 − energy)/0.55) drives naps and damps the rhythm; `sleepiness()` reads z_eff |
@@ -203,7 +203,7 @@ N_leave ×0.55 per each of the last 4 leaves of the same kind; same τ = 0.5 sof
 
 ### 2.4 Imposed ends and the resume token
 
-`STAY_END_REASONS`: user drag → `drag`; call → `called` (leaves by the best option); covered → `covered` (§3); window closed, minimized or maximized → `gone` (§3 bail-out too); setting off → `disabled`; fullscreen → `fullscreen`; nₛ > 0.9 at least 60 s in → `stimulus`. **Resume token:** when an own stay ended `covered` or `gone` and its surface reappears within 3 min, that surface's trip gets ×2 and the new stay (`resumed: true`) gets at least the remaining planned time (≥ 60 s). The three v1.1.1 descent paths and `topExplored` are **removed**, not tuned.
+`STAY_END_REASONS`: user drag → `drag`; call → `called` (leaves by the best option); covered → `covered` (§3); window closed, minimized or maximized → `gone` (§3 bail-out too); setting off → `disabled`; fullscreen → `fullscreen`; the lonely leave below → `stimulus`. **Lonely leave (corrected, review BEH-1):** nₛ > 0.9 at least 60 s in cuts a stay short **once**: the leave then ends in a `seekingAttention` request. It re-arms only after nₛ has fallen below 0.7, at most one per 20 min, never with `attentionSeeking` at 0 or `seekAttention` off, and not while the request it ends in would be held back (its cooldown, a user idle ≥ 60 s). The first version fired whenever nₛ > 0.9, and for a user who pets less than about once per 20 min the need sits there for good: every stay was cut to about 60 s, whatever `plannedMs` said, and the next hop raised arrivals above B2. Kaplan–Meier censors these ends and the U-active cells relieve the need by handling, so no band saw it; B3b (§14) now gates what such a user experiences. **Resume token:** when an own stay ended `covered` or `gone` and its surface reappears within 3 min, that surface's trip gets ×2 and the new stay (`resumed: true`) gets at least the remaining planned time (≥ 60 s). The three v1.1.1 descent paths and `topExplored` are **removed**, not tuned.
 
 ## 3. Covered or vanished support (T2): controlled bail-out
 
@@ -544,6 +544,7 @@ Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profile
 - **U-typing**: typing 60 % of the time (run with `reactToTyping` on and off).
 - **U-play**: the cursor lingers within 6 bw of the cat, erratic, no clicks, 20 % of the time.
 - **U-mouse-work**: a button press every 2–10 s, the cursor commuting, taskbar reveals at the bottom every 1–3 min.
+- **U-hands-off**: U-active's cursor and breaks, but it never pets, drags or throws the cat (B3b).
 
 8 seeds × 3 sim-h per cell (2 seeds in calibration loops). A short subset runs in `verify fast` as `tests/integration/behavior/bands-short.test.ts` (L1/P2, 2 seeds × 1.75 sim-h, binomially widened, wall-time budget ≤ 20 s with a vitest timeout; over budget it moves to the profile tier).
 
@@ -554,6 +555,7 @@ Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profile
 | B1c | active share ≤ 35 % of awake time with nothing to climb | `timeMs.active / awake` | P1, P2 × L4, L4b × U-active |
 | B2 | elevated arrivals 4–15 /h; ≤ 12 window climbs/h (edges excluded) | `onExcursion` arrive | L1, L2 |
 | B3 | stays (Kaplan–Meier, imposed ends right-censored): median 90–300 s, p10 ≥ 20 s, P(> 5 min) ≥ 8 %, P(> 15 min) monitored; plannedMs draws: median 120–200 s, p10 ≥ 30 s, ≥ 12 % > 5 min, p90 ≤ 12 min; the experienced (uncensored) median is reported | `onExcursion` end | L1, L2 |
+| B3b | nobody handling the cat: **experienced** (uncensored) median stay 90–300 s, elevated arrivals 4–15 /h, at most one lonely leave per 20 min | `onExcursion` | P1, P2 × L1, L2 × U-hands-off |
 | B4 | departures varied on two windows: no leave kind > 70 % of own departures, ≥ 3 kinds; ≥ 2 kinds on one window | `leaveKind` | L5; L1, L2 |
 | B5 | hunts 4–12 /h; pounces ≥ 1 /h; never two pounces < 90 s apart | `onHunt` | U-play |
 | B5d | ordinary use: on average over the layouts hunts ≥ 2 /h and pounces ≥ 1 /h; never two pounces < 90 s apart | `onHunt` | P1, P2 × L1, L2, L3, L4b × U-active |

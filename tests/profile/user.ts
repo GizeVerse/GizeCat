@@ -87,8 +87,8 @@ export const REAL_HANDLING: Pick<UsageModel, 'petsPerHour' | 'dragsPerHour' | 't
 /** The REAL throw spacing (8.3 hard throws per awake hour), for B7. */
 export const REAL_THROW_SPACING_MS = HOUR / 8.3;
 
-export type UserModelId = 'U-legacy' | 'U-active' | 'U-typing' | 'U-play' | 'U-mouse-work';
-export const USER_MODEL_IDS: readonly UserModelId[] = ['U-legacy', 'U-active', 'U-typing', 'U-play', 'U-mouse-work'];
+export type UserModelId = 'U-legacy' | 'U-active' | 'U-typing' | 'U-play' | 'U-mouse-work' | 'U-hands-off';
+export const USER_MODEL_IDS: readonly UserModelId[] = ['U-legacy', 'U-active', 'U-typing', 'U-play', 'U-mouse-work', 'U-hands-off'];
 
 const V12_BASE: UsageModel = { ...LEGACY_USAGE, ...REAL_HANDLING, taskbar: true, clickShare: 0.5 };
 
@@ -102,6 +102,8 @@ export const USER_MODELS: Readonly<Record<UserModelId, UsageModel>> = {
   'U-play': { ...V12_BASE, modeShares: { play: 0.2, mouse: 0.5, pause: 0.22, idle: 0.08 } },
   /** A button press every 2-10 s, the cursor commuting, taskbar reveals at the bottom every 1-3 min. */
   'U-mouse-work': { ...V12_BASE, modeShares: { mouse: 0.88, pause: 0.08, idle: 0.04 }, clickShare: 0, pressEveryMs: [2000, 10_000], taskbarEveryMs: [MIN, 3 * MIN], nearCatMoveShare: 0.04, anywhereMoveShare: 0.2 },
+  /** Like U-active, breaks included, but never touches the cat: nothing but a greeting ever relieves its social need (B3b). */
+  'U-hands-off': { ...V12_BASE, petsPerHour: 0, dragsPerHour: 0, throwsPerHour: 0, modeShares: { mouse: 0.6, pause: 0.28, idle: 0.12 } },
 };
 
 export const USER_MODEL_DESCRIPTIONS: Readonly<Record<UserModelId, string>> = {
@@ -110,6 +112,7 @@ export const USER_MODEL_DESCRIPTIONS: Readonly<Record<UserModelId, string>> = {
   'U-typing': 'typing 60 % of the present time, mouse 27 %, pauses 8 %; REAL handling rate',
   'U-play': 'cursor lingering within 6 bw of the cat, erratic, no clicks, 20 % of the present time; REAL handling rate',
   'U-mouse-work': 'mouse work: a press every 2-10 s, the cursor commuting, taskbar reveals every 1-3 min; REAL handling rate',
+  'U-hands-off': 'cursor moving 60 %, pauses 28 %, breaks 12 %, never typing; never pets, drags or throws the cat',
 };
 
 interface CursorPath {

@@ -159,7 +159,7 @@ export function decayForDowntime(d: Drives, downtimeMs: number, c: { bond: numbe
 export type DriveImpulse =
   /** Greeting the user, or an attention request the user answered. */
   | 'socialAnswered'
-  /** An attention request nobody answered. */
+  /** An attention request nobody answered: asking relieves a little, and it gets cheekier. */
   | 'attentionIgnored'
   /** A hunt the user did not play along with (the cursor stopped or left). */
   | 'huntIgnored'
@@ -193,6 +193,7 @@ export function applyImpulse(d: Drives, kind: DriveImpulse): void {
       d.socialNeed -= 0.25;
       break;
     case 'attentionIgnored':
+      d.socialNeed -= 0.2;
       d.mischief += 0.15;
       break;
     case 'huntIgnored':

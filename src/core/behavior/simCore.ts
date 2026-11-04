@@ -464,6 +464,9 @@ export abstract class SimCore {
   /** v1.2 behaviour profile (ADR 0003 §11) and the stay being tracked for it. */
   protected readonly profile: BehaviorProfileRecorder;
   protected stay: StayTrack | null = null;
+  /** The lonely leave (ADR 0003 §2.4): armed, and when it last fired. */
+  protected lonelyArmed = true;
+  protected lastLonelyAt = -Infinity;
   /** How the cat was attached last tick (arrival route of a stay). */
   protected prevAttach: 'ground' | 'wall' | 'air' | 'held' = 'ground';
   /** Why the support was lost most recently (fall cause of the next landing). */

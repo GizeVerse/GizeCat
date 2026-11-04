@@ -5,6 +5,7 @@ import { clamp } from '../../shared/geometry';
 import type { SimEnv } from '../../shared/sim';
 import { userIdleForSleep } from './decide';
 import { boredomDisplay, DRIVE_STEP_MS, stepDrives, zEff } from './drives';
+import { STAY_LONELY_REARM_NEED } from './stay';
 import { BUSY_HAND_PRESSES } from './hunt';
 import { decayRate, learnSpot } from './memory';
 import type { RhythmContext } from './rhythm';
@@ -82,6 +83,7 @@ export abstract class SimDrives extends SimCore {
     );
     // v1.1 boredom stays a display value (a 1.1.1 downgrade reads a sensible number).
     this.cat.stats.boredom = boredomDisplay(d);
+    if (d.socialNeed < STAY_LONELY_REARM_NEED) this.lonelyArmed = true;
     if (this.mode === 'normal' && this.rhythm.update(this.random, this.now, this.rhythmContext())) this.onEpisodeStart();
     this.syncJumpLimits();
   }

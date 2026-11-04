@@ -3,7 +3,7 @@
 // synthetic user (its own generator, so the sim's stream is untouched), and the SimHooks records.
 // SIMULATED: synthetic input, OS mocked. The full matrix is INT's (tests/profile, tests/integration).
 import type { BehaviorProfileSnapshot, DecisionRecord, ExcursionRecord, FallRecord, HuntRecord, ReactionRecord } from '../../../../src/shared/behaviorProfile';
-import type { Stats, Traits } from '../../../../src/shared/catState';
+import type { Drives, Stats, Traits } from '../../../../src/shared/catState';
 import type { Settings } from '../../../../src/shared/settings';
 import type { SimEvent } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
@@ -33,6 +33,8 @@ export interface CellOptions {
   profile?: 'P1' | 'P2';
   traits?: Partial<Traits>;
   stats?: Partial<Stats>;
+  /** The drives at the start (a social need that has already saturated, say). */
+  drives?: Partial<Drives>;
   /** Host tick, ms (default 50). */
   dt?: number;
 }
@@ -68,6 +70,7 @@ export function runCell(o: CellOptions, each?: (h: Harness) => void): CellResult
   if (o.profile === 'P1') Object.assign(cat.traits, USER_TRAITS);
   Object.assign(cat.traits, o.traits ?? {});
   Object.assign(cat.stats, o.stats ?? {});
+  Object.assign(cat.drives, o.drives ?? {});
   const h = new Harness({
     seed: o.seed,
     world: USER_SCREEN,

@@ -21,6 +21,7 @@ import {
   leaveBackoffMs,
   PATROL_MIN_GAP_MS,
   STAY_HARD_CAP_MS,
+  STAY_LONELY_MIN_GAP_MS,
   STAY_LONELY_MIN_MS,
   STAY_LONELY_NEED,
   STAY_OVERDUE_MS,
@@ -207,15 +208,15 @@ export abstract class SimStay extends SimDrives {
       st.leaving = null;
       st.pendingLeave = null;
       st.byMover = false;
+      st.forcedLeave = false;
       st.failures = st.failures.filter((t) => t > this.now - LEAVE_FAILURE_WINDOW_MS);
       st.failures.push(this.now);
       st.nextLeaveAt = this.now + leaveBackoffMs(st.failures.length);
       return;
     }
     const elapsed = this.now - st.since;
-    // A strong social need ends the stay early, at least 60 s in (ADR 0003 §2.4).
-    const lonely = elapsed >= STAY_LONELY_MIN_MS && this.cat.drives.socialNeed > STAY_LONELY_NEED && !this.disabled.has('seekAttention');
-    st.forcedLeave = lonely && elapsed < st.plannedMs;
+    // A strong social need ends the stay early, at least 60 s in, once (ADR 0003 §2.4).
+    const lonely = elapsed >= STAY_LONELY_MIN_MS && elapsed < st.plannedMs && this.lonelyLeaveDue();
     if (!st.overdue && elapsed > st.plannedMs + STAY_OVERDUE_MS) st.overdue = true;
     if ((elapsed < Math.min(st.plannedMs, STAY_HARD_CAP_MS) && !lonely) || this.now < st.nextLeaveAt) return;
     if (s === 'beingPetted') {
@@ -228,11 +229,24 @@ export abstract class SimStay extends SimDrives {
     const a = this.act;
     if (PHYSICAL_STATES.has(s) || a.cause === 'command' || a.cause === 'interaction' || s === 'startled' || s === 'annoyed' || s === 'hiding' || this.mover.onWall) return;
     if (!this.budgetAvailable()) return;
-    const ok = this.leaveStay(st);
+    const ok = this.leaveStay(st, lonely);
     if (ok) return;
     st.failures = st.failures.filter((t) => t > this.now - LEAVE_FAILURE_WINDOW_MS);
     st.failures.push(this.now);
     st.nextLeaveAt = this.now + leaveBackoffMs(st.failures.length);
+  }
+
+  /**
+   * The lonely leave may fire now (ADR 0003 §2.4): armed, the last one long enough ago, and the cat
+   * is allowed to ask for attention and somebody is there to ask (the same gates as the request it
+   * ends in): the 'Attention seeking' slider at 0 and the opt-out both rule it out.
+   */
+  protected lonelyLeaveDue(): boolean {
+    const att = this.settings.behavior.attentionSeeking;
+    if (!this.lonelyArmed || this.cat.drives.socialNeed <= STAY_LONELY_NEED || this.now - this.lastLonelyAt < STAY_LONELY_MIN_GAP_MS) return false;
+    if (!(Number.isFinite(att) && att > 0) || this.disabled.has('seekAttention') || this.coolingDown('seekingAttention')) return false;
+    const idle = this.env?.userIdleMs;
+    return !(Number.isFinite(idle) && (idle as number) >= 60_000);
   }
 
   /**
@@ -252,8 +266,11 @@ export abstract class SimStay extends SimDrives {
     return { state: 'walking', init: { variant: 'leave', target: choice.target } };
   }
 
-  /** One leave attempt: the single decision over the Mover's leave options (ADR 0003 §2.3); the activity runs it. */
-  protected leaveStay(st: StayTrack): boolean {
+  /**
+   * One leave attempt: the single decision over the Mover's leave options (ADR 0003 §2.3); the activity
+   * runs it. `lonely`: the stay is cut short for company (§2.4), so the walk ends in asking for attention.
+   */
+  protected leaveStay(st: StayTrack, lonely = false): boolean {
     const t = this.cat.traits;
     const emergencyOnly = st.failures.filter((x) => x > this.now - LEAVE_FAILURE_WINDOW_MS).length >= LEAVE_FAILURES_FOR_EMERGENCY;
     const choice = chooseLeave(
@@ -266,10 +283,15 @@ export abstract class SimStay extends SimDrives {
     if (!choice) return false;
     st.pendingLeave = choice;
     st.leaving = choice.kind;
-    if (this.request('walking', 'autonomous', { variant: 'leave', target: choice.target }) !== 'ok') {
+    if (this.request('walking', 'autonomous', { variant: 'leave', target: choice.target, ...(lonely ? { then: { state: 'seekingAttention', init: {} } } : {}) }) !== 'ok') {
       st.pendingLeave = null;
       st.leaving = null;
       return false;
+    }
+    if (lonely) {
+      st.forcedLeave = true;
+      this.lonelyArmed = false;
+      this.lastLonelyAt = this.now;
     }
     this.recordDecision('walking', 'leave', 'leave');
     return true;
