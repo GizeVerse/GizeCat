@@ -371,7 +371,8 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
   add(cand('playing', { variant: 'tailChase' }), 0.05, 0.2 + 0.6 * nP + 0.3 * m);
 
   // ---- social and wary (drive-gated: no baseline) ----
-  if (v.userIdleMs < 60_000 && b.attentionSeeking > 0) add(cand('seekingAttention'), 0.35, nS * nS);
+  // The slider and what asking has brought so far bound the requests (review BEH-4), on top of the quiet gap (isCoolingDown).
+  if (v.userIdleMs < 60_000 && b.attentionSeeking > 0) add(cand('seekingAttention'), 0.35, nS * nS * (0.15 + 1.7 * clamp01(b.attentionSeeking)) * (0.3 + 0.7 * clamp01(v.attentionAcceptance ?? 0.5)));
   if (rough > 0) add(cand('hiding'), 0.05, clamp01(d.wariness) + 0.5 * rough);
   if (v.surpriseReady && v.recentStimulus && !typingRaw) add(cand('startled', { variant: 'surprise' }), 0.02, 0.5 + clamp01(t.curiosity));
   return out;

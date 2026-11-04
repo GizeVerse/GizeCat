@@ -27,6 +27,8 @@ import {
   STAY_OVERDUE_MS,
   STAY_RESUME_MIN_MS,
   STAY_RESUME_WINDOW_MS,
+  TRIP_SETTLE_MS,
+  TRIP_SETTLE_SHARE,
 } from './stay';
 import { ASLEEP_STATES, PHYSICAL_STATES, STATE_SPECS } from './states';
 import { SimDrives } from './simDrives';
@@ -115,7 +117,7 @@ export abstract class SimStay extends SimDrives {
             endReason = 'slip';
             break;
           case 'fall':
-            endReason = 'other';
+            endReason = st.emergencyLeave ? 'leave' : 'other';
             break;
         }
         // The leave intent knows which way it took (a climb-then-leap also starts on the wall).
@@ -126,6 +128,8 @@ export abstract class SimStay extends SimDrives {
           const cause = this.act.cause;
           endReason = cause === 'command' ? 'called' : cause === 'stimulus' || cause === 'interaction' ? 'stimulus' : this.onFullscreenDisplay() ? 'fullscreen' : 'other';
         }
+        // Down by its own leave: it settles before the next trip (a stay the user or the desktop ended does not count).
+        if (st.leaving !== null && !toElevated) this.tripSettleUntil = this.now + clamp(TRIP_SETTLE_SHARE * Math.max(0, st.lastOnAt - st.since), TRIP_SETTLE_MS[0], TRIP_SETTLE_MS[1]);
         // A covered or vanished stay may resume when its surface comes back (ADR 0003 §2.4).
         if (endReason === 'covered' || endReason === 'gone') {
           const left = st.plannedMs - Math.max(0, st.lastOnAt - st.since);
@@ -169,7 +173,7 @@ export abstract class SimStay extends SimDrives {
       const resumed = tok !== null && (tok.surfaceId === on.surfaceId || (ownerId !== null && tok.place === `w:${ownerId}`));
       const plannedMs = resumed ? Math.min(STAY_HARD_CAP_MS, Math.max(intent.plannedMs, tok.remainingMs)) : intent.plannedMs;
       if (resumed) this.resumeToken = null;
-      this.stay = { kind, surfaceId: on.surfaceId, ownerId, since: this.now, lastOnAt: this.now, arrivedBy, via: 'none', plannedMs, napMs: 0, nextLeaveAt: -Infinity, failures: [], leaving: null, pendingLeave: null, byMover: false, bailOut: null, resumed, forcedLeave: false, overdue: false };
+      this.stay = { kind, surfaceId: on.surfaceId, ownerId, since: this.now, lastOnAt: this.now, arrivedBy, via: 'none', plannedMs, napMs: 0, nextLeaveAt: -Infinity, failures: [], failedLeaves: 0, leaving: null, pendingLeave: null, byMover: false, bailOut: null, resumed, forcedLeave: false, emergencyLeave: false, overdue: false };
       if (ownerId) this.placeVisits.set(`w:${ownerId}`, this.now);
       applyImpulse(this.cat.drives, 'arrivedUp');
       this.emitExcursion({ phase: 'arrive', at: this.now, surfaceKind: kind, arrivedBy, plannedMs: Math.round(plannedMs), dwellMs: 0, endReason: null, leaveKind: null, ...(resumed ? { resumed: true } : {}) });
@@ -187,8 +191,9 @@ export abstract class SimStay extends SimDrives {
 
   /**
    * The leave intent (ADR 0003 §2.3): once the stay's planned time is up (or its 30 min hard cap),
-   * one decision over the Mover's leave options; a failed leave is retried after 2 -> 4 -> 8 s,
-   * after three failures in 30 s the emergency option. Deferred 10-20 s while being petted, and
+   * one decision over the Mover's leave options; a failed leave is retried after 2 -> 4 -> 8 s. The
+   * emergency option only when nothing else is allowed, or when the ways listed keep failing on a
+   * stay already overdue. Deferred 10-20 s while being petted, and
    * while the cursor hotspot is right at the cat (no take-off in the hold-still zone).
    */
   protected updateStay(): void {
@@ -209,9 +214,8 @@ export abstract class SimStay extends SimDrives {
       st.pendingLeave = null;
       st.byMover = false;
       st.forcedLeave = false;
-      st.failures = st.failures.filter((t) => t > this.now - LEAVE_FAILURE_WINDOW_MS);
-      st.failures.push(this.now);
-      st.nextLeaveAt = this.now + leaveBackoffMs(st.failures.length);
+      st.emergencyLeave = false;
+      this.noteLeaveFailure(st);
       return;
     }
     const elapsed = this.now - st.since;
@@ -230,9 +234,14 @@ export abstract class SimStay extends SimDrives {
     if (PHYSICAL_STATES.has(s) || a.cause === 'command' || a.cause === 'interaction' || s === 'startled' || s === 'annoyed' || s === 'hiding' || this.mover.onWall) return;
     if (!this.budgetAvailable()) return;
     const ok = this.leaveStay(st, lonely);
-    if (ok) return;
+    if (!ok) this.noteLeaveFailure(st);
+  }
+
+  /** A leave that did not happen: the next attempt after the backoff (2 -> 4 -> 8 s by the failures within 30 s). */
+  protected noteLeaveFailure(st: StayTrack): void {
     st.failures = st.failures.filter((t) => t > this.now - LEAVE_FAILURE_WINDOW_MS);
     st.failures.push(this.now);
+    st.failedLeaves++;
     st.nextLeaveAt = this.now + leaveBackoffMs(st.failures.length);
   }
 
@@ -244,7 +253,7 @@ export abstract class SimStay extends SimDrives {
   protected lonelyLeaveDue(): boolean {
     const att = this.settings.behavior.attentionSeeking;
     if (!this.lonelyArmed || this.cat.drives.socialNeed <= STAY_LONELY_NEED || this.now - this.lastLonelyAt < STAY_LONELY_MIN_GAP_MS) return false;
-    if (!(Number.isFinite(att) && att > 0) || this.disabled.has('seekAttention') || this.coolingDown('seekingAttention')) return false;
+    if (!(Number.isFinite(att) && att > 0) || this.disabled.has('seekAttention') || this.coolingDown('seekingAttention') || this.now < this.nextAttentionAt) return false;
     const idle = this.env?.userIdleMs;
     return !(Number.isFinite(idle) && (idle as number) >= 60_000);
   }
@@ -272,14 +281,18 @@ export abstract class SimStay extends SimDrives {
    */
   protected leaveStay(st: StayTrack, lonely = false): boolean {
     const t = this.cat.traits;
-    const emergencyOnly = st.failures.filter((x) => x > this.now - LEAVE_FAILURE_WINDOW_MS).length >= LEAVE_FAILURES_FOR_EMERGENCY;
-    const choice = chooseLeave(
-      this.random,
-      this.mover.leaveOptions(),
-      { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw, disabled: this.disabled },
-      this.leaveHistory,
-      emergencyOnly,
-    );
+    const rescue = this.mover.emergencyLeaveOption();
+    // The ways listed keep failing on a stay that should be over by now: the safety net (ADR 0003 §2.3).
+    const netted = st.failedLeaves >= LEAVE_FAILURES_FOR_EMERGENCY && (st.overdue || this.now - st.since >= STAY_HARD_CAP_MS) ? rescue : null;
+    const choice =
+      netted ??
+      chooseLeave(
+        this.random,
+        this.mover.leaveOptions(),
+        { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw, disabled: this.disabled },
+        this.leaveHistory,
+        rescue,
+      );
     if (!choice) return false;
     st.pendingLeave = choice;
     st.leaving = choice.kind;
@@ -288,6 +301,7 @@ export abstract class SimStay extends SimDrives {
       st.leaving = null;
       return false;
     }
+    st.emergencyLeave = choice.emergency;
     if (lonely) {
       st.forcedLeave = true;
       this.lonelyArmed = false;

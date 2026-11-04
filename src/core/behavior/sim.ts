@@ -200,11 +200,13 @@ export class CatSimImpl extends SimActivities implements CatSim {
   /**
    * Kind of surface the cat is on its way to: the goal the mover is pursuing for the current
    * activity (or for the one a jump interrupted), or null while it does not travel. An
-   * activity's target is not used: some only look at it (watching the user, a curious look).
+   * activity's target is not used, some only look at it (watching the user, a curious look), but
+   * for the walk that starts this tick, whose goal the mover gets on the next.
    */
   protected targetKind(): DecisionDiagnostics['targetKind'] {
-    const g = this.goalPoint;
-    if (g === null || !this.mover.hasGoal) return null;
+    const a = this.act;
+    const g = this.mover.hasGoal ? this.goalPoint : a.state === 'walking' && a.goalStatus === 'none' ? a.target : null;
+    if (g === null) return null;
     // There already, or as close as it gets: it is not heading anywhere.
     const status = this.act.goalStatus;
     if (!PHYSICAL_STATES.has(this.act.state) && (status === 'arrived' || status === 'unreachable')) return null;

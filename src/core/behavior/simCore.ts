@@ -197,6 +197,8 @@ export const PLACE_RECENT_MS = 20 * 60_000;
 /** v1.2 hold-still zone: the hotspot within this many body widths of the hit region pauses take-offs and walking for up to HOLD_STILL_MAX_MS. */
 export const HOLD_STILL_BW = 0.5;
 export const HOLD_STILL_MAX_MS = 3000;
+/** Quiet between two attention requests: this x (1.3 - the 'Attention seeking' slider), as in v1.1.1. */
+export const ATTENTION_QUIET_MS = 20 * 60_000;
 
 /** States whose handler decides when they end (the generic dwell rule does not apply). */
 export const SELF_TIMED: ReadonlySet<BehaviorState> = new Set<BehaviorState>([
@@ -291,8 +293,10 @@ export interface StayTrack {
   napMs: number;
   /** The leave intent: not before this (backoff, deferral while petted). */
   nextLeaveAt: number;
-  /** Failed leave attempts and when they happened. */
+  /** Failed leave attempts and when they happened (the backoff's window). */
   failures: number[];
+  /** Failed leave attempts in all (the safety net of an overdue stay). */
+  failedLeaves: number;
   /** The leave under way (its kind once it is known), or null. */
   leaving: LeaveKind | null;
   /** The chosen option, until the walking:leave activity starts it (the transition may take a stepping stone). */
@@ -305,6 +309,8 @@ export interface StayTrack {
   resumed: boolean;
   /** The leave was forced by a need, not by the plan's end (end reason 'stimulus', ADR 0003 §2.4). */
   forcedLeave: boolean;
+  /** The leave under way is the emergency drop (its hang is no flight the sim knows the reason of). */
+  emergencyLeave: boolean;
   /** 'stay overdue' was counted for this stay. */
   overdue: boolean;
 }
@@ -467,6 +473,8 @@ export abstract class SimCore {
   /** The lonely leave (ADR 0003 §2.4): armed, and when it last fired. */
   protected lonelyArmed = true;
   protected lastLonelyAt = -Infinity;
+  /** No trip up before this: it settles after coming down from a stay (ADR 0003 §2.4). */
+  protected tripSettleUntil = -Infinity;
   /** How the cat was attached last tick (arrival route of a stay). */
   protected prevAttach: 'ground' | 'wall' | 'air' | 'held' = 'ground';
   /** Why the support was lost most recently (fall cause of the next landing). */
@@ -558,6 +566,8 @@ export abstract class SimCore {
   protected nextEdgeAt = -Infinity;
   protected readonly tripStarts: number[] = [];
   protected nextHideAt = -Infinity;
+  /** The quiet gap after an attention request (the 'Attention seeking' slider sets it). */
+  protected nextAttentionAt = -Infinity;
   protected nextNapAt = -Infinity;
   protected readonly edgePeeks: number[] = [];
   /** Recent cursor positions (the cursor moving toward a band within the last second). */
@@ -655,6 +665,7 @@ export abstract class SimCore {
       narrowLedges: true,
       bailOut: true,
       wallJumps: subBehaviorAllowed('windowWallJump', this.disabled),
+      surfaceHops: subBehaviorAllowed('surfaceHop', this.disabled),
     };
   }
 

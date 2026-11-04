@@ -19,8 +19,9 @@ export const STAY_LONG_CAP_MS = 25 * 60_000;
 export const LEAVE_DEFER_PETTED_MS: readonly [number, number] = [10_000, 20_000];
 /** Backoff after a failed leave: 2 -> 4 -> 8 s. */
 export const LEAVE_BACKOFF_MS: readonly number[] = [2000, 4000, 8000];
-/** After this many failures within LEAVE_FAILURE_WINDOW_MS the cat takes the emergency option. */
+/** This many failures on a stay already overdue: the ways listed do not work, the emergency option. */
 export const LEAVE_FAILURES_FOR_EMERGENCY = 3;
+/** The backoff counts the failures within this long. */
 export const LEAVE_FAILURE_WINDOW_MS = 30_000;
 /** A stay this far past its plan is overdue (logged, rate-limited). */
 export const STAY_OVERDUE_MS = 2 * 60_000;
@@ -39,6 +40,12 @@ export const STAY_LONELY_NEED = 0.9;
 export const STAY_LONELY_MIN_MS = 60_000;
 export const STAY_LONELY_REARM_NEED = 0.7;
 export const STAY_LONELY_MIN_GAP_MS = 20 * 60_000;
+/**
+ * Down from a stay by its own leave, the cat settles before the next trip up: half the stay, within
+ * these. Stays run to their plan now (BEH-1), and without this a cat nobody handles lives up there.
+ */
+export const TRIP_SETTLE_SHARE = 0.5;
+export const TRIP_SETTLE_MS: readonly [number, number] = [30_000, 240_000];
 /** Leave kinds remembered for N_leave. */
 export const LEAVE_HISTORY = 4;
 
@@ -140,7 +147,9 @@ export function leaveKindWeight(o: Pick<LeaveOption, 'kind' | 'impact'>, c: Pick
 export function leaveAllowed(o: Pick<LeaveOption, 'kind' | 'toKind' | 'emergency'>, disabled: ReadonlySet<BehaviorId>): boolean {
   if (o.emergency) return true;
   if (o.toKind === 'taskbar' && !subBehaviorAllowed('taskbarTarget', disabled)) return false;
-  if (o.kind === 'hop' && !subBehaviorAllowed('surfaceHop', disabled)) return false;
+  // A jump down onto another window's top or strip is a hop too (the Mover names it by its height).
+  const onTop = o.toKind === 'windowTop' || o.toKind === 'tabStrip';
+  if ((o.kind === 'hop' || (o.kind === 'jumpDown' && onTop)) && !subBehaviorAllowed('surfaceHop', disabled)) return false;
   if (o.kind === 'climbLeap' && !subBehaviorAllowed('windowWallJump', disabled)) return false;
   if (o.kind === 'climbDown' && disabled.has('climbWindows')) return false;
   return true;
@@ -163,15 +172,14 @@ export function scoreLeaveOptions(opts: readonly LeaveOption[], c: LeaveContext,
 }
 
 /**
- * The single leave decision: a τ = 0.5 softmax over the scored options; with none left (or
- * `emergencyOnly`), the emergency option if the Mover offers one; else null (retry later).
+ * The single leave decision: a τ = 0.5 softmax over the scored options. With none left, because
+ * nothing is listed or the opt-outs rule it all out, the emergency option (listed, or `rescue`:
+ * Mover.emergencyLeaveOption(), which the Mover does not list next to other options); else null (retry later).
  */
-export function chooseLeave(r: Random, opts: readonly LeaveOption[], c: LeaveContext, recent: readonly LeaveKind[], emergencyOnly = false): LeaveOption | null {
-  if (!emergencyOnly) {
-    const pick = pickWithVariety(r, scoreLeaveOptions(opts, c, recent));
-    if (pick) return pick.item;
-  }
-  return opts.find((o) => o.emergency) ?? null;
+export function chooseLeave(r: Random, opts: readonly LeaveOption[], c: LeaveContext, recent: readonly LeaveKind[], rescue: LeaveOption | null = null): LeaveOption | null {
+  const pick = pickWithVariety(r, scoreLeaveOptions(opts, c, recent));
+  if (pick) return pick.item;
+  return opts.find((o) => o.emergency) ?? rescue;
 }
 
 /** Backoff before the next leave attempt after `failures` failures (2, 4, 8 s). */

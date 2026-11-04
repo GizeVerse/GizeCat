@@ -184,3 +184,67 @@ describe('Mover.leaveBy', () => {
     expect(e.m.leaveBy(null as never, 'walk')).toBe(false);
   });
 });
+
+describe('review BEH-2: Mover.emergencyLeaveOption', () => {
+  it('gives the way off whatever is listed, the list itself keeps it alone, and leaveBy takes it', () => {
+    const e = onW(600);
+    const listed = e.m.leaveOptions();
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed.some((o) => o.emergency)).toBe(false);
+    const rescue = e.m.emergencyLeaveOption();
+    expect(rescue).toMatchObject({ kind: 'jumpDown', emergency: true, risk: 1 });
+    expect(e.m.leaveBy(rescue as LeaveOption, 'walk')).toBe(true);
+    e.until(() => e.m.grounded && e.m.attachedSurface?.surfaceId !== topId('w'), 30_000);
+    expect(e.m.y).toBeGreaterThan(600);
+  });
+
+  it('none on the floor or on a taskbar, like the list', () => {
+    const e = env(SINGLE, CFG, 0.45);
+    e.step();
+    expect(e.m.leaveOptions()).toEqual([]);
+    expect(e.m.emergencyLeaveOption()).toBeNull();
+    e.extra = [taskbar('t', SINGLE.displays[0]!, FLOOR_Y - 40)];
+    e.step();
+    e.placeOn('taskbar:t', 800, FLOOR_Y - 40);
+    e.step();
+    expect(e.m.emergencyLeaveOption()).toBeNull();
+  });
+});
+
+describe('review BEH-3: surfaceHops false (Jump between windows off)', () => {
+  it('no jump or drop onto another window: neither a leave option nor a route; floors and joined walks stay', () => {
+    const off = onW(600, { ...CFG, surfaceHops: false });
+    const k = byKind(off.m.leaveOptions());
+    expect(k.hop).toBeUndefined();
+    for (const o of k.jumpDown ?? []) expect(o.toKind).toBe('floor');
+    expect(k.walkOff?.[0]).toMatchObject({ toSurfaceId: 'windowTop:j' });
+    expect(byKind(onW(600).m.leaveOptions()).hop?.[0]).toMatchObject({ toSurfaceId: 'windowTop:v' });
+    // A top only another top can reach (far above the floor, no sides of its own).
+    const reach = (hops: boolean): boolean => {
+      const e = onW(600, { ...CFG, surfaceHops: hops }, { neighbours: false });
+      e.extra = [ledge('windowTop:high', 'windowTop', 'high', 350, 1000, 1400)];
+      e.step();
+      return e.m.canReach({ x: 1200, y: 350 });
+    };
+    expect(reach(true)).toBe(true);
+    expect(reach(false)).toBe(false);
+  });
+
+  it('a lower top below the end of this one is not a drop onto it either: it goes by the floor', () => {
+    const e = env(SINGLE, { ...CFG, wallJumps: false, surfaceHops: false }, 0.45);
+    e.walls = false;
+    e.windows = { w: { x: 600, y: 500, width: 400, height: FLOOR_Y - 500 } };
+    e.extra = [ledge('windowTop:low', 'windowTop', 'low', 800, 1020, 1500)];
+    e.step();
+    e.placeOn(topId('w'), 900, 500);
+    e.m.setGoal({ x: 1200, y: 800, pace: 'walk', allowJump: true });
+    const seq: string[] = [];
+    e.until(() => {
+      const on = e.m.grounded ? (e.m.attachedSurface?.surfaceId ?? 'floor') : null;
+      if (on && seq[seq.length - 1] !== on) seq.push(on);
+      return false;
+    }, 40_000);
+    expect(seq[0]).toBe(topId('w'));
+    expect(seq.join('>')).not.toContain(`${topId('w')}>windowTop:low`);
+  });
+});

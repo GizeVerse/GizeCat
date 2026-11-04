@@ -101,6 +101,9 @@ interface SearchLabel {
 }
 
 export const edgeId = (e: GraphEdge): string => `${e.kind}:${e.from}>${e.to}`;
+/** From one window's top or strip to another's: what 'Jump between windows' switches off. */
+export const isWindowHop = (a: Surface, b: Surface): boolean =>
+  (a.surfaceKind === 'windowTop' || a.surfaceKind === 'tabStrip') && (b.surfaceKind === 'windowTop' || b.surfaceKind === 'tabStrip') && a.ownerId !== b.ownerId;
 const upKey = (w: WallTrack): string => `up:${w.key}`;
 const downKey = (w: WallTrack): string => `down:${w.key}`;
 const r1 = (v: number): number => Math.round(v * 10) / 10;
@@ -121,6 +124,7 @@ export class SurfaceGraph {
   private ledgeList: readonly Surface[] = [];
   private wallList: readonly WallTrack[] = [];
   private wallJumps = false;
+  private surfaceHops = true;
   /** Diagnostics: how many nodes the last update recomputed, and totals. */
   lastChanged = 0;
   rebuilds = 0;
@@ -145,10 +149,12 @@ export class SurfaceGraph {
     return this.nodeMap.get(key);
   }
 
-  /** v1.2: build wall-jump edges (MoverConfig.wallJumps). A change rebuilds every edge at the next update. */
-  setOptions(o: { wallJumps: boolean }): void {
-    if (o.wallJumps === this.wallJumps) return;
+  /** v1.2: build wall-jump edges, and jumps between windows (MoverConfig). A change rebuilds every edge at the next update. */
+  setOptions(o: { wallJumps: boolean; surfaceHops?: boolean }): void {
+    const hops = o.surfaceHops !== false;
+    if (o.wallJumps === this.wallJumps && hops === this.surfaceHops) return;
     this.wallJumps = o.wallJumps;
+    this.surfaceHops = hops;
     this.world = null;
   }
 
@@ -514,7 +520,7 @@ export class SurfaceGraph {
   private jumpEdge(world: WorldModel, a: GraphNode, b: GraphNode): GraphEdge | null {
     const sa = a.surface as Surface;
     const sb = b.surface as Surface;
-    if (sb.phase === 'leaving') return null;
+    if (sb.phase === 'leaving' || (!this.surfaceHops && isWindowHop(sa, sb))) return null;
     const scale = world.scaleAt({ x: (sa.x0 + sa.x1) / 2, y: sa.y });
     const maxAcross = MOVEMENT.maxJumpAcrossDip * scale;
     const maxUp = MOVEMENT.maxJumpUpDip * scale;
@@ -592,6 +598,7 @@ export class SurfaceGraph {
       const endX = dir < 0 ? s.x0 : s.x1;
       const below = world.surfaceBelow(endX + dir * bw * 0.6, s.y + 1, others);
       if (!below || below.y <= s.y + 1 || !this.nodeMap.has(below.surface.key)) continue;
+      if (!this.surfaceHops && isWindowHop(s, below.surface)) continue;
       const effort = ROUTE_EFFORT.dropBase + (ROUTE_EFFORT.dropPerMax * (below.y - s.y)) / maxUp;
       out.push({ kind: 'drop', from: s.key, to: below.surface.key, fromLo: endX, fromHi: endX, toX: below.x, effort, effortKind: 'jump', dropDip: (below.y - s.y) / scale });
     }

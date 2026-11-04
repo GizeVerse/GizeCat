@@ -81,19 +81,29 @@ describe('leave intent (ADR 0003 §2.3)', () => {
     expect(same).toBeCloseTo(scoreLeaveOptions([option('climbDown')], ctx, [])[0]!.score * 0.55 * 0.55, 9);
   });
 
-  it('never takes the emergency option while another exists, unless it failed three times; backs off 2 -> 4 -> 8 s', () => {
+  it('never takes the emergency option while another allowed one exists; backs off 2 -> 4 -> 8 s', () => {
     const e = option('jumpDown', { emergency: true, risk: 1 });
     const c = option('climbDown');
     const r = mulberry32(4);
-    for (let i = 0; i < 200; i++) expect(chooseLeave(r, [e, c], ctx, [])).toBe(c);
-    expect(chooseLeave(r, [e, c], ctx, [], true)).toBe(e);
+    // The Mover lists an emergency option only alone; Mover.emergencyLeaveOption() is the rescue next to a list.
+    for (let i = 0; i < 200; i++) expect(chooseLeave(r, [c], ctx, [], e)).toBe(c);
     expect(chooseLeave(r, [e], ctx, [])).toBe(e);
+    expect(chooseLeave(r, [], ctx, [])).toBeNull();
+    // Everything listed switched off: the rescue, not a retry for ever (review BEH-2).
+    const hop = option('hop', { toKind: 'windowTop', toSurfaceId: 't' });
+    const noHops = { ...ctx, disabled: new Set<BehaviorId>(['surfaceHops']) };
+    expect(chooseLeave(r, [hop], noHops, [])).toBeNull();
+    expect(chooseLeave(r, [hop], noHops, [], e)).toBe(e);
     expect([1, 2, 3, 9].map(leaveBackoffMs)).toEqual([2000, 4000, 8000, 8000]);
   });
 
   it('respects the sub-act gates (hops, wall jumps, a landing on a taskbar); the emergency option is always allowed', () => {
     const off = (...ids: BehaviorId[]): ReadonlySet<BehaviorId> => new Set(ids);
     expect(leaveAllowed(option('hop'), off('surfaceHops'))).toBe(false);
+    // Review BEH-3: a jump down onto another window's top or strip is a hop as well.
+    expect(leaveAllowed(option('jumpDown', { toKind: 'windowTop', toSurfaceId: 't' }), off('surfaceHops'))).toBe(false);
+    expect(leaveAllowed(option('jumpDown', { toKind: 'tabStrip', toSurfaceId: 't' }), off('surfaceHops'))).toBe(false);
+    expect(leaveAllowed(option('jumpDown', { toKind: 'windowTop', toSurfaceId: 't', emergency: true }), off('surfaceHops'))).toBe(true);
     expect(leaveAllowed(option('climbLeap'), off('climbWindows'))).toBe(false);
     expect(leaveAllowed(option('jumpDown', { toKind: 'taskbar' }), off('taskbarPlay'))).toBe(false);
     expect(leaveAllowed(option('jumpDown', { toKind: 'taskbar', emergency: true }), off('taskbarPlay'))).toBe(true);

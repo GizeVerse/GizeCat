@@ -118,6 +118,8 @@ export interface StayView {
 export interface DecisionView {
   traits: Traits;
   stats: Stats;
+  /** How often its requests were answered, 0..1 (memory.preferences); absent: the neutral 0.5. */
+  attentionAcceptance?: number;
   behavior: Settings['behavior'];
   /** Switched-off behaviours: disabledBehaviorSet (both lists and the implied opt-outs). */
   disabled: ReadonlySet<BehaviorId>;

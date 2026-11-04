@@ -20,7 +20,7 @@ import { ballistic, clearanceFor, descendingCrossing, jumpAt, sampleArc, solveJu
 import { impactClass } from './landing';
 import { clampedClimbDip, clampedPaceDip, classifyJump, descentClearancePx, dropImpact, dropRisk, HARD_DROP_DIP, jumpDownLimits, leaveLimits, takeoffRisk } from './limits';
 import type { GraphNode, Route, RouteParams } from './surfaceGraph';
-import { edgeId, SurfaceGraph } from './surfaceGraph';
+import { edgeId, isWindowHop, SurfaceGraph } from './surfaceGraph';
 import type { FloorPiece, Surface, SurfacePoint, WallTrack } from './world';
 import { sameSurface, setDownX, WorldModel } from './world';
 
@@ -88,6 +88,11 @@ export interface MoverConfig {
   bailOut?: boolean;
   /** Jumps off a wall the cat clings to onto a support within reach (and climb-then-leap descents). Default false. */
   wallJumps?: boolean;
+  /**
+   * False ('Jump between windows' off): no jump or drop from one window's top or strip onto another's,
+   * in the routes as in the leave options. Floors, taskbars and the bail-out are not hops. Default on.
+   */
+  surfaceHops?: boolean;
 }
 
 export interface MoverInput {
@@ -508,7 +513,7 @@ export class Mover {
   constructor(geometry: WorldGeometry, cfg: MoverConfig, start: { displayId: string | null; xFrac: number }) {
     this.cfg = { ...cfg };
     this.geometry = geometry;
-    this.graph.setOptions({ wallJumps: cfg.wallJumps === true });
+    this.graph.setOptions({ wallJumps: cfg.wallJumps === true, surfaceHops: cfg.surfaceHops !== false });
     this.fullWorld = new WorldModel(geometry, cfg.size, cfg.allowMultiMonitor, { narrowLedges: cfg.narrowLedges === true });
     const d = (start.displayId !== null ? this.fullWorld.display(start.displayId) : undefined) ?? this.fullWorld.primary;
     this.homeDisplayId = d.id;
@@ -724,6 +729,15 @@ export class Mover {
   }
 
   /**
+   * The emergency way off from where the cat stands, whatever else leaveOptions() lists (ADR 0003
+   * §2.3): for the sim, whose opt-outs may rule out everything listed. Null where leaveOptions()
+   * is [] too, or when both ends lead off limits. leaveBy takes it like any other option.
+   */
+  emergencyLeaveOption(): LeaveOption | null {
+    return this.emergencyEntry()?.option ?? null;
+  }
+
+  /**
    * Leaves by `option` (from leaveOptions this tick or the last): the options are listed again and
    * the matching one (same kind, target surface and emergency flag, target and start within a
    * body length) is executed at `pace`. False when it no longer applies.
@@ -731,7 +745,8 @@ export class Mover {
   leaveBy(option: LeaveOption, pace: Pace): boolean {
     if (!option || typeof option !== 'object') return false;
     const bw = this.bodyWidth;
-    const fresh = this.listLeaveOptions().find(
+    const emergency = option.emergency ? this.emergencyEntry() : null;
+    const fresh = (emergency ? [emergency] : this.listLeaveOptions()).find(
       (l) =>
         l.option.kind === option.kind &&
         l.option.toSurfaceId === option.toSurfaceId &&
@@ -919,8 +934,8 @@ export class Mover {
     const node = this.graph.node(s.key) ?? { key: s.key, kind: 'ledge' as const, surface: s, wall: null, hash: '' };
     const out: Array<{ option: LeaveOption; plan: LeavePlan }> = [];
     const seen = new Set<string>();
-    const add = (o: Omit<LeaveOption, 'emergency'>, plan: LeavePlan, emergency = false): void => {
-      out.push({ option: { ...o, emergency }, plan });
+    const add = (o: Omit<LeaveOption, 'emergency'>, plan: LeavePlan): void => {
+      out.push({ option: { ...o, emergency: false }, plan });
     };
     const spanRisk = (t: Surface, gapPx: number, upPx: number): number => takeoffRisk({ spanPx: t.landX1 - t.landX0, gapPx, upPx, targetSpeedDip: Math.abs(t.vy) / scale }, scale, bw);
     const both = (a: number, b: number): number => 1 - (1 - a) * (1 - b);
@@ -1037,7 +1052,24 @@ export class Mover {
       }
     }
     if (out.length > 0) return out;
-    // Nothing within the limits: the emergency way off, hanging from the nearer end first.
+    const emergency = this.emergencyOffLedge(s);
+    return emergency ? [emergency] : [];
+  }
+
+  /** The emergency option where leave options exist at all (see emergencyLeaveOption). */
+  private emergencyEntry(): { option: LeaveOption; plan: LeavePlan } | null {
+    const c = this.climbing;
+    if (this.modeValue === 'climb' && c && c.phase === 'climb' && c.wall.kind === 'screenEdge') return this.emergencyOffWall();
+    if (this.modeValue !== 'ground' || !this.attach) return null;
+    const s = this.surface;
+    return s.kind === 'ledge' && s.surfaceKind !== 'taskbar' ? this.emergencyOffLedge(s) : null;
+  }
+
+  /** The emergency way off a ledge: hanging from the nearer end first, then letting go; null when both ends lead off limits. */
+  private emergencyOffLedge(s: Surface): { option: LeaveOption; plan: LeavePlan } | null {
+    const scale = this.scale;
+    const bw = this.bodyWidth;
+    const walk = Math.max(1, this.paceSpeedPx('walk'));
     const others = this.ledges.filter((l) => l.key !== s.key);
     const ends: Array<1 | -1> = this.x - s.x0 <= s.x1 - this.x ? [-1, 1] : [1, -1];
     const hangDip = MOVEMENT.emergencyHangBodyHeights * CAT_BASE_HEIGHT_DIP * this.navWorld.size;
@@ -1047,8 +1079,8 @@ export class Mover {
       const below = this.navWorld.surfaceBelow(fx, s.y + 1, others) ?? this.navWorld.nearestFloorPoint({ x: fx, y: s.y });
       if (this.offLimitsAt(below.surface, below.x)) continue;
       const dropDip = (below.y - s.y) / scale;
-      add(
-        {
+      return {
+        option: {
           kind: 'jumpDown',
           target: { x: below.x, y: below.y },
           toKind: leaveToKind(below.surface),
@@ -1058,13 +1090,12 @@ export class Mover {
           effort: Math.abs(endX - this.x) / walk + MOVEMENT.emergencyHangMs / 1000,
           risk: 1,
           startX: endX,
+          emergency: true,
         },
-        { type: 'leg', leg: { kind: 'hang', x: endX, dir }, goalKey: below.surface.key },
-        true,
-      );
-      break;
+        plan: { type: 'leg', leg: { kind: 'hang', x: endX, dir }, goalKey: below.surface.key },
+      };
     }
-    return out;
+    return null;
   }
 
   /** Ways off a screen edge the cat clings to: climb down, or (wallJumps) push off from a grip within the limits. */
@@ -1118,9 +1149,14 @@ export class Mover {
         });
       }
     }
-    if (out.length > 0) return out;
+    return out.length > 0 ? out : [this.emergencyOffWall()];
+  }
+
+  /** The emergency way off the screen edge the cat clings to: it lets go. */
+  private emergencyOffWall(): { option: LeaveOption; plan: LeavePlan } {
+    const scale = (this.climbing as Climb).wall.scale;
     const below = this.navWorld.surfaceBelow(this.x, this.y + 1, this.ledges) ?? this.navWorld.nearestFloorPoint({ x: this.x, y: this.y });
-    out.push({
+    return {
       option: {
         kind: 'jumpDown',
         target: { x: below.x, y: below.y },
@@ -1130,12 +1166,11 @@ export class Mover {
         impact: dropImpact((below.y - this.y) / scale),
         effort: 0,
         risk: 1,
-        startX: w.x,
+        startX: (this.climbing as Climb).wall.x,
         emergency: true,
       },
       plan: { type: 'wallLetGo' },
-    });
-    return out;
+    };
   }
 
   /** Executes a leave plan (leaveBy): the mover then pursues the option's target, pinned to its support. */
@@ -1359,7 +1394,7 @@ export class Mover {
   setConfig(cfg: MoverConfig): boolean {
     const rebuild = cfg.size !== this.cfg.size || cfg.allowMultiMonitor !== this.cfg.allowMultiMonitor || (cfg.narrowLedges === true) !== (this.cfg.narrowLedges === true);
     this.cfg = { ...cfg };
-    this.graph.setOptions({ wallJumps: cfg.wallJumps === true });
+    this.graph.setOptions({ wallJumps: cfg.wallJumps === true, surfaceHops: cfg.surfaceHops !== false });
     this.ledges = this.ledges.filter((l) => l.surfaceKind !== null && this.kindEnabled(l.surfaceKind));
     this.walls = this.walls.filter((w) => (w.kind === 'screenEdge' ? this.edgesEnabled() : this.wallsEnabled()));
     this.graph.update(this.navWorld, this.ledges, this.walls);
@@ -3559,6 +3594,7 @@ export class Mover {
         const endX = dir > 0 ? cur.landX1 : cur.landX0;
         const below = this.navWorld.surfaceBelow(endX + dir * this.bodyWidth * 0.6, cur.y + 1, others);
         if (limits && (!below || (below.y - cur.y) / this.scale > limits.maxDip)) continue;
+        if (below && this.cfg.surfaceHops === false && isWindowHop(cur, below.surface)) continue;
         if (!below || !this.offLimitsAt(below.surface, below.x)) return { kind: 'drop', dir };
       }
     }

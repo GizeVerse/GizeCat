@@ -36,11 +36,12 @@ export abstract class SimUtility extends SimSalience {
     this.scan = scan;
     this.decisionTargets = { ...scan.status };
     const fg = env.foreground && !env.foreground.minimized && isFiniteRect(env.foreground.rect) ? env.foreground : null;
-    const noTrips = this.tripsExhausted();
+    const noTrips = this.tripsExhausted() || this.now < this.tripSettleUntil;
     const media = fg !== null && (fg.category === 'video' || fg.category === 'game' || fg.category === 'media');
     return {
       traits: this.cat.traits,
       stats: this.cat.stats,
+      attentionAcceptance: this.cat.memory.preferences.attentionAcceptance,
       behavior: this.settings.behavior,
       disabled: this.disabled,
       localHour: Number.isFinite(env.localHour) ? env.localHour : 12,
@@ -65,7 +66,7 @@ export abstract class SimUtility extends SimSalience {
       edgeLook: this.edgeLookTarget(),
       surpriseReady: this.reactions.ready('surprise', this.now),
       exploreUrge: this.exploreUrge,
-      isCoolingDown: (s) => this.coolingDown(s) || (s === 'hiding' && this.now < this.nextHideAt) || (s === 'fallingAsleep' && this.now < this.nextNapAt && !userIdleForSleep({ userIdleMs: env.userIdleMs, behavior: this.settings.behavior })),
+      isCoolingDown: (s) => this.coolingDown(s) || (s === 'hiding' && this.now < this.nextHideAt) || (s === 'seekingAttention' && this.now < this.nextAttentionAt) || (s === 'fallingAsleep' && this.now < this.nextNapAt && !userIdleForSleep({ userIdleMs: env.userIdleMs, behavior: this.settings.behavior })),
       // ---- v1.2 (ADR 0003 §1.4) ----
       drives: this.cat.drives,
       zEff: this.zEffNow(),

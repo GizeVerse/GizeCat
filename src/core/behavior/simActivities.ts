@@ -10,7 +10,7 @@ import { chance, range } from './random';
 import { PHYSICAL_STATES, STATE_SPECS } from './states';
 import { addStat } from './stats';
 import { SimUtility } from './simUtility';
-import { SURPRISE_COOLDOWN_MS, LANDING_MS, NAP_COOLDOWN_MS, NAP_DWELL_MUL, TRAVEL_TIMEOUT_MS, CLIMB_TIMEOUT_MS } from './simCore';
+import { ATTENTION_QUIET_MS, SURPRISE_COOLDOWN_MS, LANDING_MS, NAP_COOLDOWN_MS, NAP_DWELL_MUL, TRAVEL_TIMEOUT_MS, CLIMB_TIMEOUT_MS } from './simCore';
 
 export abstract class SimActivities extends SimUtility {
   // ---- activities -----------------------------------------------------------------
@@ -164,6 +164,7 @@ export abstract class SimActivities extends SimUtility {
         if (a.variant !== 'greet') {
           const p = this.cat.memory.preferences;
           p.attentionAcceptance = ema01(p.attentionAcceptance, a.answered ? 1 : 0, 0.25);
+          this.nextAttentionAt = this.now + ATTENTION_QUIET_MS * (1.3 - clamp(this.settings.behavior.attentionSeeking, 0, 1));
           if (a.answered) {
             bumpCounter(this.cat.memory, 'attentionAnswered');
             addStat(this.cat.stats, 'bond', 0.01);
