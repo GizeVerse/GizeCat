@@ -358,6 +358,23 @@ describe('cat host loop', () => {
     expect(h.ticks.at(-1)!.env.cursor).toMatchObject({ x: 500, y: 500 });
     h.host.stop();
   });
+
+  it('test mode: an injected user idle time reaches the sim instead of the real one, until null restores it', () => {
+    const h = harness();
+    h.host.setInjectedUserIdle(90_000);
+    h.host.start();
+    h.timers.advance(0);
+    expect(h.ticks[0]!.env.userIdleMs).toBe(90_000);
+    h.host.setInjectedUserIdle(null);
+    h.setNextTick(5);
+    h.timers.advance(33);
+    expect(h.ticks.at(-1)!.env.userIdleMs).toBe(1234);
+    h.host.setInjectedUserIdle(Number.NaN);
+    h.setNextTick(5);
+    h.timers.advance(33);
+    expect(h.ticks.at(-1)!.env.userIdleMs, 'a bad value is no injection').toBe(1234);
+    h.host.stop();
+  });
 });
 
 // v1.1 surfaces: the host hands the provider's list to the sim and drives taskbar sampling

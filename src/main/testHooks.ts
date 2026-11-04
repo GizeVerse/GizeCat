@@ -59,6 +59,12 @@ export interface TestHookContext {
    */
   injectCursor(p: Point | null): void;
   /**
+   * Feeds `ms` to the sim as the user's idle time (GetLastInputInfo), until null restores the real
+   * one. The longest idle sleep the settings allow is 120 minutes of real time, which time-scaled
+   * E2E runs at an empty desk exceed: without this the cat only sleeps. Sends no OS input.
+   */
+  injectUserIdle(ms: number | null): void;
+  /**
    * Lists only windows of these processes as surfaces (the E2E's own windows), or every window
    * again with null, so the user's windows never join a run.
    */
@@ -107,6 +113,10 @@ export function installTestHooks(ctx: TestHookContext, env: Record<string, strin
     injectCursor(p) {
       if (p !== null && !isPointLike(p)) throw new Error('injectCursor: expected {x, y} finite numbers or null');
       ctx.injectCursor(p === null ? null : { x: p.x, y: p.y });
+    },
+    injectUserIdle(ms) {
+      if (ms !== null && (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0)) throw new Error('injectUserIdle: expected a finite number >= 0, or null');
+      ctx.injectUserIdle(ms);
     },
     restrictSurfacesToPids(pids) {
       const raw: unknown = pids;

@@ -664,6 +664,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     forceInteractive: (v) => overlays.forceInteractive(v),
     getBehaviorProfile: () => sim.behaviorProfile(),
     injectCursor: (p) => requireHost().setInjectedCursor(p),
+    injectUserIdle: (ms) => requireHost().setInjectedUserIdle(ms),
     restrictSurfacesToPids: (pids) => {
       if (!surfaces.restrictToPids) throw new Error('restrictSurfacesToPids: not implemented yet (ADR 0003 §16 PRV)');
       surfaces.restrictToPids(pids);

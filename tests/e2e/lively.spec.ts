@@ -21,6 +21,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ElectronApplication, Page, TestInfo } from '@playwright/test';
+import koffi from 'koffi';
 import type { BehaviorProfileSnapshot, ExcursionRecord } from '../../src/shared/behaviorProfile';
 import { CAT_BASE_HEIGHT_DIP, CAT_BASE_WIDTH_DIP } from '../../src/shared/cat';
 import type { Point, Rect } from '../../src/shared/geometry';
@@ -105,7 +106,39 @@ async function startApp(userData: string, pids: number[], o: { interaction?: boo
   const patched = await hook(app, 'patchSettings', { general: { firstRunCompleted: true }, behavior: { sleepAfterIdleMinutes: 120 }, interaction: { enabled: o.interaction === true } });
   expect(patched.ok).toBe(true);
   await hook(app, 'restrictSurfacesToPids', pids);
+  await keepPresentAtEmptyDesk(app);
   return app;
+}
+
+/** Real ms since the last input on this desk (GetLastInputInfo through user32 in this process; nothing is sent). */
+function realDeskIdleMs(): number {
+  const user32 = koffi.load('user32.dll');
+  const kernel32 = koffi.load('kernel32.dll');
+  const INFO = koffi.struct('DCAT_E2E_LASTINPUT', { cbSize: 'uint32_t', dwTime: 'uint32_t' });
+  const GetLastInputInfo = user32.func('__stdcall', 'GetLastInputInfo', 'int', [koffi.inout(koffi.pointer(INFO))]);
+  const GetTickCount = kernel32.func('__stdcall', 'GetTickCount', 'uint32_t', []);
+  const info = { cbSize: koffi.sizeof(INFO), dwTime: 0 };
+  if (!GetLastInputInfo(info)) return 0;
+  return ((GetTickCount() as number) - info.dwTime) >>> 0;
+}
+
+/** The user-presence input the run was started with: real, or SIMULATED once the desk has been empty for an hour. */
+let presence: { realIdleMin: number; simulated: boolean } = { realIdleMin: 0, simulated: false };
+
+/**
+ * The app sends an idle desk's cat to sleep (120 real minutes at most, and an idle sleep lasts until
+ * someone comes back), so at an empty desk a time-scaled run says nothing about what an awake cat does.
+ * From an hour of real idle time the sim is told someone last touched the PC a minute and a half ago:
+ * a moment "just back" to end an idle sleep, then that.
+ */
+async function keepPresentAtEmptyDesk(app: ElectronApplication): Promise<void> {
+  const idle = realDeskIdleMs();
+  presence = { realIdleMin: Math.round(idle / 60_000), simulated: idle >= 60 * 60_000 };
+  console.log(`[measure] userPresence: ${JSON.stringify(presence)}`);
+  if (!presence.simulated) return;
+  await hook(app, 'injectUserIdle', 1000);
+  await sleep(4000);
+  await hook(app, 'injectUserIdle', 90_000);
 }
 
 /** Precondition: our own window is really in front at its top edge and sides; otherwise the run says nothing. */
@@ -208,6 +241,8 @@ class Tracker {
   readonly heldAtS: number[] = [];
   readonly unexpectedMoveAtS: number[] = [];
   polls = 0;
+  /** Polls with the cat hidden (a fullscreen app in front, the PC locked): nothing it does counts then. */
+  invisiblePolls = 0;
   last: Obs | null = null;
   first: Obs | null = null;
   private cur: (TrackedStay & { lastRelX: number }) | null = null;
@@ -247,6 +282,7 @@ class Tracker {
     const out = o.out;
     for (const r of o.profile.recentStays) if (!this.records.has(r.at)) this.records.set(r.at, r);
     if (out) {
+      if (!out.visible) this.invisiblePolls++;
       this.clips.set(out.clip, (this.clips.get(out.clip) ?? 0) + 1);
       this.states.add(out.state);
       if (out.jumpKind) this.jumpKinds.add(out.jumpKind);
@@ -311,8 +347,10 @@ class Tracker {
     const a = this.first?.profile;
     const b = this.last?.profile;
     return {
+      userPresence: presence,
       heldAtS: this.heldAtS,
       windowMovedByOthersAtS: this.unexpectedMoveAtS,
+      invisiblePolls: this.invisiblePolls,
       typingSimS: a && b ? Math.round((b.context.typing - a.context.typing) / 1000) : null,
       foregroundMaximizedSimS: a && b ? Math.round((b.context.foregroundMaximized - a.context.foregroundMaximized) / 1000) : null,
       cursorInReachSimS: a && b ? Math.round((b.context.cursorInReach - a.context.cursorInReach) / 1000) : null,
@@ -724,7 +762,8 @@ test.describe('v1.2 lively: hunting the injected cursor (app REAL, input SIMULAT
         async (o) => {
           const out = o.out;
           if (!out) return;
-          const hunting = out.state === 'chasingCursor';
+          // In the air a pounce reads as state 'jumping' (jumpKind and clip 'pounce').
+          const hunting = out.state === 'chasingCursor' || out.jumpKind === 'pounce' || out.clip === 'pounce';
           if (hunting) {
             seen.add(out.clip);
             if (huntSeq[huntSeq.length - 1] !== out.clip) huntSeq.push(out.clip);
@@ -780,20 +819,20 @@ async function overlayPage(app: ElectronApplication): Promise<Page> {
  * the OS cursor), the injected cursor alongside them, as the host reads it while dragging. It has to
  * end within the overlay manager's 400 ms lost-press window, because the real button is not down.
  */
-async function throwOnce(app: ElectronApplication, page: Page, ov: { boundsPx: Rect }, scale: number, stepPx: Point): Promise<void> {
+async function throwOnce(app: ElectronApplication, page: Page, ov: { boundsPx: Rect }, scale: number, stepPx: Point): Promise<{ gestureMs: number }> {
   const o = (await observe(app)).out!;
   const c = center(o.boundsPx);
   const local = (p: Point): Point => ({ x: (p.x - ov.boundsPx.x) / scale, y: (p.y - ov.boundsPx.y) / scale });
   await hook(app, 'injectCursor', c);
   await page.mouse.move(local(c).x, local(c).y);
+  const t0 = Date.now();
   await page.mouse.down();
-  for (let i = 1; i <= 7; i++) {
+  for (let i = 1; i <= 5; i++) {
     const p = { x: c.x + stepPx.x * i, y: c.y + stepPx.y * i };
-    await hook(app, 'injectCursor', p);
-    await page.mouse.move(local(p).x, local(p).y);
-    await sleep(14);
+    await Promise.all([hook(app, 'injectCursor', p), page.mouse.move(local(p).x, local(p).y)]);
   }
   await page.mouse.up();
+  return { gestureMs: Date.now() - t0 };
 }
 
 test.describe('v1.2 lively: throws through the real drag path (app REAL, input SIMULATED)', () => {
@@ -822,15 +861,15 @@ test.describe('v1.2 lively: throws through the real drag path (app REAL, input S
         await hook(app, 'setTimeScale', 1);
         await sleep(100);
         const before = (await observe(app)).profile;
-        const side = (i % 2 === 0 ? 1 : -1) * (tr.last!.out!.x < ov.boundsPx.x + ov.boundsPx.width / 2 ? 1 : -1);
-        const speed = 34 + (i % 3) * 14; // px per step: from a fair throw to a hard one
-        await throwOnce(app, page, ov, scale, { x: side * speed, y: -speed * 0.8 });
+        const side = tr.last!.out!.x < ov.boundsPx.x + ov.boundsPx.width / 2 ? 1 : -1; // towards the middle of the screen
+        const speed = 90 + (i % 3) * 35; // px per step: from a fair throw to a hard one
+        const { gestureMs } = await throwOnce(app, page, ov, scale, { x: side * speed, y: -speed * 0.7 });
         await hook(app, 'injectCursor', far);
         const t0 = Date.now();
         const reacted = await tr.until((o) => reactionTotal(o.profile) > reactionTotal(before) || (profileDelta(before, o.profile, 'thrown') > 0 && o.out?.support.kind === 'floor' && Date.now() - t0 > 2500), 8_000, 8_000);
         const after = tr.last!.profile;
         const kinds = Object.keys(after.reactions).filter((k) => ((after.reactions as Record<string, number>)[k] ?? 0) > ((before.reactions as Record<string, number>)[k] ?? 0));
-        results.push({ i, stepPx: speed, reacted, thrown: profileDelta(before, after, 'thrown'), kinds, impact: after.falls.byImpact });
+        results.push({ i, stepPx: speed, gestureMs, reacted, thrown: profileDelta(before, after, 'thrown'), dropped: profileDelta(before, after, 'dropped'), kinds, state: tr.last?.out?.state });
       }
       const p = tr.last!.profile;
       record(info, 'throws', { results, reactions: p.reactions, falls: p.falls, states: [...tr.states] });
@@ -865,6 +904,24 @@ test.describe('v1.2 lively: throws through the real drag path (app REAL, input S
 
 // ------------------------------------------------------------------ (6) screen edge (ADR 0003 §6.1, B11, T8)
 
+/** How long a visit to a screen edge lasts from here (wall ms at x1), how high it goes, and its clips. */
+async function clingTrace(app: ElectronApplication, maxMs: number): Promise<{ ended: boolean; ms: number; risePx: number; trace: Array<Record<string, unknown>> }> {
+  const t0 = Date.now();
+  const trace: Array<Record<string, unknown>> = [];
+  let footY = -Infinity;
+  let topY = Infinity;
+  for (;;) {
+    const o = (await observe(app)).out;
+    const ms = Date.now() - t0;
+    if (!o || supportKind(o) !== 'screenEdge') return { ended: true, ms, risePx: Math.round(footY - topY), trace };
+    footY = Math.max(footY, o.y);
+    topY = Math.min(topY, o.y);
+    if (trace.length === 0 || trace[trace.length - 1]!['clip'] !== o.clip) trace.push({ ms, y: Math.round(o.y), clip: o.clip, state: o.state });
+    if (ms > maxMs) return { ended: false, ms, risePx: Math.round(footY - topY), trace };
+    await sleep(60);
+  }
+}
+
 test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)', () => {
   test.skip(!LIVELY, 'opt-in: DESKTOP_CAT_E2E_LIVELY=1 (puts an own maximized window over the desk)');
 
@@ -889,22 +946,44 @@ test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)',
       const tr = new Tracker(app, null);
       const cling = await tr.until((o) => supportKind(o.out) === 'screenEdge', 80 * 60_000, 7 * 60_000);
       const firstAtSim = (tr.last!.simNow - tr.first!.simNow) / 1000;
-      record(info, 'firstCling', { cling, firstAtSim: Math.round(firstAtSim), diag: (await hook(app, 'getSurfaceDiagnostics'))?.provider.screenEdges, confounders: tr.confounders() });
+      const { bh } = await scaleOf(app);
+      const host = await hook(app, 'getHostDebug');
+      record(info, 'firstCling', { cling, firstAtSim: Math.round(firstAtSim), diag: (await hook(app, 'getSurfaceDiagnostics'))?.provider.screenEdges, confounders: tr.confounders(), timeMs: tr.last!.profile.timeMs, decisions: tr.last!.profile.decisions, clips: Object.fromEntries(tr.clips), states: [...tr.states], host: { hidden: host.hidden, locked: host.locked, paused: host.paused }, quns: win32Probe().notificationState(), visible: tr.last!.out?.visible });
       if (!cling) {
         skipBecause(info, 'no screen-edge climb within 80 sim-min next to the own maximized window');
         return;
       }
-      // Real time from here. Over the clinging cat the mouse must reach the window, also past the 300 ms hover dwell.
+      // A first visit left alone, in real time: a covered band only gets a short, low peek (<= 2 bh, <= 8 s).
+      await hook(app, 'setTimeScale', 1);
+      const peek = await clingTrace(app, 30_000);
+      record(info, 'peek alone', peek);
+      expect(peek.ended, 'the peek ended by itself').toBe(true);
+      expect(peek.ms, 'a covered-band peek, wall ms').toBeLessThanOrEqual(9000);
+      expect(peek.risePx, 'a covered-band peek stays low (px)').toBeLessThanOrEqual(2.1 * bh);
+
+      // The next one, in real time from the moment it starts. Over the clinging cat the mouse must reach the
+      // window, also past the 300 ms hover dwell, and the cat climbs down from a cursor that close.
+      await hook(app, 'setTimeScale', 12);
+      const again = await tr.until((o) => supportKind(o.out) === 'screenEdge', 40 * 60_000, 4 * 60_000);
+      if (!again) {
+        skipBecause(info, 'no second screen-edge climb within 40 sim-min: the click-through check was not run');
+        return;
+      }
       await hook(app, 'setTimeScale', 1);
       const probe = win32Probe();
       let checks = 0;
       const wrong: Array<Record<string, unknown>> = [];
+      const trace: Array<Record<string, unknown>> = [];
+      // Up the wall first (a cat just mounted simply steps off again), then the cursor comes.
+      const footY = tr.last!.out!.y;
+      await tr.until((o) => supportKind(o.out) !== 'screenEdge' || o.out!.y < footY - 0.6 * bh, 5000, 5000);
       const t0 = Date.now();
       let held = 0;
       let lastCursor: Point | null = null;
-      while (Date.now() - t0 < 12_000) {
+      while (Date.now() - t0 < 30_000) {
         const o = (await observe(app)).out;
         if (!o || supportKind(o) !== 'screenEdge') break;
+        if (trace.length === 0 || trace[trace.length - 1]!['clip'] !== o.clip) trace.push({ ms: Date.now() - t0, y: Math.round(o.y), clip: o.clip, state: o.state });
         const c = center(o.boundsPx);
         // The cursor comes to rest over the cat: if the dwell were to open the overlay, this is when.
         if (lastCursor === null || Math.hypot(c.x - lastCursor.x, c.y - lastCursor.y) > 6) {
@@ -924,9 +1003,10 @@ test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)',
       await hook(app, 'injectCursor', null);
       const diag = await hook(app, 'getSurfaceDiagnostics');
       const dbg = await hook(app, 'getHostDebug');
-      record(info, 'clickThrough', { checks, wrong: wrong.length, sample: wrong.slice(0, 5), clingMs, screenEdges: diag?.provider.screenEdges, clickGuard: dbg.clickGuard });
+      record(info, 'clickThrough', { checks, wrong: wrong.length, sample: wrong.slice(0, 5), clingMs, trace: trace.slice(0, 12), screenEdges: diag?.provider.screenEdges, clickGuard: dbg.clickGuard });
       expect(checks, 'WindowFromPoint checks with the overlay in front').toBeGreaterThan(0);
       expect(wrong, 'the injected cursor over the clinging cat hit the overlay').toEqual([]);
+      expect(clingMs, 'the cat climbed down from the cursor, wall ms').toBeLessThan(15_000);
       annotate(info, 'UNVERIFIED', 'the clear-band hover dwell needs a clear band and the cat on it; beside a maximized window every band is covered');
 
       // A measured on-phase, then the same length off (B11: 2-8 /h on, 0 off).

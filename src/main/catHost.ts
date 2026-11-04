@@ -180,6 +180,8 @@ export interface CatHost {
   clickGuardRectsPx(): readonly Rect[];
   /** Test mode only (E2E, via test hooks): use `p` as the cursor for the sim and the click-through decision; null restores the real one. */
   setInjectedCursor(p: Point | null): void;
+  /** Test mode only (E2E, via test hooks): the sim sees `ms` as the user's idle time; null restores the real one. */
+  setInjectedUserIdle(ms: number | null): void;
   debug(): CatHostDebug;
 }
 
@@ -224,6 +226,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   let lastCursor: Point | null = null;
   /** Test mode only (setInjectedCursor). */
   let injectedCursor: Point | null = null;
+  /** Test mode only (setInjectedUserIdle). */
+  let injectedUserIdleMs: number | null = null;
   let fullscreenIds: string[] = [];
   let fullscreenAt = -Infinity;
   let quitWaiters: Array<() => void> = [];
@@ -634,7 +638,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       ...v12,
       cursor: cursor ? { x: cursor.x, y: cursor.y, speed: activity.cursorSpeed } : null,
       cursorOverCat: overlays.isCursorOverCat(cursor),
-      userIdleMs: activity.idleMs,
+      userIdleMs: injectedUserIdleMs ?? activity.idleMs,
       typing: activity.typing,
       typingIntensity: activity.typingIntensity,
       foreground,
@@ -846,6 +850,10 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     setInjectedCursor(p) {
       injectedCursor = p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;
       log.info(injectedCursor ? 'cursor injected (test mode)' : 'cursor injection ended');
+    },
+    setInjectedUserIdle(ms) {
+      injectedUserIdleMs = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : null;
+      log.info(injectedUserIdleMs !== null ? 'user idle time injected (test mode)' : 'user idle injection ended');
     },
     debug: () => ({
       ticks,

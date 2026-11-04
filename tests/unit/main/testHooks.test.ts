@@ -11,6 +11,7 @@ import type { Point } from '../../../src/shared/geometry';
 const lines: SurfaceDebugLine[] = [{ kind: 'windowSide', role: 'reachable', x0: 308, y0: 140, x1: 308, y1: 892 }];
 
 const injected: Array<Point | null> = [];
+const injectedIdle: Array<number | null> = [];
 const restricted: Array<readonly number[] | null> = [];
 
 function context(): TestHookContext {
@@ -37,6 +38,7 @@ function context(): TestHookContext {
     forceInteractive: () => undefined,
     getBehaviorProfile: () => emptyBehaviorProfile(7),
     injectCursor: (p) => void injected.push(p),
+    injectUserIdle: (ms) => void injectedIdle.push(ms),
     restrictSurfacesToPids: (pids) => void restricted.push(pids),
     setTimeScale: () => undefined,
     runAction: () => Promise.resolve({ ok: true }),
@@ -68,6 +70,12 @@ describe('test hooks', () => {
     expect(injected).toEqual([{ x: 10, y: 20 }, null]);
     expect(() => api.injectCursor({ x: Number.NaN, y: 0 })).toThrow();
     expect(() => api.injectCursor('here' as unknown as Point)).toThrow();
+    api.injectUserIdle(90_000);
+    api.injectUserIdle(null);
+    expect(injectedIdle).toEqual([90_000, null]);
+    expect(() => api.injectUserIdle(-1)).toThrow();
+    expect(() => api.injectUserIdle(Number.POSITIVE_INFINITY)).toThrow();
+    expect(() => api.injectUserIdle('soon' as unknown as number)).toThrow();
     api.restrictSurfacesToPids([1234]);
     api.restrictSurfacesToPids(null);
     expect(restricted).toEqual([[1234], null]);
