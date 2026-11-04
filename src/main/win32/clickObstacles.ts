@@ -9,10 +9,10 @@
 //
 // The list is cached. It is invalidated by WinEvents (create, show, hide, location change,
 // foreground, minimize, move/size, cloak, uncloak, destroy) hooked only while the source is armed
-// (the cat near a cling band), and re-enumerated only when invalid or older than maxAgeMs, at most
-// every minEnumerateGapMs. Fail closed: an invalid cache that cannot be refreshed yet, a failed or
-// incomplete enumeration, or a missing hook answers fresh = false, and the caller then makes the whole
-// cat click-through.
+// (the guard is in use: the cursor on a clinging, edge-flying or bailing-out cat), and re-enumerated
+// only when asked and invalid or older than maxAgeMs, at most every minEnumerateGapMs. Fail closed:
+// an invalid cache that cannot be refreshed yet, a failed or incomplete enumeration, or a missing
+// hook answers fresh = false, and the caller then makes the whole cat click-through.
 import type { Rect } from '../../shared/geometry';
 import type { Logger } from '../contracts';
 import { CHILDID_SELF, DESKTOP_WINDOW_CLASSES, EVENT_OBJECT_DESTROY, GA_ROOT, GWL_EXSTYLE, OBJID_WINDOW, OBSTACLE_EVENT_RANGES, WINEVENT_OUTOFCONTEXT } from './constants';
@@ -50,7 +50,7 @@ export interface ClickObstacleStats {
 
 export interface ClickObstacleSource {
   get(): ClickObstacles;
-  /** Installs (true) or removes (false) the invalidation hooks; the cat is near a cling band. */
+  /** Installs (true) or removes (false) the invalidation hooks; the click guard is in use. */
   setArmed(armed: boolean): void;
   invalidate(): void;
   stats(): ClickObstacleStats;

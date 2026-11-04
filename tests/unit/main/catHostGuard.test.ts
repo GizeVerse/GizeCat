@@ -73,6 +73,8 @@ interface RigOptions {
   /** Each sim tick's output; a fixed floor cat by default. */
   next?: () => SimOutput;
   listed?: () => readonly Surface[];
+  /** Whether the overlay manager stand-in asks for the guard rects on a poll; never by default. */
+  asks?: (cursor: Point | null, blocked: boolean) => boolean;
 }
 
 function rig(o: RigOptions = {}) {
@@ -124,7 +126,10 @@ function rig(o: RigOptions = {}) {
   const blocked: boolean[] = [];
   const overlays: HostOverlays = {
     render: () => undefined,
-    updateInteractivity: (_c, b) => blocked.push(b),
+    updateInteractivity: (c, b) => {
+      blocked.push(b);
+      if (o.asks?.(c, b)) host.clickGuardRectsPx();
+    },
     isCursorOverCat: () => false,
     dragging: false,
     pressed: false,
@@ -287,6 +292,57 @@ describe('T8 guard: where it still holds, and fails closed', () => {
     r.tick({ ...clinging, visible: false });
     expect(r.host.clickGuardRectsPx()).toEqual([]);
     expect(r.guard()).toMatchObject({ state: 'idle', reason: null });
+    r.host.stop();
+  });
+});
+
+describe('T8 guard: read only while an overlay asks (RES-5)', () => {
+  const clinging = { x: 44, y: 700, support: CLING, boundsPx: boundsAt(44, 700) };
+
+  it('with the cursor off the cat, or interactions blocked, the windows are not read and the hooks come off', () => {
+    let onCat = true;
+    // As the real overlay manager does (overlayManager.test.ts): asked only over the cat, when not blocked.
+    const r = started({ asks: (_c, blocked) => onCat && !blocked });
+    for (let i = 0; i < 10; i++) r.tick(clinging);
+    expect(r.source.calls).toBeGreaterThan(0);
+    expect(r.source.watch).toEqual([true]);
+    expect(r.guard()).toMatchObject({ state: 'active', reason: 'band', armed: true });
+
+    // Cursor away, a minute on the wall: nothing read, the hooks gone after the quiet spell, no churn.
+    onCat = false;
+    const calls = r.source.calls;
+    r.tick(clinging);
+    expect(r.guard()).toMatchObject({ state: 'idle', reason: null });
+    for (let i = 0; i < 3750; i++) r.tick(clinging);
+    expect(r.source.calls).toBe(calls);
+    expect(r.source.watch).toEqual([true, false]);
+    expect(r.guard()).toMatchObject({ state: 'idle', armed: false });
+
+    // Back on the cat: read and hooked at once.
+    onCat = true;
+    for (let i = 0; i < 10; i++) r.tick(clinging);
+    expect(r.source.calls).toBeGreaterThan(calls);
+    expect(r.source.watch).toEqual([true, false, true]);
+
+    // Paused with the cursor still on it: no read, hooks off again.
+    r.host.setPaused(true);
+    const paused = r.source.calls;
+    for (let i = 0; i < 300; i++) r.tick(clinging);
+    expect(r.source.calls).toBe(paused);
+    expect(r.source.watch).toEqual([true, false, true, false]);
+    expect(r.blocked.at(-1)).toBe(true);
+    r.host.stop();
+  });
+
+  it('interactions turned off: the same', () => {
+    const r = started({ asks: (_c, blocked) => !blocked });
+    for (let i = 0; i < 10; i++) r.tick(clinging);
+    expect(r.source.watch).toEqual([true]);
+    r.settings.interaction.enabled = false;
+    const calls = r.source.calls;
+    for (let i = 0; i < 300; i++) r.tick(clinging);
+    expect(r.source.calls).toBe(calls);
+    expect(r.source.watch).toEqual([true, false]);
     r.host.stop();
   });
 });

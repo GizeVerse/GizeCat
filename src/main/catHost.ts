@@ -16,7 +16,8 @@
 //   from one, and while it bails out of a covered or vanished window ledge, every obstacle window
 //   meeting its bounds (GetWindowRect grown by 8 DIP) is cut out of its hit region. Anywhere else,
 //   the floor next to a screen side included, it takes the mouse as usual. Fail closed: a stale,
-//   incomplete or failing obstacle source makes the whole cat click-through in those states.
+//   incomplete or failing obstacle source makes the whole cat click-through in those states. The
+//   overlay manager asks only with the cursor on the cat: otherwise no window is read or hooked.
 import { distanceToRect } from '../core/display/displayMath';
 import { EVERYWHERE, suggestPollIntervalMs, wallGuardRects } from '../core/interaction/clickThrough';
 import { CAT_BASE_WIDTH_DIP, type BehaviorState } from '../shared/cat';
@@ -260,6 +261,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   let guardRects = 0;
   let armed = false;
   let guardNeededAt = Number.NEGATIVE_INFINITY;
+  /** An overlay asked for the guard rects since the last poll started. */
+  let guardAsked = false;
 
   function sampleButtons(): void {
     if (input === null || !input.available) return;
@@ -360,9 +363,18 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     attempt(() => input.setObstacleWatch(want), 'obstacle watch');
   }
 
+  /** No overlay asked on this poll (the cursor is off the cat, or it may not take the mouse): nothing to read or hook. */
+  function restGuard(t: number): void {
+    if (input === null) return;
+    setArmed(false, t);
+    setGuard('idle', null);
+    guardRects = 0;
+  }
+
   /** The T8 guard (see the header). Never throws: every failure fails closed. */
   function clickGuardRects(): readonly Rect[] {
     const t = clock();
+    guardAsked = true;
     if (input === null) {
       guardRects = 0;
       return NO_GUARD_RECTS;
@@ -372,9 +384,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     const clinging = out?.support.kind === 'surface' && out.support.surfaceKind === SCREEN_EDGE_KIND;
     const reason: CatHostDebug['clickGuard']['reason'] = !bounds ? null : bailGuard ? 'bailOut' : edgeFlight ? 'edgeFlight' : clinging ? 'band' : null;
     if (!out || reason === null) {
-      setArmed(false, t);
-      setGuard('idle', null);
-      guardRects = 0;
+      restGuard(t);
       return NO_GUARD_RECTS;
     }
     setArmed(true, t);
@@ -721,7 +731,9 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       sampleButtons();
       if (t >= cursorDueAt) {
         const blocked = hidden || paused || locked || !opts.getSettings().interaction.enabled;
+        guardAsked = false;
         overlays.updateInteractivity(cursor, blocked);
+        if (!guardAsked) restGuard(t);
         const delay = hidden
           ? HIDDEN_POLL_MS
           : suggestPollIntervalMs({

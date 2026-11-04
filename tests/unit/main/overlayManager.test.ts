@@ -875,6 +875,52 @@ describe('overlay manager v1.2: hover dwell while clinging to a screen edge (T8)
     expect(takes(OVER)).toBe(true);
   });
 
+  it('asks for the exclusions only with the cursor on the cat and interactions on, so the guard reads no windows otherwise (RES-5)', () => {
+    let asked = 0;
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    rig = makeRig({
+      excludedRectsPx: () => {
+        asked++;
+        return [];
+      },
+    });
+    show(cling);
+    // Away from the cat: nothing to decide, whatever the source would say.
+    expect(takes({ x: 900, y: 470 })).toBe(false);
+    expect(rig.mgr.isCursorOverCat({ x: 900, y: 470 })).toBe(false);
+    rig.mgr.updateInteractivity(null, false);
+    expect(asked).toBe(0);
+    // Paused, interactions off, hidden: no overlay can take the mouse.
+    rig.mgr.updateInteractivity(OVER, true);
+    expect(asked).toBe(0);
+    // On the cat: asked, once per decision.
+    takes(OVER);
+    expect(asked).toBe(1);
+    expect(rig.mgr.isCursorOverCat(OVER)).toBe(true);
+    expect(asked).toBe(2);
+  });
+
+  it('a guard rect over the cat keeps it off env.cursorOverCat too, and a failing source fails closed on the cat alone', () => {
+    let throws = false;
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    rig = makeRig({
+      excludedRectsPx: () => {
+        if (throws) throw new Error('no state');
+        return [{ x: 0, y: 0, width: 400, height: 900 }];
+      },
+    });
+    show(cling);
+    expect(rig.mgr.isCursorOverCat(OVER)).toBe(false);
+    throws = true;
+    expect(rig.mgr.isCursorOverCat(OVER)).toBe(false);
+    rig.advance(400);
+    takes(OVER);
+    rig.advance(400);
+    expect(takes(OVER)).toBe(false);
+  });
+
   it('a guard rect over the cat wins after the dwell too, and a blocked overlay never dwells', () => {
     let guard: Array<{ x: number; y: number; width: number; height: number }> = [];
     rig.mgr.dispose();

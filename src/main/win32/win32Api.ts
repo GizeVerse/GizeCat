@@ -119,7 +119,7 @@ export interface Win32InputExtensions {
   mouseButtons(): MouseButtonState;
   /** The click-guard obstacle list (WinEvent-invalidated cache; fresh = false means fail closed). */
   clickObstaclesPx(): ClickObstacles;
-  /** Hooks the obstacle invalidation events while the cat is near a screen-edge band. */
+  /** Hooks the obstacle invalidation events while the click guard is in use. */
   setObstacleWatch(armed: boolean): void;
   obstacleStats(): ClickObstacleStats | null;
 }

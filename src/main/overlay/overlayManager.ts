@@ -13,7 +13,7 @@ import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
 import type { DisplayService, Logger, Unsubscribe } from '../contracts';
 import type { WindowRegistry } from '../security';
 import { crashBackoff, boundsDiffer, planOverlaySync } from './displayDiff';
-import { clipRects, cursorInHitZone, decideInteractive, EVERYWHERE } from '../../core/interaction/clickThrough';
+import { cursorInHitZone, decideInteractive, EVERYWHERE } from '../../core/interaction/clickThrough';
 import { SCREEN_EDGE_KIND } from '../../shared/surfaces';
 import type { GestureRecognizer } from '../../core/interaction/gestures';
 import { createOverlayShell, createOverlayWindow, overlayUrl, type OverlayShell } from './overlayWindow';
@@ -625,7 +625,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     const now = opts.clock();
     watchdog(now);
     const buttonDown = opts.isLeftButtonDown();
-    const excluded = forced === null ? excludedRects() : NO_RECTS;
+    // Asked once, and only with the cursor on a hit region of an overlay that may take the mouse:
+    // anywhere else it cannot change the decision, and the host's guard would read the windows for it.
+    let excluded: readonly Rect[] | null = null;
     // v1.2: clinging to a screen edge, the cat takes the mouse only after the hover dwell.
     const support = lastOutput?.support;
     const clinging = support?.kind === 'surface' && support.surfaceKind === SCREEN_EDGE_KIND;
@@ -639,11 +641,10 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       if (forced !== null) interactive = forced;
       else {
         const region = effectiveRegions(e, now);
+        const zone = { cursor: cursorPx, hitRects: region.rects, interactive: !e.ignoreMouse };
         const input = {
-          cursor: cursorPx,
-          hitRects: region.rects,
-          excludeRects: excluded,
-          interactive: !e.ignoreMouse,
+          ...zone,
+          excludeRects: !blocked && cursorInHitZone(zone) ? (excluded ??= excludedRects()) : NO_RECTS,
           interactionsEnabled: !blocked,
           visible: e.active,
           rendererHealthy: live(e),
@@ -697,11 +698,10 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
       if (!cursorPx) return false;
       const now = opts.clock();
       // Over a taskbar the pointer belongs to the taskbar, not to the cat's paws drawn over it.
-      const excluded = excludedRects();
+      let excluded: readonly Rect[] | null = null;
       for (const e of entries.values()) {
-        for (const r of clipRects(effectiveRegions(e, now).rects, excluded)) {
-          if (cursorPx.x >= r.x && cursorPx.x < r.x + r.width && cursorPx.y >= r.y && cursorPx.y < r.y + r.height) return true;
-        }
+        const zone = { cursor: cursorPx, hitRects: effectiveRegions(e, now).rects, interactive: false };
+        if (cursorInHitZone(zone) && cursorInHitZone({ ...zone, excludeRects: (excluded ??= excludedRects()) })) return true;
       }
       return false;
     },
