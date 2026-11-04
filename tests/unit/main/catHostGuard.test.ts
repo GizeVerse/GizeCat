@@ -268,6 +268,20 @@ describe('T8 guard: where it still holds, and fails closed', () => {
     r.host.stop();
   });
 
+  it('opted out of screen edges (no bands): a floor cat and a leap are not guarded, a cat clinging at the toggle still is (RES-2)', () => {
+    const r = started({ bands: null });
+    const floor = r.tick({ x: 200, boundsPx: boundsAt(200, 1200) });
+    expect(r.interactiveOver(floor.boundsPx)).toBe(true);
+    const leap = r.tick({ x: 200, y: 900, support: { kind: 'air' }, jumpKind: 'leap', boundsPx: boundsAt(200, 900) });
+    expect(r.interactiveOver(leap.boundsPx)).toBe(true);
+    expect(r.guard()).toMatchObject({ state: 'idle', reason: null, armed: false });
+    expect(r.source.calls).toBe(0);
+    const out = r.tick(clinging);
+    expect(r.interactiveOver(out.boundsPx)).toBe(false);
+    expect(r.guard()).toMatchObject({ state: 'active', reason: 'band' });
+    r.host.stop();
+  });
+
   it('a hidden cat has no guard', () => {
     const r = started();
     r.tick({ ...clinging, visible: false });

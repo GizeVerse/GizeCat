@@ -1350,6 +1350,9 @@ export function createSurfaceProvider(deps: SurfaceProviderDeps): SurfaceProvide
       // Only the full occluder snapshot (listOccluders: dialogs, tool and topmost windows too) can
       // say a band is clear; the app-window fallback cannot.
       if (disposed || !windowTracking() || extended === null) return null;
+      // Opted out (or implied by climbWindows off): the sim would refuse these climbs anyway, so no
+      // leap near a screen side arms the click guard for a feature that cannot run.
+      if (disabledSet.has('screenEdges')) return null;
       const world = display.world;
       const key = `${orderVersion}|${world.version}|${catSize}`;
       if (bandsCache?.key === key) return bandsCache.bands;

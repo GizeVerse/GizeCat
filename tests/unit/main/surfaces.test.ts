@@ -1343,3 +1343,36 @@ describe('test-mode injection', () => {
     expect(s.provider.getSurface('windowTop:101', s.now())).toBeNull();
   });
 });
+
+describe('surface provider v1.2: the screen-edge opt-out reaches the bands (RES-2)', () => {
+  const withBehavior = (behavior: Partial<Settings['behavior']>): Settings => {
+    const d = defaultSettings();
+    return { ...d, behavior: { ...d.behavior, ...behavior } };
+  };
+
+  it('offers the bands by default', () => {
+    const s = setup({ api: new SurfaceApi().add(win('101', rect(300, 400, 800, 500))) });
+    s.tick();
+    expect(s.provider.edgeBands()?.length).toBe(2);
+  });
+
+  it.each([
+    ['disabledExtras: screenEdges', { disabledExtras: ['screenEdges'] }],
+    ['disabledBehaviors: climbWindows, which implies it', { disabledBehaviors: ['climbWindows'] }],
+  ] as Array<[string, Partial<Settings['behavior']>]>)('%s: no bands, so no arming and no click guard for a feature that cannot run', (_name, behavior) => {
+    const s = setup({ api: new SurfaceApi().add(win('101', rect(300, 400, 800, 500))), settings: withBehavior(behavior) });
+    s.tick();
+    expect(s.provider.edgeBands()).toBeNull();
+    expect(s.provider.diagnostics().screenEdges).toBeUndefined();
+  });
+
+  it('follows the setting both ways, past the cached bands', () => {
+    const s = setup({ api: new SurfaceApi().add(win('101', rect(300, 400, 800, 500))) });
+    s.tick();
+    expect(s.provider.edgeBands()?.length).toBe(2);
+    s.provider.updateSettings(withBehavior({ disabledExtras: ['screenEdges'] }));
+    expect(s.provider.edgeBands()).toBeNull();
+    s.provider.updateSettings(defaultSettings());
+    expect(s.provider.edgeBands()?.length).toBe(2);
+  });
+});
