@@ -173,6 +173,47 @@ describe('screen edges (ADR 0003 §6.1)', () => {
     }
     expect(tested).toBeGreaterThanOrEqual(3);
   }, 120_000);
+
+  // REAL E2E (INT-b): a cursor arriving during the 320 ms mount found no way off yet (leave options exist only
+  // once the cat clings), so the cat went on up and sat out the 20 s hold cap: 24.4 s on the wall in 2 runs of 6.
+  it('a cursor that comes close while the cat is still mounting the wall does not leave it hanging there', () => {
+    let tested = 0;
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const h = new Harness({ seed, persisted: catWith(seed) });
+      h.env.edgeBands = clearBands();
+      let i = 0;
+      const mounting = h.runUntil(() => {
+        present(h, i++);
+        return onEdge(h);
+      }, 60 * MIN, 33);
+      if (!mounting) continue;
+      expect(FLOOR - h.last!.y, `seed ${seed}: the first tick on the wall is still at its foot`).toBeLessThan(BH);
+      tested++;
+      h.env.cursor = { x: h.last!.x - BW, y: h.last!.y, speed: 0 };
+      const off = h.runUntil(() => !onEdge(h), 6000, 33);
+      expect(off, `seed ${seed}: off the wall within 6 s`).toBe(true);
+    }
+    expect(tested).toBeGreaterThanOrEqual(3);
+  }, 120_000);
+
+  it('typing that starts during the mount lets it down as well', () => {
+    let tested = 0;
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const h = new Harness({ seed, persisted: catWith(seed) });
+      h.env.edgeBands = clearBands();
+      let i = 0;
+      const mounting = h.runUntil(() => {
+        present(h, i++);
+        return onEdge(h);
+      }, 60 * MIN, 33);
+      if (!mounting) continue;
+      tested++;
+      h.env.typing = true;
+      const off = h.runUntil(() => !onEdge(h), 6000, 33);
+      expect(off, `seed ${seed}: off the wall within 6 s`).toBe(true);
+    }
+    expect(tested).toBeGreaterThanOrEqual(3);
+  }, 120_000);
 });
 
 describe('the leave intent (ADR 0003 §2.3)', () => {

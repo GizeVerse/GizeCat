@@ -858,7 +858,13 @@ export abstract class SimStay extends SimDrives {
     }
     if (m.climbPhase === 'leap') return;
     v.mountedAt ??= this.now;
-    if (v.leaving !== null) return;
+    if (v.leaving !== null) {
+      // Nothing was offered when it decided to go: a hold reached meanwhile must not keep it up there.
+      if (v.leaving === 'retreat' && m.holdingOnWall) m.holdOnWall(null);
+      return;
+    }
+    // Still mounting: the ways off are listed once it clings, so the decision waits for that.
+    if (m.climbPhase !== 'climb') return;
     const c = this.env?.cursor;
     const close = c && Number.isFinite(c.x) && Number.isFinite(c.y) && Math.hypot(c.x - m.x, c.y - m.y) < EDGE_CLIMB_DOWN_CURSOR_BW * this.bl;
     if (close || this.typingGate()) {
