@@ -13,7 +13,7 @@ import type { DisplayGeometry, WorldGeometry } from '../../shared/world';
 import type { DisplayService, Logger, Unsubscribe } from '../contracts';
 import type { WindowRegistry } from '../security';
 import { crashBackoff, boundsDiffer, planOverlaySync } from './displayDiff';
-import { clipRects, cursorInHitZone, decideInteractive } from '../../core/interaction/clickThrough';
+import { clipRects, cursorInHitZone, decideInteractive, EVERYWHERE } from '../../core/interaction/clickThrough';
 import { SCREEN_EDGE_KIND } from '../../shared/surfaces';
 import type { GestureRecognizer } from '../../core/interaction/gestures';
 import { createOverlayShell, createOverlayWindow, overlayUrl, type OverlayShell } from './overlayWindow';
@@ -47,8 +47,6 @@ const WATCHDOG_MAX_STEP_MS = 250;
 /** Every overlay receives the TaskbarCreated broadcast: forward one notification per broadcast. */
 const TASKBAR_CREATED_DEDUPE_MS = 1000;
 const NO_RECTS: readonly Rect[] = Object.freeze([]);
-/** Excluded when the exclusion source fails: no hover anywhere (an ongoing drag keeps its captured pointer). */
-const EVERYWHERE: readonly Rect[] = Object.freeze([{ x: -1e9, y: -1e9, width: 2e9, height: 2e9 }]);
 /**
  * v1.2 hover dwell (ADR 0003 §6.1): a cat clinging to a screen edge takes the mouse only after the
  * cursor has rested on it this long, so a passing click goes to the window behind it.

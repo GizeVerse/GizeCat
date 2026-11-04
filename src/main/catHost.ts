@@ -18,7 +18,7 @@
 //   the floor next to a screen side included, it takes the mouse as usual. Fail closed: a stale,
 //   incomplete or failing obstacle source makes the whole cat click-through in those states.
 import { distanceToRect } from '../core/display/displayMath';
-import { suggestPollIntervalMs, wallGuardRects } from '../core/interaction/clickThrough';
+import { EVERYWHERE, suggestPollIntervalMs, wallGuardRects } from '../core/interaction/clickThrough';
 import { CAT_BASE_WIDTH_DIP, type BehaviorState } from '../shared/cat';
 import type { Point, Rect } from '../shared/geometry';
 import type { Settings } from '../shared/settings';
@@ -27,7 +27,7 @@ import { SCREEN_EDGE_KIND, type ScreenEdgeBand, type Surface } from '../shared/s
 import type { WorldGeometry } from '../shared/world';
 import { simWorld } from '../core/display/simWorld';
 import type { ActivityMonitor, DisplayService, Logger, PerceptionService, SurfaceProvider, TaskbarTracker, Win32Api, WindowTracker } from './contracts';
-import { BODY_MARGIN_SIDE_DIP } from './overlay/renderMapping';
+import { BODY_MARGIN_SIDE_DIP, presenceRectPx } from './overlay/renderMapping';
 import type { CatPosition, ScreenEdgeGuard } from './surfaces';
 import { bandXRange } from './surfaces/edgeBands';
 import { hasWin32InputExtensions, type Win32InputExtensions } from './win32/win32Api';
@@ -64,8 +64,6 @@ export const CURSOR_IDLE_MOVE_DIP = 2;
 export const GUARD_OBSTACLE_MARGIN_DIP = 8;
 /** A leap or wall jump counts as an edge flight while the cat's bounds are within this many body widths of a cling band. */
 export const GUARD_BAND_REACH_BW = 1;
-/** Failing closed, the whole cat plus this margin (px) is cut out (the hit zone grows by a hysteresis margin). */
-const FAIL_CLOSED_MARGIN_PX = 16;
 /** Obstacle hooks stay installed this long after the guard was last needed (no hook churn). */
 const GUARD_DISARM_AFTER_MS = 2000;
 /** Window surfaces whose loss (covered, gone) starts a bail-out guard. */
@@ -373,7 +371,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     const bounds = out && out.visible && !hidden ? out.boundsPx : null;
     const clinging = out?.support.kind === 'surface' && out.support.surfaceKind === SCREEN_EDGE_KIND;
     const reason: CatHostDebug['clickGuard']['reason'] = !bounds ? null : bailGuard ? 'bailOut' : edgeFlight ? 'edgeFlight' : clinging ? 'band' : null;
-    if (!bounds || reason === null) {
+    if (!out || reason === null) {
       setArmed(false, t);
       setGuard('idle', null);
       guardRects = 0;
@@ -387,10 +385,11 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       log.warn('click-guard obstacles failed', { error: err });
     }
     if (obstacles === null || !obstacles.fresh) {
-      // Fail closed: the whole cat is click-through until the obstacle list is current again.
+      // Fail closed: the whole cat is click-through until the obstacle list is current again. Not just
+      // its bounds: the renderer's hit rects reach past them at large scales and sizes.
       setGuard('failClosed', reason);
       guardRects = 1;
-      return [growRect(bounds, FAIL_CLOSED_MARGIN_PX)];
+      return EVERYWHERE;
     }
     // 8 DIP at the largest scale of the displays the window touches.
     const displays = opts.display.world.displays;
@@ -399,7 +398,10 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       for (const d of displays) if (rectGap(d.boundsPx, r) === 0 && d.scaleFactor > scale) scale = d.scaleFactor;
       return growRect(r, Math.ceil(GUARD_OBSTACLE_MARGIN_DIP * scale));
     });
-    const rects = wallGuardRects(growRect(bounds, FAIL_CLOSED_MARGIN_PX), grown);
+    // The presence rect holds all the renderer can draw, so every hit rect: an obstacle that misses
+    // the hit rects after all is a plain cut-out and takes nothing away.
+    const largestScale = displays.reduce((m, d) => Math.max(m, d.scaleFactor), 1);
+    const rects = wallGuardRects(presenceRectPx(out, opts.getSettings().appearance, largestScale), grown);
     setGuard('active', reason);
     guardRects = rects.length;
     return rects;

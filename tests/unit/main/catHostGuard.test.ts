@@ -7,7 +7,9 @@ import { describe, expect, it } from 'vitest';
 import { decideInteractive } from '../../../src/core/interaction/clickThrough';
 import { createCatHost, type HostOverlays, type HostSurfaceProvider } from '../../../src/main/catHost';
 import type { ActivityMonitor, DisplayService, PerceptionService, Win32Api, WindowTracker } from '../../../src/main/contracts';
+import { CatScene } from '../../../src/renderer/overlay/scene';
 import { emptyBehaviorProfile } from '../../../src/shared/behaviorProfile';
+import type { CatRenderState } from '../../../src/shared/cat';
 import type { PersistedCat } from '../../../src/shared/catState';
 import type { Point, Rect } from '../../../src/shared/geometry';
 import { defaultSettings } from '../../../src/shared/settings';
@@ -271,6 +273,108 @@ describe('T8 guard: where it still holds, and fails closed', () => {
     r.tick({ ...clinging, visible: false });
     expect(r.host.clickGuardRectsPx()).toEqual([]);
     expect(r.guard()).toMatchObject({ state: 'idle', reason: null });
+    r.host.stop();
+  });
+});
+
+describe('T8 guard: the renderer hit rects reach past the sim bounds at large scales and sizes (real CatScene; SEC-3)', () => {
+  const worldAt = (scale: number): WorldGeometry => ({
+    version: 1,
+    displays: [{ id: '1', primary: true, scaleFactor: scale, boundsDip: { x: 0, y: 0, width: 1920 / scale, height: 1200 / scale }, workAreaDip: { x: 0, y: 0, width: 1920 / scale, height: 1200 / scale }, boundsPx: SCREEN, workAreaPx: SCREEN }],
+  });
+  const ANCHOR_DIP = { x: 40, y: 300 };
+
+  /** What the renderer reports for a cat climbing a left screen edge (hind paws and tail base below the grip), px. */
+  function climbingHitRectsPx(size: number, sf: number): Rect[] {
+    const scene = new CatScene(() => 0.99);
+    const state = (t: number): CatRenderState => ({
+      seq: Math.round(t),
+      t,
+      x: ANCHOR_DIP.x,
+      y: ANCHOR_DIP.y,
+      snap: false,
+      scale: size,
+      facing: -1,
+      state: 'idle',
+      clip: 'climb',
+      clipStartedAt: 0,
+      speed: 0.5,
+      vy: 0,
+      look: null,
+      arousal: 0.3,
+      contentment: 0.5,
+      emote: null,
+      emoteStartedAt: 0,
+      opacity: 1,
+      visible: true,
+      skin: 'ginger',
+      style: 'smooth',
+      shadow: true,
+      animSpeed: 1,
+    });
+    for (let t = 0; t <= 1800; t += 16) scene.update({ x: ANCHOR_DIP.x, y: ANCHOR_DIP.y, state: state(t), simTime: t, dtMs: t === 0 ? 0 : 16, snapped: t === 0 });
+    return scene.hitRects.filter((r) => r.width > 0 && r.height > 0).map((r) => ({ x: r.x * sf, y: r.y * sf, width: r.width * sf, height: r.height * sf }));
+  }
+
+  /** The sim's clinging bounds (simCore bodyBounds): from a body width above the anchor down to it. */
+  function climbingBounds(size: number, sf: number): Rect {
+    const bw = 84 * size * sf;
+    const bh = 64 * size * sf;
+    return { x: ANCHOR_DIP.x * sf - bw / 2, y: ANCHOR_DIP.y * sf - bw, width: bw + 0.15 * bh, height: bw };
+  }
+
+  function clinging(size: number, sf: number, obstacles: readonly Rect[]): { r: ReturnType<typeof rig>; hits: Rect[]; lowest: Rect } {
+    const r = rig({ world: worldAt(sf), bands: BANDS, obstacles });
+    r.settings.appearance.size = size;
+    r.host.start();
+    r.timers.advance(0);
+    r.tick({ x: ANCHOR_DIP.x * sf, y: ANCHOR_DIP.y * sf, support: CLING, boundsPx: climbingBounds(size, sf) });
+    const hits = climbingHitRectsPx(size, sf);
+    const lowest = hits.reduce((a, b) => (b.y + b.height > a.y + a.height ? b : a));
+    return { r, hits, lowest };
+  }
+
+  const CASES: ReadonlyArray<[number, number]> = [
+    [1, 1],
+    [1, 1.5],
+    [1, 2],
+    [1.5, 1],
+    [2, 1],
+    [2.5, 1],
+    [1.5, 2],
+    [2.5, 2],
+  ];
+
+  it.each(CASES)('failing closed at size %d, scale %d: nothing of the cat takes the mouse, down to its lowest hit rect', (size, sf) => {
+    const { r, hits, lowest } = clinging(size, sf, []);
+    const bounds = climbingBounds(size, sf);
+    r.source.fresh = false;
+    expect(r.interactiveOver(lowest, { x: lowest.x + lowest.width / 2, y: lowest.y + lowest.height - 0.5 }), `lowest hit rect ends ${lowest.y + lowest.height - (bounds.y + bounds.height)} px below the bounds`).toBe(false);
+    for (const h of hits) expect(r.interactiveOver(h)).toBe(false);
+    expect(r.guard().state).toBe('failClosed');
+    r.host.stop();
+  });
+
+  it.each([
+    [2.5, 1],
+    [2.5, 2],
+    [1.5, 2],
+  ] as ReadonlyArray<[number, number]>)('active at size %d, scale %d: a window just past the old fixed reach is cut out of the hit rects over it', (size, sf) => {
+    const bounds = climbingBounds(size, sf);
+    const bottom = bounds.y + bounds.height;
+    // The obstacle's grown top lands 1 px below bounds + 16 px: it used to be filtered out.
+    const top = bottom + 16 + Math.ceil(8 * sf) + 1;
+    const { r, lowest } = clinging(size, sf, [{ x: 0, y: top, width: 1920, height: 1200 - top }]);
+    const cursorY = lowest.y + lowest.height - 0.5;
+    expect(cursorY, 'the hit rect reaches into that window').toBeGreaterThan(top);
+    expect(r.interactiveOver(lowest, { x: lowest.x + lowest.width / 2, y: cursorY })).toBe(false);
+    expect(r.guard()).toMatchObject({ state: 'active', reason: 'band', rects: 1 });
+    r.host.stop();
+  });
+
+  it('an obstacle out of the reach of any hit rect is not reported', () => {
+    const { r } = clinging(1, 1, [{ x: 1500, y: 800, width: 300, height: 300 }]);
+    expect(r.host.clickGuardRectsPx()).toEqual([]);
     r.host.stop();
   });
 });

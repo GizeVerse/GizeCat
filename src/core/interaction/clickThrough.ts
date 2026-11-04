@@ -52,6 +52,9 @@ export const DEFAULT_CLICK_THROUGH: ClickThroughConfig = {
   maxDragRegionAgeMs: 5000,
 };
 
+/** Cut-out for "no hover anywhere": what failing closed excludes (an ongoing drag keeps its captured pointer). */
+export const EVERYWHERE: readonly Rect[] = Object.freeze([{ x: -1e9, y: -1e9, width: 2e9, height: 2e9 }]);
+
 function inside(r: Rect, p: Point, margin: number): boolean {
   return p.x >= r.x - margin && p.x < r.x + r.width + margin && p.y >= r.y - margin && p.y < r.y + r.height + margin;
 }
