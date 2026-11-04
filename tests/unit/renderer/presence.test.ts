@@ -194,3 +194,73 @@ describe('presence rect covers the drawn cat', () => {
     expect(failures.slice(0, 5)).toEqual([]);
   }, 120_000);
 });
+
+// The T8 click guard (catHost.ts) relies on both: it cuts out the obstacle windows meeting the presence
+// rect because the hit rects reach past the sim bounds, and tests/unit/main/catHostGuard.test.ts feeds
+// this reach to the host, which cannot import the DOM-typed scene there (SEC-3).
+describe('presence rect covers the hit rects, which reach past the sim bounds', () => {
+  const hitRectsOf = (clip: AnimClip, size: number, facing: 1 | -1, t: number, scene: CatScene): Array<{ x: number; y: number; width: number; height: number }> => {
+    const s: CatRenderState = {
+      seq: t,
+      t,
+      x: ANCHOR.x,
+      y: ANCHOR.y,
+      snap: false,
+      scale: size,
+      facing,
+      state: clip === 'sleep' ? 'sleeping' : 'idle',
+      clip,
+      clipStartedAt: 0,
+      speed: speedOf(clip),
+      vy: vyOf(clip, t),
+      look: { x: ANCHOR.x + 60 * facing, y: ANCHOR.y - 60 },
+      arousal: 0.9,
+      contentment: 0.5,
+      emote: null,
+      emoteStartedAt: 0,
+      opacity: 1,
+      visible: true,
+      skin: 'black',
+      style: 'smooth',
+      shadow: true,
+      animSpeed: 1,
+    };
+    scene.update({ x: s.x, y: s.y, state: s, simTime: t, dtMs: t === 0 ? 0 : 250, snapped: t === 0 });
+    return scene.hitRects.filter((r) => r.width > 0 && r.height > 0);
+  };
+
+  it('every hit rect of every clip and facing lies inside it, at the sizes and scales the guard must handle', () => {
+    const failures: string[] = [];
+    for (const size of [1, 1.5, 2.5]) {
+      for (const sf of [1, 1.25, 2]) {
+        const appearance = { ...defaultSettings().appearance, size, emotes: false, style: 'smooth' as RenderStyle };
+        const p = presenceRectPx(simOutput(size, sf), appearance, sf);
+        for (const clip of ANIM_CLIPS) {
+          for (const facing of [1, -1] as const) {
+            const scene = new CatScene(seededRandom(11));
+            for (let t = 0; t <= 3000; t += 250) {
+              for (const r of hitRectsOf(clip, size, facing, t, scene)) {
+                const inside = r.x * sf >= p.x && r.y * sf >= p.y && (r.x + r.width) * sf <= p.x + p.width && (r.y + r.height) * sf <= p.y + p.height;
+                if (!inside) failures.push(`${clip}/f${facing}/size${size}/sf${sf}/t${t}: ${JSON.stringify(r)} vs ${JSON.stringify(p)}`);
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(failures.slice(0, 5)).toEqual([]);
+  }, 120_000);
+
+  it('a climbing cat reaches at least 11 DIP (x size x scale) below its grip point, under the sim bounds', () => {
+    for (const size of [1, 1.5, 2.5]) {
+      for (const facing of [1, -1] as const) {
+        const scene = new CatScene(seededRandom(11));
+        let lowest = -Infinity;
+        for (let t = 0; t <= 3000; t += 250) {
+          for (const r of hitRectsOf('climb', size, facing, t, scene)) lowest = Math.max(lowest, r.y + r.height);
+        }
+        expect(lowest - ANCHOR.y, `size ${size}, facing ${facing}`).toBeGreaterThanOrEqual(11 * size);
+      }
+    }
+  });
+});

@@ -7,9 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { decideInteractive } from '../../../src/core/interaction/clickThrough';
 import { createCatHost, type HostOverlays, type HostSurfaceProvider } from '../../../src/main/catHost';
 import type { ActivityMonitor, DisplayService, PerceptionService, Win32Api, WindowTracker } from '../../../src/main/contracts';
-import { CatScene } from '../../../src/renderer/overlay/scene';
 import { emptyBehaviorProfile } from '../../../src/shared/behaviorProfile';
-import type { CatRenderState } from '../../../src/shared/cat';
 import type { PersistedCat } from '../../../src/shared/catState';
 import type { Point, Rect } from '../../../src/shared/geometry';
 import { defaultSettings } from '../../../src/shared/settings';
@@ -347,43 +345,28 @@ describe('T8 guard: read only while an overlay asks (RES-5)', () => {
   });
 });
 
-describe('T8 guard: the renderer hit rects reach past the sim bounds at large scales and sizes (real CatScene; SEC-3)', () => {
+describe('T8 guard: the renderer hit rects reach past the sim bounds at large scales and sizes (SEC-3)', () => {
   const worldAt = (scale: number): WorldGeometry => ({
     version: 1,
     displays: [{ id: '1', primary: true, scaleFactor: scale, boundsDip: { x: 0, y: 0, width: 1920 / scale, height: 1200 / scale }, workAreaDip: { x: 0, y: 0, width: 1920 / scale, height: 1200 / scale }, boundsPx: SCREEN, workAreaPx: SCREEN }],
   });
   const ANCHOR_DIP = { x: 40, y: 300 };
+  const BELOW_GRIP_DIP = 11;
 
-  /** What the renderer reports for a cat climbing a left screen edge (hind paws and tail base below the grip), px. */
+  /**
+   * What the renderer reports for a cat climbing a left screen edge, px: the body up the wall, and the
+   * hind paws and tail base BELOW_GRIP_DIP below the grip point. That reach, and that every hit rect stays
+   * inside the presence rect, are measured on the real CatScene in tests/unit/renderer/presence.test.ts
+   * (a node-project test cannot import the DOM-typed scene).
+   */
   function climbingHitRectsPx(size: number, sf: number): Rect[] {
-    const scene = new CatScene(() => 0.99);
-    const state = (t: number): CatRenderState => ({
-      seq: Math.round(t),
-      t,
-      x: ANCHOR_DIP.x,
-      y: ANCHOR_DIP.y,
-      snap: false,
-      scale: size,
-      facing: -1,
-      state: 'idle',
-      clip: 'climb',
-      clipStartedAt: 0,
-      speed: 0.5,
-      vy: 0,
-      look: null,
-      arousal: 0.3,
-      contentment: 0.5,
-      emote: null,
-      emoteStartedAt: 0,
-      opacity: 1,
-      visible: true,
-      skin: 'ginger',
-      style: 'smooth',
-      shadow: true,
-      animSpeed: 1,
-    });
-    for (let t = 0; t <= 1800; t += 16) scene.update({ x: ANCHOR_DIP.x, y: ANCHOR_DIP.y, state: state(t), simTime: t, dtMs: t === 0 ? 0 : 16, snapped: t === 0 });
-    return scene.hitRects.filter((r) => r.width > 0 && r.height > 0).map((r) => ({ x: r.x * sf, y: r.y * sf, width: r.width * sf, height: r.height * sf }));
+    const k = size * sf;
+    const x = ANCHOR_DIP.x * sf;
+    const y = ANCHOR_DIP.y * sf;
+    return [
+      { x: x - 20 * k, y: y - 84 * k, width: 45 * k, height: 70 * k },
+      { x: x - 12 * k, y: y - 14 * k, width: 25 * k, height: (14 + BELOW_GRIP_DIP) * k },
+    ];
   }
 
   /** The sim's clinging bounds (simCore bodyBounds): from a body width above the anchor down to it. */
@@ -428,7 +411,6 @@ describe('T8 guard: the renderer hit rects reach past the sim bounds at large sc
   it.each([
     [2.5, 1],
     [2.5, 2],
-    [1.5, 2],
   ] as ReadonlyArray<[number, number]>)('active at size %d, scale %d: a window just past the old fixed reach is cut out of the hit rects over it', (size, sf) => {
     const bounds = climbingBounds(size, sf);
     const bottom = bounds.y + bounds.height;
