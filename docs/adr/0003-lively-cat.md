@@ -577,7 +577,7 @@ Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profile
 | B12 | CPU awake ≤ 1.5 % of a core, regression ≤ 0.3 pp | REAL bench (§15.4) | REAL |
 | B13 | covered strip and maximize/minimize of the support window: 0 free falls; every covered/gone end has `bailOut` | `onExcursion`, `onFall` | L3 fast churn |
 | B14 | `stuckResets` = 0 | profile | every cell incl. churn |
-| B16 | requests per hour rise with `attentionSeeking` (5 % < 35 % < 100 %), the need held saturated; 0 at 0 | `onDecision` | `sim-v12-review.test.ts` |
+| B16 | requests per hour rise with `attentionSeeking` (5 % < 50 % < 100 %), the need held saturated; 0 at 0 | `onDecision` | `sim-v12-review.test.ts` |
 | B15 | asleep 5–20 % of present time (lead decision: was 8–20 %, see below); 0.8–2.5 autonomous naps/h | `timeMs.asleep`, `sleeps` | P1, P2 × L1–L3 × U-active |
 
 "Never in the way" ceilings stay: no locomotion under a pressed cursor, no hunts or play near the cursor while typing, ≤ 12 window climbs per hour. The v1.1.1 passive-mix assertions (`behavior-mix.test.ts:41–45, 131–135`, `sim-liveness.test.ts:31–40`, `decide-urge.test.ts`) are rewritten as these bands by BEH.

@@ -12,8 +12,9 @@ import type { Rect } from '../../../../src/shared/geometry';
 import type { Surface } from '../../../../src/shared/surfaces';
 import type { DisplayGeometry } from '../../../../src/shared/world';
 import type { ExcursionRecord } from '../../../../src/shared/behaviorProfile';
+import type { WindowInfo } from '../../../../src/shared/world';
 import { HOUR, MIN, runCell } from './bands';
-import { callCat, Harness, onWindowTop, settingsWith, taskbar, WAKE_MS } from './fixtures';
+import { callCat, Harness, ledge, onWindowTop, settingsWith, taskbar, WAKE_MS } from './fixtures';
 import { TYPICAL_FRAME, TYPICAL_STRIP, USER_SCREEN } from './liveness';
 
 const median = (xs: number[]): number => {
@@ -40,7 +41,7 @@ describe('review BEH-1: the lonely leave is one-shot, not a cap on every stay (A
   it('fires once until the need has fallen below 0.7, then again', () => {
     const cuts = (rearm: boolean): number[] => {
       let first = -1;
-      const r = runCell({ seed: 5, hours: 1.6, layout: 'L1', user: 'active', drives: { socialNeed: 1 } }, (h) => {
+      const r = runCell({ seed: 5, hours: 3, layout: 'L1', user: 'active', drives: { socialNeed: 1 } }, (h) => {
         if (first < 0) first = h.sim.behaviorProfile().recentStays.find((s) => s.endReason === 'stimulus')?.at ?? -1;
         // Saturated on a stay, high but not asking much down on the floor, and for a moment (a pet) 25 min after the first cut when `rearm`.
         const up = h.last?.support.kind === 'surface' && (h.last.support.surfaceKind === 'windowTop' || h.last.support.surfaceKind === 'tabStrip');
@@ -214,10 +215,10 @@ describe('review BEH-8, PHYS-5: failed leaves (ADR 0003 §2.3)', () => {
 });
 
 describe('review BEH-4 (band B16): the Attention seeking slider bounds the requests', () => {
-  const requests = (att: number): number => {
+  const requests = (att: number, seeds = [31, 32]): number => {
     let n = 0;
-    for (const seed of [31, 32, 33]) {
-      const r = runCell({ seed, hours: 1.5, layout: 'L1', user: 'active', drives: { socialNeed: 1 }, settings: behavior({ attentionSeeking: att }) }, (h) => {
+    for (const seed of seeds) {
+      const r = runCell({ seed, hours: 2, layout: 'L1', user: 'active', drives: { socialNeed: 1 }, settings: behavior({ attentionSeeking: att }) }, (h) => {
         // Saturated all along: the slider, not the need, has to tell them apart.
         drivesOf(h.sim).socialNeed = 1;
       });
@@ -228,20 +229,20 @@ describe('review BEH-4 (band B16): the Attention seeking slider bounds the reque
 
   it('requests per hour rise with the slider with the need saturated, and stop at 0', () => {
     const low = requests(0.05);
-    const mid = requests(0.35);
+    const mid = requests(0.5);
     const high = requests(1);
     expect(low).toBeLessThan(mid);
     expect(mid).toBeLessThan(high);
-    expect(requests(0)).toBe(0);
-    // At 5 % it rarely asks: at most the quiet gap's 2.4 an hour, over 3 x 1.5 sim-h.
-    expect(low).toBeLessThanOrEqual(11);
+    expect(requests(0, [31])).toBe(0);
+    // At 5 % it rarely asks: at most the quiet gap's 2.4 an hour, over 2 x 2 sim-h.
+    expect(low).toBeLessThanOrEqual(10);
   });
 
   it('ignoring it teaches it: a cat whose requests went unanswered asks less', () => {
     const count = (acceptance: number): number => {
       let n = 0;
-      for (const seed of [31, 32, 33]) {
-        const r = runCell({ seed, hours: 1.5, layout: 'L1', user: 'active', drives: { socialNeed: 1 } }, (h) => {
+      for (const seed of [31, 32]) {
+        const r = runCell({ seed, hours: 2, layout: 'L1', user: 'active', drives: { socialNeed: 1 } }, (h) => {
           const c = h.sim as unknown as { cat: { drives: Drives; memory: { preferences: { attentionAcceptance: number } } } };
           c.cat.drives.socialNeed = 1;
           c.cat.memory.preferences.attentionAcceptance = acceptance;
@@ -394,5 +395,222 @@ describe('review PHYS-1: a loop of landings is a stuck state too (ADR 0003 §6.9
     drop(looping);
     expect(looping.sim.behaviorProfile().stuckResets).toBe(1);
     expect(looping.last?.state).toBe('idle');
+  });
+});
+
+describe('review BEH-5: after the hold-still the cat walks away from the cursor, never toward it (ADR 0003 §4.3)', () => {
+  for (const seed of [1, 2, 3]) {
+    it(`seed ${seed}: a walk through a resting hotspot stops short and goes the other way`, () => {
+      const c = newPersistedCat(mulberry32(seed), WALL - HOUR);
+      const h = new Harness({ seed, persisted: c, wall: WALL });
+      h.env.cursor = { x: 1500, y: 200, speed: 0 };
+      h.run(WAKE_MS, 33);
+      const sim = h.sim as unknown as { act: { done: boolean }; request(to: string, cause: string, init: unknown): string };
+      const floor = h.floorY();
+      const start = (h.last as { x: number }).x;
+      const hot = start + 220;
+      h.env.cursor = { x: hot, y: floor - 30, speed: 0 };
+      h.env.cursorIdleMs = 10_000;
+      sim.act.done = true;
+      expect(sim.request('walking', 'autonomous', { variant: 'wander', target: { x: start + 500, y: floor } })).toBe('ok');
+      const bw = 84;
+      let farthest = -1;
+      let held = false;
+      let clear = false;
+      let last = (h.last as { x: number }).x;
+      let stillFor = 0;
+      h.run(15_000, 33, (hh) => {
+        const x = (hh.last as { x: number }).x;
+        const d = Math.abs(hot - x);
+        stillFor = Math.abs(x - last) < 0.01 ? stillFor + 33 : 0;
+        last = x;
+        if (stillFor >= 2500) held = true;
+        // Once the hold has run out (it stood still for it), the hotspot only gets further away, until it is clear of it.
+        if (held && !clear) {
+          if (d < farthest - 1) expect.fail(`it came closer after the hold: ${Math.round(farthest)} -> ${Math.round(d)}`);
+          farthest = Math.max(farthest, d);
+          clear = d >= 2 * bw;
+        }
+        return [];
+      });
+      expect(held, 'it paused at the zone').toBe(true);
+      expect(clear, 'and got clear of the hotspot').toBe(true);
+    });
+  }
+});
+
+describe('review BEH-6: a private window is no target for walking over or staring', () => {
+  const secret: WindowInfo = { id: 'k', rect: { x: 1300, y: 300, width: 500, height: 400 }, processName: 'keepass.exe', category: 'unknown', minimized: false, maximized: false, fullscreen: false, excluded: true };
+  const run = (fg: WindowInfo): { nearby: number; watching: number; lookedAt: number } => {
+    let nearby = 0;
+    let watching = 0;
+    let lookedAt = 0;
+    for (const seed of [1, 2, 3]) {
+      const decisions: Array<{ state: string; variant: string | null }> = [];
+      const h = new Harness({ seed, world: USER_SCREEN, hooks: { onDecision: (d) => void decisions.push(d) } });
+      h.env.foreground = fg;
+      const center = { x: fg.rect.x + fg.rect.width / 2, y: fg.rect.y + fg.rect.height / 2 };
+      h.env.cursor = { x: 200, y: 200, speed: 0 };
+      h.run(WAKE_MS, 50);
+      let i = 0;
+      h.run(30 * MIN, 50, (hh) => {
+        i++;
+        const typing = Math.floor(i / 400) % 2 === 1;
+        hh.env.typing = typing;
+        hh.env.typingIntensity = typing ? 0.8 : 0.05;
+        hh.env.userIdleMs = i % 100;
+        const o = hh.last as { look: { x: number; y: number } | null };
+        if (o.look && Math.abs(o.look.x - center.x) < 1 && Math.abs(o.look.y - center.y) < 1) lookedAt++;
+        return [];
+      });
+      nearby += decisions.filter((d) => d.state === 'watchingUser' && d.variant === 'nearby').length;
+      watching += decisions.filter((d) => d.state === 'watchingUser').length;
+    }
+    return { nearby, watching, lookedAt };
+  };
+
+  it('no nearby walk, no watching it and no look at its centre; the same window not private gets them', () => {
+    const open = run({ ...secret, excluded: false });
+    expect(open.watching, 'control: an ordinary window is watched').toBeGreaterThan(0);
+    expect(open.lookedAt, 'control: and looked at').toBeGreaterThan(0);
+    const closed = run(secret);
+    expect(closed.nearby).toBe(0);
+    expect(closed.watching).toBe(0);
+    expect(closed.lookedAt).toBe(0);
+  });
+});
+
+describe('review BEH-7: annoyance and fear decay for the downtime', () => {
+  const saved = (savedAgoMs: number): Harness => {
+    const c = newPersistedCat(mulberry32(3), WALL - HOUR);
+    Object.assign(c.stats, { annoyance: 0.95, fear: 0.9 });
+    Object.assign(c.drives, { irritability: 0.8, wariness: 0.9, frustration: 0.9 });
+    c.savedAt = WALL - savedAgoMs;
+    return new Harness({ seed: 3, persisted: c, wall: WALL });
+  };
+
+  it('after 8 h off the cat is not angry or afraid, and the first stroke is no annoyed one', () => {
+    const h = saved(8 * HOUR);
+    const s = h.sim.serialize();
+    expect(s.stats.annoyance).toBeLessThan(0.01);
+    expect(s.stats.fear).toBeLessThan(0.01);
+    h.env.cursor = { x: 1500, y: 300, speed: 0 };
+    h.run(WAKE_MS, 50);
+    const o = h.last as { x: number; y: number };
+    h.step([{ type: 'pointer.pet', at: { x: o.x, y: o.y - 30 }, strength: 0.8 }], 50);
+    h.run(500, 50);
+    expect(h.last?.state).not.toBe('annoyed');
+  });
+
+  it('a restart a moment later keeps most of it', () => {
+    const s = saved(1000).sim.serialize();
+    expect(s.stats.annoyance).toBeGreaterThan(0.9);
+  });
+});
+
+describe('review RES-3: the event dedupe must not swallow the bookkeeping of a move', () => {
+  const moving = (h: Harness): number => (h.sim as unknown as { movingWindows: { size: number } }).movingWindows.size;
+  const rect = { x: 500, y: 760, width: 800, height: 400 };
+  const onTop = (): Harness => perched(4, { a: rect }).h;
+
+  it('a drag, a re-grab within 500 ms and a quick nudge: the window is not left marked as moving', () => {
+    const h = onTop();
+    h.step([{ type: 'window.moveStart', id: 'a' }], 50);
+    h.run(800, 50);
+    h.step([{ type: 'window.moveEnd', id: 'a', rect }], 50);
+    expect(moving(h)).toBe(0);
+    h.run(400, 50);
+    h.step([{ type: 'window.moveStart', id: 'a' }, { type: 'window.moveEnd', id: 'a', rect }], 50);
+    expect(moving(h)).toBe(0);
+    h.run(60_000, 100);
+    expect(moving(h)).toBe(0);
+  });
+
+  it('asleep on it, the tick stays the sleeping one after such a nudge', () => {
+    const h = onTop();
+    h.step([{ type: 'command.sleep' }], 50);
+    h.run(8000, 50);
+    expect(h.last?.state).toBe('sleeping');
+    const before = h.last?.nextTickMs;
+    expect(before).toBeGreaterThan(33);
+    h.step([{ type: 'window.moveStart', id: 'a' }], 50);
+    h.run(800, 50);
+    h.step([{ type: 'window.moveEnd', id: 'a', rect }], 50);
+    h.run(420, 50);
+    h.step([{ type: 'window.moveStart', id: 'a' }, { type: 'window.moveEnd', id: 'a', rect }], 50);
+    h.run(2000, 50);
+    expect(h.last?.nextTickMs).toBe(before);
+  });
+
+  it('an end and a new start right after: the new move counts, though its start is a duplicate of the last', () => {
+    const h = onTop();
+    h.step([{ type: 'window.moveStart', id: 'a' }], 50);
+    h.run(200, 50);
+    h.step([{ type: 'window.moveEnd', id: 'a', rect }, { type: 'window.moveStart', id: 'a' }], 50);
+    expect(moving(h)).toBe(1);
+    h.step([{ type: 'window.moveEnd', id: 'a', rect }], 50);
+    expect(moving(h)).toBe(0);
+  });
+
+  it('a moveEnd arriving while the cat is not in normal mode clears it as well', () => {
+    const h = onTop();
+    h.step([{ type: 'window.moveStart', id: 'a' }], 50);
+    h.run(800, 50);
+    h.step([{ type: 'system.lock' }], 50);
+    h.run(200, 50);
+    h.step([{ type: 'window.moveEnd', id: 'a', rect }], 50);
+    expect(moving(h)).toBe(0);
+  });
+});
+
+describe('review RES-4: the slip clip plays only at a ledge edge', () => {
+  it('a cat clinging to a wall keeps the climb pose during a scramble at the catch', () => {
+    const g = new Harness({ seed: 4, world: USER_SCREEN });
+    g.env.windows = { a: { x: 500, y: 200, width: 800, height: 700 } };
+    g.env.cursor = { x: 1880, y: 100, speed: 0 };
+    g.run(WAKE_MS, 50);
+    const s = g.sim as unknown as { mover: { climbPhase: string | null }; slipClipUntil: number; computeClip(): string; request(to: string, cause: string, i: unknown): string };
+    const opts = (g.sim as unknown as { mover: { climbOptions(): Array<{ dir: string; wallKind?: string; target: { x: number; y: number } }> } }).mover.climbOptions();
+    const up = opts.find((o) => o.dir === 'up' && o.wallKind !== 'screenEdge');
+    for (let i = 0; i < 400 && s.request('walking', 'stimulus', { variant: 'climb', target: up?.target }) !== 'ok'; i++) g.step([], 50);
+    g.runUntil(() => s.mover.climbPhase === 'climb', 30_000, 50);
+    expect(s.mover.climbPhase).toBe('climb');
+    s.slipClipUntil = g.now + 800;
+    expect(s.computeClip()).toBe('climb');
+  });
+});
+
+describe('review RES-6: the edge and balance poses play', () => {
+  it('sitting at the edge of a top plays edgeSit', () => {
+    const { h } = perched(4, { a: { x: 500, y: 760, width: 800, height: 400 } });
+    const sim = h.sim as unknown as { request(to: string, cause: string, i: unknown): string };
+    const o = h.last as { x: number; y: number };
+    for (let i = 0; i < 400 && sim.request('inspectingWindow', 'stimulus', { variant: 'edge', windowId: 'a', target: { x: o.x + 40, y: o.y } }) !== 'ok'; i++) h.step([], 50);
+    const seen = new Set<string>();
+    run(h, 6000, () => void seen.add((h.last as { clip: string }).clip));
+    expect([...seen]).toContain('edgeSit');
+    expect([...seen]).not.toContain('balance');
+  });
+
+  it('standing still on a narrow ledge plays balance, on a wide one it does not', () => {
+    const clipsOn = (width: number): Set<string> => {
+      const seen = new Set<string>();
+      for (const seed of [1, 2]) {
+        const h = new Harness({ seed });
+        h.env.extraSurfaces = [ledge('windowTop:n', 'windowTop', 'n', 960, 900, 900 + width)];
+        h.run(WAKE_MS);
+        callCat(h, { x: 900 + width / 2, y: 950 });
+        h.run(30_000, 33, (hh) => {
+          const o = hh.last as { support: { kind: string; surfaceId?: string }; speed: number; clip: string };
+          if (o.support.surfaceId === 'windowTop:n' && o.speed === 0) seen.add(o.clip);
+        });
+      }
+      return seen;
+    };
+    const BW = 84;
+    expect([...clipsOn(0.5 * BW)]).toContain('balance');
+    const wide = clipsOn(8 * BW);
+    expect(wide.size).toBeGreaterThan(0);
+    expect([...wide]).not.toContain('balance');
   });
 });

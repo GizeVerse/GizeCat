@@ -110,10 +110,13 @@ export abstract class SimSalience extends SimReactions {
       case 'window.moveEnd':
         this.notePrivacy(ev.id, ev.excluded);
         this.noteWindowRect(ev.id, ev.rect);
+        // Bookkeeping, whatever the mode and whether or not the event gets a reaction below.
+        this.movingWindows.delete(ev.id);
         break;
       case 'window.closed':
       case 'window.minimized':
         this.windowRects.delete(ev.id);
+        this.movingWindows.delete(ev.id);
         break;
       case 'command.callCat':
         // Called while a fullscreen app keeps it hidden or quiet: it comes over to the caller's display.
@@ -154,6 +157,7 @@ export abstract class SimSalience extends SimReactions {
     if (this.mode !== 'normal') return;
     // v1.2 (ADR 0003 §1.8): one desktop change delivered twice in a row (shown and restored, a strip
     // re-announced) gets one reaction; every such event counts as a recent stimulus.
+    if (ev.type === 'window.moveStart') this.movingWindows.add(ev.id);
     const key = salienceKey(ev);
     if (key !== null) {
       if (!this.dedupe.fresh(key, this.now)) return;
@@ -166,7 +170,6 @@ export abstract class SimSalience extends SimReactions {
         this.onWindowRestored(ev.window);
         return this.onWindowAppeared(ev.window, false);
       case 'window.closed': {
-        this.movingWindows.delete(ev.id);
         const excluded = ev.excluded === true || this.excludedWindows.has(ev.id);
         this.excludedWindows.delete(ev.id);
         // The window the cat is on: losing its footing is the reaction (the mover drops it).
@@ -178,11 +181,9 @@ export abstract class SimSalience extends SimReactions {
       case 'window.moveStart':
         return this.onMoveStart(ev.id, this.excludedWindows.has(ev.id));
       case 'window.moveEnd':
-        this.movingWindows.delete(ev.id);
         if (ev.rect && isFiniteRect(ev.rect)) this.onMoveEnd(ev.id, ev.rect, this.excludedWindows.has(ev.id));
         return;
       case 'window.minimized':
-        this.movingWindows.delete(ev.id);
         return;
       case 'activity.typingStart':
         return this.onTypingStart();
@@ -433,7 +434,6 @@ export abstract class SimSalience extends SimReactions {
   }
 
   protected onMoveStart(id: string, excluded: boolean): void {
-    this.movingWindows.add(id);
     if (!this.settings.behavior.reactToWindows || this.mover.perchWindowId === id) return;
     const rect = this.windowRect(id);
     if (!rect || ASLEEP_STATES.has(this.act.state) || PHYSICAL_STATES.has(this.act.state)) return;
@@ -460,7 +460,7 @@ export abstract class SimSalience extends SimReactions {
     const b = this.settings.behavior;
     if (!b.reactToTyping || ASLEEP_STATES.has(this.act.state) || !CALM_STATES.has(this.act.state)) return;
     if (!chance(this.random, 0.35 * b.activitySensitivity) || !this.reactions.take('typing', this.now, 60_000)) return;
-    const fg = this.env?.foreground;
+    const fg = this.watchableForeground();
     const far = fg ? Math.abs(rectCenter(fg.rect).x - this.mover.x) > 6 * this.bl : false;
     this.request('watchingUser', 'stimulus', { variant: far ? 'nearby' : null });
   }

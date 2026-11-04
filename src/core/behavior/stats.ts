@@ -85,6 +85,13 @@ export function stepStats(stats: Stats, ctx: StatsContext, dtMs: number): void {
   stats.fear = clamp01(stats.fear * Math.pow(0.5, dt / fearHalfLife));
 }
 
+/** At load: annoyance and fear as they would have decayed over the downtime (stepStats' half-lives), capped like the moods. */
+export function decayStatsForDowntime(stats: Stats, traits: Pick<Traits, 'confidence'>, patience: number, downtimeS: number): void {
+  if (!Number.isFinite(downtimeS) || downtimeS <= 0) return;
+  stats.annoyance = clamp01(stats.annoyance * Math.pow(0.5, downtimeS / (90 + 120 * clamp01(patience))));
+  stats.fear = clamp01(stats.fear * Math.pow(0.5, downtimeS / (2.5 + 3 * traits.confidence)));
+}
+
 export function addStat(stats: Stats, key: keyof Stats, delta: number): void {
   if (!Number.isFinite(delta)) return;
   stats[key] = clamp01(stats[key] + delta);

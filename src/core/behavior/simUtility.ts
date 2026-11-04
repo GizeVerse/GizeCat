@@ -35,13 +35,16 @@ export abstract class SimUtility extends SimSalience {
     const scan = this.scanTargets();
     this.scan = scan;
     this.decisionTargets = { ...scan.status };
-    const fg = env.foreground && !env.foreground.minimized && isFiniteRect(env.foreground.rect) ? env.foreground : null;
+    const shown = env.foreground && !env.foreground.minimized && isFiniteRect(env.foreground.rect) ? env.foreground : null;
+    // A private window is no target for walking over or staring (the rule of simSalience's window events).
+    const fg = this.watchableForeground();
     const noTrips = this.tripsExhausted() || this.now < this.tripSettleUntil;
-    const media = fg !== null && (fg.category === 'video' || fg.category === 'game' || fg.category === 'media');
+    const media = shown !== null && (shown.category === 'video' || shown.category === 'game' || shown.category === 'media');
     return {
       traits: this.cat.traits,
       stats: this.cat.stats,
       attentionAcceptance: this.cat.memory.preferences.attentionAcceptance,
+      hotspotResting: this.hotspotInZone() && (env.cursorIdleMs ?? 0) >= 1000,
       behavior: this.settings.behavior,
       disabled: this.disabled,
       localHour: Number.isFinite(env.localHour) ? env.localHour : 12,

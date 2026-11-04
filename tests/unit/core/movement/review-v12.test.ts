@@ -214,3 +214,24 @@ describe('review PHYS-4: a display event during a leap', () => {
     expect(MOVEMENT.maxWallHoldMs).toBeGreaterThan(0);
   });
 });
+
+describe('review RES-4: a slip needs a ledge edge', () => {
+  it('no slip on a jump down to the floor; one onto another top still may', () => {
+    const e = env(SINGLE, { jumpDownSafeDip: 700, jumpDownMaxDip: 800 }, 0.5);
+    e.windows = { w: { x: 800, y: 600, width: 400, height: 440 } };
+    e.step();
+    e.placeOn('windowTop:w', 1000, 600);
+    e.m.setGoal({ x: 1500, y: FLOOR_Y, pace: 'walk', allowJump: true });
+    expect(e.until((r) => r.crouchStarted, 15_000), 'prepares the jump down').toBe(true);
+    expect(e.m.armSlip('scramble')).toBe(false);
+    expect(e.m.armSlip('miss')).toBe(false);
+
+    const t = env(SINGLE, { jumpDownSafeDip: 700, jumpDownMaxDip: 800 }, 0.5);
+    t.windows = { w: { x: 800, y: 600, width: 400, height: 440 }, v: { x: 1250, y: 620, width: 400, height: 420 } };
+    t.step();
+    t.placeOn('windowTop:w', 1000, 600);
+    t.m.setGoal({ x: 1450, y: 620, pace: 'walk', allowJump: true });
+    expect(t.until((r) => r.crouchStarted, 15_000), 'prepares the hop').toBe(true);
+    expect(t.m.armSlip('scramble')).toBe(true);
+  });
+});

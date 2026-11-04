@@ -120,6 +120,8 @@ export interface DecisionView {
   stats: Stats;
   /** How often its requests were answered, 0..1 (memory.preferences); absent: the neutral 0.5. */
   attentionAcceptance?: number;
+  /** A resting cursor hotspot is right at the cat (no settling down under it, ADR 0003 §4.3). */
+  hotspotResting?: boolean;
   behavior: Settings['behavior'];
   /** Switched-off behaviours: disabledBehaviorSet (both lists and the implied opt-outs). */
   disabled: ReadonlySet<BehaviorId>;

@@ -178,14 +178,25 @@ describe('slips on a leap onto a side and on a pull-up onto a tab strip', () => 
     expect(e.m.support).toMatchObject({ surfaceId: stripId('b') });
   });
 
-  it('a wall jump may slip too: armed during its push-off crouch, a scramble on landing', () => {
-    const e = env(SINGLE, { screenEdges: true, wallJumps: true, jumpDownSafeDip: 477, jumpDownMaxDip: 644 }, 0.1);
-    e.goal({ x: 0, y: 500, surfaceId: 'screenEdge:1:left' });
-    expect(e.until((r) => r.goal === 'arrived', 40_000)).toBe(true);
-    const leap = e.m.leaveOptions().find((o) => o.kind === 'climbLeap');
-    expect(leap).toBeDefined();
-    expect(e.m.leaveBy(leap as never, 'walk')).toBe(true);
-    expect(e.until((r) => r.crouchStarted, 20_000)).toBe(true);
+  it('a wall jump may slip too: armed during its push-off crouch, a scramble on landing on a ledge, never on the floor', () => {
+    const atEdge = (): ReturnType<typeof env> => {
+      const e = env(SINGLE, { screenEdges: true, wallJumps: true, jumpDownSafeDip: 477, jumpDownMaxDip: 644 }, 0.1);
+      e.extra = [ledge('windowTop:t', 'windowTop', 't', 700, 100, 500)];
+      e.goal({ x: 0, y: 500, surfaceId: 'screenEdge:1:left' });
+      expect(e.until((r) => r.goal === 'arrived', 40_000)).toBe(true);
+      return e;
+    };
+    const off = (e: ReturnType<typeof env>, toKind: string): void => {
+      const leap = e.m.leaveOptions().find((o) => o.kind === 'climbLeap' && o.toKind === toKind);
+      expect(leap).toBeDefined();
+      expect(e.m.leaveBy(leap as never, 'walk')).toBe(true);
+      expect(e.until((r) => r.crouchStarted, 20_000)).toBe(true);
+    };
+    const toFloor = atEdge();
+    off(toFloor, 'floor');
+    expect(toFloor.m.armSlip('scramble')).toBe(false);
+    const e = atEdge();
+    off(e, 'windowTop');
     expect(e.m.nextLegRisk).toBeGreaterThanOrEqual(0);
     expect(e.m.armSlip('scramble')).toBe(true);
     const r = collect(e, (s) => s.landed !== null, 5000);

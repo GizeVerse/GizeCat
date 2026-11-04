@@ -285,8 +285,9 @@ export class CatSimImpl extends SimActivities implements CatSim {
     const a = this.act;
     const m = this.mover;
     if (this.oneShot && this.now >= this.oneShot.until) this.oneShot = null;
-    // v1.2: the scramble of a deliberate slip (front paws catch the edge, then it pulls up).
-    if (this.now < this.slipClipUntil && !m.airborne && !m.held) return 'slip';
+    // v1.2: the scramble of a deliberate slip (front paws catch the edge, then it pulls up): never
+    // on a wall, where it keeps the climb pose and stays within the wall line.
+    if (this.now < this.slipClipUntil && !m.airborne && !m.held && !m.onWall) return 'slip';
     // On a wall the body is in the vertical climbing pose while getting on and climbing. During
     // the corner pull-up and the step-off the renderer cross-fades back to a ground clip (its
     // off-wall fade is tuned to the pull-up duration), so the cat does not glide rigidly.
@@ -300,12 +301,16 @@ export class CatSimImpl extends SimActivities implements CatSim {
     // v1.2: a hunting pounce flies in the pounce pose (the renderer shapes it by vy).
     if (a.state === 'jumping' && this.pounceFlight && m.airborne) return 'pounce';
     const scale = m.scale;
-    return clipFor(a.state, a.phase, {
+    const clip = clipFor(a.state, a.phase, {
       groundSpeed: m.groundSpeed,
       runThreshold: 140 * this.settings.behavior.movementSpeed * scale,
       moveThreshold: 6 * scale,
       vy: m.vy,
     });
+    // The poses of a place (ADR 0003 §8): looking down from the edge, keeping its balance on a narrow ledge.
+    if (clip === 'sit' && a.state === 'inspectingWindow' && a.variant === 'edge') return 'edgeSit';
+    if ((clip === 'sit' || clip === 'stand') && m.grounded && m.balance > 0) return 'balance';
+    return clip;
   }
 
   /**

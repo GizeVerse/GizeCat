@@ -16,6 +16,8 @@ function catWith(seed: number, o: { traits?: Partial<Traits>; stats?: Partial<St
   const cat = newPersistedCat(mulberry32(seed), WALL - 3600_000);
   Object.assign(cat.traits, o.traits ?? {});
   Object.assign(cat.stats, o.stats ?? {});
+  // Saved just now: the moods given here are the ones it has (they decay for any downtime, review BEH-7).
+  cat.savedAt = WALL;
   if (o.recent) cat.memory.recent = o.recent;
   if (o.petRate !== undefined) cat.memory.preferences.petRatePerHour = o.petRate;
   return cat;

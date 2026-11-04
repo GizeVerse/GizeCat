@@ -25,6 +25,7 @@ import type { SubBehavior } from '../../shared/behaviorGates';
 import { subBehaviorAllowed } from '../../shared/behaviorGates';
 import type { PersistedCat } from '../../shared/catState';
 import type { Point, Rect } from '../../shared/geometry';
+import type { WindowInfo } from '../../shared/world';
 import { clamp, isFiniteRect } from '../../shared/geometry';
 import type { BehaviorId, Settings } from '../../shared/settings';
 import { disabledBehaviorSet } from '../../shared/settings';
@@ -38,7 +39,8 @@ import { makeActivity } from './activity';
 import type { Phase } from './clips';
 import type { Candidate, DecisionView, EdgeTarget, Variant } from './decide';
 import { sleepiness, userIdleForSleep } from './decide';
-import { decayForDowntime } from './drives';
+import { decayForDowntime, DOWNTIME_DECAY_CAP_MS } from './drives';
+import { decayStatsForDowntime } from './stats';
 import { EmoteController } from './emotes';
 import { CursorTracker, huntBaseline, TYPING_HOLD_MS } from './hunt';
 import type { MemoryDetail } from './memory';
@@ -606,6 +608,8 @@ export abstract class SimCore {
     // its needs do not grow across it; a new cat's hunt drive starts at its baseline. No draws.
     const H = clamp(Number.isFinite(this.settings.behavior.cursorPlay) ? this.settings.behavior.cursorPlay : 0.5, 0, 1);
     if (restoring) {
+      // Before the drives, which read the fear for the mischief target: nobody is still angry after a night off.
+      decayStatsForDowntime(this.cat.stats, this.cat.traits, this.settings.interaction.patience, Math.min(wall - this.cat.savedAt, DOWNTIME_DECAY_CAP_MS) / 1000);
       decayForDowntime(this.cat.drives, wall - this.cat.savedAt, {
         bond: this.cat.stats.bond,
         patience: this.settings.interaction.patience,
@@ -833,6 +837,12 @@ export abstract class SimCore {
       this.stop();
       return;
     }
+    if (this.holdSince !== null) {
+      // The hold ran out with the hotspot still there: on, away from the cursor, never toward it (§4.3).
+      const away = this.awayFromHotspot(p, opts.surfaceId !== undefined);
+      if (!away) return;
+      p = away;
+    }
     this.goalPoint = isFinitePoint(p) ? { x: p.x, y: p.y } : null;
     this.mover.setGoal({
       x: p.x,
@@ -911,15 +921,51 @@ export abstract class SimCore {
       this.holdSince = null;
       return false;
     }
-    const b = this.approxBounds();
-    const m = HOLD_STILL_BW * this.mover.bodyWidth;
-    const near = c.x >= b.x - m && c.x <= b.x + b.width + m && c.y >= b.y - m && c.y <= b.y + b.height + m;
-    if (!near) {
+    if (!this.hotspotInZone()) {
       this.holdSince = null;
       return false;
     }
     this.holdSince ??= this.now;
     return this.now - this.holdSince < HOLD_STILL_MAX_MS;
+  }
+
+  /** The cursor hotspot within HOLD_STILL_BW body widths of the cat's bounds. */
+  protected hotspotInZone(): boolean {
+    const c = this.env?.cursor;
+    if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y)) return false;
+    const b = this.approxBounds();
+    const m = HOLD_STILL_BW * this.mover.bodyWidth;
+    return c.x >= b.x - m && c.x <= b.x + b.width + m && c.y >= b.y - m && c.y <= b.y + b.height + m;
+  }
+
+  /**
+   * After the hold: `p` if it does not lead toward the hotspot. Else a plain walk is re-aimed a body
+   * length and a half the other way (its next steps follow the new target), and whatever else, or a
+   * walk with no room that way, ends here (null).
+   */
+  protected awayFromHotspot(p: Point, pinned: boolean): Point | null {
+    const c = this.env?.cursor;
+    const m = this.mover;
+    if (!c || !Number.isFinite(c.x)) return p;
+    const dir = m.x >= c.x ? 1 : -1;
+    if ((p.x - m.x) * dir > 0 || Math.abs(p.x - m.x) < 1) return p;
+    const a = this.act;
+    const r = m.walkRange;
+    const x = r ? clamp(m.x + dir * 1.5 * m.bodyWidth, r.x0, r.x1) : m.x;
+    if (a.state === 'walking' && !pinned && Math.abs(x - m.x) >= 0.5 * m.bodyWidth) {
+      a.target = { x, y: m.y };
+      a.targetSurfaceId = null;
+      return a.target;
+    }
+    this.finish();
+    return null;
+  }
+
+  /** The foreground window, for walking over to or looking at it: never one that is private (it stays geometry for everything else). */
+  protected watchableForeground(): WindowInfo | null {
+    const fg = this.env?.foreground ?? null;
+    if (!fg || fg.minimized || !isFiniteRect(fg.rect) || fg.excluded === true || this.excludedWindows.has(fg.id)) return null;
+    return fg;
   }
 
   /** Upright body box at the anchor, px (the click-through fallback the renderer refines). */

@@ -877,10 +877,11 @@ export class Mover {
   /** A take-off that may slip is being prepared (see armSlip). */
   private slipEligible(): boolean {
     const k = this.crouch;
-    if (this.modeValue === 'crouch' && k) return (k.kind === 'jump' && k.target.key !== this.surface.key) || k.kind === 'leap';
+    // A slip catches a ledge's edge with the front paws: there is none on a floor (nor room below it).
+    if (this.modeValue === 'crouch' && k) return (k.kind === 'jump' && k.target.key !== this.surface.key && k.target.kind === 'ledge') || k.kind === 'leap';
     const c = this.climbing;
     if (this.modeValue !== 'climb' || !c || c.phase === 'leap' || c.phase === 'pullUp') return false;
-    if (c.wallJump) return true;
+    if (c.wallJump) return this.supportByKey(c.wallJump.targetKey)?.kind === 'ledge';
     return c.dir < 0 && c.topKey !== null && this.ledgeById(c.topKey)?.surfaceKind === 'tabStrip';
   }
 
@@ -2697,7 +2698,11 @@ export class Mover {
     const maxLift = MOVEMENT.liftMaxBodyHeights * this.bodyHeight;
     for (const l of this.ledges) {
       if (this.attach?.surfaceId === l.key || l.phase === 'leaving') continue;
-      if (this.x < l.landX0 || this.x > l.landX1) continue;
+      if (this.x < l.landX0 || this.x > l.landX1) {
+        // Out of its column: the step-off is over.
+        if (this.steppedOffKey === l.key) this.steppedOffKey = null;
+        continue;
+      }
       if (!(l.y < this.y - 0.5 && l.y >= this.y - maxLift)) continue;
       const prev = this.graph.prevY(l.key);
       // A ledge that just appeared above the feet counts only for taskbars (they slide in from the screen edge).

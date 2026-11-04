@@ -1,6 +1,6 @@
 // The cat simulation, layer 8: entering, running and leaving each activity.
 import type { Point } from '../../shared/geometry';
-import { clamp, isFiniteRect, rectCenter } from '../../shared/geometry';
+import { clamp, rectCenter } from '../../shared/geometry';
 import type { Pace } from '../movement';
 import type { Activity } from './activity';
 import { userIdleForSleep } from './decide';
@@ -408,7 +408,7 @@ export abstract class SimActivities extends SimUtility {
   }
 
   protected updWatchUser(a: Activity): void {
-    const fg = this.env?.foreground ?? null;
+    const fg = this.watchableForeground();
     if (a.phase === 'approach') {
       if (!fg || a.goalStatus === 'arrived' || a.goalStatus === 'unreachable' || this.now - a.phaseAt > 10_000) {
         this.stop();
@@ -520,7 +520,7 @@ export abstract class SimActivities extends SimUtility {
 
   protected updSeekAttention(a: Activity): void {
     const cur = this.cursorInfo();
-    const fg = this.env?.foreground ?? null;
+    const fg = this.watchableForeground();
     if (a.phase === 'approach') {
       const goal = cur?.point ?? (fg ? { x: fg.rect.x + fg.rect.width / 2, y: fg.rect.y + fg.rect.height } : null);
       const close = goal ? Math.abs(goal.x - this.mover.x) < 1.5 * this.bl : true;
@@ -546,7 +546,8 @@ export abstract class SimActivities extends SimUtility {
     const env = this.env;
     if (!env) return null;
     const cursor = env.cursor && Number.isFinite(env.cursor.x) && Number.isFinite(env.cursor.y) ? { x: env.cursor.x, y: env.cursor.y } : null;
-    const fg = env.foreground && isFiniteRect(env.foreground.rect) && !env.foreground.minimized ? rectCenter(env.foreground.rect) : null;
+    const shown = this.watchableForeground();
+    const fg = shown ? rectCenter(shown.rect) : null;
     switch (a.state) {
       case 'watchingCursor':
       case 'chasingCursor':

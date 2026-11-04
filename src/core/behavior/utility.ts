@@ -34,6 +34,7 @@ const RECENT_PLACE_MUL = 0.7;
 const QUIET_CALM_MUL = 5;
 /** The ADR's starting 0.25 measured 12-13 window climbs an hour for P1 once B1 was met (ceiling 12, SIMULATED). */
 const TRIP_BASE = 0.2;
+const HOTSPOT_REST_MUL = 0.1;
 const TYPING_TRIP_MUL = 0.6;
 /** With 'React to typing' off nothing else damps a trip while the user types (§1.4 reads the raw signal here). */
 const TYPING_TRIP_RAW_MUL = 0.2;
@@ -290,6 +291,8 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
     if (family === 'tripUp' && m > 0.15 && c.windowId !== null && c.windowId === v.foregroundId) P += 0.4 * m * (0.5 + W);
     // The stay a cover or a vanished window cut short (ADR 0003 §2.4).
     if (family === 'tripUp' && c.place && c.place === v.resumePlace) P *= 2;
+    // Not settling down under a resting cursor (over a control, most likely): the user's next click would hit the cat (§4.3).
+    if (v.hotspotResting && (c.state === 'resting' || c.state === 'grooming' || c.state === 'idle' || c.state === 'fallingAsleep')) C *= HOTSPOT_REST_MUL;
     const N = repetitionFactor(candidateKey(c), recent, currentKey);
     const E = Math.exp(-2 * energyKappa(c, family, cls) * (1 - energy));
     let R = rhythmWeight(episode, cls, m, onStay);
