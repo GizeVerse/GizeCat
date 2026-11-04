@@ -372,7 +372,7 @@ export abstract class SimStay extends SimDrives {
       if (top) {
         // On its way up the cat is not distracted by its next decision: the approach's own timeout ends it.
         a.dwellMs = Math.max(a.dwellMs, this.now - a.startedAt + 1000);
-        this.goTo({ x: clamp(this.mover.x, top.x0, top.x1), y: top.y }, 'walk', true);
+        this.goTo({ x: clamp(this.mover.x, top.x0, top.x1), y: top.y }, 'walk', true, undefined, { surfaceId: top.key });
       } else {
         const side = Math.sign(center.x - this.mover.x) || 1;
         this.goTo({ x: center.x - side * this.bl, y: rect.y + rect.height }, 'walk', true);
@@ -687,6 +687,34 @@ export abstract class SimStay extends SimDrives {
     if (t.length >= TRIPS_PER_HOUR_MAX) return true;
     const last = t[t.length - 1];
     return last !== undefined && this.now - this.lastTypingRawAt < TYPING_RECENT_MS && this.now - last < TYPING_TRIP_GAP_MS;
+  }
+
+  /**
+   * The window top or strip a trip's target lies on (ADR 0003 §7.3 layer 2), named when the trip starts.
+   * The target otherwise stays a screen point: with the window moved up meanwhile it lies below the top
+   * and maps to the floor, so a cat that has just pulled itself up (REAL: a stay of 0 s, then the whole
+   * climb back down) or stands on a strip turns round and leaves. Only the surface holding the target:
+   * a trip through other surfaces on the way keeps going.
+   */
+  protected nameTripSurface(a: Activity): void {
+    const t = a.target;
+    if (!t) return;
+    const l = this.mover.ledgeSurfaces.find((s) => isElevatedKind(s.surfaceKind) && Math.abs(s.y - t.y) <= 2 && t.x >= s.landX0 - 1 && t.x <= s.landX1 + 1);
+    if (!l) return;
+    a.targetSurfaceId = l.key;
+    a.targetRelX = t.x - l.x0;
+  }
+
+  /** Moves a named target along with its surface (or the top or strip replacing it); the goal options that pin it. */
+  protected followTripSurface(a: Activity): { surfaceId?: string } {
+    const id = a.targetSurfaceId;
+    if (id === null) return {};
+    const m = this.mover;
+    const l = m.ledgeById(id) ?? m.ledgeSurfaces.find((s) => isElevatedKind(s.surfaceKind) && s.ownerId !== null && id.endsWith(`:${s.ownerId}`));
+    if (!l) return {};
+    a.targetSurfaceId = l.key;
+    a.target = { x: clamp(l.x0 + a.targetRelX, l.landX0, l.landX1), y: l.y };
+    return { surfaceId: l.key };
   }
 
   /** Starts tracking a trip up: exploring a top, climbing up a side, or visiting a tab strip from elsewhere. */

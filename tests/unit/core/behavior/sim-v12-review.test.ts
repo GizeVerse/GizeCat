@@ -14,7 +14,7 @@ import type { DisplayGeometry } from '../../../../src/shared/world';
 import type { ExcursionRecord } from '../../../../src/shared/behaviorProfile';
 import { HOUR, MIN, runCell } from './bands';
 import { callCat, Harness, onWindowTop, settingsWith, taskbar, WAKE_MS } from './fixtures';
-import { USER_SCREEN } from './liveness';
+import { TYPICAL_FRAME, TYPICAL_STRIP, USER_SCREEN } from './liveness';
 
 const median = (xs: number[]): number => {
   const s = [...xs].sort((a, b) => a - b);
@@ -251,5 +251,123 @@ describe('review BEH-4 (band B16): the Attention seeking slider bounds the reque
       return n;
     };
     expect(count(0)).toBeLessThan(count(1));
+  });
+});
+
+describe('review TAB-1 and the REAL 0 s stays: a trip names the surface its target lies on (ADR 0003 §7.3)', () => {
+  type WalkInit = { variant: string; target: { x: number; y: number } | null; then?: unknown };
+  /** The walk starts as soon as what the cat is doing lets it (the transition guards). */
+  const start = (h: Harness, init: WalkInit): void => {
+    const sim = h.sim as unknown as { request(to: string, cause: string, i: WalkInit): string };
+    for (let i = 0; i < 2000; i++) {
+      if (sim.request('walking', 'stimulus', init) === 'ok') return;
+      h.step([], 50);
+    }
+    throw new Error('the walk never started');
+  };
+  const onWall = (h: Harness): boolean => (h.sim as unknown as { mover: { onWall: boolean; climbPhase: string | null } }).mover.climbPhase === 'climb';
+  const FRAME = { ...TYPICAL_FRAME, y: TYPICAL_FRAME.y + 40 };
+  const ledges = (h: Harness): ReadonlyArray<{ key: string; y: number; x0: number; surfaceKind: string | null }> => (h.sim as unknown as { mover: { ledgeSurfaces: ReadonlyArray<{ key: string; y: number; x0: number; surfaceKind: string | null }> } }).mover.ledgeSurfaces;
+  const options = (h: Harness): ReadonlyArray<{ dir: string; wallKind?: string; target: { x: number; y: number } }> => (h.sim as unknown as { mover: { climbOptions(): ReadonlyArray<{ dir: string; wallKind?: string; target: { x: number; y: number } }> } }).mover.climbOptions();
+  const on = (h: Harness): string => {
+    const s = h.last?.support;
+    return s?.kind === 'surface' ? s.surfaceId : (s?.kind ?? '?');
+  };
+  const atFrame = (seed: number): { h: Harness; ex: ExcursionRecord[] } => {
+    const ex: ExcursionRecord[] = [];
+    const h = new Harness({ seed, world: USER_SCREEN, hooks: { onExcursion: (r) => ex.push(r) } });
+    h.env.windows = { b: FRAME };
+    h.env.tabStrips = { b: TYPICAL_STRIP };
+    h.env.cursor = { x: 1880, y: 100, speed: 0 };
+    h.run(WAKE_MS, 50);
+    return { h, ex };
+  };
+
+  // Reproduces the REAL records: Chrome 545.8 s leave climbLeap, then 0 s other (fresh planned, by climb), then 222.8 s.
+  for (const variant of ['tabStrip', 'climb'] as const) {
+    for (const [dy, label] of [[-40, 'raised'], [40, 'lowered']] as const) {
+      it(`walking:${variant}, the window ${label} 40 px during the climb: it arrives and stays, with no stay of 0 s and no climb back down`, () => {
+        for (const seed of [1, 3]) {
+          const { h, ex } = atFrame(seed);
+          const strip = ledges(h).find((l) => l.surfaceKind === 'tabStrip');
+          const up = options(h).find((o) => o.dir === 'up' && o.wallKind !== 'screenEdge');
+          const target = variant === 'tabStrip' ? { x: (strip?.x0 ?? 0) + 100, y: strip?.y ?? 0 } : (up?.target ?? null);
+          start(h, { variant, target, then: variant === 'climb' ? { state: 'walking', init: { variant: 'patrol' } } : { state: 'resting', init: {} } });
+          let moved = false;
+          run(h, 40_000, () => {
+            if (!moved && onWall(h)) {
+              moved = true;
+              h.env.windows = { b: { ...FRAME, y: FRAME.y + dy } };
+            }
+          });
+          expect(moved, `seed ${seed}: it climbed`).toBe(true);
+          expect(ex.filter((e) => e.phase === 'end').map((e) => [e.dwellMs, e.endReason]), `seed ${seed}`).toEqual([]);
+          expect(on(h), `seed ${seed}`).toBe('tabStrip:b');
+          expect(h.last?.y).toBeCloseTo(FRAME.y + dy, 0);
+        }
+      });
+    }
+  }
+
+  it('the strip replaced by the window top during the climb: the target goes with it', () => {
+    for (const seed of [1, 3]) {
+      const { h, ex } = atFrame(seed);
+      const strip = ledges(h).find((l) => l.surfaceKind === 'tabStrip');
+      start(h, { variant: 'tabStrip', target: { x: (strip?.x0 ?? 0) + 100, y: strip?.y ?? 0 }, then: { state: 'resting', init: {} } });
+      let swapped = false;
+      run(h, 40_000, () => {
+        if (!swapped && onWall(h)) {
+          swapped = true;
+          delete h.env.tabStrips;
+          h.env.windows = { b: { ...FRAME, y: FRAME.y - 40 } };
+        }
+      });
+      expect(swapped, `seed ${seed}`).toBe(true);
+      expect(ex.filter((e) => e.phase === 'end'), `seed ${seed}`).toEqual([]);
+      expect(on(h), `seed ${seed}`).toBe('windowTop:b');
+    }
+  });
+
+  const standOnStrip = (seed: number): Harness => {
+    const { h } = atFrame(seed);
+    const strip = ledges(h).find((l) => l.surfaceKind === 'tabStrip');
+    start(h, { variant: 'tabStrip', target: { x: (strip?.x0 ?? 0) + 500, y: strip?.y ?? 0 }, then: { state: 'resting', init: {} } });
+    h.runUntil((o) => o.support.kind === 'surface' && o.support.surfaceKind === 'tabStrip', 60_000, 50);
+    expect(on(h)).toBe('tabStrip:b');
+    return h;
+  };
+  for (const [label, dx, dy] of [['raised 8 px', 0, -8], ['raised 60 px', 0, -60], ['dragged 400 px to the right', 400, 0]] as const) {
+    it(`a window ${label} during the walk along the strip: it stays on the strip`, () => {
+      for (const seed of [1, 5]) {
+        const h = standOnStrip(seed);
+        const strip = ledges(h).find((l) => l.surfaceKind === 'tabStrip');
+        start(h, { variant: 'tabStrip', target: { x: (strip?.x0 ?? 0) + 100, y: strip?.y ?? 0 }, then: { state: 'resting', init: {} } });
+        run(h, 500);
+        h.env.windows = { b: { ...FRAME, x: FRAME.x + dx, y: FRAME.y + dy } };
+        const seen = new Set<string>();
+        run(h, 12_000, () => void seen.add(on(h)));
+        // A little hop along the strip may happen (a play act); it never goes anywhere else.
+        expect([...seen].filter((k) => k !== 'air'), `seed ${seed}`).toEqual(['tabStrip:b']);
+        expect(on(h), `seed ${seed}`).toBe('tabStrip:b');
+        expect(h.last?.y).toBeCloseTo(FRAME.y + dy, 0);
+      }
+    });
+  }
+
+  it('a trip through another strip on the way still arrives on the strip it named', () => {
+    for (const seed of [2, 3]) {
+      const h = new Harness({ seed, world: USER_SCREEN });
+      const low = { x: 100, y: 800, width: 1400, height: 200 };
+      const high = { x: 1350, y: 560, width: 500, height: 420 };
+      h.env.windows = { c: low, b: high };
+      h.env.tabStrips = { c: { x0: 150, x1: 1450, rest: { x0: 200, x1: 1400 }, focusX: 300 }, b: { x0: 1400, x1: 1800, rest: { x0: 1420, x1: 1780 }, focusX: 1500 } };
+      h.env.walls = false;
+      h.env.cursor = { x: 1880, y: 100, speed: 0 };
+      h.run(WAKE_MS, 50);
+      start(h, { variant: 'tabStrip', target: { x: 1600, y: 560 }, then: { state: 'resting', init: {} } });
+      run(h, 40_000);
+      expect(on(h), `seed ${seed}`).toBe('tabStrip:b');
+      expect(h.last?.y).toBeCloseTo(560, 0);
+    }
   });
 });

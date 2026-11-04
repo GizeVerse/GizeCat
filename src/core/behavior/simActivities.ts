@@ -56,6 +56,7 @@ export abstract class SimActivities extends SimUtility {
           a.approachMs = Math.max(TRAVEL_TIMEOUT_MS, this.approachTimeoutMs(a.target, 'walk', 0));
         }
         if (a.variant === 'screenEdge') this.beginEdgeVisit(a);
+        if (a.variant === 'climb' || a.variant === 'tabStrip') this.nameTripSurface(a);
         this.beginExcursion(a);
         break;
       case 'chasingCursor':
@@ -326,7 +327,10 @@ export abstract class SimActivities extends SimUtility {
     switch (a.variant) {
       case 'climb':
         // Up a window side to its top corner (then a pull-up), or down from the corner of the top it stands on.
-        this.goTo(a.target, 'walk', true, undefined, { route: 'climb' });
+        {
+          const pin = this.followTripSurface(a);
+          this.goTo(a.target, 'walk', true, undefined, { route: 'climb', ...pin });
+        }
         return;
       case 'patrol':
         // Along the top it is on, never off it.
@@ -339,7 +343,8 @@ export abstract class SimActivities extends SimUtility {
       case 'tabStrip': {
         // Along the strip it is on, slowly; to a strip elsewhere by any way up (climbing too, v1.1.1).
         const onStrip = this.mover.attachedSurface?.surfaceKind === 'tabStrip';
-        this.goTo(a.target, onStrip ? 'slow' : 'walk', true, undefined, { route: this.climbAllowed() ? 'any' : 'noClimb' });
+        const pin = this.followTripSurface(a);
+        this.goTo(a.target, onStrip ? 'slow' : 'walk', true, undefined, { route: this.climbAllowed() ? 'any' : 'noClimb', ...pin });
         return;
       }
       case 'slink':

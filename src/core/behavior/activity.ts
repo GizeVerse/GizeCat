@@ -51,6 +51,10 @@ export interface Activity {
   landing: LandingInfo | null;
   /** Longest the approach to a destination may take, ms (0: the state's fixed default). */
   approachMs: number;
+  /** The window top or strip a trip's target lies on, named when it starts: the target follows it (T6). */
+  targetSurfaceId: string | null;
+  /** Where along that surface: target x minus its x0. */
+  targetRelX: number;
 }
 
 export function makeActivity(state: BehaviorState, cause: TransitionCause, now: number, dwellMs: number, init: ActivityInit): Activity {
@@ -76,5 +80,7 @@ export function makeActivity(state: BehaviorState, cause: TransitionCause, now: 
     lastPetAt: now,
     landing: init.landing ?? null,
     approachMs: 0,
+    targetSurfaceId: null,
+    targetRelX: 0,
   };
 }
