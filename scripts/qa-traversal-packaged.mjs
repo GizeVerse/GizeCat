@@ -6,22 +6,28 @@
 // desk does not put it to sleep), opens a throwaway always-on-top window of typical size
 // (about 70 % of the work area, its bottom ~180 px above the floor, not movable, says what it
 // is), and reads the app's own rate-limited 'surfaces summary' log lines (counts, verdict code,
-// what the cat stands on, trips up this session) until the cat has been up or time runs out.
-// Then it closes the window, waits for the cat to be back on the floor and stops only the
-// processes it started. Nothing of the user's is touched; no screenshots are taken.
+// what the cat stands on, trips up this session) until the cat has been up or time runs out. From
+// there it keeps watching for up to --stay-minutes, until --stays finished stays are in the app's
+// 'stay ended' log lines (kind, dwellS, reason, leave, arrivedBy), so a packaged run reports real
+// dwell times. Then it closes the window, waits for the cat to be back on the floor and stops only
+// the processes it started. Nothing of the user's is touched; no screenshots are taken.
 //
-//   node scripts/with-lock.mjs qa-traversal -- node scripts/qa-traversal-packaged.mjs [--minutes=12] [path-to-exe]
+//   node scripts/with-lock.mjs qa-traversal -- node scripts/qa-traversal-packaged.mjs [--minutes=12] [--stays=3] [--stay-minutes=25] [path-to-exe]
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { staysFromLog, summarizeStays } from './stay-lines.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const argv = process.argv.slice(2);
-const minutes = Number((argv.find((a) => a.startsWith('--minutes=')) ?? '--minutes=12').split('=')[1]);
+const numArg = (name, fallback) => Number((argv.find((a) => a.startsWith(`--${name}=`)) ?? `--${name}=${fallback}`).split('=')[1]);
+const minutes = numArg('minutes', 12);
+const wantStays = numArg('stays', 3);
+const stayMinutes = numArg('stay-minutes', 25);
 const exeArg = argv.find((a) => !a.startsWith('--'));
 const exe = exeArg ? path.resolve(exeArg) : path.join(root, 'release', 'win-unpacked', 'DesktopCat.exe');
 if (!fs.existsSync(exe)) {
@@ -73,7 +79,7 @@ fs.writeFileSync(probeOut, '');
 fs.writeFileSync(probeCmd, '');
 const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(ELECTRON_RUN_AS_NODE|NODE_OPTIONS)$/i.test(k) && !k.toUpperCase().startsWith('DESKTOP_CAT_')));
 
-const result = { exe: path.relative(root, exe), minutes, userData, started: new Date().toISOString(), probe: null, summaries: [], checks: {}, pids: {} };
+const result = { exe: path.relative(root, exe), minutes, userData, started: new Date().toISOString(), probe: null, summaries: [], stays: [], staySummary: null, checks: {}, pids: {} };
 const logFile = path.join(userData, 'logs', 'main.log');
 const logLines = () => {
   try {
@@ -128,8 +134,10 @@ try {
   result.checks.firstUpLoggedAt = upAt;
   result.checks.secondsToFirstUpLog = upAt ? Math.round((Date.parse(upAt) - t0) / 1000) : null;
   if (upAt !== null) {
-    // Let it explore for a while, then take the window away and see it set down on the floor.
+    // Let it explore (real stays need real minutes), then take the window away and see it set down on the floor.
+    const stayT0 = Date.now();
     await sleep(60_000);
+    while (Date.now() - stayT0 < stayMinutes * 60_000 && appExit === null && staysFromLog(logLines()).length < wantStays) await sleep(10_000);
     const closeAt = Date.now();
     fs.writeFileSync(probeCmd, 'quit\n');
     let down = null;
@@ -143,6 +151,8 @@ try {
   }
   const lines = logLines();
   result.summaries = summaries().map((l) => ({ t: l.t, ...l.d }));
+  result.stays = staysFromLog(lines);
+  result.staySummary = summarizeStays(result.stays);
   result.checks.seenOnASide = result.summaries.some((s) => s.support === 'windowSide');
   result.checks.maxExcursions = Math.max(0, ...result.summaries.map((s) => s.excursions ?? 0));
   result.checks.errorLines = lines.filter((l) => l.l === 'error').map((l) => `${l.s}: ${l.m}`);
