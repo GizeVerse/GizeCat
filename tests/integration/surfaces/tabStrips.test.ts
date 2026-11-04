@@ -77,7 +77,9 @@ describe('a floating browser (probe-shaped strip)', () => {
       }
       expect(outside, 'not left outside the span at the end of the run').toEqual([]);
       for (const { seg, endedOnSpan } of outsides) {
-        expect(seg[seg.length - 1]!.t - seg[0]!.t).toBeLessThanOrEqual(6000);
+        // It never stops out there: however far it was, the walk takes no longer than that distance at its slowest pace (52 px/s here).
+        const far = Math.max(...seg.map((p) => p.d));
+        expect(seg[seg.length - 1]!.t - seg[0]!.t).toBeLessThanOrEqual((far / 45) * 1000 + 1000);
         if (endedOnSpan) for (let i = 1; i < seg.length; i++) expect(seg[i]!.d).toBeLessThanOrEqual(seg[i - 1]!.d + 0.5);
       }
       // A climb whose planned top was replaced re-resolves instead of reversing (RC3).

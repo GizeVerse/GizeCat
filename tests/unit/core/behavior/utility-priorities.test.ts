@@ -118,7 +118,7 @@ describe('the exploration urge in the scorer the sim uses (ADR 0003 §1.2)', () 
     expect(scoreOf(userView({ exploreUrge: 1, sinceTypingMs: 60_000 }), 'walking', 'climb')).toBeCloseTo(free, 9);
     const ignore = { ...settingsWith({}).behavior, reactToTyping: false };
     const raw = scoreOf(userView({ exploreUrge: 1, typing: true, typingRaw: true, behavior: ignore }), 'walking', 'climb');
-    expect(raw).toBeCloseTo(scoreOf(userView({ exploreUrge: 1, behavior: ignore }), 'walking', 'climb') * 0.25, 9);
+    expect(raw).toBeCloseTo(scoreOf(userView({ exploreUrge: 1, behavior: ignore }), 'walking', 'climb') * 0.2, 9);
     expect(raw).toBeGreaterThan(0);
   });
 

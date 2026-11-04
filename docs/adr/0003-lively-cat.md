@@ -545,7 +545,7 @@ Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profile
 - **U-play**: the cursor lingers within 6 bw of the cat, erratic, no clicks, 20 % of the time.
 - **U-mouse-work**: a button press every 2–10 s, the cursor commuting, taskbar reveals at the bottom every 1–3 min.
 
-8 seeds × 3 sim-h per cell (2 seeds in calibration loops). A short subset runs in `verify fast` as `tests/integration/behavior/bands-short.test.ts` (L1/P2, 4 seeds × 2 sim-h, binomially widened, wall-time budget ≤ 20 s with a vitest timeout; over budget it moves to the profile tier).
+8 seeds × 3 sim-h per cell (2 seeds in calibration loops). A short subset runs in `verify fast` as `tests/integration/behavior/bands-short.test.ts` (L1/P2, 3 seeds × 1.5 sim-h, binomially widened, wall-time budget ≤ 20 s with a vitest timeout; over budget it moves to the profile tier).
 
 | # | Band (assert) | Metric | Cells |
 |---|---|---|---|

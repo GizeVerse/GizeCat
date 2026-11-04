@@ -2,7 +2,7 @@
 // repetition keys, place novelty, the hunt's readiness; ADR 0003 §1.4), how a chosen candidate
 // starts, and the progress monitor.
 import type { Point } from '../../shared/geometry';
-import { clamp, isFiniteRect, rectCenter } from '../../shared/geometry';
+import { isFiniteRect, rectCenter } from '../../shared/geometry';
 import type { SimEnv } from '../../shared/sim';
 import type { FollowUp } from './activity';
 import type { Candidate, DecisionView } from './decide';
