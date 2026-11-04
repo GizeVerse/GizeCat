@@ -4,9 +4,9 @@
 // re-assert as topmost or close. The user's windows are never touched; every lively spec also
 // calls restrictSurfacesToPids([own pids]) so they never become surfaces.
 //
-//   - openFormWindow: a WinForms window in its own PowerShell process (-STA, per-monitor DPI
-//     aware, so its bounds are physical px), driven through a command file like the Electron probe
-//     window of surfaces.spec.ts; it ends by itself when the test process dies.
+//   - openOwnWindow: an Electron window in its own process, driven through a command file like the
+//     probe window of surfaces.spec.ts; shown without activation, no taskbar button; it ends by
+//     itself when the test process dies.
 //   - openTerminalWindow: a named Windows Terminal window (wt -w dcat-e2e-<rand>) with
 //     self-ending tabs; only its own HWND is closed (one process hosts every Terminal window, so
 //     process exit is never asserted and a Terminal already running for the user is a skip).
@@ -77,6 +77,14 @@ export function rectOf(hwnd: string): Rect | null {
   return r ? { x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top } : null;
 }
 
+/** The visible frame of a window (DWM extended frame bounds, else GetWindowRect), physical px. */
+export function frameOf(hwnd: string): Rect | null {
+  const n = loadWin32Native();
+  const h = BigInt(hwnd);
+  const r = n.getExtendedFrameBounds(h) ?? n.getWindowRect(h);
+  return r ? { x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top } : null;
+}
+
 /** Waits for windows of `className` that were not in `before` (the window-list diff). */
 export async function newWindowsOfClass(className: string, before: ReadonlySet<string>, timeoutMs = 20_000): Promise<TopWindow[]> {
   const t0 = Date.now();
@@ -113,92 +121,106 @@ export function closeOwnWindow(hwnd: string): boolean {
   return ownNative().scClose(BigInt(hwnd));
 }
 
-// ------------------------------------------------------------------ WinForms window (own PowerShell process)
+// ------------------------------------------------------------------ Own Electron window (own process)
 
-const FORM_SCRIPT = String.raw`
-param([string]$OutFile, [string]$CmdFile, [int]$ParentPid, [string]$Layout, [int]$X, [int]$Y, [int]$W, [int]$H, [int]$Topmost)
-$ErrorActionPreference = 'Stop'
-Add-Type -Namespace DcatE2e -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(System.IntPtr v);'
-[void][DcatE2e.Dpi]::SetProcessDpiAwarenessContext([System.IntPtr](-4))
-Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object System.Windows.Forms.Form
-$f.Text = 'Desktop Cat end-to-end test window'
-$f.StartPosition = 'Manual'
-$f.ShowInTaskbar = $true
-$f.BackColor = [System.Drawing.Color]::White
-$label = New-Object System.Windows.Forms.Label
-$label.Text = 'Desktop Cat end-to-end test window. It closes by itself; please leave it where it is.'
-$label.AutoSize = $true
-$label.Left = 40; $label.Top = 40
-$f.Controls.Add($label)
-$f.Bounds = New-Object System.Drawing.Rectangle($X, $Y, $W, $H)
-if ($Layout -eq 'maximized') { $f.WindowState = 'Maximized' }
-if ($Topmost -eq 1) { $f.TopMost = $true }
-$seq = 0
-$done = 0
-$report = {
-  $r = $f.Bounds
-  $o = @{ seq = $script:seq; hwnd = $f.Handle.ToInt64().ToString(); pid = $PID; frame = @{ x = $r.X; y = $r.Y; width = $r.Width; height = $r.Height }; state = $f.WindowState.ToString() }
-  Add-Content -Path $OutFile -Value (ConvertTo-Json -Compress -InputObject $o)
+// A separate Electron process, to the cat an ordinary app window. Shown without activation and
+// without a taskbar button: a background process cannot take the foreground, and a refused
+// activation flashes the taskbar button, which keeps an auto-hide taskbar revealed and so changes
+// what the cat sees. It says what it is, cannot be moved by hand, and ends by itself when the test
+// process goes.
+const OWN_WINDOW_SCRIPT = String.raw`
+const fs = require('node:fs');
+const { app, BrowserWindow, screen } = require('electron');
+const out = process.env.DCAT_WIN_OUT, cmdFile = process.env.DCAT_WIN_CMD, parentPid = Number(process.env.DCAT_WIN_PARENT);
+const layout = process.env.DCAT_WIN_LAYOUT, rect = process.env.DCAT_WIN_RECT ? JSON.parse(process.env.DCAT_WIN_RECT) : null;
+const write = (o) => fs.appendFileSync(out, JSON.stringify(o) + '\n');
+process.on('uncaughtException', (e) => { try { write({ error: String((e && e.stack) || e) }); } finally { app.exit(1); } });
+function bounds() {
+  const d = screen.getPrimaryDisplay();
+  const wa = d.workArea;
+  if (rect) return screen.screenToDipRect(null, rect);
+  if (layout !== 'typical') return { x: wa.x + 80, y: wa.y + 80, width: Math.round(wa.width * 0.6), height: Math.round(wa.height * 0.6) };
+  // About 70 % of the primary work area, centred, its bottom edge ~180 px above the work-area bottom.
+  const width = Math.round(wa.width * 0.7);
+  const bottom = wa.y + wa.height - Math.round(180 / d.scaleFactor);
+  const height = Math.min(Math.round(wa.height * 0.7), bottom - wa.y - Math.round(120 / d.scaleFactor));
+  return { x: wa.x + Math.round((wa.width - width) / 2), y: bottom - height, width, height };
 }
-$timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 100
-$timer.Add_Tick({
-  if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { $f.Close(); return }
-  $lines = @()
-  if (Test-Path $CmdFile) { $lines = @(Get-Content $CmdFile) }
-  for (; $script:done -lt $lines.Count; $script:done++) {
-    $c = ConvertFrom-Json $lines[$script:done]
-    if ($c.op -eq 'quit') { $f.Close(); return }
-    if ($c.op -eq 'maximize') { $f.WindowState = 'Maximized' }
-    if ($c.op -eq 'restore') { $f.WindowState = 'Normal' }
-    if ($c.op -eq 'minimize') { $f.WindowState = 'Minimized' }
-    if ($c.op -eq 'move') { $f.Bounds = New-Object System.Drawing.Rectangle([int]$c.x, [int]$c.y, [int]$c.width, [int]$c.height) }
-    if ($c.op -eq 'front') { $f.TopMost = $true; $f.TopMost = ($Topmost -eq 1) }
-    $script:seq = $script:done + 1
-    & $report
-  }
-})
-$f.Add_Shown({ & $report; $timer.Start() })
-[System.Windows.Forms.Application]::Run($f)
+app.whenReady().then(() => {
+  const fixed = layout === 'maximized' || layout === 'hidden' ? {} : { movable: false, resizable: false, minimizable: false, maximizable: false };
+  const w = new BrowserWindow({ ...bounds(), ...fixed, show: false, skipTaskbar: true, alwaysOnTop: true, backgroundColor: '#ffffff', title: 'dcat-e2e' });
+  w.loadURL('data:text/html,' + encodeURIComponent('<!doctype html><meta charset="utf-8"><body style="font:20px sans-serif;margin:40px">Desktop Cat end-to-end test window. It closes by itself within a few minutes; please leave it where it is.</body>'));
+  if (layout === 'maximized') w.maximize();
+  else if (layout !== 'hidden') w.showInactive();
+  const hwnd = w.getNativeWindowHandle().readBigUInt64LE(0).toString();
+  let seq = 0;
+  const report = () => write({ seq, hwnd, pid: process.pid, state: w.isMinimized() ? 'minimized' : w.isMaximized() ? 'maximized' : w.isVisible() ? 'normal' : 'hidden' });
+  setTimeout(report, 800);
+  let done = 0;
+  setInterval(() => {
+    try { process.kill(parentPid, 0); } catch { app.exit(0); return; }
+    let lines = [];
+    try { lines = fs.readFileSync(cmdFile, 'utf8').split('\n').filter(Boolean); } catch { return; }
+    for (; done < lines.length; done++) {
+      const c = JSON.parse(lines[done]);
+      if (c.op === 'quit') { app.exit(0); return; }
+      if (c.op === 'maximize') w.maximize();
+      if (c.op === 'restore') w.restore();
+      if (c.op === 'minimize') w.minimize();
+      seq = done + 1;
+      setTimeout(report, 300);
+    }
+  }, 50);
+});
 `;
 
-export interface FormReport {
+export interface OwnWindowReport {
   seq: number;
   hwnd: string;
   pid: number;
-  frame: Rect;
   state: string;
 }
 
-export interface FormWindow {
+export interface OwnWindow {
   proc: ChildProcess;
-  /** The report answering the latest command (or the first one, after it was shown). */
-  next(): Promise<FormReport>;
-  send(cmd: { op: 'quit' | 'maximize' | 'restore' | 'minimize' | 'front' } | ({ op: 'move' } & Rect)): void;
+  /** The report answering the latest command (or the first one, after it was created). */
+  next(): Promise<OwnWindowReport>;
+  send(cmd: { op: 'maximize' | 'restore' | 'minimize' }): void;
+  /** Asks it to quit, ends it if it does not, deletes its profile; resolves once it has exited. */
   close(): Promise<void>;
 }
 
-/** A WinForms window in its own process: 'maximized', or floating at `rect` (physical px). */
-export function openFormWindow(dir: string, o: { layout: 'maximized' | 'floating'; rect?: Rect; topmost?: boolean }): FormWindow {
-  const script = path.join(dir, 'dcat-form.ps1');
-  const outFile = path.join(dir, `form-out-${crypto.randomBytes(3).toString('hex')}.jsonl`);
-  const cmdFile = `${outFile}.cmd`;
-  fs.writeFileSync(script, FORM_SCRIPT);
+/**
+ * 'typical': about 70 % of the work area, its bottom ~180 px above the floor. 'floating': at `rect`
+ * (physical px). 'maximized': maximized at once. 'hidden': created but not shown (send 'maximize' to
+ * bring it up in a fraction of a second, for the covered-support case).
+ */
+export function openOwnWindow(o: { layout: 'typical' | 'floating' | 'maximized' | 'hidden'; rect?: Rect }): OwnWindow {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dcat-e2e-own-'));
+  const script = path.join(dir, 'own-window.cjs');
+  const outFile = path.join(dir, 'out.jsonl');
+  const cmdFile = path.join(dir, 'cmd.jsonl');
+  fs.writeFileSync(script, OWN_WINDOW_SCRIPT);
   fs.writeFileSync(outFile, '');
   fs.writeFileSync(cmdFile, '');
-  const r = o.rect ?? { x: 300, y: 160, width: 1000, height: 800 };
-  const args = ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File', script, '-OutFile', outFile, '-CmdFile', cmdFile, '-ParentPid', String(process.pid), '-Layout', o.layout, '-X', String(r.x), '-Y', String(r.y), '-W', String(r.width), '-H', String(r.height), '-Topmost', o.topmost ? '1' : '0'];
-  const proc = spawn('powershell.exe', args, { stdio: 'ignore', windowsHide: false });
+  const env: Record<string, string> = {};
+  // Not the test runner's Node options (its TS loader) nor this app's switches.
+  const skip = (k: string): boolean => /^(ELECTRON_RUN_AS_NODE|NODE_OPTIONS)$/i.test(k) || k.toUpperCase().startsWith('DESKTOP_CAT_');
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !skip(k)) env[k] = v;
+  Object.assign(env, { DCAT_WIN_OUT: outFile, DCAT_WIN_CMD: cmdFile, DCAT_WIN_PARENT: String(process.pid), DCAT_WIN_LAYOUT: o.layout, DCAT_WIN_RECT: o.rect ? JSON.stringify(o.rect) : '', ELECTRON_ENABLE_LOGGING: '0' });
+  const root = path.resolve(__dirname, '..', '..');
+  const exe = path.join(root, 'node_modules', 'electron', 'dist', fs.readFileSync(path.join(root, 'node_modules', 'electron', 'path.txt'), 'utf8').trim());
+  const proc = spawn(exe, [script, `--user-data-dir=${path.join(dir, 'profile')}`], { env, stdio: 'ignore' });
   const exited = new Promise<void>((resolve) => proc.once('exit', () => resolve()));
   let sent = 0;
-  const reports = (): FormReport[] =>
+  const reports = (): Array<OwnWindowReport | { error: string }> =>
     fs
       .readFileSync(outFile, 'utf8')
       .split(/\r?\n/)
       .flatMap((l) => {
+        // A line still being written is skipped until it is complete.
         try {
-          return l ? [JSON.parse(l) as FormReport] : [];
+          return l ? [JSON.parse(l) as OwnWindowReport | { error: string }] : [];
         } catch {
           return [];
         }
@@ -208,9 +230,12 @@ export function openFormWindow(dir: string, o: { layout: 'maximized' | 'floating
     next: async () => {
       const deadline = Date.now() + 20_000;
       for (;;) {
-        const rep = reports().find((x) => x.seq === sent);
+        const all = reports();
+        const failed = all.find((x): x is { error: string } => 'error' in x);
+        if (failed) throw new Error(`own window failed: ${failed.error}`);
+        const rep = all.find((x): x is OwnWindowReport => 'seq' in x && x.seq === sent);
         if (rep) return rep;
-        if (proc.exitCode !== null || Date.now() > deadline) throw new Error(`form window did not report (exit ${String(proc.exitCode)})`);
+        if (proc.exitCode !== null || Date.now() > deadline) throw new Error(`own window did not report (exit ${String(proc.exitCode)})`);
         await sleep(100);
       }
     },
@@ -219,13 +244,15 @@ export function openFormWindow(dir: string, o: { layout: 'maximized' | 'floating
       fs.appendFileSync(cmdFile, `${JSON.stringify(cmd)}\n`);
     },
     close: async () => {
-      if (proc.exitCode !== null || proc.signalCode !== null) return;
-      fs.appendFileSync(cmdFile, '{"op":"quit"}\n');
-      const quit = await Promise.race([exited.then(() => true), sleep(5000).then(() => false)]);
-      if (!quit) {
-        proc.kill();
-        await exited;
+      if (proc.exitCode === null && proc.signalCode === null) {
+        fs.appendFileSync(cmdFile, '{"op":"quit"}\n');
+        const quit = await Promise.race([exited.then(() => true), sleep(5000).then(() => false)]);
+        if (!quit) {
+          proc.kill();
+          await exited;
+        }
       }
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     },
   };
 }
