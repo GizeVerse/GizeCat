@@ -312,7 +312,7 @@ class Tracker {
       this.stays.push({ ...done, open: false });
       this.cur = null;
     }
-    if (elevated && out) this.cur = { id: id as string, fromSim: o.simNow, toSim: o.simNow, pathPx: 0, updates: 0, open: true, lastRelX: out.x - originX };
+    if (elevated && out) this.cur = { id: id, fromSim: o.simNow, toSim: o.simNow, pathPx: 0, updates: 0, open: true, lastRelX: out.x - originX };
   }
 
   /** Polls until `pred` holds or a budget runs out. */
@@ -575,7 +575,10 @@ for (const kind of BROWSERS) {
         expect(summary.medianS, 'median stay, sim-s').toBeGreaterThanOrEqual(90);
         expect(summary.byReason.gone ?? 0, 'stays lost to a geometry update').toBe(0);
         expect(summary.byReason.covered ?? 0, 'stays lost to a cover').toBe(0);
-        expect(Object.keys(summary.byLeave).length, 'departure kinds').toBeGreaterThanOrEqual(2);
+        // Voluntary departures happened (`done` needs them). Variety is band B4 on a two-window layout: one
+        // tall window offers only climbDown and climbLeap, so 3 departures can all be the likelier one.
+        expect(Object.keys(summary.byLeave).length, 'departure kinds').toBeGreaterThanOrEqual(1);
+        for (const k of Object.keys(summary.byLeave)) expect(['climbDown', 'climbLeap', 'jumpDown', 'hop', 'walkOff'], 'a known way off').toContain(k);
         expect(Math.max(0, ...walked), 'walked along the strip (px)').toBeGreaterThanOrEqual(bw);
         expect(tr.stays.filter((s) => s.id === stripId).reduce((n, s) => n + s.updates, 0), 'geometry updates while the cat stood on the strip').toBeGreaterThan(0);
         assertNoPhysicsErrors(tr.last!.profile);
@@ -1201,13 +1204,20 @@ test.describe('v1.2 lively: sound releases the audio device (REAL renderer, OS c
       const ok = await hook(app, 'patchSettings', { sound: { enabled: true, volume: 0.05 } });
       expect(ok.ok).toBe(true);
       await hook(app, 'setTimeScale', 4);
-      // Cues come from what the cat does: a call, then whatever it does next.
+      // Cues come from what the cat does: a call, and hard landings from throws through the real drag path.
+      const { scale } = await scaleOf(app);
+      const ov = (await hook(app, 'getOverlays'))[0]!;
       const t0 = Date.now();
       let cues = 0;
+      let throws = 0;
       while ((await audio()).created === 0 && Date.now() - t0 < 90_000) {
         await hook(app, 'injectEvent', { type: 'command.callCat', at: { x: 900, y: 600 } });
         const o = (await observe(app)).out;
         if (o?.sound) cues++;
+        if (o?.support.kind === 'floor' && !['held', 'falling', 'landing', 'jumping'].includes(o.state)) {
+          await throwOnce(app, page, ov, scale, { x: (throws % 2 === 0 ? 1 : -1) * 160, y: -112 });
+          throws++;
+        }
         await sleep(1000);
       }
       const opened = await audio();
