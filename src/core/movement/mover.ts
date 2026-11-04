@@ -1888,6 +1888,7 @@ export class Mover {
       nx = targetX;
       this.vx = 0;
     }
+    let blocked = false;
     if (nx > range.x1 || nx < range.x0) {
       const dir: 1 | -1 = nx > range.x1 ? 1 : -1;
       if (stepOffDir === dir) {
@@ -1903,6 +1904,7 @@ export class Mover {
       }
       nx = clamp(nx, range.x0, range.x1);
       this.vx = 0;
+      blocked = true;
     }
     this.x = nx;
     this.applySupportY(dt);
@@ -1911,6 +1913,13 @@ export class Mover {
     if (!this.goal || !this.leg) return;
     const leg = this.leg;
     const settled = Math.abs(this.vx) < 1;
+    // v1.2 (ADR 0003 §6.8, B14): the take-off point went out of the walk range on the way (a window came to cover
+    // that part): a plan it can never finish, so it says so instead of 'moving' at the end of what is left.
+    const standX = leg.kind === 'jump' ? leg.takeoffX : leg.kind === 'climbUp' ? leg.standX : null;
+    if (blocked && standX !== null && Math.abs(this.x - standX) > 1) {
+      out.goal = 'unreachable';
+      return;
+    }
     switch (leg.kind) {
       case 'jump':
         if (Math.abs(this.x - leg.takeoffX) <= 1 && settled) {
@@ -1936,6 +1945,11 @@ export class Mover {
         return;
       case 'climbDown':
         if (Math.abs(this.x - leg.cornerX) <= 1 && settled) this.startClimbDown(leg, input, out);
+        // v1.2 (B14): the top or strip now ends short of the corner: as with a take-off cut off above.
+        else if (Math.abs(this.x - targetX) <= 1 && settled && Math.abs(leg.cornerX - targetX) > 1) {
+          out.goal = 'unreachable';
+          return;
+        }
         out.goal = 'moving';
         return;
       case 'walk':

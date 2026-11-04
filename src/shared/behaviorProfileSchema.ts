@@ -57,6 +57,7 @@ const ExcursionRecordSchema = z.strictObject({
   leaveKind: z.nullable(z.enum(LEAVE_KINDS)),
   bailOut: z.optional(z.nullable(z.enum(BAIL_OUT_KINDS))),
   resumed: z.optional(z.boolean()),
+  overdue: z.optional(z.boolean()),
 });
 
 export const BehaviorProfileSchema = z.strictObject({

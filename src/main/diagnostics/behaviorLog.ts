@@ -50,6 +50,8 @@ export interface StayLine {
   leave: LeaveKind | null;
   arrivedBy: ArrivalRoute | 'other';
   bailOut: BailOutKind | null;
+  /** It ran well past its plan (only present when it did). */
+  overdue?: true;
   /** Stays since the previous line that the rate limit kept out of the log. */
   suppressed?: number;
 }
@@ -86,6 +88,7 @@ export function stayLine(r: ExcursionRecord): StayLine {
     leave: pick(LEAVE_KINDS, r.leaveKind),
     arrivedBy: pick(ARRIVAL_ROUTES, r.arrivedBy) ?? 'other',
     bailOut: pick(BAIL_OUT_KINDS, r.bailOut),
+    ...(r.overdue === true ? { overdue: true as const } : {}),
   };
 }
 

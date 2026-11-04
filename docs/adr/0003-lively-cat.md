@@ -134,6 +134,8 @@ When an episode ends, the next is active with probability σ(4·(D − 0.5)):
 
 Worked (UNVERIFIED): defaults D ≈ 0.37, P(active) ≈ 0.37, 52 s active against 106 s calm → ≈ 22 % active-episode time; the user's cat (A 0.8, energyLevel 0.54) D ≈ 0.43 → ≈ 32 %. Both inside B1 (20–35 %), which stays the assertion (resolves the old Q4). Because nₑ grows ×0.3 without an opportunity, the maximized-window state no longer saturates the explore need (B1b).
 
+**Calibrated (BEH-c, the bands win; SIMULATED).** The implementation adds 0.3 to D, active episodes run ×1.3 and calm picks weigh ×0.1 in an active episode (B1). **Nothing to climb** (a maximized window in front, or nothing in reach to go up onto: `nothingToClimb`): D − 0.3 and nₑ left out of the max. That is the fix for the restless empty desktop: nothing there satisfies the explore need, it saturated and kept D and the walk candidates up (P1/L4 53 % active, 28 % of the time walking; B1c).
+
 ### 1.7 Mischief (unobtrusive by construction)
 
 Mischief reweights existing acts and adds no new way to get in the way. All acts need m > 0.15 (none at Calm), fire with probability ∝ m, and pass the typing, click, petting and T8 gates (§4.3) and their sub-act gates:
@@ -218,23 +220,24 @@ It takes off after a 120 ms crouch, ≤ 0.6 s after the cover, and reports `Move
 
 ### 4.1 Prey salience (4 Hz)
 
-`q = inStartBand · move · (1 + 0.3·erratic) · still`, q̂ = q·prox with **prox = 1/(1 + (dx/4 bw)²)**:
+`q = inWatchBand · max(move · (1 + 0.3·erratic) · still + flick, presence)`, q̂ = q·prox with **prox = 1/(1 + (dx/4 bw)²)**:
 
 - move = clamp(v/400), v the cursor speed in DIP/s (v < 30 counts as 0); erratic = 1 if the direction turned > 90° within 400 ms; still = 0 once `cursorIdleMs` > 1500 (except during a running crouch, §4.2); `cursor.flick` adds 0.5.
+- **presence = 0.8 until the cursor has rested 20 s** (BEH-c). A cursor merely hanging around is what ordinary use offers: movement in the start band alone peaked the drive at 0.15 against a threshold of 0.45-0.55 (P2/L1/U-active, 0 hunts/h, SIMULATED).
 - **Watch band** (watchingCursor, `cursorInReach` context): 14 bw horizontally, 0.6 bh below to 4.5 bh above the feet, same display, not off limits.
 - **Start band** (hunts): the watch band with dy ≤ 2.5 bh above the feet.
 
 ### 4.2 Start and phases
 
-A hunt starts when h > **θ_h = 0.55 − 0.15·H − 0.05·m (+ 0.3·(1 − W) while the cursor is inside the foreground window)**, the cooldown U(4, 7) min·(1.6 − H) has elapsed and no gate (§4.3) holds. It interrupts calm activities only. The scheduler's hunt candidate uses the same threshold and cooldown (one start path).
+A hunt starts when h > **θ_h = 0.4 − 0.15·H − 0.05·m (+ 0.1·(1 − W) while the cursor is inside the foreground window)**, the cooldown U(4, 7) min·(1.6 − H) has elapsed and no gate (§4.3) holds. The drive follows q̂ with gain k_h = 0.34·H·(0.6 + 0.8·playfulness)·(0.6 + 0.8·nₚ) and τ 45 s, and keeps building through a press hold (only a button held down, or typing, stops it). It interrupts calm activities only. The scheduler's hunt candidate uses the same threshold and cooldown (one start path). (Started at 0.55 and 0.3, k_h 0.2, τ 30 s; calibrated against B5 and B5d, SIMULATED.)
 
 | Phase | Rule | Clip |
 |---|---|---|
 | notice | 0.4–1.2 s; ears forward, look | sit / crouch |
 | approach | low trot at `chase` pace until 4 bw from the cursor's projection | walk / run |
-| stalk | `stalk` pace (24 DIP/s) for at most 6 s toward 1.5–2.5 bw short of the hotspot (measured from the hit region's front), pausing 0.3–1 s every 1–2 bw | `stalk` |
-| crouch | 600–1600 ms, wiggle visible from 0 s. **A still cursor keeps the crouch alive (wiggling) up to 6 s; its next movement > 30 DIP/s within reach triggers the pounce** | `crouch` |
-| pounce | `Mover.pounceAt` with `frontExtentPx = HIT_FRONT_EXTENT_DIP.pounce·size·scale` and `shortPx = max(0.35 bw, hysteresis + HIT_CLEARANCE_DIP)`: the hit region lands ≥ 8 DIP + hysteresis short of the hotspot (≈ 0.85–1.0 bw of anchor clearance). ≤ 3.2 bw | `pounce` (jumpKind `pounce`) |
+| stalk | `stalk` pace (24 DIP/s) for at most 6 s toward 1.5–2.5 bw short of the hotspot (measured from the hit region's front), pausing 0.3–1 s every 1–2 bw. Prey already within a pounce's reach: 1.2 s of it, then the crouch | `stalk` |
+| crouch | 600–1600 ms, wiggle visible from 0 s. **A still cursor keeps the crouch alive (wiggling) for a wait drawn per cycle, U(2.5, 6) s; its next movement > 30 DIP/s within reach triggers the pounce.** Prey out of the start band for 1 s: a stalk turns into this crouch, lying low for it, instead of ending the hunt. At the end of the wait it leaps 85 % of the time, at the cursor or at the place the prey left (a miss like any other), else it loses interest; a press still too recent for the leap holds it up to 3 s more | `crouch` |
+| pounce | `Mover.pounceAt` with `frontExtentPx = HIT_FRONT_EXTENT_DIP.pounce·size·scale` and `shortPx = max(0.35 bw, hysteresis + HIT_CLEARANCE_DIP)`: the hit region lands ≥ 8 DIP + hysteresis short of the hotspot (≈ 0.85–1.0 bw of anchor clearance). ≤ 3.2 bw; prey past the end of what it stands on gets a shorter leap, 0.2 bw inside the end (no leap under 0.3 bw) | `pounce` (jumpKind `pounce`) |
 | jump-swat | cursor 1.2–2.5 bh above: a vertical hop with a swat at the apex (jumpKind `up`), same cooldown and clearance (`huntJumpSwat`) | `jump` + `swat` |
 | bat | pawAt 0.6–1.5 s, or `swat` within 0.8 bw — **only when the paw's maximum reach (`HIT_FRONT_EXTENT_DIP.pawAt/swat`) stays ≥ 8 DIP + hysteresis short of the hotspot**; otherwise a look or a tail lash (`huntBat`) | `pawAt` / `swat` |
 | next | caught = the cursor within 1 bw of the paw point at landing. Re-stalk if the cursor still moves in the start band, h > 0.35, f < 0.6 and < 3 cycles have run; otherwise lose interest (sit and look away 40 %, groom 25 % if allowed, walk away 35 %) | — |
@@ -246,9 +249,9 @@ A hunt starts when h > **θ_h = 0.55 − 0.15·H − 0.05·m (+ 0.3·(1 − W) w
 No hunt starts, and a running one ends within 0.5 s (`HuntRecord.gate`), when any of these holds:
 
 - **typing**: `typingRaw = env.typing || env.typingIntensity > 0.35`, or less than 3 s since it ended. This raw signal drives every "never in the way" gate (hunt start/abort, pounce, swat, mischief, play near the cursor, the 3 s hold, W) **whatever `reactToTyping` says**; that setting governs only the typing reactions.
-- **buttons**: `pointerButtonDown`, or a press (`env.pointerButtonPresses` increased) within the last 6 s; a press during a hunt ends it (`click`).
+- **buttons**: `pointerButtonDown`, or a press (`env.pointerButtonPresses` increased) too recent: **6 s** close to the cat; **2 s** with the press and the cursor both more than 4 bw from it (nothing the cat does reaches them); **10.5 s** for a hand at work, 3 presses within 30 s and moved within the last 3 s, wherever it is (a hand that has come to rest has stopped working). A press within 1 s, or the button down, close to the cat ends a running hunt (`click`); a press far from it only holds the leap back (2 s). This is what ordinary use needed: U-active presses about 680 times an hour, and a flat 6 s hold rejected more of the time in the start band than every other gate together (SIMULATED).
 - **petting zone**: the cursor within the cat's hit rect grown by 0.5 bw, `beingPetted`, and 3 s after petting: q̂ = 0 and h relaxes with τ 5 s.
-- **taskbar**: a taskbar shown, less than 1 s since it hid, or the cursor inside a taskbar's band (the user's bottom auto-hide reveal).
+- **taskbar**: a taskbar shown, less than **10 s** since it hid (the hand that used it is at work; 1 s to begin with, 14 % of the U-mouse-work hunts started within 15 s of one, SIMULATED), or the cursor inside a taskbar's band (the user's bottom auto-hide reveal).
 - **strip and caption**: the cursor inside the container of a strip the cat stands on or next to, or in the caption band (top 1 bh) of the window it stands on.
 - `chaseCursor` off, or H = 0; w > 0.3 or fear > 0.3; asleep, away, paused, quiet or fullscreen; a command.
 

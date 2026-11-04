@@ -137,6 +137,8 @@ export interface ExcursionRecord {
   bailOut?: BailOutKind | null;
   /** 'arrive': this stay resumes one a cover or a vanished window cut short (ADR 0003 §2.4 resume token). */
   resumed?: boolean;
+  /** 'end': it ran more than STAY_OVERDUE_MS past its plan (a leave kept failing or was put off). */
+  overdue?: boolean;
 }
 
 export interface FallRecord {

@@ -55,6 +55,7 @@ describe("'stay ended' line", () => {
     const line = stayLines(log)[0]!.data!;
     expect(Object.keys(line).sort()).toEqual(['arrivedBy', 'bailOut', 'dwellS', 'kind', 'leave', 'plannedS', 'reason']);
     expect(line).toMatchObject({ reason: 'covered', bailOut: 'hop', leave: null });
+    expect(stayLine({ ...stay(1), overdue: true }).overdue).toBe(true);
   });
 
   it('maps values outside the contract to other / null instead of passing them through', () => {

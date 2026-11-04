@@ -44,7 +44,7 @@ export const RHYTHM_D_OFFSET = 0.3;
  * one. Without it, and with no stay to sit through, the empty desktop measured 53 % (P1) and 39 % (P2, SIMULATED);
  * the other half of the cause: an explore need nothing can satisfy saturates, so the sim leaves it out of D there.
  */
-export const RHYTHM_NOTHING_TO_CLIMB_DAMP = 0.32;
+export const RHYTHM_NOTHING_TO_CLIMB_DAMP = 0.3;
 /**
  * Active episodes run this much longer than the ADR's starting U(25, 75) s: with the cat up on window tops a
  * third or more of the time the default cat measured 17-18 % against B1's 20-35 % (SIMULATED, 3 seeds x 2 sim-h).

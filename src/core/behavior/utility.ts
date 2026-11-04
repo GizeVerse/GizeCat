@@ -36,7 +36,7 @@ const QUIET_CALM_MUL = 5;
 const TRIP_BASE = 0.2;
 const TYPING_TRIP_MUL = 0.6;
 /** With 'React to typing' off nothing else damps a trip while the user types (§1.4 reads the raw signal here). */
-const TYPING_TRIP_RAW_MUL = 0.25;
+const TYPING_TRIP_RAW_MUL = 0.2;
 const TYPING_TRIP_RECENT_MS = 30_000;
 const TYPING_TRIP_RECENT_MUL = 0.35;
 const PATROL_MIN_RHYTHM = 0.8;

@@ -7,6 +7,7 @@ import { PHYSICS_ERROR_CAUSES } from '../../../../src/shared/behaviorProfile';
 import type { Traits } from '../../../../src/shared/catState';
 import type { ScreenEdgeBand } from '../../../../src/shared/surfaces';
 import { mulberry32, newPersistedCat } from '../../../../src/core/behavior';
+import { STAY_OVERDUE_MS } from '../../../../src/core/behavior/stay';
 import { callCat, Harness, ledge, onWindowTop, settingsWith, stripId, tabStrip, WAKE_MS } from './fixtures';
 
 const MIN = 60_000;
@@ -289,6 +290,27 @@ describe('covered and vanished supports (ADR 0003 §2.4, §3)', () => {
     const end = records.find((r) => r.phase === 'end');
     expect(end).toMatchObject({ endReason: 'stimulus' });
     expect(falls).toEqual([]);
+  });
+
+  it('a stay long past its plan says so when it ends; one that kept to it does not', () => {
+    const ends = (lateMs: number): ExcursionRecord | undefined => {
+      const records: ExcursionRecord[] = [];
+      const h = new Harness({ seed: 6, persisted: catWith(6), hooks: { onExcursion: (r) => records.push(r) } });
+      h.env.windows = { w: { x: 700, y: 700, width: 6 * BW, height: 340 } };
+      h.run(WAKE_MS);
+      callCat(h, { x: 700 + 3 * BW, y: 600 });
+      expect(h.runUntil((o) => onWindowTop(o.support, 'w'), 30_000)).toBe(true);
+      // A plan already used up and a leave put off for as long as the test wants.
+      const st = (h.sim as unknown as { stay: { plannedMs: number; since: number; nextLeaveAt: number } }).stay;
+      st.plannedMs = 1000;
+      st.nextLeaveAt = h.now + lateMs + 1000;
+      h.run(lateMs, 100, (hh) => present(hh, 1));
+      h.env.windows = {};
+      h.run(3000);
+      return records.find((r) => r.phase === 'end');
+    };
+    expect(ends(STAY_OVERDUE_MS + 5000)?.overdue).toBe(true);
+    expect(ends(5000)?.overdue).toBeUndefined();
   });
 
   it('flight with room: it runs along the surface, the stay goes on', () => {

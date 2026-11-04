@@ -100,7 +100,7 @@ interface Inner {
   cat: { drives: { huntDrive: number } };
 }
 const running = (h: Harness): boolean => h.last!.state === 'chasingCursor';
-const huntPhase = (h: Harness): string | null => h.sim.debugInfo().phase ?? null;
+const huntPhase = (h: Harness): unknown => h.sim.debugInfo().phase;
 
 /** Rests the cursor `dxBw` body widths from the cat and keeps the user around, nudging it now and then, until a hunt runs. */
 function untilHunt(h: Harness, dxBw: number, maxMs = 15 * MIN): boolean {
@@ -259,7 +259,7 @@ describe('a press during a hunt (ADR 0003 §4.3)', () => {
             presses.push(hh.now + seed * 1e9);
           }
         });
-        for (const r of hunts) for (const t of r.pounceTimes) pounces.push(t + seed * 1e9);
+        for (const r of hunts) for (const t of r.pounceTimes ?? []) pounces.push(t + seed * 1e9);
       }
       expect(pounces.length, `dx ${dx}`).toBeGreaterThan(0);
       const hold = dx < 4 ? PRESS_HOLD_MS : PRESS_HOLD_FAR_MS;

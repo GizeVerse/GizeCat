@@ -144,6 +144,7 @@ export abstract class SimStay extends SimDrives {
           endReason,
           leaveKind: endReason === 'leave' ? leaveKind : null,
           ...(endReason === 'covered' || endReason === 'gone' ? { bailOut: st.bailOut } : {}),
+          ...(st.overdue ? { overdue: true } : {}),
         });
         this.stay = null;
       }
@@ -215,10 +216,8 @@ export abstract class SimStay extends SimDrives {
     // A strong social need ends the stay early, at least 60 s in (ADR 0003 §2.4).
     const lonely = elapsed >= STAY_LONELY_MIN_MS && this.cat.drives.socialNeed > STAY_LONELY_NEED && !this.disabled.has('seekAttention');
     st.forcedLeave = lonely && elapsed < st.plannedMs;
-    if ((elapsed < Math.min(st.plannedMs, STAY_HARD_CAP_MS) && !lonely) || this.now < st.nextLeaveAt) {
-      if (!st.overdue && elapsed > st.plannedMs + STAY_OVERDUE_MS) st.overdue = true;
-      return;
-    }
+    if (!st.overdue && elapsed > st.plannedMs + STAY_OVERDUE_MS) st.overdue = true;
+    if ((elapsed < Math.min(st.plannedMs, STAY_HARD_CAP_MS) && !lonely) || this.now < st.nextLeaveAt) return;
     if (s === 'beingPetted') {
       st.nextLeaveAt = this.now + range(this.random, LEAVE_DEFER_PETTED_MS[0], LEAVE_DEFER_PETTED_MS[1]);
       return;
