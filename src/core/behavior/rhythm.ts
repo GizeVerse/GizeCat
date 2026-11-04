@@ -27,8 +27,8 @@ export interface RhythmContext {
   busySwitching: boolean;
   video: boolean;
   night: boolean;
-  /** A maximized window in front. */
-  maximized?: boolean;
+  /** Nothing to go up onto but the screen edges: a maximized window in front, an empty desktop. */
+  nothingToClimb?: boolean;
 }
 
 /**
@@ -39,10 +39,11 @@ export interface RhythmContext {
  */
 export const RHYTHM_D_OFFSET = 0.25;
 /**
- * A maximized window in front (the user's commonest state, B1b): nothing to explore but the floor and
- * the screen edges, so the cat leans calm there; its active share stays at or below the floating-window one.
+ * Nothing to explore but the floor and the screen edges (a maximized window in front, the user's commonest
+ * state, B1b; an empty desktop, L4): the cat leans calm there, its active share at or below the floating-window
+ * one. Without it, and with no stay to sit through, the empty desktop measured 53 % (P1) and 39 % (P2, SIMULATED).
  */
-export const RHYTHM_MAXIMIZED_DAMP = 0.25;
+export const RHYTHM_NOTHING_TO_CLIMB_DAMP = 0.25;
 /**
  * Active episodes run this much longer than the ADR's starting U(25, 75) s: with the cat up on window tops a
  * third or more of the time the default cat measured 17-18 % against B1's 20-35 % (SIMULATED, 3 seeds x 2 sim-h).
@@ -62,7 +63,7 @@ export function rhythmDrive(c: RhythmContext): number {
     0.1 * (1 - z) -
     0.45 * z -
     ctx -
-    (c.maximized === true ? RHYTHM_MAXIMIZED_DAMP : 0)
+    (c.nothingToClimb === true ? RHYTHM_NOTHING_TO_CLIMB_DAMP : 0)
   );
 }
 

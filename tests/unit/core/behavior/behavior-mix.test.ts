@@ -63,6 +63,7 @@ describe('behaviour mix with v1.1 surfaces (default settings)', () => {
     const onKind = new Map<string, number>();
     let ticks = 0;
     let calm = 0;
+    let onFloor = 0;
     let taskbarShows = 0;
     let taskbarReactions = 0;
     let tabReactions = 0;
@@ -111,6 +112,7 @@ describe('behaviour mix with v1.1 surfaces (default settings)', () => {
         ticks++;
         if (CALM.has(o.state)) calm++;
         if (o.support.kind === 'surface') onKind.set(o.support.surfaceKind, (onKind.get(o.support.surfaceKind) ?? 0) + 1);
+        if (o.support.kind === 'floor') onFloor++;
         const isWall = o.support.kind === 'surface' && o.support.orientation === 'wall';
         if (isWall && !wasWall) climbs++;
         wasWall = isWall;
@@ -129,8 +131,11 @@ describe('behaviour mix with v1.1 surfaces (default settings)', () => {
       `surface mix: on surfaces ${(100 * surfaceShare).toFixed(1)} % of the time ${JSON.stringify(byKind)} (%); per hour: ${perHour(taskbarShows).toFixed(1)} taskbar shows, ${perHour(taskbarReactions).toFixed(1)} taskbar reactions, ${perHour(tabReactions).toFixed(1)} tab reactions, ${perHour(climbs).toFixed(1)} climbs, ${perHour(jumps).toFixed(1)} jumps; calm ${(100 * calm / ticks).toFixed(1)} %`,
     );
     expect(calm / ticks).toBeGreaterThan(0.75);
-    // ADR 0003 B2 x B3: long stays on window tops and strips are the point of v1.2 (the v1.1.1 ceiling was 45 %).
-    expect(surfaceShare).toBeLessThan(0.8);
+    // ADR 0003 B2 x B3: long stays on window tops and strips are the point of v1.2 (the v1.1.1 ceiling was 45 %):
+    // measured 36 % here (SIMULATED, 4 seeds x 2 sim-h). It goes up there, and it does not live up there.
+    expect(surfaceShare).toBeGreaterThan(0.15);
+    expect(surfaceShare).toBeLessThan(0.6);
+    expect(onFloor / ticks).toBeGreaterThan(0.35);
     // Climbing happens, but only now and then (cooldown 1.5-4 min, low utility for a default cat).
     expect(climbs).toBeGreaterThan(0);
     expect(perHour(climbs)).toBeLessThanOrEqual(12);

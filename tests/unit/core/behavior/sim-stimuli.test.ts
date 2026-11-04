@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BehaviorState } from '../../../../src/shared/cat';
-import type { AiReaction } from '../../../../src/shared/perception';
+import type { AiReaction, SceneReport } from '../../../../src/shared/perception';
+import { AI_REACTIONS } from '../../../../src/shared/perception';
 import type { SimEvent, SimOutput } from '../../../../src/shared/sim';
 import type { WindowInfo } from '../../../../src/shared/world';
 import { callCat, display, DUAL_MIXED, Harness, onWindowSurface, onWindowTop, settingsWith, WAKE_MS, world } from './fixtures';
@@ -233,27 +234,41 @@ describe('attention seeking', () => {
 
 describe('perception', () => {
   const region = { x: 300, y: 300, width: 600, height: 400 };
-  const ai = (reaction: AiReaction, interest = 0.9): SimEvent => ({ type: 'perception.ai', report: { scene: 'video', energy: 'moderate', interest, reaction, caption: 'x' }, regionPx: region });
+  const ai = (reaction: AiReaction, interest = 0.9, scene: SceneReport['scene'] = 'video'): SimEvent => ({ type: 'perception.ai', report: { scene, energy: 'moderate', interest, reaction, caption: 'x' }, regionPx: region });
 
-  it('maps allow-listed AI reactions to behaviours', () => {
-    const expectState = (reaction: AiReaction, ok: (s: BehaviorState[]) => boolean) => {
-      // From an idle cat (a walk or rest it just started may not be cut short); the state's own cooldown
-      // after what the cat just did may hold one seed back (ADR 0003 §1.3: more varied picks), so a few seeds.
-      const reacted = [6, 7, 8, 9].some((seed) => {
-        const h = new Harness({ seed });
-        h.run(WAKE_MS);
-        h.runUntil((o) => o.state === 'idle', 5 * MIN);
-        return ok(collect(h, 1500, (_hh, i) => (i === 0 ? [ai(reaction)] : [])));
-      });
-      expect(reacted, reaction).toBe(true);
+  /** One seed, an idle cat, no state cooling down and tired enough to nap: the reaction alone decides. */
+  function idleCat(): Harness {
+    const h = new Harness({ seed: 6 });
+    h.run(WAKE_MS);
+    expect(h.runUntil((o) => o.state === 'idle', 5 * MIN)).toBe(true);
+    const inner = h.sim as unknown as { cooldownUntil: Map<BehaviorState, number>; cat: { stats: { energy: number } } };
+    inner.cooldownUntil.clear();
+    inner.cat.stats.energy = 0.6;
+    return h;
+  }
+
+  it('maps every allow-listed AI reaction to its behaviour', () => {
+    const mapped: Record<Exclude<AiReaction, 'ignore'>, BehaviorState> = {
+      watch: 'watchingUser',
+      approach: 'curious',
+      sit_nearby: 'curious',
+      play: 'playing',
+      startle: 'startled',
+      groom: 'grooming',
+      sleep: 'fallingAsleep',
     };
-    expectState('watch', (s) => s.includes('watchingUser'));
-    expectState('approach', (s) => s.includes('curious'));
-    expectState('play', (s) => s.includes('playing'));
-    expectState('startle', (s) => s.includes('startled'));
-    expectState('groom', (s) => s.includes('grooming'));
-    expectState('sit_nearby', (s) => s.includes('curious'));
-    expectState('ignore', (s) => !s.includes('curious') && !s.includes('playing') && !s.includes('startled'));
+    // A reaction added to the allow-list has to be added here.
+    expect([...Object.keys(mapped), 'ignore'].sort()).toEqual([...AI_REACTIONS].sort());
+    for (const [reaction, state] of Object.entries(mapped) as Array<[AiReaction, BehaviorState]>) {
+      const states = collect(idleCat(), 1500, (_hh, i) => (i === 0 ? [ai(reaction)] : []));
+      expect(states, reaction).toContain(state);
+    }
+  });
+
+  it("the AI's 'ignore' changes nothing: the same seed runs on tick for tick as without it", () => {
+    const without = collect(idleCat(), 5000);
+    const withIgnore = collect(idleCat(), 5000, (_hh, i) => (i === 0 ? [ai('ignore', 0.9, 'other')] : []));
+    expect(withIgnore).toEqual(without);
   });
 
   it('ignores low-interest and unknown reactions and rate-limits AI reactions', () => {

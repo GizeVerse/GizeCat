@@ -99,6 +99,12 @@ export abstract class SimDrives extends SimCore {
 
   protected abstract clearEdgeBand(): boolean;
 
+  /** On the floor with no window top, side or strip to go up to (the look of the last scan, cooldowns aside). */
+  protected nothingWithinReach(): boolean {
+    const sc = this.scan;
+    return this.mover.attachedSurface === null && sc.perch === null && sc.climb?.dir !== 'up' && sc.strip === null;
+  }
+
   protected rhythmContext(): RhythmContext {
     const d = this.cat.drives;
     const env = this.env;
@@ -120,7 +126,7 @@ export abstract class SimDrives extends SimCore {
       busySwitching: this.now < this.busyUntil,
       video,
       night: hour >= 23 || hour < 6,
-      maximized: fg?.maximized === true,
+      nothingToClimb: fg?.maximized === true || this.nothingWithinReach(),
     };
   }
 

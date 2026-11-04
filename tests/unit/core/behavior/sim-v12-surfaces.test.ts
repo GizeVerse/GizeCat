@@ -3,6 +3,7 @@
 // and what the cat does up there. SIMULATED: the real sim and Mover with an injected environment.
 import { describe, expect, it } from 'vitest';
 import type { EdgeVisitRecord, ExcursionRecord, SlipRecord } from '../../../../src/shared/behaviorProfile';
+import { PHYSICS_ERROR_CAUSES } from '../../../../src/shared/behaviorProfile';
 import type { Traits } from '../../../../src/shared/catState';
 import type { ScreenEdgeBand } from '../../../../src/shared/surfaces';
 import { mulberry32, newPersistedCat } from '../../../../src/core/behavior';
@@ -113,6 +114,42 @@ describe('screen edges (ADR 0003 §6.1)', () => {
   it('no peek with the cursor within 6 bw of the band (the only band offered)', () => {
     const left: ScreenEdgeBand[] = [{ displayId: '1', side: 'left', clearSpans: [] }];
     for (const seed of [1, 2, 3]) expect(run(seed, 40 * MIN, left, { cursorX: 4 * BW }).samples).toEqual([]);
+  }, 120_000);
+
+  it.each([
+    ['removed', (h: Harness): void => void delete h.env.edgeBands],
+    ['emptied', (h: Harness): void => void (h.env.edgeBands = [])],
+    ['the setting off', (h: Harness): void => h.sim.updateSettings(settingsWith({ behavior: { disabledExtras: ['screenEdges'] } }))],
+  ] as const)('edge bands %s mid-climb: the cat comes down by itself, no physics fall, no stuck reset', (_name, vanish) => {
+    let tested = 0;
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const falls: string[] = [];
+      const resets: string[] = [];
+      const h = new Harness({ seed, persisted: catWith(seed), hooks: { onFall: (r) => falls.push(r.cause), onDecision: (r) => void (r.cause === 'watchdog' && resets.push(r.state)) } });
+      h.env.edgeBands = clearBands();
+      let i = 0;
+      const up = h.runUntil(() => {
+        present(h, i++);
+        return onEdge(h) && FLOOR - h.last!.y > BH;
+      }, 60 * MIN, 100);
+      if (!up) continue;
+      tested++;
+      vanish(h);
+      // Everything that could leave it hanging: the hold's cap, the climb down, a grace for what it does next.
+      const down = h.runUntil(() => {
+        present(h, i++);
+        return !onEdge(h) && h.last!.support.kind === 'floor';
+      }, 40_000, 100);
+      expect(down, `seed ${seed}: back on the floor`).toBe(true);
+      // ... and it does not go back up.
+      h.run(3 * MIN, 100, (hh) => {
+        present(hh, i++);
+        expect(onEdge(hh), `seed ${seed}: on the edge again`).toBe(false);
+      });
+      expect(falls.filter((c) => PHYSICS_ERROR_CAUSES.has(c as never))).toEqual([]);
+      expect(resets).toEqual([]);
+    }
+    expect(tested).toBeGreaterThanOrEqual(2);
   }, 120_000);
 
   it('the cat climbs down when the cursor comes within 2 bw', () => {
@@ -232,6 +269,36 @@ describe('covered and vanished supports (ADR 0003 §2.4, §3)', () => {
     expect(falls).toEqual([]);
     expect(h.sim.serialize().stats.fear).toBeLessThanOrEqual(fear0 + 1e-6);
     expect(h.last!.support.kind).toBe('floor');
+  });
+
+  it('flight with no room up there: it leaves within the safe height, the stay ends stimulus (ADR 0003 §5.2)', () => {
+    const records: ExcursionRecord[] = [];
+    const falls: unknown[] = [];
+    const h = new Harness({ seed: 5, persisted: catWith(5), hooks: { onExcursion: (r) => records.push(r), onFall: (f) => falls.push(f) } });
+    // A window top barely wider than the cat, low enough to get down from: nowhere to run along it.
+    h.env.windows = { w: { x: 900, y: 800, width: 2.2 * BW, height: 240 } };
+    h.run(WAKE_MS);
+    callCat(h, { x: 900 + 1.1 * BW, y: 700 });
+    expect(h.runUntil((o) => onWindowTop(o.support, 'w') && o.state === 'idle', 30_000)).toBe(true);
+    const inner = h.sim as unknown as { reactionFollowUp(kind: 'flight'): { state: string; init: { variant?: string } }; finish(next: unknown): void; leaveHistory: unknown[] };
+    h.env.cursor = { x: 900 + 1.1 * BW, y: 780, speed: 0 };
+    const next = inner.reactionFollowUp('flight');
+    expect(next).toMatchObject({ state: 'walking', init: { variant: 'leave' } });
+    inner.finish(next);
+    expect(h.runUntil((o) => !onWindowTop(o.support, 'w') && o.support.kind === 'floor', 15_000)).toBe(true);
+    const end = records.find((r) => r.phase === 'end');
+    expect(end).toMatchObject({ endReason: 'stimulus' });
+    expect(falls).toEqual([]);
+  });
+
+  it('flight with room: it runs along the surface, the stay goes on', () => {
+    const h = new Harness({ seed: 5, persisted: catWith(5) });
+    h.env.windows = { w: { ...RECT } };
+    h.run(WAKE_MS);
+    callCat(h, { x: 950, y: 700 });
+    expect(h.runUntil((o) => onWindowTop(o.support, 'w') && o.state === 'idle', 30_000)).toBe(true);
+    const inner = h.sim as unknown as { reactionFollowUp(kind: 'flight'): { state: string; init: { variant?: string } } };
+    expect(inner.reactionFollowUp('flight')).toMatchObject({ state: 'running', init: { variant: 'flight' } });
   });
 
   it('the resume token: the surface back within 3 min gets the rest of the planned time (at least 60 s), marked resumed', () => {

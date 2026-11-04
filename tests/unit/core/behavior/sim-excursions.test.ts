@@ -33,42 +33,40 @@ function drive(h: Harness, ms: number, each: (o: SimOutput) => boolean | void = 
 }
 
 describe('exploration urge (v1.1.1)', () => {
-  /** Growth of the urge over `ms` right after waking up, while the cat stays on the floor. */
-  function growth(seed: number, traits: Partial<Traits>, ms: number, typing = false): number {
-    // ADR 0003 §1.4: the need-driven picker may start a trip before the urge is high, so the rate is
-    // measured over the time the cat really is on the floor (at least 15 s, the next seed otherwise) and scaled to `ms`.
-    for (let k = 0; k < 12; k++) {
-      const h = userHarness(seed + 100 * k, traits);
-      h.env.typing = typing;
-      h.run(WAKE_MS, 100);
-      const u0 = decision(h).exploreUrge;
-      const t0 = h.now;
-      let u1 = u0;
-      let until = t0;
-      drive(h, ms, (o) => {
-        if (elevated(o) || o.support.kind !== 'floor') return true;
-        u1 = decision(h).exploreUrge;
-        until = h.now;
-        return false;
-      });
-      if (until - t0 >= 15_000) return ((u1 - u0) * ms) / (until - t0);
-    }
-    throw new Error(`seed ${seed}: the cat never stayed on the floor long enough to measure`);
+  /**
+   * The urge's growth per minute, tick by tick, while the cat is on the floor in the first minute after
+   * waking up. Whatever it does down there (and a trip up that starts early) does not change the rate.
+   */
+  function growth(seed: number, traits: Partial<Traits>, typing = false): number {
+    const h = userHarness(seed, traits);
+    h.env.typing = typing;
+    h.run(WAKE_MS, 100);
+    const rates: number[] = [];
+    let u = decision(h).exploreUrge;
+    let t = h.now;
+    drive(h, MIN, (o) => {
+      if (elevated(o) || o.support.kind !== 'floor') return true;
+      const next = decision(h).exploreUrge;
+      if (next > u) rates.push(((next - u) * MIN) / (h.now - t));
+      u = next;
+      t = h.now;
+      return false;
+    });
+    expect(rates.length).toBeGreaterThan(20);
+    return (rates.sort((a, b) => a - b)[Math.floor(rates.length / 2)] as number);
   }
 
   it('grows on the floor with a way up in reach: 0 to 1 in 3-8 min, faster for a curious, playful cat, slower for a lazy one', () => {
     const CURIOUS: Partial<Traits> = { curiosity: 1, playfulness: 1, laziness: 0 };
     const LAZY: Partial<Traits> = { curiosity: 0.2, playfulness: 0.1, laziness: 1 };
     for (const seed of [1, 2]) {
-      const user = growth(seed, {}, 60_000);
-      const curious = growth(seed, CURIOUS, 60_000);
-      const lazy = growth(seed, LAZY, 60_000);
-      // Implied time to 1 (a little of the minute may be spent in a hop or a stretch, when it does not grow).
-      const tauMin = 1 / user;
-      expect(tauMin).toBeGreaterThanOrEqual(3);
-      expect(tauMin).toBeLessThanOrEqual(8 / 0.9);
-      expect(1 / curious).toBeGreaterThanOrEqual(3 * 0.99);
-      expect(1 / lazy).toBeLessThanOrEqual(8 / 0.9);
+      const user = growth(seed, {});
+      const curious = growth(seed, CURIOUS);
+      const lazy = growth(seed, LAZY);
+      expect(1 / user).toBeGreaterThanOrEqual(3);
+      expect(1 / user).toBeLessThanOrEqual(8);
+      expect(1 / curious).toBeGreaterThanOrEqual(3 * 0.999);
+      expect(1 / lazy).toBeLessThanOrEqual(8 * 1.001);
       expect(curious).toBeGreaterThan(user * 1.2);
       expect(lazy).toBeLessThan(user / 1.2);
     }
@@ -76,10 +74,9 @@ describe('exploration urge (v1.1.1)', () => {
 
   it('grows half as fast while the user types', () => {
     for (const seed of [1, 2]) {
-      const free = growth(seed, {}, 60_000);
-      const typing = growth(seed, {}, 60_000, true);
-      expect(typing / free).toBeGreaterThan(0.4);
-      expect(typing / free).toBeLessThan(0.6);
+      const free = growth(seed, {});
+      const typing = growth(seed, {}, true);
+      expect(typing / free).toBeCloseTo(0.5, 3);
     }
   });
 

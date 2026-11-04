@@ -176,7 +176,8 @@ export abstract class SimReactions extends SimHunt {
       case 'flight': {
         addFear(st, t, 0.25);
         const away = this.awayFromCursor(4, 8);
-        return away ? { state: 'running', init: { variant: 'flight', target: away, then: { state: 'watchingCursor', init: {} } } } : { state: 'watchingCursor', init: {} };
+        if (away) return { state: 'running', init: { variant: 'flight', target: away, then: { state: 'watchingCursor', init: {} } } };
+        return this.leaveForRoom() ?? { state: 'watchingCursor', init: {} };
       }
       case 'playful': {
         d.playNeed = clamp(d.playNeed - 0.1, 0, 1);

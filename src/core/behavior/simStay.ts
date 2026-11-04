@@ -7,7 +7,7 @@ import type { DecisionTarget, TargetAvailability } from '../../shared/surfaceDia
 import type { ScreenEdgeBand } from '../../shared/surfaces';
 import type { Pace } from '../movement';
 import { MOVEMENT } from '../movement';
-import type { Activity } from './activity';
+import type { Activity, FollowUp } from './activity';
 import type { EdgeTarget, StayView } from './decide';
 import { applyImpulse } from './drives';
 import { arrivalRouteOf } from './profile';
@@ -202,7 +202,7 @@ export abstract class SimStay extends SimDrives {
     if (st.leaving !== null) {
       // Still up there with the leave no longer under way: it failed (retry with the backoff).
       const a = this.act;
-      if (PHYSICAL_STATES.has(a.state) || (a.state === 'walking' && a.variant === 'leave') || this.pending?.init.variant === 'leave') return;
+      if (PHYSICAL_STATES.has(a.state) || (a.state === 'walking' && a.variant === 'leave') || this.pending?.init.variant === 'leave' || a.then?.init.variant === 'leave') return;
       st.leaving = null;
       st.pendingLeave = null;
       st.byMover = false;
@@ -234,6 +234,23 @@ export abstract class SimStay extends SimDrives {
     st.failures = st.failures.filter((t) => t > this.now - LEAVE_FAILURE_WINDOW_MS);
     st.failures.push(this.now);
     st.nextLeaveAt = this.now + leaveBackoffMs(st.failures.length);
+  }
+
+  /**
+   * No room left up here for a reaction that needs to get away (ADR 0003 §5.2): the best leave option within the
+   * safe height, as the walk that carries it out; the stay ends 'stimulus'. Null: not on a stay, or nothing within H_safe.
+   */
+  protected leaveForRoom(): FollowUp | null {
+    const st = this.stay;
+    if (!st || st.leaving !== null || !this.onStay()) return null;
+    const t = this.cat.traits;
+    const safe = this.mover.leaveOptions().filter((o) => !o.emergency && (o.impact === null || o.dropDip <= this.safeDipNow));
+    const choice = chooseLeave(this.random, safe, { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw, disabled: this.disabled }, this.leaveHistory);
+    if (!choice) return null;
+    st.pendingLeave = choice;
+    st.leaving = choice.kind;
+    st.forcedLeave = true;
+    return { state: 'walking', init: { variant: 'leave', target: choice.target } };
   }
 
   /** One leave attempt: the single decision over the Mover's leave options (ADR 0003 §2.3); the activity runs it. */
