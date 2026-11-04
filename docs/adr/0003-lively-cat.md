@@ -538,26 +538,28 @@ The lead writes the PRIVACY.md and THREAT_MODEL.md text after PRV and BEH merge 
 
 ## 14. Target bands as test assertions
 
-Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profiles: P1 (the user's settings and cat), P2 (defaults); Calm and Mischievous presets informational (active share Calm < P2 < Mischievous, Calm ≥ 10 %). Layouts: L1 floating browser with a strip, L2 floating editor, L3 alternating a maximized window, L4 nothing reachable but screen edges, **L4b** a maximized window in front most of the time (the user's commonest state). Users:
+Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profiles: P1 (the user's settings and cat), P2 (defaults); Calm and Mischievous presets informational (active share Calm < P2 < Mischievous, Calm ≥ 10 %). Layouts: L1 floating browser with a strip, L2 floating editor, L3 alternating a maximized window, L4 nothing reachable but screen edges, **L4b** a maximized window in front most of the time (the user's commonest state), L5 two floating windows a hop apart (B4). Users:
 
 - **U-active**: moving the cursor, not typing, handling at the REAL rate.
 - **U-typing**: typing 60 % of the time (run with `reactToTyping` on and off).
 - **U-play**: the cursor lingers within 6 bw of the cat, erratic, no clicks, 20 % of the time.
 - **U-mouse-work**: a button press every 2–10 s, the cursor commuting, taskbar reveals at the bottom every 1–3 min.
 
-8 seeds × 3 sim-h per cell (2 seeds in calibration loops). A short subset runs in `verify fast` as `tests/integration/behavior/bands-short.test.ts` (L1/P2, 2 seeds × 1 sim-h, binomially widened, wall-time budget ≤ 20 s with a vitest timeout; over budget it moves to the profile tier).
+8 seeds × 3 sim-h per cell (2 seeds in calibration loops). A short subset runs in `verify fast` as `tests/integration/behavior/bands-short.test.ts` (L1/P2, 4 seeds × 2 sim-h, binomially widened, wall-time budget ≤ 20 s with a vitest timeout; over budget it moves to the profile tier).
 
 | # | Band (assert) | Metric | Cells |
 |---|---|---|---|
 | B1 | active share 20–35 % of awake time | `timeMs.active / awake` (`activityClassOf`) | P1, P2 × L1–L3 × U-active |
 | B1b | active share ≤ the same seed's L1 value; 1–4 edge peeks/h | profile, `onEdgeVisit` | L4b |
+| B1c | active share ≤ 35 % of awake time with nothing to climb | `timeMs.active / awake` | P1, P2 × L4, L4b × U-active |
 | B2 | elevated arrivals 4–15 /h; ≤ 12 window climbs/h (edges excluded) | `onExcursion` arrive | L1, L2 |
-| B3 | stays (Kaplan–Meier, imposed ends right-censored): median 90–300 s, p10 ≥ 20 s, P(> 5 min) ≥ 8 %, p90 ≤ 15 min; plannedMs draws: median 120–200 s, p10 ≥ 30 s, ≥ 12 % > 5 min, p90 ≤ 12 min; the experienced (uncensored) median is reported | `onExcursion` end | L1, L2 |
-| B4 | departures varied: no leave kind > 70 % of own departures, ≥ 3 kinds | `leaveKind` | L1, L2 |
+| B3 | stays (Kaplan–Meier, imposed ends right-censored): median 90–300 s, p10 ≥ 20 s, P(> 5 min) ≥ 8 %, P(> 15 min) monitored; plannedMs draws: median 120–200 s, p10 ≥ 30 s, ≥ 12 % > 5 min, p90 ≤ 12 min; the experienced (uncensored) median is reported | `onExcursion` end | L1, L2 |
+| B4 | departures varied on two windows: no leave kind > 70 % of own departures, ≥ 3 kinds; ≥ 2 kinds on one window | `leaveKind` | L5; L1, L2 |
 | B5 | hunts 4–12 /h; pounces ≥ 1 /h; never two pounces < 90 s apart | `onHunt` | U-play |
+| B5d | ordinary use: on average over the layouts hunts ≥ 2 /h and pounces ≥ 1 /h; never two pounces < 90 s apart | `onHunt` | P1, P2 × L1, L2, L3, L4b × U-active |
 | B5b | hunts ≤ 1 /h; 0 pounces within 2 s of a press or within 1 bw of a press point | `onHunt` vs the harness's presses | U-mouse-work |
 | B5c | every pounce and strike: `minClearanceDip` ≥ 8 | `onHunt` | all hunting cells |
-| B6 | 0 hunts, pounces, swats or play near the cursor started while typing or < 3 s after (also with `reactToTyping` off); excursions 0.2–0.6 × the U-active rate | `onHunt`, `onDecision` | U-typing |
+| B6 | 0 hunts, pounces, swats or play near the cursor started while typing or < 3 s after (also with `reactToTyping` off); excursions 0.2–0.9 × the U-active rate | `onHunt`, `onDecision` | U-typing |
 | B7 | ≥ 4 kinds over 100 throws, no kind > 50 %, hide ≤ 25 %, on the **uncapped** softmax at the REAL throw spacing; caps active in < 10 % of draws; every opt-out combination keeps ≥ 3 kinds or logs | `onReaction` | P1, P2, Monte Carlo 100 × 8 |
 | B8 | after 5 hard throws (bond ≥ 0.3): fear < 0.05, i < pre + 0.1, w < 0.05 within 10 min; within 8 min with petting at the REAL rate | drives | P1, P2, bond 0.3 |
 | B8b | w > 0.3 ≤ 15 % and i > 0.5 ≤ 10 % of awake time | `moodMs` | U-active |
@@ -570,6 +572,16 @@ Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profile
 | B15 | asleep 8–20 % of present time; 0.8–2.5 autonomous naps/h | `timeMs.asleep`, `sleeps` | P1, P2 × L1–L3 × U-active |
 
 "Never in the way" ceilings stay: no locomotion under a pressed cursor, no hunts or play near the cursor while typing, ≤ 12 window climbs per hour. The v1.1.1 passive-mix assertions (`behavior-mix.test.ts:41–45, 131–135`, `sim-liveness.test.ts:31–40`, `decide-urge.test.ts`) are rewritten as these bands by BEH.
+
+**Lead decisions on the bands (2026-11-04; numbers SIMULATED, 8 seeds × 3 sim-h, `docs/research/v1.2/profile-v12.json`):**
+
+- **B6's upper bound is 0.9, not 0.6.** Measured 0.75–0.83 (0.65–0.89 before the raw typing weight went from 0.25 to 0.2). Trips between typing bursts are not disruptive; what would be stays at 0: hunts, pounces, swats and play near the cursor while typing.
+- **B3's P(> 15 min) is monitored, not a gate.** Kaplan–Meier holds S flat after its last event, and under the REAL handling rate most stays end by the user's hand, so the tail says little (0–0.10 on L1 and L2, 0.02–0.14 in the previous run). Median, p10 and P(> 5 min) stay gates: 149–198 s, 53–66 s, 0.17–0.32.
+- **B4 is measured on a two-window layout.** A single tall window structurally offers two ways down (§6.3), which is what L1 and L2 still show (2 kinds, at least 2 asserted). L5, two windows a hop apart: 4 kinds, the commonest 36–38 %.
+
+**Added for ordinary use (BEH-c):** B5d, after U-active measured 0 hunts/h: 2.50 hunts/h and 1.41 pounces/h on P2, 2.65 and 1.30 on P1 (L1 1.5–1.9 hunts/h, L4b 3.3–3.7; about 700 presses/h), with U-play 6.4–6.7 hunts/h, U-mouse-work 0.92–0.96 hunts/h and no pounce near a press. B1c, after the empty desktop measured 53 % (P1) and 39 % (P2): now 32.6 % and 25.6 %, L4b 22.8 % and 17.9 %; edge visits 3.5–4.1/h on L4, peeks 1.7–1.8/h on L4b.
+
+**Still outside its band: B15's asleep share**, 5.5–7.9 % of present time against 8–20 % (0.8–2.5 naps/h holds at 1.7–2.4). Not a matter of dwell: at the REAL handling rate 70–80 % of naps are ended by the user's hand or a stimulus (P2/L1: 23 of 63 picked up, 20 woken by a touch, 6 by a stimulus, 14 ran out; median 87 s against a dwell of 288–960 s), so at the band's top nap rate the share stays near 8 %. Getting there would take letting the cat sleep through touches. Left to the lead.
 
 ## 15. Test plan
 

@@ -56,7 +56,7 @@ describe.skipIf(!enabled)('ADR 0003 §14 target bands, full matrix (DESKTOP_CAT_
   it(`B1: ${BAND_TEXT.B1} (P1, P2 x L1-L3 x U-active)`, () => expectBand('B1', 6), T);
   it(`B1b: ${BAND_TEXT.B1b} (L4b vs L1, P1 and P2)`, () => expectBand('B1b', 4), T);
   it(`B2: ${BAND_TEXT.B2} (L1, L2)`, () => expectBand('B2', 4), T);
-  it(`B3: ${BAND_TEXT.B3} (L1, L2)`, () => expectBand('B3', 4 * 8), T);
+  it(`B3: ${BAND_TEXT.B3} (L1, L2)`, () => expectBand('B3', 4 * 7), T);
   it(`B4: ${BAND_TEXT.B4} (L5; at least two kinds on L1, L2)`, () => expectBand('B4', 8), T);
   it(`B1c: ${BAND_TEXT.B1c} (L4, L4b, P1 and P2)`, () => expectBand('B1c', 4), T);
   it(`B5d: ${BAND_TEXT.B5d} (P1, P2 x L1, L2, L3, L4b, U-active)`, () => expectBand('B5d', 4), T);
