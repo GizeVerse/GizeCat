@@ -275,6 +275,14 @@ describe('the v1.2 users (ADR 0003 §14)', () => {
     expect(USER_MODELS['U-mouse-work'].pressEveryMs).toEqual([2000, 10_000]);
     expect(USER_MODELS['U-mouse-work'].taskbarEveryMs).toEqual([MIN, 3 * MIN]);
     for (const u of ['U-active', 'U-typing', 'U-play', 'U-mouse-work'] as const) expect(USER_MODELS[u].throwsPerHour).toBe(REAL_HANDLING.throwsPerHour);
+    expect(USER_MODELS['U-hands-off']).toMatchObject({ petsPerHour: 0, dragsPerHour: 0, throwsPerHour: 0, modeShares: USER_MODELS['U-active'].modeShares });
+  });
+
+  it('U-hands-off takes its breaks and never touches the cat', () => {
+    const r = runProfile({ profile: 'P2', layout: 'L1', user: 'U-hands-off', seed: 3, hours: 0.75 });
+    expect(r.userLog).toMatchObject({ petSessions: 0, drags: 0, throws: 0 });
+    expect(r.records.releases).toEqual([]);
+    expect(r.userLog.shortIdles).toBeGreaterThan(0);
   });
 });
 
@@ -282,7 +290,7 @@ describe('cells, scenarios and band evaluation', () => {
   it('cell keys round-trip and the bands matrix holds every cell §14 names', () => {
     for (const c of MATRICES.bands) expect(parseCellKey(cellKey(c))).toEqual(c.variant === 'default' ? { profile: c.profile, layout: c.layout, user: c.user } : c);
     const keys = new Set(MATRICES.bands.map(cellKey));
-    for (const k of ['P1/L1/U-active', 'P2/L3/U-active', 'P1/L4b/U-active', 'P2/L1/U-play', 'P2/L1/U-mouse-work', 'P2/L1/U-typing', 'P2/L1/U-typing+typingReactionsOff', 'P2/L4/U-active', 'P2/L4/U-active+edgesOff', 'P2/L4/U-active+noEdgeBands', 'P2/L3c/U-active', 'P2/L1d/U-active', 'Calm/L1/U-active', 'Mischievous/L1/U-active']) expect(keys).toContain(k);
+    for (const k of ['P1/L1/U-active', 'P2/L3/U-active', 'P1/L4b/U-active', 'P2/L1/U-play', 'P2/L1/U-mouse-work', 'P1/L1/U-hands-off', 'P2/L2/U-hands-off', 'P2/L1/U-typing', 'P2/L1/U-typing+typingReactionsOff', 'P2/L4/U-active', 'P2/L4/U-active+edgesOff', 'P2/L4/U-active+noEdgeBands', 'P2/L3c/U-active', 'P2/L1d/U-active', 'Calm/L1/U-active', 'Mischievous/L1/U-active']) expect(keys).toContain(k);
   });
 
   it('each kind of cell gets its bands', () => {
@@ -295,6 +303,8 @@ describe('cells, scenarios and band evaluation', () => {
     expect(one('P2/L3/U-active')).not.toContain('B2');
     expect(one('P2/L1/U-play')).toEqual(expect.arrayContaining(['B5', 'B9', 'B14']));
     expect(one('P2/L1/U-mouse-work')).toEqual(expect.arrayContaining(['B5b']));
+    expect(one('P2/L1/U-hands-off')).toEqual(expect.arrayContaining(['B3b', 'B9', 'B14']));
+    expect(one('P2/L1/U-active')).not.toContain('B3b');
     expect(one('P2/L1/U-typing+typingReactionsOff')).toEqual(expect.arrayContaining(['B6']));
     expect(one('P2/L4/U-active+edgesOff')).toEqual(expect.arrayContaining(['B11']));
     expect(one('P2/L3c/U-active')).toEqual(expect.arrayContaining(['B13']));
