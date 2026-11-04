@@ -340,8 +340,9 @@ export interface HuntRun {
   minClearancePx: number | null;
   /** The cursor was caught (within 1 bw of the paw point at a landing) at least once. */
   caught: boolean;
-  /** When the cursor was last in the start band. */
+  /** When the cursor was last in the start band, and where. */
   seenAt: number;
+  seenAtPoint: Point | null;
   /** Set when the hunt is over (the record is emitted once). */
   ended: boolean;
   /** This cycle's stalk stand-off from the hotspot, body widths (1.5-2.5), and the current stalk pause's end. */
@@ -432,7 +433,6 @@ export abstract class SimCore {
   protected lastPetCountedAt = -Infinity;
   protected lastPetMemoryAt = -Infinity;
   protected lastPetEventAt = -Infinity;
-  protected lastInteractionAt: number;
   protected lastDragCursorAt = 0;
   protected lastCursorSeenAt = -Infinity;
   protected busyUntil = -Infinity;
@@ -488,6 +488,10 @@ export abstract class SimCore {
   /** Last seen SimEnv.pointerButtonPresses and when it last increased. */
   protected lastPresses: number | null = null;
   protected lastPressAt = -Infinity;
+  /** Where the last press happened (content-free: only the button gate's distance to the cat reads it). */
+  protected lastPressPoint: Point | null = null;
+  /** The last few press times, oldest first (the hand at work, ADR 0003 §4.3). */
+  protected recentPressAt: number[] = [];
   /** Hunting: when the next hunt may start, the global pounce cooldown, the evaluation's verdicts. */
   protected huntReadyAt = -Infinity;
   protected lastPounceAt = -Infinity;
@@ -569,7 +573,6 @@ export abstract class SimCore {
     this.disabled = disabledBehaviorSet(opts.settings.behavior);
     this.now = Number.isFinite(opts.now) ? opts.now : 0;
     this.clipStartedAt = this.now;
-    this.lastInteractionAt = this.now;
     this.awakeSince = this.now;
     this.profile = new BehaviorProfileRecorder(this.now);
     const wall = this.wall();

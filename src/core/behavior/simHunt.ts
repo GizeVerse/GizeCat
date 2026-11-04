@@ -21,7 +21,10 @@ import {
   MAX_POUNCES_PER_HUNT,
   POUNCE_COOLDOWN_MS,
   PETTING_HOLD_MS,
-  PRESS_HOLD_MS,
+  BUSY_HAND_PRESSES,
+  BUSY_HAND_WINDOW_MS,
+  PRESS_NEAR_BW,
+  pressHoldMs,
   STALK_IN_REACH_MS,
   STALK_MAX_MS,
   TASKBAR_HIDE_HOLD_MS,
@@ -58,6 +61,8 @@ const PETTING_ZONE_MAX_EVALS = 6;
 const QUIET_CONTEXT_THETA = 0.2;
 /** A cursor counts as moving above this speed, DIP/s. */
 const MOVING_DIP_S = 30;
+/** A crouch that waited in vain (the prey sat still or left) still ends in the leap this often; else the cat loses interest. */
+const WAITED_POUNCE_P = 0.6;
 
 export abstract class SimHunt extends SimStay {
   /** The mischief-swat roll was made for the cursor's current pass. */
@@ -143,6 +148,20 @@ export abstract class SimHunt extends SimStay {
     return { strip, caption };
   }
 
+  /** The hand is away from the cat: the cursor and the last press both beyond anything it can reach. */
+  protected pressFar(p: Point | null): boolean {
+    const m = this.mover;
+    const lim = PRESS_NEAR_BW * m.bodyWidth;
+    const q = this.lastPressPoint;
+    return p !== null && Math.hypot(p.x - m.x, p.y - m.y) > lim && (q === null || Math.hypot(q.x - m.x, q.y - m.y) > lim);
+  }
+
+  /** The hand has been pressing again and again: it is at work, wherever the cursor is. */
+  protected pressBusy(): boolean {
+    const t = this.recentPressAt;
+    return t.length >= BUSY_HAND_PRESSES && this.now - (t[0] as number) <= BUSY_HAND_WINDOW_MS;
+  }
+
   protected huntGateInput(p: Point | null): HuntGateInput {
     const s = this.act.state;
     const H = clamp(Number.isFinite(this.settings.behavior.cursorPlay) ? this.settings.behavior.cursorPlay : 0, 0, 1);
@@ -153,6 +172,8 @@ export abstract class SimHunt extends SimStay {
       sinceTypingMs: this.now - this.lastTypingRawAt,
       buttonDown: this.env?.pointerButtonDown === true,
       sincePressMs: this.now - this.lastPressAt,
+      pressFar: this.pressFar(p),
+      pressBusy: this.pressBusy(),
       pettingZone: this.inPettingZone(p),
       taskbar: this.taskbarGate(p),
       stripContainer: sc.strip,
@@ -194,7 +215,9 @@ export abstract class SimHunt extends SimStay {
       qHat = preySalience({ dxBw: g.dxBw, dyBh: g.dyBh, speedDip: (Number.isFinite(c.speed) ? Math.max(0, c.speed) : 0) / this.mover.scale, erratic: this.cursorTrack.erratic, idleMs: this.cursorIdle(), crouching, flick, sameDisplay: g.sameDisplay }).qHat;
     }
     const cursorInFg = this.cursorInForeground(p);
-    d.huntDrive = stepHuntDrive(d.huntDrive, gate === 'typing' || gate === 'button' ? 0 : qHat, huntGain(H, this.cat.traits.playfulness, d.playNeed), huntBaseline(H), dtS, gateIn.pettingZone);
+    // The press hold only holds the start back: interest keeps building while the button is up, so a hand that
+    // comes to rest near the cat is hunted when the hold ends. Typing is never prey.
+    d.huntDrive = stepHuntDrive(d.huntDrive, gate === 'typing' || gateIn.buttonDown ? 0 : qHat, huntGain(H, this.cat.traits.playfulness, d.playNeed), huntBaseline(H), dtS, gateIn.pettingZone);
     this.huntThetaNow = huntThreshold(H, d.mischief, b.workDisruption, cursorInFg) + (this.quietContext() ? QUIET_CONTEXT_THETA : 0);
     // The cursor resting in the petting zone (not one passing through it) ends a running hunt.
     this.pettingZoneEvals = gate === 'petting' ? this.pettingZoneEvals + 1 : 0;
@@ -206,7 +229,12 @@ export abstract class SimHunt extends SimStay {
         // A hand slowing down over the cat is aiming at it; prey darting past is not (and lingering ends it anyway).
         const slow = !c || !Number.isFinite(c.speed) || c.speed / this.mover.scale < PETTING_AIM_DIP_S;
         if (petted || (this.pettingZoneEvals >= 2 && slow) || this.pettingZoneEvals >= PETTING_ZONE_MAX_EVALS) this.interruptHunt('petting');
-      } else if (gate !== null) this.interruptHunt(gate === 'button' && this.now - this.lastPressAt < 1000 ? 'click' : gate);
+      } else if (gate === 'button') {
+        // A press close to the cat (or the button down there) ends the hunt. A press away from it is the user's own
+        // business, and an older press only holds the strike back (the crouch below keeps wiggling).
+        const fresh = gateIn.buttonDown || this.now - this.lastPressAt < 1000;
+        if (fresh && gateIn.pressFar !== true) this.interruptHunt('click');
+      } else if (gate !== null) this.interruptHunt(gate);
       return;
     }
     if (this.huntStartable()) this.startHunt();
@@ -252,7 +280,7 @@ export abstract class SimHunt extends SimStay {
   protected beginHunt(a: Activity): void {
     const H = clamp(Number.isFinite(this.settings.behavior.cursorPlay) ? this.settings.behavior.cursorPlay : 0, 0, 1);
     this.huntReadyAt = this.now + huntCooldownMs(this.random, H);
-    this.hunt = { startedAt: this.now, cycles: 0, cycleStartedAt: this.now, pounces: 0, pounceTimes: [], minClearancePx: null, caught: false, seenAt: this.now, ended: false, standoffBw: 2, pauseUntil: -Infinity, pauseFromX: this.mover.x, pauseEveryBw: 1.5 };
+    this.hunt = { startedAt: this.now, cycles: 0, cycleStartedAt: this.now, pounces: 0, pounceTimes: [], minClearancePx: null, caught: false, seenAt: this.now, seenAtPoint: null, ended: false, standoffBw: 2, pauseUntil: -Infinity, pauseFromX: this.mover.x, pauseEveryBw: 1.5 };
     this.huntLanded = null;
     bumpCounter(this.cat.memory, 'hunts');
     bumpCounter(this.cat.memory, 'chasesStarted');
@@ -318,7 +346,10 @@ export abstract class SimHunt extends SimStay {
       a.observedMs += this.dt;
       if ((Number.isFinite(c.speed) ? c.speed : 0) / m.scale > 120) a.engagedMs += this.dt;
       const g = this.preyGeometry(cur);
-      if (g.sameDisplay && inStartBand(g.dxBw, g.dyBh)) run.seenAt = this.now;
+      if (g.sameDisplay && inStartBand(g.dxBw, g.dyBh)) {
+        run.seenAt = this.now;
+        run.seenAtPoint = cur;
+      }
     }
     // The prey hopped out of the start band: the cat lies low for it (the crouch's own window bounds
     // the wait); only a cursor gone altogether, or lost mid-strike, ends the hunt at once.
@@ -414,11 +445,15 @@ export abstract class SimHunt extends SimStay {
         // A still or absent prey keeps the crouch alive (wiggling) up to 6 s; its next movement in the start band triggers the pounce.
         if (lost || this.cursorIdle() >= 300) {
           if (elapsed < CROUCH_STILL_MAX_MS && !over) return;
-          // Waited for it in vain: a lost stalk frustrates a little.
+          // Waited for it in vain: a lost stalk frustrates a little. Often it leaps anyway, at the prey that never
+          // moved or at the place the prey vanished from; a hunter's leap at nothing is a miss like any other.
           if (lost) applyImpulse(this.cat.drives, 'cursorLost');
+          if (chance(this.random, WAITED_POUNCE_P) && this.tryHuntPounce(lost ? (run.seenAtPoint ?? cur) : cur)) return;
           this.loseInterest(a);
           return;
         }
+        // The press hold still runs: it keeps wiggling a little longer.
+        if (this.huntGateNow === 'button' && elapsed < CROUCH_STILL_MAX_MS && !over) return;
         if (!this.tryHuntPounce(cur)) this.tryStrike(a, cur);
         return;
       }
@@ -497,14 +532,16 @@ export abstract class SimHunt extends SimStay {
     return { dist: Math.abs(cur.x - dir * (front + shortPx) - m.x), front, shortPx };
   }
 
-  /** The ballistic pounce, landing short of the hotspot (hit region clearance, T8). */
+  /** The ballistic pounce at `cur` (the cursor, or where the prey was last seen), landing short of the hotspot (hit region clearance, T8). */
   protected tryHuntPounce(cur: Point): boolean {
     const run = this.hunt;
     const m = this.mover;
     if (!run || !this.subAllowed('huntPounce') || this.disabled.has('chaseCursor')) return false;
     if (run.pounces >= MAX_POUNCES_PER_HUNT || this.now - this.lastPounceAt < POUNCE_COOLDOWN_MS || this.holdingStill() || this.huntGateNow !== null || this.typingGate()) return false;
     // The 4 Hz gate may not have seen a press of this very tick: a pounce never follows one (B5b).
-    if (this.env?.pointerButtonDown === true || this.now - this.lastPressAt < PRESS_HOLD_MS) return false;
+    const hot = this.env?.cursor;
+    const hotPoint = hot && Number.isFinite(hot.x) && Number.isFinite(hot.y) ? { x: hot.x, y: hot.y } : null;
+    if (this.env?.pointerButtonDown === true || this.now - this.lastPressAt < pressHoldMs(this.pressFar(hotPoint), this.pressBusy())) return false;
     if (m.balance > 0) return false;
     const dir: Facing = cur.x >= m.x ? 1 : -1;
     const size = this.settings.appearance.size;
@@ -515,7 +552,10 @@ export abstract class SimHunt extends SimStay {
     // Prey beyond the reach gets a leap after it, landing short (Mover.pounceAt clamps the same way).
     const landX = m.x + dir * Math.min(dist, maxDist);
     if (dist < 0.3 * m.bodyWidth || (r && (landX < r.x0 || landX > r.x1))) return false;
-    const clearance = strikeClearancePx('pounce', { x: landX, y: m.y }, dir, cur, scale, size, { bw: m.bodyWidth, bh: m.bodyHeight });
+    // The clearance from the aim, and from the real hotspot when the aim is the place the prey left.
+    const body = { bw: m.bodyWidth, bh: m.bodyHeight };
+    const toAim = strikeClearancePx('pounce', { x: landX, y: m.y }, dir, cur, scale, size, body);
+    const clearance = hotPoint ? Math.min(toAim, strikeClearancePx('pounce', { x: landX, y: m.y }, dir, hotPoint, scale, size, body)) : toAim;
     if (clearance < requiredClearancePx(scale)) return false;
     if (!m.pounceAt(this.now, { x: cur.x, y: m.y }, { crouchMs: MOVEMENT.pounceCrouchMinMs, shortPx, maxDistPx: maxDist, frontExtentPx: front })) return false;
     if (this.request('jumping', 'physical', { suspend: true }) !== 'ok') {

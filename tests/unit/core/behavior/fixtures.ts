@@ -9,7 +9,7 @@ import type { LedgeSurface, Surface, SurfaceKind, TaskbarEdge, WallSurface } fro
 import type { DisplayGeometry, Platform, WorldGeometry } from '../../../../src/shared/world';
 import { createInstrumentedCatSim, mulberry32 } from '../../../../src/core/behavior';
 import type { DecisionView } from '../../../../src/core/behavior/decide';
-import { scoreCandidates } from '../../../../src/core/behavior/decide';
+import { scoreAll } from '../../../../src/core/behavior/utility';
 import type { SimHooks, TransitionRecord } from '../../../../src/core/behavior';
 import type { CatSimImpl } from '../../../../src/core/behavior/sim';
 import { simWorld } from '../../../../src/core/display/simWorld';
@@ -337,7 +337,6 @@ export function decisionView(o: Partial<DecisionView> = {}): DecisionView {
   return {
     traits: { playfulness: 0.6, curiosity: 0.6, affection: 0.6, laziness: 0.3, confidence: 0.5, energyLevel: 0.6, startleSensitivity: 0.5 },
     stats: { energy: 0.9, boredom: 0.5, bond: 0.5, annoyance: 0, fear: 0 },
-    prefs: { cursorPlayAcceptance: 0.5, attentionAcceptance: 0.5, petRatePerHour: 0, roughRatePerHour: 0 },
     behavior: { ...defaultSettings().behavior, autonomy: 1, attentionSeeking: 1 },
     disabled: new Set(),
     localHour: 14,
@@ -347,26 +346,18 @@ export function decisionView(o: Partial<DecisionView> = {}): DecisionView {
     mediaForeground: false,
     screen: null,
     recentRough: 0,
-    darkBias: 0,
-    quietMs: 2 * 3600_000,
-    awakeMs: 0,
     cursor: { point: { x: 1000, y: 1000 }, speedDip: 400, distBodyLengths: 3, reachable: true },
     foreground: { center: { x: 900, y: 500 }, distBodyLengths: 2 },
     favoriteSpot: null,
     perchTarget: null,
     wanderTarget: { x: 1200, y: 1040 },
     cornerTarget: null,
-    typingIntensity: 0,
     standingOn: 'floor',
     climbTarget: null,
     tabStripTarget: null,
     edgeLook: null,
     surpriseReady: false,
     exploreUrge: 0,
-    downTarget: null,
-    elevatedMs: 0,
-    recentStates: [],
-    current: 'idle',
     isCoolingDown: () => false,
     ...o,
   };
@@ -374,7 +365,7 @@ export function decisionView(o: Partial<DecisionView> = {}): DecisionView {
 
 /** Summed utility of the candidates for `state` (and `variant`, when given). */
 export function scoreOf(v: DecisionView, state: BehaviorState, variant: string | null = null): number {
-  return scoreCandidates(v)
+  return scoreAll(v)
     .filter((c) => c.item.state === state && (variant === null || c.item.variant === variant))
     .reduce((a, c) => a + c.score, 0);
 }

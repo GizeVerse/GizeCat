@@ -113,21 +113,18 @@ describe('F7: reactions to screen statistics', () => {
     expect(h.sim.debugInfo().screen).toBeNull();
   });
 
-  it('a busy screen lowers activity a little, video-like content (or a windowed video app) a lot; a quiet one favours rest', () => {
+  it('video-like content (or a windowed video app) damps every active candidate, not the calm ones (ADR 0003 §1.4 C_c)', () => {
     const base = decisionView();
-    const busy = decisionView({ screen: 'busy' });
     const video = decisionView({ screen: 'video' });
     const media = decisionView({ mediaForeground: true });
-    const quiet = decisionView({ screen: 'quiet' });
-    for (const [state, variant] of [['playing', 'pawAt'], ['chasingCursor', null], ['walking', 'wander']] as const) {
+    for (const [state, variant] of [['playing', 'pawAt'], ['walking', 'wander']] as const) {
       const b = scoreOf(base, state, variant);
       expect(b).toBeGreaterThan(0);
-      expect(scoreOf(busy, state, variant)).toBeCloseTo(b * 0.8, 6);
       expect(scoreOf(video, state, variant)).toBeCloseTo(b * 0.4, 6);
       expect(scoreOf(media, state, variant)).toBeCloseTo(b * 0.4, 6);
     }
-    expect(scoreOf(video, 'watchingUser')).toBeGreaterThan(scoreOf(base, 'watchingUser'));
-    expect(scoreOf(quiet, 'resting')).toBeGreaterThan(scoreOf(base, 'resting'));
+    expect(scoreOf(video, 'watchingUser')).toBeCloseTo(scoreOf(base, 'watchingUser'), 9);
+    expect(scoreOf(video, 'resting')).toBeCloseTo(scoreOf(base, 'resting'), 9);
   });
 });
 
@@ -160,12 +157,20 @@ describe('F8: the perception interval setting applies', () => {
 });
 
 describe('F9: switches turn their reactions fully off', () => {
-  it('"React to typing" off: typing changes nothing in the scores', () => {
+  it('"React to typing" off: the typing reactions are gone from the scores, the raw gates stay', () => {
     const behavior = { ...decisionView().behavior, reactToTyping: false };
-    const quiet = scoreOf(decisionView({ behavior, typing: false }), 'playing') + scoreOf(decisionView({ behavior, typing: false }), 'chasingCursor');
-    const typing = scoreOf(decisionView({ behavior, typing: true }), 'playing') + scoreOf(decisionView({ behavior, typing: true }), 'chasingCursor');
-    expect(typing).toBeCloseTo(quiet, 9);
-    expect(scoreOf(decisionView({ behavior, typing: true }), 'watchingUser')).toBeCloseTo(scoreOf(decisionView({ behavior, typing: false }), 'watchingUser'), 9);
+    const quiet = decisionView({ behavior, typing: false, typingRaw: false });
+    const typing = decisionView({ behavior, typing: true, typingRaw: true });
+    // The reactions: walking is not damped, watching the user not raised.
+    expect(scoreOf(typing, 'walking', 'wander')).toBeCloseTo(scoreOf(quiet, 'walking', 'wander'), 9);
+    expect(scoreOf(typing, 'watchingUser')).toBeCloseTo(scoreOf(quiet, 'watchingUser'), 9);
+    // On, the same input does both.
+    const on = { ...behavior, reactToTyping: true };
+    expect(scoreOf(decisionView({ behavior: on, typing: true, typingRaw: true }), 'walking', 'wander')).toBeLessThan(scoreOf(quiet, 'walking', 'wander'));
+    expect(scoreOf(decisionView({ behavior: on, typing: true, typingRaw: true }), 'watchingUser')).toBeGreaterThan(scoreOf(quiet, 'watchingUser'));
+    // The gate: play near the cursor stops whatever the setting says (§4.3).
+    expect(scoreOf(quiet, 'playing')).toBeGreaterThan(0);
+    expect(scoreOf(typing, 'playing', 'pawAt')).toBe(0);
   });
 
   // ADR 0003 §1.1, §4.3, B6: the setting governs the typing reactions only; hunts read the raw signal whatever it says.
@@ -222,8 +227,6 @@ describe('F9: switches turn their reactions fully off', () => {
   });
 
   it('"Pointer play" at 0 %: never chases on its own', () => {
-    const behavior = { ...decisionView().behavior, cursorPlay: 0 };
-    expect(scoreOf(decisionView({ behavior }), 'chasingCursor')).toBe(0);
     for (const seed of [1, 2, 3]) {
       const h = new Harness({ seed, settings: settingsWith({ behavior: { cursorPlay: 0, autonomy: 1 } }) });
       h.run(30 * MIN, 100, (hh, i) => {

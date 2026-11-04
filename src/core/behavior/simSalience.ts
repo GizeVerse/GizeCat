@@ -139,10 +139,7 @@ export abstract class SimSalience extends SimReactions {
       case 'pointer.doubleTap':
         return this.onDoubleTap(ev.at);
       case 'pointer.hoverStart':
-        if (this.settings.interaction.enabled && isFinitePoint(ev.at)) {
-          this.lastInteractionAt = this.now;
-          if (!ASLEEP_STATES.has(this.act.state)) this.setGlance(ev.at, 2000);
-        }
+        if (this.settings.interaction.enabled && isFinitePoint(ev.at) && !ASLEEP_STATES.has(this.act.state)) this.setGlance(ev.at, 2000);
         return;
       case 'pointer.hoverEnd':
         return;

@@ -54,21 +54,6 @@ export interface Scored<T> {
   score: number;
 }
 
-/**
- * Softmax choice among the `topK` best candidates: the best option is the most
- * likely, but close runners-up get a fair share. Non-positive scores are dropped.
- */
-export function softmaxPick<T>(r: Random, candidates: readonly Scored<T>[], temperature: number, topK: number): Scored<T> | undefined {
-  const top = candidates
-    .filter((c) => Number.isFinite(c.score) && c.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Math.max(1, topK));
-  if (top.length === 0) return undefined;
-  const t = Math.max(1e-3, temperature);
-  const best = (top[0] as Scored<T>).score;
-  return pickWeighted(r, top, (c) => Math.exp((c.score - best) / t));
-}
-
 /** Random hex string of `length` characters. */
 export function randomHex(r: Random, length: number): string {
   let s = '';

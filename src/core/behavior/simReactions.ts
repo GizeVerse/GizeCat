@@ -402,7 +402,6 @@ export abstract class SimReactions extends SimHunt {
   }
 
   protected noteInteraction(): void {
-    this.lastInteractionAt = this.now;
     if (this.act.state === 'seekingAttention') this.act.answered = true;
   }
 

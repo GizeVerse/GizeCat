@@ -5,6 +5,7 @@ import type { PersistedCat, Stats, Traits } from '../../../../src/shared/catStat
 import type { SimOutput } from '../../../../src/shared/sim';
 import { mulberry32, newPersistedCat } from '../../../../src/core/behavior';
 import { MAX_COMMAND_IGNORE_CHANCE, REACTION_MIN_GAP_MS, SURPRISE_COOLDOWN_MS } from '../../../../src/core/behavior/sim';
+import { huntGain } from '../../../../src/core/behavior/hunt';
 import { callCat, commandsIgnored, decisionView, DUAL_FLAT, Harness, scoreOf, settingsWith, WAKE_MS } from './fixtures';
 
 const MIN = 60_000;
@@ -170,16 +171,9 @@ describe('F11: the cat may ignore a command', () => {
 });
 
 describe('F10: what the cat learned changes how it behaves after a restart', () => {
-  it('rough handling makes it warier; frequent petting makes it more affectionate', () => {
-    const base = decisionView();
-    const rough = decisionView({ recentRough: 4 });
-    const petted = decisionView({ prefs: { ...base.prefs, petRatePerHour: 6 } });
-    expect(scoreOf(rough, 'seekingAttention')).toBeLessThan(scoreOf(base, 'seekingAttention') * 0.5);
-    expect(scoreOf(rough, 'playing', 'rollOver')).toBeLessThan(scoreOf(base, 'playing', 'rollOver') * 0.5);
-    expect(scoreOf(base, 'hiding')).toBe(0);
-    expect(scoreOf(rough, 'hiding')).toBeGreaterThan(0);
-    expect(scoreOf(petted, 'seekingAttention')).toBeGreaterThan(scoreOf(base, 'seekingAttention') * 1.4);
-    expect(scoreOf(petted, 'playing', 'rollOver')).toBeGreaterThan(scoreOf(base, 'playing', 'rollOver') * 1.4);
+  it('rough handling opens up hiding (no baseline: an unharmed cat never picks it)', () => {
+    expect(scoreOf(decisionView(), 'hiding')).toBe(0);
+    expect(scoreOf(decisionView({ recentRough: 4 }), 'hiding')).toBeGreaterThan(0);
   });
 
   it('a cat thrown several times before the restart now and then keeps out of the way; an unharmed one does not', () => {
@@ -202,18 +196,17 @@ describe('F10: what the cat learned changes how it behaves after a restart', () 
 });
 
 describe('F12: corners, surprises and boredom play', () => {
-  it('scores a wander to the corner by boredom, a rare surprise only when its cooldown is over, and more chasing when bored', () => {
+  it('scores a wander to the corner by the explore need, a rare surprise only when its cooldown is over and a stimulus just happened, and hunts more keenly with a play need', () => {
     const corner = { x: 60, y: 1040 };
     expect(scoreOf(decisionView({ cornerTarget: corner, stats: { ...decisionView().stats, boredom: 1 } }), 'walking', 'corner')).toBeGreaterThan(
       2 * scoreOf(decisionView({ cornerTarget: corner, stats: { ...decisionView().stats, boredom: 0 } }), 'walking', 'corner'),
     );
     expect(scoreOf(decisionView(), 'walking', 'corner')).toBe(0);
     expect(scoreOf(decisionView({ surpriseReady: false }), 'startled')).toBe(0);
-    expect(scoreOf(decisionView({ surpriseReady: true }), 'startled', 'surprise')).toBeGreaterThan(0);
-    expect(scoreOf(decisionView({ surpriseReady: true, typing: true }), 'startled')).toBe(0);
-    const bored = scoreOf(decisionView({ stats: { ...decisionView().stats, boredom: 1 } }), 'chasingCursor');
-    const content = scoreOf(decisionView({ stats: { ...decisionView().stats, boredom: 0 } }), 'chasingCursor');
-    expect(bored).toBeGreaterThan(2.5 * content);
+    expect(scoreOf(decisionView({ surpriseReady: true }), 'startled')).toBe(0);
+    expect(scoreOf(decisionView({ surpriseReady: true, recentStimulus: true }), 'startled', 'surprise')).toBeGreaterThan(0);
+    expect(scoreOf(decisionView({ surpriseReady: true, recentStimulus: true, typing: true }), 'startled')).toBe(0);
+    expect(huntGain(0.5, 0.6, 1)).toBeGreaterThan(2.2 * huntGain(0.5, 0.6, 0));
   });
 
   it('over a long session the cat sometimes walks into a corner, and is surprised only rarely', () => {

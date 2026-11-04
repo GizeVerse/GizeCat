@@ -215,6 +215,11 @@ export function urgeBonus(urge: number, exploration: number, exploreNeed: number
   return u * u * u * 0.8 * (0.35 + 0.65 * clamp01(exploration)) * Math.sqrt(clamp01(exploreNeed));
 }
 
+/** A frightened or annoyed cat feels no urge to go up: fear 0.2-0.5 and annoyance 0.3-0.7 take the bonus to nothing (v1.1.1). */
+export function urgeCalm(fear: number, annoyance: number): number {
+  return (1 - clamp01((fear - 0.2) / 0.3)) * (1 - clamp01((annoyance - 0.3) / 0.4));
+}
+
 function cand(state: BehaviorState, extra: Partial<Candidate> = {}): Candidate {
   return { state, variant: null, target: null, windowId: null, then: null, thenVariant: null, ...extra };
 }
@@ -338,7 +343,7 @@ export function scoreAll(v: DecisionView): Scored<Candidate>[] {
   // ---- exploring ----
   if (v.wanderTarget) add(cand('walking', { variant: 'wander', target: v.wanderTarget }), 0.3, 0.2 + 0.6 * nE + 0.1 * m);
   if (v.cornerTarget) add(cand('walking', { variant: 'corner', target: v.cornerTarget }), 0.12, 0.2 + 0.7 * nE);
-  const urge = urgeBonus(v.exploreUrge, X, nE);
+  const urge = urgeBonus(v.exploreUrge, X, nE) * urgeCalm(s.fear, s.annoyance);
   const trip = (stripBonus: boolean): number => 0.2 + 0.5 * nE + (stripBonus ? 0.2 * m : 0) + urge;
   if (v.perchTarget) {
     const p = v.perchTarget;

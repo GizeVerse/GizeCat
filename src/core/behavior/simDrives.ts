@@ -5,6 +5,7 @@ import { clamp } from '../../shared/geometry';
 import type { SimEnv } from '../../shared/sim';
 import { userIdleForSleep } from './decide';
 import { boredomDisplay, DRIVE_STEP_MS, stepDrives, zEff } from './drives';
+import { BUSY_HAND_PRESSES } from './hunt';
 import { decayRate, learnSpot } from './memory';
 import type { RhythmContext } from './rhythm';
 import { ACTIVE_STATES, ASLEEP_STATES, CALM_STATES, PHYSICAL_STATES, STATE_SPECS } from './states';
@@ -20,7 +21,13 @@ export abstract class SimDrives extends SimCore {
   protected notePresses(env: SimEnv): void {
     const p = env.pointerButtonPresses;
     if (typeof p !== 'number' || !Number.isFinite(p)) return;
-    if (this.lastPresses !== null && p > this.lastPresses) this.lastPressAt = this.now;
+    if (this.lastPresses !== null && p > this.lastPresses) {
+      this.lastPressAt = this.now;
+      this.recentPressAt.push(this.now);
+      if (this.recentPressAt.length > BUSY_HAND_PRESSES) this.recentPressAt.shift();
+      const c = env.cursor;
+      this.lastPressPoint = c && Number.isFinite(c.x) && Number.isFinite(c.y) ? { x: c.x, y: c.y } : null;
+    }
     this.lastPresses = p;
   }
 
