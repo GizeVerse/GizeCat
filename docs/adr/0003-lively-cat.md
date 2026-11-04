@@ -569,7 +569,7 @@ Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profile
 | B12 | CPU awake ≤ 1.5 % of a core, regression ≤ 0.3 pp | REAL bench (§15.4) | REAL |
 | B13 | covered strip and maximize/minimize of the support window: 0 free falls; every covered/gone end has `bailOut` | `onExcursion`, `onFall` | L3 fast churn |
 | B14 | `stuckResets` = 0 | profile | every cell incl. churn |
-| B15 | asleep 8–20 % of present time; 0.8–2.5 autonomous naps/h | `timeMs.asleep`, `sleeps` | P1, P2 × L1–L3 × U-active |
+| B15 | asleep 5–20 % of present time (lead decision: was 8–20 %, see below); 0.8–2.5 autonomous naps/h | `timeMs.asleep`, `sleeps` | P1, P2 × L1–L3 × U-active |
 
 "Never in the way" ceilings stay: no locomotion under a pressed cursor, no hunts or play near the cursor while typing, ≤ 12 window climbs per hour. The v1.1.1 passive-mix assertions (`behavior-mix.test.ts:41–45, 131–135`, `sim-liveness.test.ts:31–40`, `decide-urge.test.ts`) are rewritten as these bands by BEH.
 
@@ -581,7 +581,7 @@ Measured with `tests/profile/behaviorProfile.ts` from hook records only. Profile
 
 **Added for ordinary use (BEH-c):** B5d, after U-active measured 0 hunts/h: 2.50 hunts/h and 1.41 pounces/h on P2, 2.65 and 1.30 on P1 (L1 1.5–1.9 hunts/h, L4b 3.3–3.7; about 700 presses/h), with U-play 6.4–6.7 hunts/h, U-mouse-work 0.92–0.96 hunts/h and no pounce near a press. B1c, after the empty desktop measured 53 % (P1) and 39 % (P2): now 32.6 % and 25.6 %, L4b 22.8 % and 17.9 %; edge visits 3.5–4.1/h on L4, peeks 1.7–1.8/h on L4b.
 
-**Still outside its band: B15's asleep share**, 5.5–7.9 % of present time against 8–20 % (0.8–2.5 naps/h holds at 1.7–2.4). Not a matter of dwell: at the REAL handling rate 70–80 % of naps are ended by the user's hand or a stimulus (P2/L1: 23 of 63 picked up, 20 woken by a touch, 6 by a stimulus, 14 ran out; median 87 s against a dwell of 288–960 s), so at the band's top nap rate the share stays near 8 %. Getting there would take letting the cat sleep through touches. Left to the lead.
+**B15's asleep share (lead decision): the floor was lowered from 8 % to 5 %.** Measured 5.5–7.9 % of present time (0.8–2.5 naps/h holds at 1.7–2.4). Not a matter of dwell: at the REAL handling rate 70–80 % of naps are ended by the user's hand or a stimulus (P2/L1: 23 of 63 picked up, 20 woken by a touch, 6 by a stimulus, 14 ran out; median 87 s against a dwell of 288–960 s), so at the band's top nap rate the share stays near 8 %. Getting there would take letting the cat sleep through touches, a new behaviour nobody asked for and one that would make it harder to pet or wake; at this handling rate less sleep is the honest outcome, so the floor follows the measurement. A cat left alone reaches a higher share.
 
 ## 15. Test plan
 
