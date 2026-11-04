@@ -371,3 +371,28 @@ describe('review TAB-1 and the REAL 0 s stays: a trip names the surface its targ
     }
   });
 });
+
+describe('review PHYS-1: a loop of landings is a stuck state too (ADR 0003 §6.9)', () => {
+  it('the sim resets to a calm idle and counts it, and an ordinary landing does not', () => {
+    const drop = (h: Harness): void => {
+      const o = h.last as NonNullable<Harness['last']>;
+      h.step([{ type: 'pointer.dragStart', at: { x: o.x, y: o.y - 30 } }], 50);
+      h.env.dragCursor = { x: o.x, y: o.y - 300 };
+      h.run(500, 50);
+      h.step([{ type: 'pointer.dragEnd', at: h.env.dragCursor, velocity: { x: 0, y: 0 } }], 50);
+      h.env.dragCursor = null;
+      h.runUntil((x) => x.state === 'landing', 5000, 50);
+      h.run(150, 50);
+    };
+    const quiet = new Harness({ seed: 3, world: USER_SCREEN });
+    quiet.run(WAKE_MS, 50);
+    drop(quiet);
+    expect(quiet.sim.behaviorProfile().stuckResets).toBe(0);
+    const looping = new Harness({ seed: 3, world: USER_SCREEN });
+    looping.run(WAKE_MS, 50);
+    (looping.sim as unknown as { progress: { noteLanding(): boolean } }).progress.noteLanding = () => true;
+    drop(looping);
+    expect(looping.sim.behaviorProfile().stuckResets).toBe(1);
+    expect(looping.last?.state).toBe('idle');
+  });
+});

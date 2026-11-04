@@ -507,6 +507,8 @@ export class Mover {
   private pendingLoss: SupportLoss | null = null;
   /** stepAway: the hidden cat keeps the v1.1.1 handling of lost supports (no bail-out). */
   private away = false;
+  /** The taskbar the cat last stepped off on purpose (see checkLift). */
+  private steppedOffKey: string | null = null;
   /** Plans of the options the last leaveOptions() returned. */
   private leavePlans = new WeakMap<LeaveOption, LeavePlan>();
 
@@ -1105,7 +1107,7 @@ export class Mover {
     const limits = leaveLimits(this.cfg);
     const out: Array<{ option: LeaveOption; plan: LeavePlan }> = [];
     const climb = clampedClimbDip(false, this.cfg.movementSpeed);
-    const exit = this.graph.dismountTarget(this.navWorld, w);
+    const exit = this.graph.dismountTarget(this.navWorld, w, this.y);
     if (exit && !this.offLimitsAt(exit.surface, exit.x)) {
       out.push({
         option: {
@@ -1930,6 +1932,7 @@ export class Mover {
         // From the end of where it may walk (no snap back to the stand range from beside it).
         this.x = dir > 0 ? range.x1 : range.x0;
         const vx = dir * Math.max(Math.abs(this.vx), this.paceSpeedPx('walk') * 0.8);
+        this.steppedOffKey = s.kind === 'ledge' && s.surfaceKind === 'taskbar' ? s.key : null;
         this.startFlight(vx, 0, input.now, { thrown: false, intentional: true, ignoreKey: this.attach?.surfaceId ?? null });
         // v1.2: a deliberate step off a ledge end is a jump down for the render hint.
         if (this.flight) this.flight.kind = 'down';
@@ -2699,7 +2702,8 @@ export class Mover {
       const prev = this.graph.prevY(l.key);
       // A ledge that just appeared above the feet counts only for taskbars (they slide in from the screen edge).
       const rising = prev !== undefined ? prev > l.y + 0.25 && prev >= this.y - 1.5 : l.surfaceKind === 'taskbar';
-      const buried = l.surfaceKind === 'taskbar' && this.attach === null && this.surface.kind === 'floor';
+      // Not one it just stepped off on its way past its end (toward another monitor): lifted back, it would step off again for ever.
+      const buried = l.surfaceKind === 'taskbar' && this.attach === null && this.surface.kind === 'floor' && !this.leavingTaskbar(l);
       if (!rising && !buried) continue;
       const live = this.liveLedge(input, l.key);
       if (!live) continue;
@@ -2713,6 +2717,15 @@ export class Mover {
       out.lifted = { surfaceId: l.key, surfaceKind: l.surfaceKind ?? 'taskbar' };
       return;
     }
+  }
+
+  /** The cat stepped off this taskbar and its goal still leads out of the taskbar's column. */
+  private leavingTaskbar(l: Surface): boolean {
+    const g = this.goal;
+    if (this.steppedOffKey !== l.key) return false;
+    if (g && (g.x < l.landX0 || g.x > l.landX1)) return true;
+    this.steppedOffKey = null;
+    return false;
   }
 
   /** Walks across onto a touching surface at the same height. */
@@ -3151,8 +3164,9 @@ export class Mover {
     }
     const speed = this.climbSpeedPx(false);
     this.vy = speed;
-    const exit = this.graph.dismountTarget(this.navWorld, track);
-    let exitY = exit ? Math.min(exit.y, track.yBottom) : track.yBottom;
+    const exit = this.graph.dismountTarget(this.navWorld, track, this.y);
+    // Climbing down never moves it up: the way off is below where it clings.
+    let exitY = Math.max(this.y, exit ? Math.min(exit.y, track.yBottom) : track.yBottom);
     const holdBelow = c.holdY !== null && c.holdY > this.y && c.holdY < exitY;
     if (holdBelow) exitY = c.holdY as number;
     this.y = Math.min(exitY, this.y + speed * dt);
@@ -3844,12 +3858,22 @@ export class Mover {
    */
   private keepClimbing(pos: Point): boolean | null {
     const c = this.climbing;
-    if (!c || c.phase === 'leap') return null;
+    if (!c) return null;
+    // Mid-arc it flies on: the next step re-validates the wall, and a lost one is a miss from where it is.
+    if (c.phase === 'leap') return this.navWorld.contains(pos, 1) ? false : null;
+    // Its way off (and the glide to it) belongs to the old world: it climbs on down to the one that is there now.
+    const dismounting = c.phase === 'dismount';
+    if (dismounting) {
+      c.phase = 'climb';
+      c.exit = null;
+      c.dir = 1;
+    }
     const w = c.wall;
     if (w.kind === 'screenEdge') {
       const t = this.edgesEnabled() ? this.screenEdgeTracks().find((e) => e.key === w.key) : undefined;
       const tol = MOVEMENT.planStaleBodyLengths * this.navWorld.bodyWidth(t?.scale ?? w.scale);
-      if (t && Math.abs(t.x - pos.x) <= tol && pos.y >= t.yTop - tol && pos.y <= t.yBottom + tol) {
+      // A dismount has already stepped away from the line.
+      if (t && (dismounting || Math.abs(t.x - pos.x) <= tol) && pos.y >= t.yTop - tol && pos.y <= t.yBottom + tol) {
         c.wall = t;
         this.x = t.x;
         this.y = clamp(pos.y, t.yTop, t.yBottom);

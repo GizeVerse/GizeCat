@@ -493,6 +493,8 @@ export abstract class SimCore {
   /** Throws, rough drags and annoyed reactions, in their own bounded list (§5.4). */
   protected readonly rough = new RoughMemory();
   protected readonly progress = new ProgressMonitor();
+  /** The cat keeps landing on one spot (ProgressMonitor.noteLanding): the next landing state ends it. */
+  protected landingLoop = false;
   protected readonly dedupe = new EventDedupe();
   protected readonly cursorTrack = new CursorTracker();
   /** Raw keyboard-like input this tick, whatever 'React to typing' says (every "never in the way" gate). */

@@ -368,6 +368,10 @@ Each emits a `SlipRecord`.
 
 ### 6.9 Stuck-state watchdogs (B14)
 
+Added after review PHYS-1: 6 landings within 1 bw in 20 s are a loop too (physical states are not observed by the progress monitor), and end the same way.
+
+Review PHYS-3: a topology change during a dismount sends the cat back to climbing down to the way off that exists now (it may have stepped up to 0.55 bw from the line); the old `c.exit` would have stood it on the old floor.
+
 - Mover: `maxWallHoldMs` 20 s; plan-cancel backoff (§6.8).
 - Stays: 30 min hard cap including naps; leave retry backoff and the emergency path (§2.3).
 - Reactions: avoidance with < 2 bw of free space sits grumpy, no movement.

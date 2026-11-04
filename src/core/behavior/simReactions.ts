@@ -331,6 +331,7 @@ export abstract class SimReactions extends SimHunt {
    */
   protected enterLanding(a: Activity): void {
     a.dwellMs = LANDING_MS;
+    if (this.progress.noteLanding(this.now, this.mover.x, this.mover.bodyWidth)) this.landingLoop = true;
     const info: LandingInfo | null = a.landing;
     const reason = this.fallReason;
     this.fallReason = null;

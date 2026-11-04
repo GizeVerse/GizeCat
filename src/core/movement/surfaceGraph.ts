@@ -608,12 +608,13 @@ export class SurfaceGraph {
   /**
    * Where climbing down a wall ends: the first support beside its foot (possibly below it, then
    * the cat hops down). On a tab strip's window top beside the strip (landWide) it steps off
-   * beside the wall and walks in, never glides along the top into the stand range.
+   * beside the wall and walks in, never glides along the top into the stand range. A cat already on
+   * the wall gives `fromY`, where it clings: what lies above it is no way down.
    */
-  dismountTarget(world: WorldModel, w: WallTrack): { surface: Surface; x: number; y: number } | null {
+  dismountTarget(world: WorldModel, w: WallTrack, fromY?: number): { surface: Surface; x: number; y: number } | null {
     const bw = world.bodyWidth(w.scale);
     const top = w.topLedgeId;
-    const below = world.surfaceBelow(w.standX, w.yTop + bw * 0.3, top ? this.ledgeList.filter((l) => l.key !== top) : this.ledgeList);
+    const below = world.surfaceBelow(w.standX, Math.max(fromY ?? -Infinity, w.yTop + bw * 0.3), top ? this.ledgeList.filter((l) => l.key !== top) : this.ledgeList);
     return below ? { surface: below.surface, x: setDownX(below.surface, w.standX), y: below.y } : null;
   }
 

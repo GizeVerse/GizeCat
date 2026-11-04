@@ -106,11 +106,23 @@ export abstract class SimUtility extends SimSalience {
 
   /**
    * Progress monitor (ADR 0003 §6.9): the same activity with a goal the Mover reports as moving and
-   * less than 0.25 bw of progress for 10 s is reset to a calm idle (decision cause 'watchdog').
+   * less than 0.25 bw of progress for 10 s is reset to a calm idle (decision cause 'watchdog'), and
+   * so is a loop of landings on one spot, which the first cannot see (physical states have no such goal).
    */
   protected checkProgress(): void {
     const a = this.act;
     const m = this.mover;
+    if (this.landingLoop && a.state === 'landing') {
+      // Whatever kept sending it off again goes with the activity a jump or fall suspended.
+      this.landingLoop = false;
+      this.discardSuspended();
+      this.pending = null;
+      this.stop();
+      a.then = null;
+      this.progress.reset();
+      if (this.go('idle', 'lifecycle', {}) === 'ok') this.recordDecision('idle', null, 'watchdog');
+      return;
+    }
     const moving = this.mode === 'normal' && !PHYSICAL_STATES.has(a.state) && a.goalStatus === 'moving' && m.grounded;
     if (!this.progress.observe(this.now, a, moving, { x: m.x, y: m.y }, m.bodyWidth)) return;
     this.progress.reset();

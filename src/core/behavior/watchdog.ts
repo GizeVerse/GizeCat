@@ -5,11 +5,25 @@ import type { Point } from '../../shared/geometry';
 
 export const STUCK_AFTER_MS = 10_000;
 export const STUCK_PROGRESS_BW = 0.25;
+/** Landings on one spot: this many within LOOP_WINDOW_MS, within LOOP_SPOT_BW body widths, is a loop no 'moving' goal would show. */
+export const LOOP_LANDINGS = 6;
+export const LOOP_WINDOW_MS = 20_000;
+export const LOOP_SPOT_BW = 1;
 
 export class ProgressMonitor {
   private token: object | null = null;
   private anchor: Point | null = null;
   private since = 0;
+  private landings: Array<{ at: number; x: number }> = [];
+
+  /** A landing (physical states are not observed: a fall-and-land loop has no goal 'moving' on the ground). True when it is a loop. */
+  noteLanding(now: number, x: number, bodyWidth: number): boolean {
+    this.landings = this.landings.filter((l) => now - l.at <= LOOP_WINDOW_MS && Math.abs(l.x - x) <= LOOP_SPOT_BW * bodyWidth);
+    this.landings.push({ at: now, x });
+    if (this.landings.length < LOOP_LANDINGS) return false;
+    this.landings = [];
+    return true;
+  }
 
   /**
    * One observation: the running activity (identity), whether its goal is 'moving', where the cat
