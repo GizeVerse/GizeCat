@@ -853,3 +853,14 @@ Rejected outright: none. Partially adopted, with the reason recorded above: B1 (
 - Main gains a window-obstacle source used only for the click guard.
 - 36 clips; the renderer test matrix grows ~2.7×.
 - The v1.1.1 passive-mix tests are replaced by the §14 bands; the "never in the way" ceilings stay and gain nuisance bands.
+
+## As built after the adversarial review (2026-11-05)
+
+The review of the implemented code confirmed 25 findings (2 high, 7 medium, 16 low), all fixed with regression tests. Where it changed what this ADR says, the text below wins.
+
+- **§6.1(a) click guard.** The guard holds while the cat clings to a screen edge, is in an edge flight, or is bailing out: not whenever its bounds meet a band, which made a cat on the floor near a screen side impossible to click, pet or grab over any window (RES-1, high). Failing closed makes everything click-through, not just the cat's bounds (SEC-3). The bail-out guard also arms when the supporting window is maximized, minimized or closed, and holds through a leap (SEC-1, SEC-2). The screen-edge opt-out ends the bands, so nothing arms the guard for it (RES-2).
+- **§12 cost.** Windows are enumerated only with the cursor on a guarded cat and interactions on, on invalidation or at most every 250 ms (RES-5); the guard idles and its hooks come off otherwise.
+- **§2.4 lonely leave.** It fires once and re-arms only after the need has fallen, ends in asking for attention, and is off at attention seeking 0 (BEH-1, high): as first written, a cat nobody petted had every stay cut to about 60 s.
+- **§10 sound.** A cue already playing ends when the cat is hidden or away. Paused, quiet or sound switched off leave a tail bounded by the cue, 2.4 s at most (RES-7, partly fixed).
+- **§7 T6.** A timed-out read keeps the retention limits, so a strip no longer outlives a width change (TAB-2). A trip names the surface its target lies on, which ended the 0 s stays seen in REAL runs (TAB-1).
+- **Lead review of the tests.** The short band budget is a runaway guard (120 s of CPU), not the 20 s of §14: the subset costs about 5 s on an idle machine, but CPU time inflated sixfold in the loaded full suite on this shared hybrid CPU. The REAL browser dwell asserts voluntary and known departures, not at least two kinds: one tall window offers two kinds, and three departures can all be the likelier one; variety is band B4 on a two-window layout.
