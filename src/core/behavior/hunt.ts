@@ -31,8 +31,8 @@ export const BUSY_HAND_REST_MS = 3000;
 export const PRESS_NEAR_BW = 4;
 /** After petting the cursor is not prey for this long. */
 export const PETTING_HOLD_MS = 3000;
-/** A taskbar that just slid away still blocks hunts this long: the hand that used it is at work (ADR 0003 §4.3). */
-export const TASKBAR_HIDE_HOLD_MS = 10_000;
+/** A taskbar that just slid away still blocks hunts this long: the hand that used it is at work (ADR 0003 §4.3; 30 s, not the ADR's first 10: B5b). */
+export const TASKBAR_HIDE_HOLD_MS = 30_000;
 /** A cursor still for longer than this stops being prey (except during a running crouch). */
 export const STILL_CURSOR_MS = 1500;
 /** A cursor resting in the watch band stays of interest this long after its last movement. */

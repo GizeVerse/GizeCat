@@ -77,6 +77,8 @@ export class Env {
   patch = new Map<string, Partial<Surface>>();
   log: MoverStep[] = [];
   dragCursor: { x: number; y: number } | null = null;
+  /** Windows the user is moving (MoverInput.movingWindowIds). */
+  moving = new Set<string>();
   /** Every step stays finite and inside some work area. */
   checkInside = true;
 
@@ -100,7 +102,7 @@ export class Env {
     const all = this.surfaces();
     const byId = new Map(all.map((s) => [s.id, s] as const));
     this.m.sense(all.filter((s) => !this.hidden.has(s.id)));
-    const r = this.m.step({ now: this.now, dtMs: dt, dragCursor: this.dragCursor, getSurface: (id) => (this.gone.has(id) ? null : (byId.get(id) ?? null)) });
+    const r = this.m.step({ now: this.now, dtMs: dt, dragCursor: this.dragCursor, movingWindowIds: this.moving, getSurface: (id) => (this.gone.has(id) ? null : (byId.get(id) ?? null)) });
     this.log.push(r);
     expect(Number.isFinite(this.m.x) && Number.isFinite(this.m.y)).toBe(true);
     if (this.checkInside) {

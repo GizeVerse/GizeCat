@@ -1517,8 +1517,9 @@ export abstract class SimCore {
     const risk = clamp(m.nextLegRisk, 0, 1);
     const conf = clamp(this.cat.traits.confidence, 0, 1);
     const tired = 1 - clamp(this.cat.stats.energy, 0, 1);
-    // The ADR's base 0.03 measured below B10's floor (0.2-0.3 /h at ~10-20 take-offs/h, SIMULATED): the band wins.
-    const p = Math.min(0.2, (0.07 + 0.15 * risk) * (1.3 - conf) * (0.7 + 0.6 * tired));
+    // The ADR's base 0.03 measured below B10's floor (0.2-0.3 /h at ~10-20 take-offs/h, SIMULATED), and fewer take-offs
+    // may slip since landings on a floor do not (review RES-4): the band wins.
+    const p = Math.min(0.2, (0.085 + 0.15 * risk) * (1.3 - conf) * (0.7 + 0.6 * tired));
     if (!chance(this.random, p)) return;
     const kind: SlipKind = chance(this.random, 0.7) ? 'scramble' : 'miss';
     if (m.armSlip(kind)) this.slipRisk = risk;

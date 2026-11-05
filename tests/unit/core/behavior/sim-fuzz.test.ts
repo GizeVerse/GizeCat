@@ -365,7 +365,7 @@ describe('simulation fuzz', () => {
     expect(res.debug.invalidSamples).toEqual([]);
     expect(res.debug.eventErrors).toBe(0);
     // The run is long and varied enough to visit almost every state.
-    expect(res.states.size).toBeGreaterThanOrEqual(BEHAVIOR_STATES.length - 2);
+    expect(res.states.size, `states never visited: ${BEHAVIOR_STATES.filter((s) => !res.states.has(s)).join(', ')}`).toBeGreaterThanOrEqual(BEHAVIOR_STATES.length - 2);
     // The run really exercised taskbars, window tops and sides, and tab strips.
     for (const kind of ['taskbar', 'windowTop', 'windowSide', 'tabStrip']) expect(res.onSurface[kind] ?? 0, kind).toBeGreaterThan(0);
   }, 300_000);

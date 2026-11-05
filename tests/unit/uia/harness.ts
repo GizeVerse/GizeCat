@@ -51,7 +51,7 @@ export function fakeHelperHarness(initial: FakeHelperState = {}): FakeHelperHarn
         return;
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code;
-        if ((code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') || attempt >= 200) throw e;
+        if ((code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') || attempt >= 1000) throw e;
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
     }

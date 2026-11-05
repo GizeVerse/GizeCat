@@ -37,7 +37,7 @@ export interface RhythmContext {
  * episodes are calm-leaning; without the offset the default cat measured 10-16 % active against
  * B1's 20-35 % (SIMULATED, 2 seeds x 1 sim-h, L1).
  */
-export const RHYTHM_D_OFFSET = 0.3;
+export const RHYTHM_D_OFFSET = 0.33;
 /**
  * Nothing to explore but the floor and the screen edges (a maximized window in front, the user's commonest
  * state, B1b; an empty desktop, L4): the cat leans calm there, its active share at or below the floating-window
@@ -54,7 +54,7 @@ export const ACTIVE_EPISODE_MUL = 1.3;
 /** D = 0.25A + 0.2 energy + 0.25 max(nP, nE, m) + 0.1 h + 0.1 (1 - zEff) - 0.45 zEff - c_ctx (+ RHYTHM_D_OFFSET). */
 export function rhythmDrive(c: RhythmContext): number {
   const z = clamp01(c.zEff);
-  const ctx = 0.25 * (c.typing ? 1 : 0) + 0.15 * clamp01(c.typingIntensity) + 0.2 * (c.busySwitching ? 1 : 0) + 0.2 * (c.video ? 1 : 0) + 0.1 * (c.night ? 1 : 0);
+  const ctx = 0.25 * (c.typing ? 1 : 0) + 0.15 * clamp01(c.typingIntensity) + 0.3 * (c.busySwitching ? 1 : 0) + 0.2 * (c.video ? 1 : 0) + 0.1 * (c.night ? 1 : 0);
   return (
     RHYTHM_D_OFFSET +
     0.25 * clamp01(c.autonomy) +

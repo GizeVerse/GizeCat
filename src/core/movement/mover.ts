@@ -335,6 +335,8 @@ interface Flight {
   slip: SlipKind | null;
   /** v1.2: this flight is the fall after a deliberate 'miss' (LandingInfo.slipped). */
   slipped: boolean;
+  /** v1.2: the user dragged the planned target away during the flight (the landing is 'gone', not a miss). */
+  draggedAway?: boolean;
 }
 
 /** The ledge the cat stands on, tracked through the provider's live geometry. */
@@ -2130,6 +2132,7 @@ export class Mover {
     if (c.kind !== 'pounce' && this.cfg.bailOut !== true) return false;
     const snap = c.snap;
     if (!snap) return false;
+    if (target.key !== this.surface.key && this.beingDragged(target, input)) return true;
     const tol = MOVEMENT.planStaleBodyLengths * this.bodyWidth;
     if (Math.abs(target.y - snap.y) > tol) return true;
     if (Math.abs(target.landX0 - snap.x0) > tol && Math.abs(target.landX1 - snap.x1) > tol) return true;
@@ -2138,6 +2141,11 @@ export class Mover {
       if (live && Number.isFinite(live.confidence) && live.confidence < MOVEMENT.planCoveredConfidence) return true;
     }
     return false;
+  }
+
+  /** A window the user is dragging moves on during the flight: no target for a take-off, and a landing it pulled away is no miss. */
+  private beingDragged(t: Surface, input: MoverInput): boolean {
+    return t.kind === 'ledge' && t.ownerId !== null && (input.movingWindowIds ?? NO_MOVING).has(t.ownerId);
   }
 
   /** Reports a stale-plan cancel and, after planCancelBackoffCount of them within the window, starts the backoff. */
@@ -2243,7 +2251,7 @@ export class Mover {
       // first valid surface below, the one it jumped from included (it is no longer just under its paws).
       this.x = end.x;
       this.y = end.y;
-      this.flight = { ...f, t0: now, lastT: now, x0: end.x, y0: end.y, vx: end.vx * 0.5, vy0: end.vy, plan: null, target: null, ignoreKey: null };
+      this.flight = { ...f, t0: now, lastT: now, x0: end.x, y0: end.y, vx: end.vx * 0.5, vy0: end.vy, plan: null, target: null, ignoreKey: null, draggedAway: this.beingDragged(f.target, input) };
       return;
     }
 
@@ -3275,7 +3283,7 @@ export class Mover {
     const target = this.supportByKey(wj.targetKey);
     const land = target ? this.graph.wallJumpLanding(this.navWorld, track, this.y, target) : null;
     const tooFar = land !== null && Math.abs(land.x - wj.landX) > MOVEMENT.planStaleBodyLengths * this.bodyWidth;
-    if (!target || !land || tooFar || (land.y - this.y) / track.scale > leaveLimits(this.cfg).maxDip) {
+    if (!target || !land || tooFar || this.beingDragged(target, input) || (land.y - this.y) / track.scale > leaveLimits(this.cfg).maxDip) {
       c.wallJump = null;
       c.dir = 1;
       this.cancelPlan(input.now, out);
@@ -3407,7 +3415,7 @@ export class Mover {
       impact: impactClass(impactVy / scale),
       jumpKind: f?.kind ?? null,
       slipped: f?.slipped ?? false,
-      ...this.plannedLanding(f?.plannedKey ?? null, surface, forced, input),
+      ...this.plannedLanding(f?.plannedKey ?? null, surface, forced, input, f?.draggedAway === true),
     };
     this.bailing = null;
     this.setGrounded(surface, x, live);
@@ -3419,9 +3427,10 @@ export class Mover {
   }
 
   /** v1.2 fall accounting: how a planned jump ended against the support it aimed at. */
-  private plannedLanding(key: string | null, surface: Surface, forced: boolean, input: MoverInput): Pick<LandingInfo, 'plannedSupportId' | 'plannedOutcome'> {
+  private plannedLanding(key: string | null, surface: Surface, forced: boolean, input: MoverInput, draggedAway = false): Pick<LandingInfo, 'plannedSupportId' | 'plannedOutcome'> {
     if (key === null) return { plannedSupportId: null, plannedOutcome: null };
     if (!forced && surface.key === key) return { plannedSupportId: key, plannedOutcome: 'landed' };
+    if (draggedAway) return { plannedSupportId: key, plannedOutcome: 'gone' };
     const exists = this.navWorld.floors.some((fl) => fl.key === key) || this.liveLedge(input, key) !== null;
     return { plannedSupportId: key, plannedOutcome: exists ? 'missed' : 'gone' };
   }

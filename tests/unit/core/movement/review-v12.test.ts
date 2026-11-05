@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { ProgressMonitor, LOOP_LANDINGS } from '../../../../src/core/behavior/watchdog';
 import { MOVEMENT } from '../../../../src/core/movement';
-import { BW, display, edgeId, env, FLOOR_Y, SINGLE, taskbar, world, type Env } from './v12Fixtures';
+import { BW, display, edgeId, env, FLOOR_Y, ledge, SINGLE, taskbar, world, type Env } from './v12Fixtures';
 
 const on = (e: Env): string => {
   const s = e.m.support;
@@ -233,5 +233,67 @@ describe('review RES-4: a slip needs a ledge edge', () => {
     t.m.setGoal({ x: 1450, y: 620, pace: 'walk', allowJump: true });
     expect(t.until((r) => r.crouchStarted, 15_000), 'prepares the hop').toBe(true);
     expect(t.m.armSlip('scramble')).toBe(true);
+  });
+});
+
+describe('band B9 under window-drag churn: a window being dragged is no landing to plan on', () => {
+  const CFG = { jumpDownSafeDip: 477, jumpDownMaxDip: 644, bailOut: true };
+
+  it('no take-off from a crouch onto it: the plan is cancelled, and the cat goes once the drag is over', () => {
+    const e = env(SINGLE, CFG, 0.5);
+    e.walls = false;
+    e.windows = { w: { x: 800, y: 800, width: 400, height: 240 } };
+    e.step();
+    e.goal({ x: 1000, y: 800 });
+    expect(e.until((r) => r.crouchStarted, 15_000), 'prepares the jump').toBe(true);
+    e.moving.add('w');
+    let cancelled = false;
+    let tookOff = false;
+    e.until((r) => {
+      cancelled ||= r.planCancelled;
+      tookOff ||= r.tookOff;
+      return cancelled || tookOff;
+    }, 2000);
+    expect(tookOff).toBe(false);
+    expect(cancelled).toBe(true);
+    e.moving.clear();
+    expect(e.until((r) => r.goal === 'arrived', 15_000), 'arrives after the drag').toBe(true);
+    expect(on(e)).toBe('windowTop:w');
+  });
+
+  it('no wall jump onto it: it climbs down instead', () => {
+    const e = env(SINGLE, { ...CFG, screenEdges: true, wallJumps: true }, 0.1);
+    e.extra = [ledge('windowTop:t', 'windowTop', 't', 700, 100, 500)];
+    e.goal({ x: 0, y: 500, surfaceId: edgeId('1', 'left') });
+    expect(e.until((r) => r.goal === 'arrived', 40_000), 'holds on the edge').toBe(true);
+    const leap = e.m.leaveOptions().find((o) => o.kind === 'climbLeap' && o.toKind === 'windowTop');
+    expect(leap).toBeDefined();
+    expect(e.m.leaveBy(leap as never, 'walk')).toBe(true);
+    e.moving.add('t');
+    let tookOff = false;
+    e.until((r) => {
+      tookOff ||= r.tookOff;
+      return e.m.grounded;
+    }, 30_000);
+    expect(tookOff).toBe(false);
+    expect(e.m.grounded).toBe(true);
+    expect(e.m.y).toBe(FLOOR_Y);
+  });
+
+  it('dragged away during the flight: the landing is reported gone, not as a miss (a physics error)', () => {
+    const run = (dragged: boolean): string | null | undefined => {
+      const e = env(SINGLE, CFG, 0.5);
+      e.walls = false;
+      e.windows = { w: { x: 800, y: 800, width: 400, height: 240 } };
+      e.step();
+      e.goal({ x: 1000, y: 800 });
+      expect(e.until((r) => r.tookOff, 15_000), 'takes off').toBe(true);
+      if (dragged) e.moving.add('w');
+      e.windows = { w: { x: 800, y: 700, width: 400, height: 340 } };
+      const l = e.nextLanding(5000);
+      return l?.plannedOutcome;
+    };
+    expect(run(true)).toBe('gone');
+    expect(run(false)).toBe('missed');
   });
 });
