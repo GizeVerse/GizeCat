@@ -755,6 +755,7 @@ test.describe('v1.2 lively: hunting the injected cursor (app REAL, input SIMULAT
       const t0 = Date.now();
       const seen = new Set<string>();
       const strikes: Array<{ clip: string; clearanceDip: number; overlayInteractive: boolean }> = [];
+      const interactiveDetail: Array<Record<string, unknown>> = [];
       let inStrike = false;
       const huntSeq: string[] = [];
       const seenAll = (): boolean => ['stalk', 'crouch', 'pounce'].every((c) => seen.has(c)) && (seen.has('pawAt') || seen.has('swat'));
@@ -774,7 +775,20 @@ test.describe('v1.2 lively: hunting the injected cursor (app REAL, input SIMULAT
           const strike = hunting && (STRIKE_CLIPS.has(out.clip) || out.jumpKind === 'pounce');
           if (hunting && (out.clip === 'pawAt' || out.clip === 'swat' || (inStrike && !strike) || out.clip === 'pounce')) {
             const ov = await hook(app, 'getOverlays');
-            strikes.push({ clip: out.clip, clearanceDip: round1(distToRect(cursor, out.boundsPx) / scale), overlayInteractive: ov.some((x) => !x.ignoreMouse) });
+            const clearanceDip = round1(distToRect(cursor, out.boundsPx) / scale);
+            let overlayInteractive = ov.some((x) => !x.ignoreMouse);
+            if (overlayInteractive) {
+              // The renderer reports its hit rects a frame late, and at this time scale a frame is many px of
+              // travel: look again once it has reported, and keep the detail either way.
+              await sleep(150);
+              const later = await observe(app);
+              const laterOv = await hook(app, 'getOverlays');
+              const stillInteractive = laterOv.some((x) => !x.ignoreMouse);
+              const laterClearanceDip = later.out ? round1(distToRect(cursor, later.out.boundsPx) / scale) : null;
+              interactiveDetail.push({ clip: out.clip, clearanceDip, cursor, boundsPx: out.boundsPx, stillInteractive, laterClip: later.out?.clip ?? null, laterClearanceDip });
+              overlayInteractive = stillInteractive && laterClearanceDip !== null && laterClearanceDip > 0;
+            }
+            strikes.push({ clip: out.clip, clearanceDip, overlayInteractive });
           }
           inStrike = strike;
           if (strike) return; // a still cursor through the strike
@@ -791,7 +805,7 @@ test.describe('v1.2 lively: hunting the injected cursor (app REAL, input SIMULAT
       await hook(app, 'injectCursor', null);
       const p = tr.last!.profile;
       const strikeClear = strikes.filter((s) => s.clip === 'pawAt' || s.clip === 'swat').map((s) => s.clearanceDip);
-      record(info, 'hunt', { ...tr.report(), done, hunts: p.hunts, clipsInHunts: [...seen], sequence: huntSeq.join(' ').slice(0, 800), jumpKinds: [...tr.jumpKinds], strikes: strikes.length, minClearanceAllDip: strikes.length ? Math.min(...strikes.map((s) => s.clearanceDip)) : null, minClearanceStrikeDip: strikeClear.length ? Math.min(...strikeClear) : null, interactiveDuringStrike: strikes.filter((s) => s.overlayInteractive).length, sample: strikes.slice(0, 12) });
+      record(info, 'hunt', { ...tr.report(), interactiveDetail: interactiveDetail.slice(0, 8), done, hunts: p.hunts, clipsInHunts: [...seen], sequence: huntSeq.join(' ').slice(0, 800), jumpKinds: [...tr.jumpKinds], strikes: strikes.length, minClearanceAllDip: strikes.length ? Math.min(...strikes.map((s) => s.clearanceDip)) : null, minClearanceStrikeDip: strikeClear.length ? Math.min(...strikeClear) : null, interactiveDuringStrike: strikes.filter((s) => s.overlayInteractive).length, sample: strikes.slice(0, 12) });
       if (!done && tr.heldAtS.length > 0) skipBecause(info, `environment: the desk was in use (${JSON.stringify(tr.confounders())})`);
       expect(seen.has('stalk'), 'stalk seen').toBe(true);
       expect(seen.has('crouch'), 'crouch seen').toBe(true);
@@ -1000,6 +1014,9 @@ test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)',
         const overlay = (await hook(app, 'getOverlays')).find((x) => c.x >= x.boundsPx.x && c.x < x.boundsPx.x + x.boundsPx.width);
         const clickThrough = overlay ? (probe.exStyle(overlay.hwnd) & WS_EX_TRANSPARENT) === WS_EX_TRANSPARENT : false;
         const at = probe.rootWindowAt(c.x, c.y);
+        // Only while it still clings: a cat that stepped off meanwhile is on the floor, where it is clickable (review RES-1).
+        const still = (await observe(app)).out;
+        if (!still || supportKind(still) !== 'screenEdge') break;
         if (!clickThrough || at !== win.hwnd) wrong.push({ ms: Date.now() - t0, restedMs: Date.now() - held, clickThrough, atOwnWindow: at === win.hwnd });
       }
       const clingMs = Date.now() - t0;
