@@ -1,0 +1,343 @@
+{
+  "exe": "release\\win-unpacked\\DesktopCat.exe",
+  "minutes": 12,
+  "userData": "%TEMP%/dcat-qa-traversal-*/userdata",
+  "started": "2026-11-05T09:21:57.197Z",
+  "probe": {
+    "frame": {
+      "x": 297,
+      "y": 180,
+      "width": 1334,
+      "height": 832
+    },
+    "scale": 1.25,
+    "topmostReasserted": true
+  },
+  "summaries": [
+    {
+      "t": "2026-11-05T09:22:07.481Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "idle",
+      "verdict": "exploring",
+      "support": "floor",
+      "excursions": 0
+    },
+    {
+      "t": "2026-11-05T09:23:07.533Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "active",
+      "verdict": "cooldown",
+      "support": "floor",
+      "excursions": 1
+    },
+    {
+      "t": "2026-11-05T09:24:07.582Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "active",
+      "verdict": "elevated",
+      "support": "windowTop",
+      "excursions": 2
+    },
+    {
+      "t": "2026-11-05T09:28:17.750Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "active",
+      "verdict": "elevated",
+      "support": "windowSide",
+      "excursions": 2
+    },
+    {
+      "t": "2026-11-05T09:29:17.804Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "active",
+      "verdict": "exploring",
+      "support": "floor",
+      "excursions": 2
+    },
+    {
+      "t": "2026-11-05T09:30:17.833Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "idle",
+      "verdict": "exploring",
+      "support": "floor",
+      "excursions": 2
+    },
+    {
+      "t": "2026-11-05T09:34:28.010Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "idle",
+      "verdict": "elevated",
+      "support": "windowTop",
+      "excursions": 3
+    },
+    {
+      "t": "2026-11-05T09:35:28.081Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 1,
+        "windowSide": 2,
+        "tabStrip": 0
+      },
+      "frontMaximized": false,
+      "tabStrips": "active",
+      "verdict": "elevated",
+      "support": "windowTop",
+      "excursions": 3
+    },
+    {
+      "t": "2026-11-05T09:36:28.131Z",
+      "listed": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "accepted": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "reachable": {
+        "taskbar": 0,
+        "windowTop": 0,
+        "windowSide": 0,
+        "tabStrip": 0
+      },
+      "frontMaximized": true,
+      "tabStrips": "active",
+      "verdict": "frontMaximized",
+      "support": "floor",
+      "excursions": 3
+    }
+  ],
+  "stays": [
+    {
+      "t": "2026-11-05T09:23:07.533Z",
+      "kind": "windowTop",
+      "dwellS": 36.8,
+      "plannedS": 347.5,
+      "reason": "drag",
+      "leave": null,
+      "arrivedBy": "climb",
+      "bailOut": null,
+      "overdue": false,
+      "suppressed": 0
+    },
+    {
+      "t": "2026-11-05T09:28:27.761Z",
+      "kind": "windowTop",
+      "dwellS": 299.3,
+      "plannedS": 289.3,
+      "reason": "leave",
+      "leave": "climbLeap",
+      "arrivedBy": "carried",
+      "bailOut": null,
+      "overdue": false,
+      "suppressed": 0
+    },
+    {
+      "t": "2026-11-05T09:35:48.094Z",
+      "kind": "windowTop",
+      "dwellS": 65.2,
+      "plannedS": 44.2,
+      "reason": "leave",
+      "leave": "climbLeap",
+      "arrivedBy": "climb",
+      "bailOut": null,
+      "overdue": false,
+      "suppressed": 0
+    }
+  ],
+  "staySummary": {
+    "n": 3,
+    "medianS": 65.2,
+    "minS": 36.8,
+    "maxS": 299.3,
+    "byKind": {
+      "windowTop": 3
+    },
+    "byReason": {
+      "drag": 1,
+      "leave": 2
+    },
+    "byLeave": {
+      "climbLeap": 2
+    },
+    "byArrivedBy": {
+      "climb": 2,
+      "carried": 1
+    },
+    "overdue": 0,
+    "suppressedByRateLimit": 0
+  },
+  "checks": {
+    "appRanThroughout": true,
+    "wentUp": true,
+    "firstUpLoggedAt": "2026-11-05T09:23:07.533Z",
+    "secondsToFirstUpLog": 67,
+    "backOnFloorAfterClose": true,
+    "secondsToFloorLogAfterClose": 37,
+    "seenOnASide": true,
+    "maxExcursions": 3,
+    "errorLines": [],
+    "warnLines": 1,
+    "boot": {
+      "version": "1.2.0",
+      "electron": "44.9.3",
+      "packaged": true,
+      "dev": false,
+      "test": false,
+      "launchedAtLogin": false,
+      "settings": "ok"
+    },
+    "testHooksIgnoredWhenPackaged": true,
+    "cleanedUp": {
+      "probeExited": true,
+      "appExited": true
+    }
+  },
+  "pids": {
+    "probe": 48396,
+    "app": 44560
+  },
+  "finished": "2026-11-05T09:36:34.245Z"
+}

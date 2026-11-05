@@ -4,15 +4,15 @@ A living desktop companion for Windows: **one** animated, persistent cat that li
 
 ![The cat's coats and poses, rendered by the app's own renderer](docs/images/skins.png)
 
-- **Original procedural art** — a vector rig drawn in code (21 animation clips, 7 coats, optional pixel style), no third-party assets.
+- **Original procedural art** — a vector rig drawn in code (36 animation clips, 7 coats, optional pixel style), no third-party assets.
 - **Click-through by design** — only the cat's body catches the mouse; everything else goes to the windows underneath. No global mouse or keyboard hooks.
 - **Works offline, no AI required.** Optional, opt-in screen perception (local statistics, or an AI vision model you configure) with privacy enforced in code.
 
-> Status: v1.1.1, built and validated on Windows 11 (see [Tested environments](#tested-environments)). The installer is **not code-signed**. v1.1.1 fixes v1.1.0's cat never leaving the floor on a real desktop ([diagnosis](docs/research/v1.1.1-floor-only-diagnosis.md)).
+> Status: v1.2.0, built and validated on Windows 11 (see [Tested environments](#tested-environments)). The installer is **not code-signed**. v1.2 makes the cat livelier: it explores on its own, stays on windows and tab strips for minutes, hunts the cursor, and reacts to throws in varied ways ([design](docs/adr/0003-lively-cat.md), [why it was passive](docs/research/v1.2/diagnosis.md)).
 
 ## Install
 
-Build the installer with `npm run package` (see [Build, run, test](#build-run-test)) — no release is published yet — then run `release/Desktop-Cat-Setup-1.1.1.exe` (per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`, no admin). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. From then on Desktop Cat starts when you sign in to Windows (one-time notification; turn it off in Settings → General or Task Manager → Startup apps — an opt-out is never overridden). Upgrading from 1.0 or 1.1.0 keeps your cat and settings (quit the running cat from its tray menu first). Uninstall from Windows Settings → Apps (removes the startup entry too).
+Build the installer with `npm run package` (see [Build, run, test](#build-run-test)) — no release is published yet — then run `release/Desktop-Cat-Setup-1.2.0.exe` (per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`, no admin). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. From then on Desktop Cat starts when you sign in to Windows (one-time notification; turn it off in Settings → General or Task Manager → Startup apps — an opt-out is never overridden). Upgrading from an earlier version keeps your cat and settings (quit the running cat from its tray menu first). Uninstall from Windows Settings → Apps (removes the startup entry too).
 
 ## Controls
 
@@ -81,6 +81,8 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 | Environment | What ran | Result |
 |---|---|---|
 | Windows 11 Home 10.0.26200, x64, one 1920×1200 display at 125 %, auto-hide bottom taskbar, Edge 156, Chrome 155 | v1.1: typecheck, lint, 2834 unit/integration tests, 30 Playwright E2E tests against the real app (28 passed + 2 environment skips in the final run, all 30 passed earlier), silent install with startup registration/repair/Task-Manager-disable/upgrade/uninstall checks, a real 1.0 → 1.1 upgrade with settings migration, taskbar/z-order probe with control, UI Automation probe with own Edge/Chrome instances, packaged smoke, resource benchmark | all pass — see [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
+| Same machine, v1.2.0 | typecheck, lint, 3645 unit/integration tests, 30 default Playwright tests against the real app, REAL scenarios with own windows (window, Edge 156 and Chrome 155 tab-strip stays through ordinary geometry updates, hunting, throws, screen edge beside a maximized window, covered support, sound), the **packaged** build going up by itself, packaged smoke, fuses, resource benchmark, behaviour band matrix (SIMULATED) | pass, with the narrow misses and open items in [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
+| Installing 1.2.0 over a running 1.1.1, the cat on a real Windows Terminal strip, File Explorer tab strips (ship off) | not run | **not observed** |
 | Same machine, v1.1.1 | typecheck, lint, 3078 unit/integration tests, 33 Playwright E2E tests (30 passed + 3 skips: the opt-in browser test, run separately, and 2 environment preconditions), REAL traversal: a fresh cat leaps onto and climbs a typical-size window and walks its top (dev build and the **packaged** build), and reaches the tab strip of an own floating Edge 156 and Chrome 155 window; packaged smoke, fuses, resource benchmark | all pass — see [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
 | Installing 1.1.1 over a running 1.1.0, the user's own browser profiles | not run (the machine's real install was in use) | **not observed** |
 | Reboot / sign-in start, a physically revealed taskbar with the cat riding it | registration verified on a real install; riding SIMULATED through the real app | **not observed** |

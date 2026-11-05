@@ -111,6 +111,7 @@ function win32() {
   const GetWindowThreadProcessId = user32.func('uint32_t __stdcall GetWindowThreadProcessId(void *h, _Out_ uint32_t *pid)');
   const IsWindowVisible = user32.func('int __stdcall IsWindowVisible(void *h)');
   const PostMessageW = user32.func('int __stdcall PostMessageW(void *h, uint32_t msg, uintptr_t w, intptr_t l)');
+  const SetWindowPos = user32.func('int __stdcall SetWindowPos(void *h, intptr_t after, int x, int y, int cx, int cy, uint32_t flags)');
   const buf = Buffer.alloc(512);
   w32 = {
     windows() {
@@ -128,6 +129,8 @@ function win32() {
     },
     /** WM_SYSCOMMAND SC_CLOSE to one of OUR windows. */
     scClose: (h) => PostMessageW(h, 0x0112, 0xf060, 0) !== 0,
+    /** HWND_TOPMOST on one of OUR windows (no move, size or activation), or a maximized window of the user's covers it. */
+    topmost: (h) => SetWindowPos(h, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010) !== 0,
   };
   return w32;
 }
@@ -178,7 +181,9 @@ async function openOwnWindows() {
           }
         }
       });
-      own.notes.push(`edge: ${pids.length} own processes`);
+      let raised = 0;
+      for (const w of win32().windows()) if (w.visible && w.cls === 'Chrome_WidgetWin_1' && pids.includes(w.pid) && win32().topmost(w.h)) raised++;
+      own.notes.push(`edge: ${pids.length} own processes, ${raised} window(s) raised above normal windows`);
     }
   }
   if (livelyWindows.has('terminal')) {

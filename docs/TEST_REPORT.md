@@ -2,6 +2,83 @@
 
 Labels: **REAL** = executed and observed on the machine below; **MOCKED** = executed against fakes/mock servers; **SIMULATED** = real code driven with synthetic geometry/events; **UNVERIFIED** = not executed.
 
+# v1.2.0 (2026-11-05): a lively cat
+
+Code: branch `feat/v1.2-lively`, application code at `d96c4ab` (later commits change a bench script and docs only; nothing that ships). Installer `release/Desktop-Cat-Setup-1.2.0.exe`, 121,515,413 bytes, SHA-256 `02C05826675D7F946BDDAB7A1C28DE59F644E1651915EEEC70507EC17B1657B3`, unsigned; `release/win-unpacked` is its payload from the same `npm run package`. Same machine: Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide bottom taskbar, Edge 156.0.4314.50, Chrome 155.0.8059.79, Windows Terminal 1.24.12741.0. The owner was at the desk during several runs, usually with a maximized window in front. Design: ADR 0003. Why the cat was passive and left tab strips early: [docs/research/v1.2/diagnosis.md](research/v1.2/diagnosis.md).
+
+## Automated suites
+
+| Tier | Result |
+|---|---|
+| `node .claude/scripts/verify.mjs full` at `d96c4ab` | **PASS**, not stale: typecheck, lint, unit, build, e2e |
+| Vitest (unit + integration) | **3645 passed, 26 skipped, 1 todo** (177 of 179 files; the skips are opt-in real-browser tests, the long band tier and one marker) |
+| Playwright default suite (real app) | **30 passed, 15 skipped**: 12 opt-in lively scenarios (run separately, below), the v1.1 opt-in browser test, and 2 environment preconditions (a maximized window in front of the taskbar or probe, as in v1.1) |
+| Band matrix (`scripts/behavior-profile.mjs`, 8 seeds × 3 sim-h per cell; SIMULATED: real Sim, Mover and host loop, synthetic user) | every band passes except 3 narrow checks, below. Raw: `docs/research/v1.2/profile-v12.json` |
+
+## Before and after (SIMULATED, same harness; baseline = v1.1.1 behaviour, `profile-baseline.json`)
+
+| Metric | P1 (the owner's cat and settings), floating browser | P2 (defaults), floating browser |
+|---|---|---|
+| Active share of awake time | 19.0 % → **31.8 %** | 12.9 % → **27.1 %** |
+| Median stay up there (Kaplan–Meier) | 74 s → **177 s** | 89 s → **170 s** |
+| Stays over 5 min | 3.7 % → **29.4 %** | 1.5 % → **26.8 %** |
+| Cursor chases (v1.1.1) or hunts (v1.2) per hour, ordinary use | 1.04 → **1.92** | 0.29 → **1.92** |
+| Pounces per hour, ordinary use (baseline from the diagnosis's older user model) | 0.08 → **0.92** | 0 → **0.83** |
+| Hides after a hard throw | 81 % → **15.9 %** | 57 % → **14.5 %** |
+| Own trips up per hour | 12.8 → 6.8 (longer stays) | 10.1 → 7.1 |
+| Physics-error falls, stuck resets | 0, 0 | 0, 0 |
+
+Also: playing with the pointer 6.6–7.2 hunts and 4.2–5.0 pounces per hour, smallest gap 247 s; 0 hunts while typing; throws give 9 reaction kinds, none above about 25 %, moods recover (160/160); two windows give 4 ways off, none above 37 %; nothing to climb but screen edges 3.1–3.7 visits per hour, 0 with the setting off or without the host's edge bands; a cat nobody pets keeps its stays (142 s experienced median) since the review.
+
+**Bands not met, narrowly:** hunts while working with the mouse 1.38/h against ≤ 1 on one cell (pounces near a press stay 0); window climbs 12.3/h against ≤ 12 on the window-churn cell; one seed of "active share with a maximized window ≤ the same seed's floating window". **Changed by lead decision, with the measurements in ADR 0003 §14:** asleep floor 5 % instead of 8 % (the real handling rate ends most naps); typing excursion ratio up to 0.9; P(> 15 min) monitored, not gated; leave variety measured on a two-window layout; the short band budget is a runaway guard, not 20 s (about 5 s alone, 32.8 s of CPU in the loaded suite on this shared hybrid CPU).
+
+## Real-Windows checks on the final code (REAL unless noted)
+
+Own throwaway windows and browsers only, closed afterwards; the owner's windows and installed app were never touched. Sim-seconds are at time ×8–12 through the test hook.
+
+| Scenario | Result |
+|---|---|
+| **Packaged build** (`scripts/qa-traversal-packaged.mjs`, no test hooks, real time, typical window) | up by itself within about 1 min (seen on a side, then the top); 3 stays: 36.8 s (ended by someone dragging the cat at the desk), 299.3 s (arrived carried) and 65.2 s (arrived by climbing), the last two ended by a climb-and-leap; window closed → back on the floor; 0 error lines; `DESKTOP_CAT_TEST=1` ignored. Raw: `docs/research/v1.2/qa-traversal-packaged.json` |
+| Window (dev build) | fresh cat, 3 stays of 136, 72 and 413 sim-s, 1,170–4,559 px walked, each left by itself (climb down, climb and leap); window closed with the cat up → on the floor in about 1 s; 0 falls, 0 stuck |
+| **Edge 156 dwell** (own instance, floating) | strip found on the floor; 5 stays of 70–614 sim-s, median 166, all ended by the cat's own choice (climb down 2, climb and leap 3), through up to 21 ordinary geometry updates (new tabs, moves, resizes of the own window); stays followed their plan closely; 0 lost to an update |
+| **Chrome 155 dwell** (same) | 5 stays of 68–326 sim-s, median 301, all its own choice (climb down 2, climb and leap 3), through up to 11 updates |
+| Hunting (cursor injected: input SIMULATED, app REAL) | stalk, crouch, pounce and bat seen; 9 of 10 runs passed with 93 strikes, 0 with the overlay taking the mouse, smallest clearance 45.4 DIP. **One earlier run saw the overlay interactive in 2 of 25 strike samples** (smallest strike clearance there 88 DIP). Renderer hit rects arriving late at a high time scale is a hypothesis; it did not recur in 9 runs with extra logging, so the cause is UNVERIFIED |
+| Throws (real drag path, input SIMULATED) | 10 throws: grumpy 3, flight 2, hide 2, defensive 1, shrug 1, startled jump 1; fear back to 0, cat walking again |
+| Screen edge beside an own maximized window | peeks only (6.6 s, 160 px high, ended by itself); 24 click-through checks over the clinging cat, 0 wrong; setting off: 0 climbs |
+| Covered support | an own window maximized over the cat: guard up within about 93 ms of the cover, 0 wrong clicks, a jump, no free fall; on the floor afterwards the overlay takes the mouse (positive control) |
+| Sound | a throw's cue opened an audio context; switching sound off closed it |
+| Windows Terminal | helper probe on an own window passed: protocol 2, 2 tabs, 1.34 ms per read (max 2.49), owner memory +0.2 MB, helper 23.8 MB private, a new tab raised an event in 97 ms. **The cat walking a Terminal strip in the real app: UNVERIFIED**: the E2E skipped because the owner's Terminal shares the process, so its own window cannot be isolated (SIMULATED through the real pipeline only) |
+| Packaged app | smoke: first instance stays up, second launch exits 0, 0 errors, 0 Run writes (1 warning: the owner's running cat holds the shortcut); fuses unchanged; helper protocol 2, per-monitor-v2 |
+
+**Real bugs only the desktop showed, fixed with regression tests:** a cursor or typing during the mount left the cat 24 s on a screen edge (decisions waited out a hold); strip stays of 0 s right after a real one (a trip now names the surface its target lies on); a cat on the floor near a screen side could not be clicked, petted or grabbed over a window (found by review, RES-1).
+
+## Adversarial review (REAL)
+
+5 dimensions against the brief's failure list, each finding independently verified: **26 findings, 25 confirmed (2 high, 7 medium, 16 low), 1 refuted**. All fixed with regression tests, except that a cue playing when the cat is paused or sound goes off keeps a tail of at most 2.4 s (documented). The two high ones: a cat nobody pets had every stay cut to about 60 s (the bands assumed heavy handling; a hands-off band cell now gates it), and RES-1 above. Details in ADR 0003, "As built".
+
+## Resource benchmark (REAL, `scripts/bench.mjs --phase-sec=90 --lively`)
+
+CPU in % of one core over all app processes. Raw: `docs/bench/bench-2026-11-05T09-12-54-630Z.json`. Gate B12 passes.
+
+| Phase | v1.1.1 | v1.2.0 avg (max) | Private MB | Timers / handles |
+|---|---|---|---|---|
+| Awake | 1.05 % | **0.91 %** (1.23 %) | 336 → 340 | 5 → 5 / 7 → 7 |
+| Asleep | 0.66 % | 0.63 % (0.91 %) | 342 → 328 | 5 → 5 / 7 → 7 |
+| Hidden | 0.03 % | **0.02 %** (0.03 %) | 333 → 334 | 5 → 5 / 7 → 7 |
+| Paused | 0.58 % | 0.57 % (0.59 %) | 329 → 330 | 5 → 5 / 7 → 7 |
+| Lively (own windows, injected cursor) | n/a | 1.06–1.13 % (1.56 %) | 345 → 355 | 5 → 5 / 11 → 7 |
+
+0 tick errors, 0 errors, 1 warning (the owner's running cat holds the shortcut). Machine load differed between the runs. **Not measured:** the tab-strip helper's sustained CPU inside the app (the bench's sampler found no helper in its lively runs, whether idle or missed is UNVERIFIED) and the cost while the cat stays on a surface specifically. Upper bound from the REAL probe: at most about one read per second at about 1.3 ms, plus 23.8 MB private while it runs.
+
+## Not verified in v1.2 (UNVERIFIED)
+
+- **Installing 1.2.0 over the owner's running 1.1.1**: not done here (the NSIS installer would replace the running app; `install-test.ps1` also refuses while the production startup entry exists). Same installer configuration whose install, upgrade and uninstall passed REAL for 1.1.0. The settings v2 → v3 migration and the 1.1.1 downgrade round trip are tested on files (SIMULATED), not on the owner's install.
+- The cat on a real Windows Terminal strip; File Explorer tab strips ship **off** (its soak was not run); Notepad, VS Code and other Electron apps and Firefox are never queried; maximized windows offer nothing to climb.
+- The owner's own browsers (profiles, extensions, toolbar layouts); long runs (hours) of the lively behaviour; a real user throwing the cat (input SIMULATED through the real drag path).
+- Sound quality (nobody has listened to it); new poses reviewed in preview sheets by the renderer engineer, not on a live desktop by a person.
+- Multi-monitor, mixed DPI hardware, Windows 10, a docked always-visible taskbar, scales other than 125 %.
+- Earlier items still open: a real reboot or sign-in start, the cat riding a physically revealed taskbar, a standard-user token.
+
 # v1.1.1 (2026-10-29): the cat never left the floor
 
 Code: branch `feat/v1.1-surfaces`, application code at `19cd1dd` (later commits change tests, scripts and docs only; nothing that ships). Installer `release/Desktop-Cat-Setup-1.1.1.exe`, 121,464,882 bytes, SHA-256 `D7B52F171FC0DA1C726AFE39A23EE67814236B63978D5B709D3B431DBB8EF36D`, unsigned; `release/win-unpacked` is its payload from the same `npm run package`. Same machine as below: Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide bottom taskbar, Edge 156.0.4314.50, Chrome 155.0.8059.79. The user was working at the desk during the runs (maximized windows in front much of the time; they dragged test windows and the test cat in early runs).

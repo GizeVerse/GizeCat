@@ -1,0 +1,152 @@
+{
+  "at": "2026-11-05T09:37:05.031Z",
+  "phaseSec": 90,
+  "sampleSec": 10,
+  "os": "Windows_NT 10.0.26200",
+  "cpus": 22,
+  "appPid": 38864,
+  "phases": {
+    "lively": {
+      "cpuAvgPercentOfOneCore": 1.06,
+      "cpuMaxPercentOfOneCore": 1.38,
+      "workingSetMB": {
+        "first": 572,
+        "last": 611
+      },
+      "privateMB": {
+        "first": 348,
+        "last": 379
+      },
+      "asleepShare": 0,
+      "mainHeapMB": {
+        "first": 14,
+        "last": 15
+      },
+      "timers": {
+        "first": 5,
+        "last": 5,
+        "max": 5
+      },
+      "handles": {
+        "first": 11,
+        "last": 7
+      },
+      "statesSeen": [
+        "resting",
+        "idle",
+        "watchingUser",
+        "grooming",
+        "curious"
+      ],
+      "lastByProcess": {
+        "Browser:32112": 0.14,
+        "GPU:49144": 0.67,
+        "Utility:47788": 0,
+        "Tab:25344": 0.25,
+        "Tab:39368": 0
+      },
+      "uiaHelper": {
+        "runningShare": 0,
+        "cpuAvgPercentOfOneCore": 0,
+        "cpuMaxPercentOfOneCore": null,
+        "privateMB": null,
+        "workingSetMB": null,
+        "pids": []
+      },
+      "withHelper": {
+        "cpuAvgPercentOfOneCore": 1.06,
+        "privateMBLast": 379
+      },
+      "label": "own windows only, injected cursor, no forced command.play",
+      "ownWindows": [
+        "edge: 16 own processes, 1 window(s) raised above normal windows"
+      ],
+      "behaviorProfile": {
+        "since": 0,
+        "at": 106776.34909999999,
+        "timeMs": {
+          "asleep": 3678.2194999999997,
+          "calm": 92953.499,
+          "active": 10144.6306,
+          "interaction": 0,
+          "reaction": 0,
+          "physical": 0,
+          "away": 0
+        },
+        "activeShare": 0.09839781419274167,
+        "decisions": 6,
+        "excursions": {
+          "arrivals": 0,
+          "byKind": {},
+          "dwellS": {
+            "n": 0,
+            "p10": 0,
+            "p50": 0,
+            "p90": 0,
+            "max": 0
+          },
+          "byEnd": {},
+          "byLeave": {}
+        },
+        "hunts": {
+          "count": 0,
+          "pounces": 0,
+          "byOutcome": {}
+        },
+        "falls": {
+          "count": 0,
+          "byCause": {},
+          "byImpact": {}
+        },
+        "slips": 0,
+        "reactions": {},
+        "screenEdgeVisits": 0,
+        "screenEdgePeeks": 0,
+        "sleeps": 0,
+        "stuckResets": 0,
+        "moodMs": {
+          "wary": 0,
+          "irritable": 0,
+          "fearful": 0
+        },
+        "context": {
+          "typing": 104358.9314,
+          "foregroundMaximized": 101974.3172,
+          "cursorInReach": 33187.4638
+        },
+        "recentStays": []
+      }
+    }
+  },
+  "gateB12": {
+    "status": "n/a",
+    "reason": "no awake phase"
+  },
+  "logProblems": {
+    "warn": 1,
+    "error": 0
+  },
+  "hostDebug": {
+    "ticks": 1686,
+    "tickErrors": 0,
+    "simNow": 112831.5377,
+    "timeScale": 1,
+    "paused": false,
+    "hidden": false,
+    "locked": false,
+    "pendingEvents": 0,
+    "droppedEvents": 0,
+    "surfaces": 0,
+    "taskbarSamples": 658,
+    "taskbarDelayMs": 250,
+    "clickGuard": {
+      "state": "idle",
+      "reason": null,
+      "failClosed": 0,
+      "rects": 0,
+      "armed": false
+    },
+    "edgeBands": 2
+  },
+  "exitCode": 0
+}
