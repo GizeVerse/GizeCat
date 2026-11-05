@@ -1152,9 +1152,8 @@ test.describe('v1.2 lively: covered support bails out (REAL)', () => {
       expect(guardAtMs, 'the mouse over the cat reached the cover during the bail-out').not.toBeNull();
       expect(guardAtMs! - coverUpAtMs!, 'from the cover coming up to the click guard (ms)').toBeLessThanOrEqual(500);
       expect(wrong, 'injected cursor over the bailing-out cat did not reach the covering window').toEqual([]);
-      // Within one body width of a screen-edge band the guard keeps a cat over a window click-through by design (ADR 0003 §6.1).
-      if (guardDebug.reason === null) expect(controlHits, 'positive control: on the floor afterwards the overlay takes the mouse over the cat').toBeGreaterThan(0);
-      else annotate(info, 'UNVERIFIED', `positive control not applicable: the cat landed near a screen-edge band (guard ${guardDebug.reason}), where a window under it keeps it click-through`);
+      // Wherever it landed, even next to a screen side (review RES-1): a cat on the floor is clickable.
+      expect(controlHits, 'positive control: on the floor afterwards the overlay takes the mouse over the cat').toBeGreaterThan(0);
       expect(profileDelta(before, after, 'covered'), 'covered free falls').toBe(0);
       expect(profileDelta(before, after, 'physics'), 'physics falls').toBe(0);
       expect(last?.endReason).toBe('covered');
