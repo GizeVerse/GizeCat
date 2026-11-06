@@ -5,5 +5,5 @@
     "types": ["node"]
   },
   "include": ["src/main/**/*.ts", "src/preload/**/*.ts", "src/core/**/*.ts", "src/shared/**/*.ts", "tests/**/*.ts", "*.config.mts"],
-  "exclude": ["tests/**/renderer/**"]
+  "exclude": ["tests/**/renderer/**", "tests/unit/web/**"]
 }

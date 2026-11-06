@@ -75,6 +75,39 @@ export default tseslint.config(
     },
   },
   {
+    // GizeVerse web host (ADR 0004 §8): browser code like the renderers, plus only the pure main
+    // modules it composes (catHost and what they import are Electron-, Node- and koffi-free, and
+    // type-check with the DOM lib alone). Never win32/index.ts or native.ts (koffi), never the
+    // overlay manager (Electron). No key listeners anywhere (M5).
+    files: ['src/web/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: NODE_BUILTINS.map((p) => ({ ...p, message: 'The web host runs in a browser page (Node built-in).' })),
+          patterns: [
+            { group: ['electron', 'electron/*', 'node:*', 'koffi'], message: 'The web host runs in a browser page.' },
+            {
+              // A regex, not a group: gitignore-style negation cannot re-include files below an excluded folder.
+              regex: '(^|/)main/(?!(catHost|contracts|overlay/renderMapping|win32/win32Api|win32/windowTracker|win32/activityMonitor)$)',
+              message: 'The web host may only use the pure main modules (catHost, contracts, overlay/renderMapping, win32/win32Api, win32/windowTracker, win32/activityMonitor).',
+            },
+            { group: ['**/preload/**'], message: 'The web host has no preload: it builds its OverlayApi in the page.' },
+          ],
+        },
+      ],
+      'no-restricted-globals': [
+        'error',
+        ...['process', 'Buffer', '__dirname', '__filename', 'require', 'module', 'global', 'setImmediate', 'clearImmediate'].map((name) => ({ name, message: 'The web host runs in a browser page.' })),
+      ],
+      'no-restricted-syntax': [
+        'error',
+        { selector: 'Literal[value=/^key(down|up|press)$/i]', message: 'The web host never listens to the keyboard (ADR 0004 §8, M5).' },
+        { selector: 'TemplateElement[value.raw=/key(down|up|press)/i]', message: 'The web host never listens to the keyboard (ADR 0004 §8, M5).' },
+      ],
+    },
+  },
+  {
     files: ['tests/**/*.ts'],
     rules: {
       '@typescript-eslint/no-unsafe-assignment': 'off',

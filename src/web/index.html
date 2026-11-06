@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="GizeCat, a GizeVerse character, living in your browser tab." />
+    <title>GizeCat</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="web.css" />
+    <script type="module" src="main.js"></script>
+  </head>
+  <body>
+    <div class="scroller">
+      <main class="page">
+        <h1>GizeCat</h1>
+        <p class="tagline">A GizeVerse character, living in your browser tab.</p>
+        <section aria-labelledby="about-heading">
+          <h2 id="about-heading">What it does here</h2>
+          <p>
+            The cat lives along the bottom of this page: it wanders, naps, grooms and keeps an eye on your pointer. Stroke it back and forth
+            to pet it, click or tap it, or drag it to pick it up and let go to drop or throw it. On a touch screen, press and hold it for a
+            moment before you drag.
+          </p>
+          <p>
+            The rest of the page keeps working: only the cat itself takes your clicks and taps. It needs no account, makes no network
+            requests and never listens to your keyboard. It remembers itself in this browser's local storage.
+          </p>
+        </section>
+        <div class="controls" role="group" aria-label="Cat controls">
+          <button type="button" id="btn-call">Call the cat</button>
+          <button type="button" id="btn-sleep">Sleep</button>
+          <button type="button" id="btn-pause">Pause</button>
+          <button type="button" id="btn-sound">Turn sound on</button>
+        </div>
+        <p id="cat-status" class="visually-hidden" role="status" aria-live="polite"></p>
+        <noscript><p>The cat needs JavaScript to live here.</p></noscript>
+      </main>
+    </div>
+    <canvas id="cat" aria-hidden="true"></canvas>
+  </body>
+</html>

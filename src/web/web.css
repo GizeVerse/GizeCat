@@ -1,0 +1,142 @@
+/* GizeCat web host. The document itself never scrolls (the viewport is the cat's world and its
+   canvas covers it exactly); the page content scrolls inside .scroller when it does not fit. */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f1e7;
+  --fg: #231d16;
+  --muted: #5d5246;
+  --accent: #9a4f12;
+  --accent-fg: #ffffff;
+  --button-bg: #fffaf1;
+  --button-border: #b9a68e;
+  --focus: #1d5fd1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1814;
+    --fg: #f1e9dc;
+    --muted: #c2b5a2;
+    --accent: #f0a35c;
+    --accent-fg: #1b1814;
+    --button-bg: #2a251f;
+    --button-border: #6f6253;
+    --focus: #8ab4ff;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 1rem/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.scroller {
+  box-sizing: border-box;
+  height: 100%;
+  overflow: auto;
+  /* Room at the bottom so the cat never sits on the last line of text. */
+  padding: 2.5rem 1.25rem 11rem;
+}
+
+.page {
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 2.25rem;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+}
+
+h2 {
+  margin: 1.75rem 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.tagline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.1rem;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1.75rem;
+}
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--button-bg);
+  border: 1px solid var(--button-border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  min-height: 2.75rem;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button:active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The cat's canvas covers the viewport and never takes the pointer: the pointer router decides
+   what belongs to the cat (src/web/pointerRouter.ts). */
+#cat {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Over the cat the cursor says it can be picked up. */
+html.gizecat-hover,
+html.gizecat-hover * {
+  cursor: grab !important;
+}
+
+html.gizecat-hold,
+html.gizecat-hold * {
+  cursor: grabbing !important;
+  user-select: none;
+  -webkit-user-select: none;
+}
