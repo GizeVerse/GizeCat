@@ -107,7 +107,7 @@ Renaming any of them loses users' cats, settings, API keys or startup entries. T
 | `src/renderer/overlay/` | The procedural cat rig and its animator |
 | `src/renderer/settings/` | The settings UI |
 | `src/preload/` | Typed bridges between renderers and main, nothing else |
-| `src/web/` | *Planned (ADR 0004 §8).* The web host: the real catHost, sim and overlay renderer in one page, with no network, no key listeners and no perception |
+| `src/web/` | The web host (ADR 0004 §8): the real catHost, sim and overlay renderer in one page, with no network, no key listeners and no perception. `npm run build:web`, `npm run test:web` (Playwright, installed Chrome/Edge); ESLint keeps key-event literals and Node out of it |
 | `native/uia-helper/` | The Windows UI Automation helper (tab-strip geometry only) |
 | `tests/unit`, `tests/integration` | Vitest |
 | `tests/e2e` | Playwright against the real app (Windows) |
