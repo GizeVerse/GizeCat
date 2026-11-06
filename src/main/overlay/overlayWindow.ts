@@ -3,6 +3,7 @@
 // (Electron #41063, #27651, #54627); the renderer simply draws nothing when the
 // cat is elsewhere.
 import { BrowserWindow } from 'electron';
+import { BRAND } from '../../shared/brand';
 import { OVERLAY_URL } from '../../shared/ipc';
 import type { DisplayGeometry } from '../../shared/world';
 import type { Logger } from '../contracts';
@@ -50,7 +51,7 @@ export function createOverlayWindow(opts: OverlayWindowOptions): BrowserWindow {
     ...(profile.acceptFirstMouse ? { acceptFirstMouse: true } : {}),
     ...(profile.hiddenInMissionControl ? { hiddenInMissionControl: true } : {}),
     alwaysOnTop: true,
-    title: 'Desktop Cat',
+    title: BRAND.product,
     enableLargerThanScreen: false,
     webPreferences: {
       preload: opts.preloadPath,

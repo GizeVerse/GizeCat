@@ -1,13 +1,14 @@
-// The one-time "Desktop Cat now starts when you sign in" notice (ADR 0002 §1, startup.md §4
+// The one-time "the app now starts when you sign in" notice (ADR 0002 §1, startup.md §4
 // option a). Startup turned on by default (a new install, or a v1 `false` that may never have
 // been a choice) is announced once with a Windows notification, not only in the Settings ›
 // General callout: a v1 user who upgrades gets no window at all, so the callout alone could go
 // unseen. Electron-free: the notification surface (the tray icon) is injected.
+import { BRAND } from '../../shared/brand';
 import type { LoginItemStatus } from '../../shared/ipc';
 import type { Logger } from '../contracts';
 
 export const LAUNCH_NOTICE = {
-  title: 'Desktop Cat now starts with Windows',
+  title: `${BRAND.product} now starts with Windows`,
   body: 'Your cat appears when you sign in. To change this, click here for Settings › General, or use Task Manager › Startup apps.',
 } as const;
 

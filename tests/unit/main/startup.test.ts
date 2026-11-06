@@ -8,6 +8,12 @@ import { removeDir, tempDir } from './helpers';
 const h = vi.hoisted(() => {
   const state = {
     userData: '',
+    /** app.getPath('appData'); '' makes getPath('appData') throw, so no test writes beside the repo. */
+    appData: '',
+    /** setPath calls, in order. getPath returns the last value set, else userData. */
+    setPaths: [] as Array<[string, string]>,
+    /** The data passed to requestSingleInstanceLock, per call. */
+    lockData: [] as unknown[],
     /** Calls into the fake Electron app, in order. */
     order: [] as string[],
     failAt: null as string | null,
@@ -21,12 +27,23 @@ const h = vi.hoisted(() => {
     state.order.push(name);
     if (state.failAt === name) throw new Error(`${name} failed (simulated)`);
   };
+  const setPathStep = step('setPath');
   const app = {
-    setPath: step('setPath'),
-    getPath: () => state.userData,
+    setPath: (name: string, value: string) => {
+      setPathStep();
+      state.setPaths.push([name, value]);
+    },
+    getPath: (name: string) => {
+      if (name === 'appData') {
+        if (!state.appData) throw new Error('appData is not set up in this test');
+        return state.appData;
+      }
+      return state.setPaths.filter(([n]) => n === name).at(-1)?.[1] ?? state.userData;
+    },
     setAppUserModelId: step('setAppUserModelId'),
-    requestSingleInstanceLock: () => {
+    requestSingleInstanceLock: (data?: unknown) => {
       state.order.push('lock');
+      state.lockData.push(data);
       return true;
     },
     on: (event: string) => {
@@ -66,6 +83,8 @@ const tick = () => new Promise<void>((r) => setImmediate(r));
 describe('startup (index.ts)', () => {
   beforeEach(() => {
     h.state.userData = tempDir();
+    h.state.setPaths = [];
+    h.state.lockData = [];
     h.state.order = [];
     h.state.failAt = null;
     h.state.processHandlers.clear();
@@ -125,6 +144,9 @@ describe('startup (index.ts)', () => {
     expect(order).not.toContain('whenReady');
     expect(exits()).toEqual(['exit:1']);
     expect(h.dialog.showErrorBox).toHaveBeenCalledTimes(1);
+    // The product name (ADR 0004 §9).
+    expect(h.dialog.showErrorBox.mock.calls[0]![0]).toBe('GizeCat could not start');
+    expect(String(h.dialog.showErrorBox.mock.calls[0]![1])).toMatch(/^GizeCat ran into a problem while starting and has closed\./);
   });
 
   it('under test, the failure exits without a blocking dialog', async () => {
@@ -165,6 +187,8 @@ describe('startup (index.ts)', () => {
 describe('startup (index.ts): GizeVerse boot decisions (ADR 0004 §6)', () => {
   beforeEach(() => {
     h.state.userData = tempDir();
+    h.state.setPaths = [];
+    h.state.lockData = [];
     h.state.order = [];
     h.state.failAt = null;
     h.state.switches.clear();
@@ -212,5 +236,83 @@ describe('startup (index.ts): GizeVerse boot decisions (ADR 0004 §6)', () => {
   it('the AppUserModelID is set on Windows only', async () => {
     await bootPackaged();
     expect(h.state.order.includes('setAppUserModelId')).toBe(process.platform === 'win32');
+  });
+});
+
+describe('startup (index.ts): the userData folder is pinned (ADR 0004 §9)', () => {
+  const root = path.resolve(__dirname, '..', '..', '..');
+
+  beforeEach(() => {
+    h.state.appData = tempDir();
+    h.state.userData = tempDir();
+    h.state.setPaths = [];
+    h.state.lockData = [];
+    h.state.order = [];
+    h.state.failAt = null;
+    h.state.switches.clear();
+    h.app.isPackaged = true;
+    h.dialog.showErrorBox.mockClear();
+    h.startApp.mockReset();
+    h.startApp.mockReturnValue({ onSecondInstance: () => undefined });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.spyOn(process, 'on').mockImplementation((() => process) as never);
+  });
+
+  afterEach(() => {
+    h.app.isPackaged = false;
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    removeDir(h.state.appData);
+    removeDir(h.state.userData);
+    h.state.appData = '';
+  });
+
+  /** Boots index.ts with DESKTOP_CAT_USER_DATA set to `override` ('' = no override) and extra argv. */
+  async function bootWith(override: string, argv: readonly string[] = []): Promise<void> {
+    vi.resetModules();
+    vi.stubEnv('DESKTOP_CAT_USER_DATA', override);
+    vi.stubEnv('DESKTOP_CAT_TEST', '0');
+    const saved = process.argv;
+    process.argv = [...saved, ...argv];
+    try {
+      await import('../../../src/main/index');
+    } finally {
+      process.argv = saved;
+    }
+  }
+
+  const userDataSets = (): string[] => h.state.setPaths.filter(([name]) => name === 'userData').map(([, value]) => value);
+
+  it('without an override, userData is <appData>\\Desktop Cat (today’s default), set and created before the lock', async () => {
+    await bootWith('');
+    const pinned = path.join(h.state.appData, 'Desktop Cat');
+    expect(userDataSets()).toEqual([pinned]);
+    // Electron's default is <appData>/<productName>: the pin moves nothing.
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { productName: string };
+    expect(pinned).toBe(path.join(h.state.appData, pkg.productName));
+    expect(fs.statSync(pinned).isDirectory()).toBe(true);
+    expect(h.state.order.indexOf('setPath')).toBeLessThan(h.state.order.indexOf('lock'));
+    expect(h.state.lockData).toEqual([{ kind: 'desktop-cat:second-instance' }]);
+    expect(h.state.order).toContain('whenReady');
+    expect(h.state.order.filter((s) => s.startsWith('exit:'))).toEqual([]);
+  });
+
+  it('DESKTOP_CAT_USER_DATA still wins over the pin', async () => {
+    await bootWith(h.state.userData);
+    expect(userDataSets()).toEqual([path.resolve(h.state.userData)]);
+    expect(fs.existsSync(path.join(h.state.appData, 'Desktop Cat'))).toBe(false);
+  });
+
+  it('--user-data-dir= still wins over the pin', async () => {
+    await bootWith('', [`--user-data-dir=${h.state.userData}`]);
+    expect(userDataSets()).toEqual([path.resolve(h.state.userData)]);
+    expect(fs.existsSync(path.join(h.state.appData, 'Desktop Cat'))).toBe(false);
+  });
+
+  it('a user-data-dir switch Chromium parsed in another spelling is left to Electron, as before', async () => {
+    h.state.switches.set('user-data-dir', h.state.userData);
+    await bootWith('');
+    expect(userDataSets()).toEqual([]);
+    expect(fs.existsSync(path.join(h.state.appData, 'Desktop Cat'))).toBe(false);
   });
 });

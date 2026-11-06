@@ -1,7 +1,10 @@
 // Pure descriptions of the tray menu, tray tooltip/icon and the cat's right-click
 // menu. tray.ts and the overlay manager turn these into native menus.
+import { BRAND } from '../../shared/brand';
 import type { BehaviorState } from '../../shared/cat';
 import type { PerceptionMode } from '../../shared/perception';
+
+const QUIT_LABEL = `Quit ${BRAND.product}`;
 
 export type MenuAction =
   | 'pet'
@@ -86,7 +89,7 @@ export function trayMenuModel(ctx: MenuContext): MenuItemModel[] {
     item('callCat', `Call ${ctx.catName}`, !ctx.paused),
     item('settings', 'Settings…'),
     { kind: 'separator' },
-    item('quit', 'Quit Desktop Cat'),
+    item('quit', QUIT_LABEL),
   );
   return items;
 }
@@ -104,7 +107,7 @@ export function catContextMenuModel(ctx: MenuContext): MenuItemModel[] {
     item('hide', 'Hide'),
     { kind: 'separator' },
     item('settings', 'Settings…'),
-    item('quit', 'Quit Desktop Cat'),
+    item('quit', QUIT_LABEL),
   ];
 }
 
@@ -113,7 +116,7 @@ export function trayTooltip(ctx: MenuContext): string {
   let vision = VISION_LABEL[ctx.perceptionMode];
   if (ctx.perceptionMode !== 'off' && ctx.perceptionPaused) vision += ' (paused)';
   // Windows truncates notification-area tooltips at 127 characters.
-  return `Desktop Cat — ${state} · Vision: ${vision}`.slice(0, 127);
+  return `${BRAND.product} — ${state} · Vision: ${vision}`.slice(0, 127);
 }
 
 export type TrayIconVariant = 'tray' | 'tray-paused' | 'tray-vision';

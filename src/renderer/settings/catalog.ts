@@ -47,7 +47,7 @@ export const LIVELY_PARENT: Readonly<Partial<Record<LivelyBehavior, ToggleableBe
 
 export const PROVIDER_IDS = ['none', 'ollama', 'openai-compatible', 'anthropic'] as const satisfies readonly AiProviderId[];
 
-/** Choices of "When Desktop Cat starts" (general.startupState), in display order. */
+/** Choices of "When <product> starts" (general.startupState), in display order. */
 export const STARTUP_STATES = ['visible', 'hidden', 'paused', 'remember'] as const satisfies readonly StartupState[];
 
 type Missing<All, Listed> = Exclude<All, Listed>;

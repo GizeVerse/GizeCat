@@ -163,7 +163,7 @@ Default-on startup was verified and disclosed for the Windows installer only. Of
 
 ## 9. Branding and frozen identifiers
 
-**Display.** `src/shared/brand.ts` holds `{ platform: 'GizeVerse', product: 'GizeCat', legacyName: 'Desktop Cat' }`. It feeds:
+**Display.** `src/shared/brand.ts` holds `{ platform: 'GizeVerse', product: 'GizeCat', installedName: 'Desktop Cat', formerName: 'Desktop Cat' }`. `installedName` is what Windows shows for the installed app (shortcuts, Apps list, Task Manager › Startup apps); text that tells the user what to click there uses it. The frozen identifiers live in `src/shared/identity.ts`. `product` feeds:
 - UI strings, window titles, the tray tooltip and menus;
 - dialogs and notices.
 

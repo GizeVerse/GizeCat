@@ -4,6 +4,7 @@
 // passed through redaction once more. Pure.
 import type { BehaviorProfileSnapshot } from '../../shared/behaviorProfile';
 import { parseBehaviorProfile } from '../../shared/behaviorProfileSchema';
+import { IDENTITY } from '../../shared/identity';
 import type { AppStatus, ResourceSample } from '../../shared/ipc';
 import { DEFAULT_EXCLUDED_PROCESSES, DEFAULT_EXCLUDED_TITLE_PATTERNS, type Settings } from '../../shared/settings';
 import type { SurfaceDiagnostics } from '../../shared/surfaceDiagnostics';
@@ -92,7 +93,7 @@ export function exportedBehaviorProfile(profile: unknown): BehaviorProfileSnapsh
 export function buildDiagnosticsReport(input: DiagnosticsInput): Record<string, unknown> {
   const logs = input.logs.slice(-DIAGNOSTICS_LOG_LINES).map((e) => redactString(formatEntry(e)));
   const report = {
-    kind: 'desktop-cat-diagnostics',
+    kind: IDENTITY.diagnosticsKind,
     formatVersion: 1,
     generatedAt: input.generatedAt.toISOString(),
     versions: input.versions,

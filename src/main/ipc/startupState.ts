@@ -67,6 +67,6 @@ export function createViewStateMemory(deps: { settings: Pick<SettingsStore, 'get
 export function rejectMainOwnedFields(patch: unknown): string | null {
   if (patch === null || typeof patch !== 'object') return null;
   const general = (patch as Record<string, unknown>)['general'];
-  if (general !== null && typeof general === 'object' && 'rememberedState' in general) return 'general.rememberedState is kept by Desktop Cat itself';
+  if (general !== null && typeof general === 'object' && 'rememberedState' in general) return 'general.rememberedState is kept by the app itself';
   return null;
 }

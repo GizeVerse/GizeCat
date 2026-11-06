@@ -1,4 +1,4 @@
-/* Desktop Cat settings — Windows 11 (Fluent) look, system fonts only, no inline styles. */
+/* Settings window — Windows 11 (Fluent) look, system fonts only, no inline styles. */
 
 :root {
   color-scheme: light dark;
@@ -1720,6 +1720,16 @@ p.row-desc {
   margin-bottom: 10px;
 }
 
+/* ---------- diagnostics: platform ---------- */
+
+.platform-subtitle {
+  margin-top: 14px;
+}
+
+.platform-note {
+  margin: 12px 0 0;
+}
+
 /* ---------- about ---------- */
 
 .about-head {
@@ -1736,6 +1746,12 @@ p.row-desc {
 .about-name {
   margin: 0;
   font: 600 20px/28px var(--font-display);
+}
+
+/* The rest of the heading ("— a GizeVerse character ..."), quieter than the product name. */
+.about-identity {
+  font: 400 14px/20px var(--font);
+  color: var(--text-2);
 }
 
 .about-version {

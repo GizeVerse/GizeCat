@@ -2,6 +2,7 @@
 // open, destroyed on close. Nothing about the cat depends on it.
 import { BrowserWindow, nativeTheme, type NativeImage, type WebContents } from 'electron';
 import type { Logger } from './contracts';
+import { BRAND } from '../shared/brand';
 import { SETTINGS_URL } from '../shared/ipc';
 import type { WindowRegistry } from './security';
 
@@ -87,7 +88,7 @@ export function createSettingsWindowController(opts: SettingsWindowOptions): Set
       minHeight: 520,
       show: false,
       frame: true,
-      title: 'Desktop Cat — Settings',
+      title: `${BRAND.product} — Settings`,
       backgroundColor: background(),
       autoHideMenuBar: true,
       icon: opts.icon,

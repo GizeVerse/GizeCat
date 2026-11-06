@@ -11,6 +11,8 @@ import path from 'node:path';
 // uninstaller beside the exe), so its paths are Windows paths on every host: on win32 this is the
 // same module as `path`; elsewhere the write gate is closed and nothing is written (ADR 0004 §7).
 const winPath = path.win32;
+import { BRAND } from '../../shared/brand';
+import { IDENTITY } from '../../shared/identity';
 import type { ActionResult, LoginItemStatus } from '../../shared/ipc';
 import type { Logger } from '../contracts';
 import type { JsonReadStatus } from '../store/jsonStore';
@@ -39,10 +41,10 @@ import {
 } from './loginItemReconcile';
 
 /** Registry value name under HKCU\...\Run. Fixed so the uninstaller (build/installer.nsh) can remove it. */
-export const LOGIN_ITEM_NAME = 'io.github.enesiltas.desktopcat';
+export const LOGIN_ITEM_NAME: string = IDENTITY.loginItemName;
 export const LOGIN_ITEM_ARGS: readonly string[] = [LAUNCHED_AT_LOGIN_FLAG];
 /** DESKTOP_CAT_LOGIN_ITEM=off keeps any build from writing the entry (smoke runs). */
-export const LOGIN_ITEM_ENV = 'DESKTOP_CAT_LOGIN_ITEM';
+export const LOGIN_ITEM_ENV = IDENTITY.env.loginItem;
 /**
  * The uninstaller electron-builder writes next to the exe of an installed copy (never into
  * release/win-unpacked): `Uninstall ${productFilename}.exe`, where productFilename is
@@ -55,7 +57,7 @@ export function uninstallerFileFor(execPath: string): string {
 /** This build's uninstaller (electron-builder.yml: executableName DesktopCat). */
 export const UNINSTALLER_FILE = uninstallerFileFor('DesktopCat.exe');
 /** Left in userData by a real uninstall (installer.nsh): a missing entry then means "reinstalled", not "opted out". */
-export const UNINSTALL_MARKER_FILE = 'login-item-removed-by-uninstall';
+export const UNINSTALL_MARKER_FILE = IDENTITY.uninstallMarkerFile;
 /** Settings and diagnostics re-read the registry at most this often. */
 const STATUS_MAX_AGE_MS = 2000;
 
@@ -102,7 +104,7 @@ export interface LoginItemService {
   /** Boot-time reconcile (once, before the cat host starts). Never throws. */
   reconcileAtStartup(): ReconcileReport;
   /**
-   * The user started Desktop Cat again while it runs (second instance): reconciled as a start
+   * The user started the app again while it runs (second instance): reconciled as a start
    * by the user, so work a sign-in boot had to skip (repair, register, disable a leftover
    * entry) is done now instead of waiting for a cold start that may never come. Never throws.
    */
@@ -114,16 +116,19 @@ export interface LoginItemService {
   debugInfo(): Record<string, unknown>;
 }
 
+// The app is BRAND.product; what Task Manager › Startup apps lists is the installed name (brand.ts).
+const PRODUCT = BRAND.product;
+const ENTRY = `the ${BRAND.installedName} entry`;
 const MESSAGES: Record<UserChoiceOutcome, (on: boolean) => string> = {
-  unchanged: (on) => (on ? 'Desktop Cat starts when you sign in to Windows.' : 'Desktop Cat no longer starts when you sign in.'),
-  registered: () => 'Desktop Cat starts when you sign in to Windows.',
-  'opted-out': () => 'Desktop Cat no longer starts when you sign in.',
+  unchanged: (on) => (on ? `${PRODUCT} starts when you sign in to Windows.` : `${PRODUCT} no longer starts when you sign in.`),
+  registered: () => `${PRODUCT} starts when you sign in to Windows.`,
+  'opted-out': () => `${PRODUCT} no longer starts when you sign in.`,
   'not-writable': () => 'Saved. This build cannot change Windows startup (development or portable build); the installed app does.',
-  'registry-unreadable': () => 'Saved, but the Windows startup entry could not be read, so it was left as it is. It is checked again the next time Desktop Cat starts.',
+  'registry-unreadable': () => `Saved, but the Windows startup entry could not be read, so it was left as it is. It is checked again the next time ${PRODUCT} starts.`,
   'windows-disabled': () =>
-    'Saved. Windows Startup apps keeps Desktop Cat disabled, and Desktop Cat does not override that. To turn it on, open Task Manager › Startup apps and enable Desktop Cat.',
+    `Saved. Windows Startup apps keeps ${ENTRY} disabled, and ${PRODUCT} does not override that. To turn it on, open Task Manager › Startup apps and enable ${ENTRY}.`,
   'windows-disabled-restored': () =>
-    'Saved. Windows Startup apps has Desktop Cat disabled, and Desktop Cat does not override that. Its entry is listed in Task Manager › Startup apps again: enable it there to start Desktop Cat when you sign in.',
+    `Saved. Windows Startup apps has ${ENTRY} disabled, and ${PRODUCT} does not override that. The entry is listed in Task Manager › Startup apps again: enable it there to start ${PRODUCT} when you sign in.`,
 };
 const WRITE_FAILED = 'Windows did not accept the startup change; details are in the log.';
 

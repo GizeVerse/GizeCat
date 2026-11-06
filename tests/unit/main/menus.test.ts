@@ -43,11 +43,23 @@ describe('cat context menu', () => {
   });
 });
 
+describe('product name in menus (ADR 0004 §9)', () => {
+  const label = (items: MenuItemModel[], action: string): string | null => {
+    const found = items.find((i) => i.kind !== 'separator' && i.action === action);
+    return found && found.kind !== 'separator' ? found.label : null;
+  };
+
+  it('the tray menu and the cat menu quit GizeCat', () => {
+    expect(label(trayMenuModel(base), 'quit')).toBe('Quit GizeCat');
+    expect(label(catContextMenuModel(base), 'quit')).toBe('Quit GizeCat');
+  });
+});
+
 describe('tray tooltip and icon', () => {
   it('describes state and vision mode', () => {
-    expect(trayTooltip(base)).toBe('Desktop Cat — idle · Vision: off');
-    expect(trayTooltip({ ...base, state: 'chasingCursor', perceptionMode: 'local-stats' })).toBe('Desktop Cat — chasing the cursor · Vision: local stats');
-    expect(trayTooltip({ ...base, hidden: true, perceptionMode: 'ai-local', perceptionPaused: true })).toBe('Desktop Cat — hidden · Vision: AI (local) (paused)');
+    expect(trayTooltip(base)).toBe('GizeCat — idle · Vision: off');
+    expect(trayTooltip({ ...base, state: 'chasingCursor', perceptionMode: 'local-stats' })).toBe('GizeCat — chasing the cursor · Vision: local stats');
+    expect(trayTooltip({ ...base, hidden: true, perceptionMode: 'ai-local', perceptionPaused: true })).toBe('GizeCat — hidden · Vision: AI (local) (paused)');
     expect(trayTooltip({ ...base, paused: true })).toContain('paused');
     expect(trayTooltip(base).length).toBeLessThanOrEqual(127);
   });

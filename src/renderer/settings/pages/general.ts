@@ -1,4 +1,5 @@
 import type { AppStatus, LoginItemStatus } from '../../../shared/ipc';
+import type { RuntimeCapability } from '../../../shared/platform';
 import { MAX_CAT_NAME_LENGTH, MAX_SHORTCUT_LENGTH, STARTUP_STATES } from '../catalog';
 import type { PageContext, PageView } from '../context';
 import { button, group, page, row, runAction, segmentedRow, setButtonLabel, setNote, textRow, toggleRow, toggleSwitch, type NoteTone } from '../controls';
@@ -24,6 +25,22 @@ export function launchStatusView(s: LoginItemStatus): { text: string; tone: Note
   if (s.disabledBy === 'windows' && !s.active) return { text: L.windowsDisabled, tone: 'warn' };
   if (!s.enabled && !s.active) return { text: s.disabledBy === 'external' ? L.removedOutside : L.off, tone: 'info' };
   return { text: s.reason ?? (s.enabled ? L.pending : L.off), tone: 'warn' };
+}
+
+export type LaunchRowView = { showSwitch: true } | { showSwitch: false; title: string; reason: string };
+
+/**
+ * Whether the launch-at-sign-in row offers its switch (GizeVerse, ADR 0004 §7). Off Windows, when
+ * main reports the loginItem capability unavailable, the switch is hidden and main's reason is
+ * shown instead. On Windows the row stays exactly as it was, also in development builds (where
+ * the capability is unavailable too), and so it does without a platform report.
+ */
+export function launchRowView(status: Pick<AppStatus, 'platform'>): LaunchRowView {
+  const platform = status.platform;
+  if (!platform || platform.id === 'win32') return { showSwitch: true };
+  const cap = platform.capabilities.loginItem as RuntimeCapability | undefined;
+  if (!cap || cap.available) return { showSwitch: true };
+  return { showSwitch: false, title: G.launchTitleElsewhere, reason: cap.reason ?? G.launchStatus.unsupported };
 }
 
 /**
@@ -73,7 +90,9 @@ export function generalPage(ctx: PageContext): PageView {
   const launchSwitch = toggleSwitch(launch.titleId, launch.describedBy);
   launch.control.append(launchSwitch.root);
   launch.note.setAttribute('aria-live', 'polite');
+  const launchTitle = launch.row.querySelector<HTMLElement>('.row-title');
   let launchBusy = false;
+  let unavailableShown: string | null = null;
   const syncLaunch = (s: LoginItemStatus): void => {
     if (!launchBusy) {
       launchSwitch.input.checked = s.enabled;
@@ -81,6 +100,21 @@ export function generalPage(ctx: PageContext): PageView {
     }
     const line = launchStatusView(s);
     setNote(launch.note, line.text, line.tone);
+  };
+  /** Shows the switch with main's state, or (off Windows, unavailable) only the reason. */
+  const syncLaunchRow = (status: AppStatus): void => {
+    const view = launchRowView(status);
+    const title = view.showSwitch ? G.launchTitle : view.title;
+    if (launchTitle && launchTitle.textContent !== title) launchTitle.textContent = title;
+    launchSwitch.root.hidden = !view.showSwitch;
+    if (view.showSwitch) {
+      unavailableShown = null;
+      syncLaunch(status.loginItem);
+    } else if (unavailableShown !== view.reason) {
+      // Only a changed sentence is announced (main broadcasts on every state change).
+      unavailableShown = view.reason;
+      setNote(launch.note, view.reason, 'info');
+    }
   };
   launchSwitch.input.addEventListener('change', () => {
     const on = launchSwitch.input.checked;
@@ -165,7 +199,7 @@ export function generalPage(ctx: PageContext): PageView {
     if (status.paused) setNote(pause.note, G.pausedNow, 'info');
     else if (pause.note.classList.contains('tone-info')) setNote(pause.note, null);
 
-    syncLaunch(status.loginItem);
+    syncLaunchRow(status);
     notice.hidden = !status.loginItem.showNotice;
 
     const enabled = ctx.store.intended('general', 'shortcutsEnabled');

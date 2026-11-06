@@ -13,8 +13,10 @@ import { explicitOzone, NO_SANDBOX_MESSAGE, NO_SANDBOX_TITLE, sandboxDecision } 
 import { registerAppSchemePrivileges } from './protocol';
 import { createJsonStore } from './store/jsonStore';
 import { createSettingsStore } from './store/settingsStore';
+import { BRAND } from '../shared/brand';
+import { IDENTITY } from '../shared/identity';
 
-export const APP_USER_MODEL_ID = 'io.github.enesiltas.desktopcat';
+export const APP_USER_MODEL_ID = IDENTITY.appUserModelId;
 /** macOS: 'activate' events this soon after start belong to the launch itself. */
 const MAC_ACTIVATE_GRACE_MS = 3000;
 
@@ -29,7 +31,7 @@ function exitAfterStartupFailure(err: unknown, logger: RootLogger | null, test: 
       logger.child('boot').error('startup failed', { error: err });
       logger.flushSync();
     } else {
-      console.error('Desktop Cat: startup failed', err);
+      console.error(`${BRAND.product}: startup failed`, err);
     }
   } catch {
     /* exiting anyway */
@@ -37,7 +39,7 @@ function exitAfterStartupFailure(err: unknown, logger: RootLogger | null, test: 
   if (!test) {
     try {
       const where = logger?.logDir ? `\n\nDetails were written to the log in:\n${logger.logDir}` : '';
-      dialog.showErrorBox('Desktop Cat could not start', `Desktop Cat ran into a problem while starting and has closed.${where}`);
+      dialog.showErrorBox(`${BRAND.product} could not start`, `${BRAND.product} ran into a problem while starting and has closed.${where}`);
     } catch {
       /* exiting anyway */
     }
@@ -76,11 +78,18 @@ function start(test: boolean, boot: { logger: RootLogger | null }): void {
   if (userDataOverride) {
     fs.mkdirSync(userDataOverride, { recursive: true });
     app.setPath('userData', userDataOverride);
+  } else if (!app.commandLine.hasSwitch('user-data-dir')) {
+    // ADR 0004 §9: pinned to the folder every install has used (<appData>/Desktop Cat, today's
+    // default from productName), so renaming the product can never move users' data or the lock.
+    // Chromium's own --user-data-dir spellings are left to Electron, as before.
+    const pinned = path.join(app.getPath('appData'), IDENTITY.userDataFolder);
+    fs.mkdirSync(pinned, { recursive: true });
+    app.setPath('userData', pinned);
   }
   // Windows only (taskbar grouping, notifications); the id itself is frozen (ADR 0004 §9).
   if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
 
-  if (!app.requestSingleInstanceLock({ kind: 'desktop-cat:second-instance' })) {
+  if (!app.requestSingleInstanceLock({ kind: IDENTITY.singleInstanceLockKind })) {
     // The running instance surfaces the cat (second-instance event); nothing else to do here.
     app.exit(0);
     return;

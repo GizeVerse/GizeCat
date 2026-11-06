@@ -88,6 +88,10 @@ describe('diagnostics report', () => {
     settings.loginItem = { ...settings.loginItem, registeredPath: 'D:\\Jane\\DesktopCat\\DesktopCat.exe' };
     expect(JSON.stringify(buildDiagnosticsReport({ ...baseInput(), settings }))).not.toMatch(/Jane/);
   });
+
+  it('keeps its frozen kind tag, whatever the product is called (ADR 0004 §9)', () => {
+    expect(buildDiagnosticsReport(baseInput()).kind).toBe('desktop-cat-diagnostics');
+  });
 });
 
 function baseInput(): Parameters<typeof buildDiagnosticsReport>[0] {

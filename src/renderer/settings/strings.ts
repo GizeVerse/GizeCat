@@ -1,11 +1,15 @@
 // Every user-visible string of the settings window lives here so the UI can be
-// localised later without touching the page code.
+// localised later without touching the page code. Product names come from shared/brand.ts:
+// PRODUCT is what the app is called; INSTALLED is how Windows lists it (Start menu, Settings ›
+// Apps, Task Manager › Startup apps), used only where the text says what to find or click there.
 import type { MemoryDetail, MemoryKind } from '../../core/behavior/memory';
+import { BRAND } from '../../shared/brand';
 import type { ActivityClass, FallCause, HuntOutcome, LeaveKind, MoodExposure, ProfileContext, StayEndReason, StaySurfaceKind, ThrowReactionKind } from '../../shared/behaviorProfile';
 import type { BehaviorState, LandingImpact, RenderStyle, SkinId } from '../../shared/cat';
 import type { Counters, Preferences, Stats, Traits } from '../../shared/catState';
 import type { AppStatus } from '../../shared/ipc';
 import type { PerceptionMode, VisualEventKind } from '../../shared/perception';
+import { CAPABILITY_LABELS } from '../../shared/platform';
 import type { AiProviderId, LivelyBehavior, Settings, ToggleableBehavior } from '../../shared/settings';
 import type { ActivityPresetId } from '../../shared/settingsPresets';
 import type { DecisionDiagnostics, DecisionTarget, NavRejectReason, ProviderDiagnostics, ProviderSkipReason, TargetAvailability } from '../../shared/surfaceDiagnostics';
@@ -13,15 +17,17 @@ import type { SupportSurfaceKind, SurfaceKind } from '../../shared/surfaces';
 import type { PageId } from './catalog';
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+const PRODUCT = BRAND.product;
+const INSTALLED = BRAND.installedName;
 
 export const S = {
   app: {
-    title: 'Desktop Cat Settings',
-    pageTitle: (page: string) => `${page} · Desktop Cat`,
-    brand: 'Desktop Cat',
+    title: `${PRODUCT} Settings`,
+    pageTitle: (page: string) => `${page} · ${PRODUCT}`,
+    brand: PRODUCT,
     navLabel: 'Settings sections',
     loading: 'Loading settings…',
-    bridgeMissing: 'The settings window could not connect to Desktop Cat. Close it and open Settings again from the tray icon.',
+    bridgeMissing: `The settings window could not connect to ${PRODUCT}. Close it and open Settings again from the tray icon.`,
     loadFailed: (detail: string) => `Settings could not be loaded: ${detail}`,
     retry: 'Try again',
   },
@@ -125,7 +131,7 @@ export const S = {
       { title: 'Click and double-click', text: 'Click to say hello. Double-click for a playful reaction. Too many clicks in a row can annoy it.' },
       { title: 'Stroke', text: 'Move the pointer slowly back and forth over the cat to pet it.' },
       { title: 'Right-click menu', text: 'Right-click the cat for quick actions such as Pause, Hide and Settings.' },
-      { title: 'Tray icon', text: 'The Desktop Cat icon in the notification area shows whether screen analysis is on and opens this window.' },
+      { title: 'Tray icon', text: `The ${PRODUCT} icon in the notification area shows whether screen analysis is on and opens this window.` },
     ],
     shortcutTitle: 'Hide or show',
     shortcutText: (shortcut: string) => `Press ${shortcut} at any time to hide or show the cat.`,
@@ -163,19 +169,22 @@ export const S = {
     resume: 'Resume',
     pausedNow: 'Paused.',
     launchTitle: 'Start with Windows',
-    launchDesc: 'Open Desktop Cat when you sign in.',
+    /** The same row off Windows (GizeVerse, ADR 0004 §7), where it only says why it is unavailable. */
+    launchTitleElsewhere: 'Start when you sign in',
+    launchDesc: `Open ${PRODUCT} when you sign in.`,
     launchStatus: {
-      active: 'On. Windows starts Desktop Cat when you sign in.',
-      off: 'Off. Desktop Cat starts only when you open it.',
-      removedOutside: 'Off. Windows no longer has a startup entry for Desktop Cat (it was removed outside the app or by an uninstall), so it stays off. Turn it on here to add it again.',
-      windowsDisabled: 'Disabled in Windows Startup apps. Desktop Cat never overrides that. To turn it back on, open Task Manager › Startup apps and enable Desktop Cat.',
+      active: `On. Windows starts ${PRODUCT} when you sign in.`,
+      off: `Off. ${PRODUCT} starts only when you open it.`,
+      removedOutside: `Off. Windows no longer has a startup entry for ${PRODUCT} (it was removed outside the app or by an uninstall), so it stays off. Turn it on here to add it again.`,
+      windowsDisabled: `Disabled in Windows Startup apps. ${PRODUCT} never overrides that. To turn it back on, open Task Manager › Startup apps and enable the ${INSTALLED} entry.`,
       notAvailable: 'Not available in this build (development or portable). The installed app manages Start with Windows.',
-      pending: 'On. Windows will start Desktop Cat once its startup entry is in place.',
+      pending: `On. Windows will start ${PRODUCT} once its startup entry is in place.`,
+      unsupported: 'Not available on this platform.',
     },
-    launchNoticeTitle: 'Desktop Cat now starts with Windows',
+    launchNoticeTitle: `${PRODUCT} now starts with Windows`,
     launchNoticeText: 'Your cat appears when you sign in. You can turn this off here at any time, or in Task Manager › Startup apps.',
     launchNoticeDismiss: 'Got it',
-    startupStateTitle: 'When Desktop Cat starts',
+    startupStateTitle: `When ${PRODUCT} starts`,
     startupStateDesc: 'How the cat appears each time the app starts, also when it starts with Windows.',
     startupStates: { visible: 'Visible', hidden: 'Hidden', paused: 'Paused', remember: 'As I left it' } satisfies Record<
       Settings['general']['startupState'],
@@ -189,7 +198,7 @@ export const S = {
     shortcutRegistered: 'Registered and ready.',
     shortcutNotRegistered: 'Could not register this shortcut. Another app may already use it. Try a different combination.',
     shortcutOff: 'Shortcuts are turned off.',
-    quitTitle: 'Quit Desktop Cat',
+    quitTitle: `Quit ${PRODUCT}`,
     quitDesc: 'Closes the app until you start it again. Your cat remembers everything.',
     quit: 'Quit',
   },
@@ -391,7 +400,7 @@ export const S = {
     >,
     intervalTitle: 'Minimum time between analyses',
     intervalDesc:
-      'Desktop Cat never captures more often than this. The cat only looks now and then, so it usually looks less often. AI vision also keeps to the limits on the AI page.',
+      `${PRODUCT} never captures more often than this. The cat only looks now and then, so it usually looks less often. AI vision also keeps to the limits on the AI page.`,
     groupExclusions: 'Never analyse',
     groupExclusionsDesc: 'While one of these is in front, nothing is captured. Window titles are only compared in memory and never stored in logs.',
     processesTitle: 'Apps',
@@ -437,14 +446,14 @@ export const S = {
       aiTitle: 'Turn on AI vision?',
       intro: 'Please read what will happen. You can turn it off again at any time.',
       localPoints: (region: string, interval: string) => [
-        `Desktop Cat will capture three small, downscaled images (about 0.15 s apart) of: ${region.toLowerCase()}.`,
+        `${PRODUCT} will capture three small, downscaled images (about 0.15 s apart) of: ${region.toLowerCase()}.`,
         `It looks at most once every ${interval}, and only when something changes or the cat is curious.`,
         'It computes brightness, colour, detail and movement numbers. No AI is involved.',
         'The image never leaves this PC and is discarded right after the numbers are computed.',
         'The cat and excluded apps or windows are blanked out; nothing is captured while they are in front or the PC is locked.',
       ],
       aiPoints: (region: string, interval: string, perHour: number) => [
-        `Desktop Cat will capture three small, downscaled images (about 0.15 s apart) of: ${region.toLowerCase()}.`,
+        `${PRODUCT} will capture three small, downscaled images (about 0.15 s apart) of: ${region.toLowerCase()}.`,
         `At most once every ${interval} and at most ${perHour} times per hour, the image is sent to the AI model below.`,
         'The model only returns a short label (type of scene, energy, a suggested reaction). It cannot control your PC.',
         'Images are never saved. The cat and excluded apps or windows are blanked out first.',
@@ -728,7 +737,7 @@ export const S = {
     logLevelDesc: 'Logs never contain window titles, images or keys.',
     logLevels: { error: 'Errors', warn: 'Warnings', info: 'Info', debug: 'Debug' } satisfies Record<Settings['diagnostics']['logLevel'], string>,
     hwAccelTitle: 'Hardware acceleration',
-    hwAccelDesc: 'Turn off if the cat shows a black box around it. Applies after restarting Desktop Cat.',
+    hwAccelDesc: `Turn off if the cat shows a black box around it. Applies after restarting ${PRODUCT}.`,
     exportTitle: 'Export diagnostics',
     exportDesc: 'Saves a report with settings, status, what the cat did this session and recent logs (no images, titles or keys) that you can attach to a bug report.',
     exportButton: 'Export',
@@ -736,12 +745,25 @@ export const S = {
     logsButton: 'Open folder',
     dataFolder: 'Data folder',
     groupVersions: 'Versions',
-    versions: { app: 'Desktop Cat', electron: 'Electron', chrome: 'Chromium', node: 'Node.js', os: 'Windows' },
+    versions: { app: PRODUCT, electron: 'Electron', chrome: 'Chromium', node: 'Node.js', os: 'Windows' },
+    // GizeVerse (ADR 0004 §2.2): this platform and what is unavailable here, as main detected it.
+    platform: {
+      group: 'Platform',
+      groupDesc: `What ${PRODUCT} can do on this computer right now.`,
+      label: 'This platform',
+      unavailableTitle: 'Not available here',
+      allAvailable: 'Every capability is available here.',
+      unknown: 'Platform details are not available.',
+      noReason: 'No reason was given.',
+      docNote: 'What each capability’s status means on every platform is documented in docs/gizeverse/capability-matrix.md in the project’s source files.',
+      /** Capability names, as in the generated capability matrix. */
+      capabilities: CAPABILITY_LABELS,
+    },
     // v1.2 (ADR 0003 §11): the behaviour profile of this session.
     behavior: {
       group: 'Behaviour',
       groupDesc:
-        'What the cat did since Desktop Cat started: kinds, counts and durations only, never which windows or apps and never what you typed.',
+        `What the cat did since ${PRODUCT} started: kinds, counts and durations only, never which windows or apps and never what you typed.`,
       loading: 'Reading what the cat did…',
       unavailable: 'Behaviour details are not available right now.',
       summaryTitle: 'This session',
@@ -939,11 +961,13 @@ export const S = {
       errorItem: (kind: string, source: string, when: string) => `${kind} (${source}) · ${when}`,
       outlinesTitle: 'Show surface outlines on the desktop',
       outlinesDesc:
-        'A debug aid that draws the edges the cat knows over your desktop: grey dashed cannot be used, blue can, green can be reached, orange is where the cat is, magenta is where it is heading. It never captures the screen and turns off when Desktop Cat restarts.',
+        `A debug aid that draws the edges the cat knows over your desktop: grey dashed cannot be used, blue can, green can be reached, orange is where the cat is, magenta is where it is heading. It never captures the screen and turns off when ${PRODUCT} restarts.`,
     },
   },
   about: {
     title: 'About',
+    /** Follows the product name in the heading: "GizeCat — a GizeVerse character (formerly Desktop Cat)". */
+    identity: ` — a ${BRAND.platform} character (formerly ${BRAND.formerName})`,
     tagline: 'A living desktop companion.',
     version: (v: string) => `Version ${v}`,
     license: 'Released under the MIT License.',
@@ -958,10 +982,11 @@ export const S = {
     ],
     groupThirdParty: 'Third-party software',
     thirdParty:
-      'Desktop Cat is built with Electron (Chromium and Node.js), koffi and zod. Their licence texts are installed next to the app in the installation folder.',
+      `${PRODUCT} is built with Electron (Chromium and Node.js), koffi and zod. Their licence texts are installed next to the app in the installation folder.`,
     groupUninstall: 'Uninstall',
+    // Names the app as Windows lists it (BRAND.installedName), which is what the user looks for there.
     uninstall:
-      'Open Windows Settings › Apps › Installed apps, find Desktop Cat and choose Uninstall. Your cat’s memories and settings stay in the data folder below; delete it if you want them gone too.',
+      `Open Windows Settings › Apps › Installed apps, find ${INSTALLED} and choose Uninstall. Your cat’s memories and settings stay in the data folder below; delete it if you want them gone too.`,
   },
 } as const;
 

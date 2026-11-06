@@ -149,6 +149,10 @@ describe('Windows Startup apps always wins', () => {
     const svc = r.boot();
     const res = svc.setLaunchAtLogin(true);
     expect(res).toMatchObject({ ok: true, message: expect.stringMatching(/Task Manager › Startup apps/) });
+    // The app is GizeCat; the entry Task Manager lists keeps the installed name (ADR 0004 §9).
+    expect(res.message).toBe(
+      'Saved. Windows Startup apps keeps the Desktop Cat entry disabled, and GizeCat does not override that. To turn it on, open Task Manager › Startup apps and enable the Desktop Cat entry.',
+    );
     expect(r.win.writes).toHaveLength(1);
     expect(r.win.approved.get(LOGIN_ITEM_NAME)?.data).toEqual(Buffer.from(TASK_MANAGER_DISABLED));
     expect(svc.status()).toMatchObject({ enabled: true, active: false, reason: expect.stringMatching(/Disabled in Windows Startup apps/) });
@@ -362,7 +366,7 @@ describe('an on the user chose that has not taken effect yet (startup#2)', () =>
     expect(r.win.approvedHex()).toBe(DISABLE_HEX);
     r.win.failWrites = 'ignore';
     expect(svc.setLaunchAtLogin(true).ok).toBe(false);
-    expect(svc.status()).toMatchObject({ enabled: true, active: false, reason: 'Desktop Cat registers itself the next time it starts.' });
+    expect(svc.status()).toMatchObject({ enabled: true, active: false, reason: 'GizeCat registers itself the next time it starts.' });
     r.win.failWrites = null;
     const next = r.boot();
     expect([r.win.runText(), r.win.approvedHex()]).toEqual([EXPECTED_RUN, null]);

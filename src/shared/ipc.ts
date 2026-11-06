@@ -6,14 +6,15 @@ import type { BehaviorProfileSnapshot } from './behaviorProfile';
 import type { PlatformReport } from './platform';
 import type { BehaviorState, CatRenderState, HitRegion } from './cat';
 import type { CatSummary } from './catState';
+import { IDENTITY } from './identity';
 import type { PerceptionStatus, SceneReport, VisualEventKind, VisualFeatures } from './perception';
 import type { SurfaceDiagnostics } from './surfaceDiagnostics';
 import type { SurfaceLinesPayload } from './surfaceDiagnosticsSchema';
 import type { SurfaceStatus } from './surfaces';
 import type { PatchResult, Settings, SettingsPatch } from './settings';
 
-/** Custom privileged scheme serving bundled renderer files (never file://). */
-export const APP_SCHEME = 'desktop-cat';
+/** Custom privileged scheme serving bundled renderer files (never file://). Frozen (identity.ts). */
+export const APP_SCHEME = IDENTITY.scheme;
 export const OVERLAY_URL = `${APP_SCHEME}://app/renderer/overlay/index.html`;
 export const SETTINGS_URL = `${APP_SCHEME}://app/renderer/settings/index.html`;
 

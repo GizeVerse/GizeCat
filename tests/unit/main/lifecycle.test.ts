@@ -7,6 +7,7 @@ import { LOGIN_ITEM_NAME, UNINSTALL_MARKER_FILE, UNINSTALLER_FILE, uninstallerFi
 import { createQuitSequence } from '../../../src/main/lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndKind } from '../../../src/main/lifecycle/sessionEnd';
 import { createShortcutManager } from '../../../src/main/lifecycle/shortcuts';
+import { IDENTITY } from '../../../src/shared/identity';
 import { manualTimers, memoryLogger, removeDir, tempDir } from './helpers';
 
 describe('quit sequence', () => {
@@ -320,7 +321,10 @@ describe('login item names shared with the installer', () => {
   });
 
   it('the value name equals the AppUserModelID (Electron defaults the name to it)', () => {
+    // index.ts cannot be imported here (it starts the app); it takes the id from identity.ts.
     const index = fs.readFileSync(path.join(root, 'src', 'main', 'index.ts'), 'utf8');
-    expect(index).toContain(`APP_USER_MODEL_ID = '${LOGIN_ITEM_NAME}'`);
+    expect(index).toContain('APP_USER_MODEL_ID = IDENTITY.appUserModelId;');
+    expect(IDENTITY.appUserModelId).toBe(LOGIN_ITEM_NAME);
+    expect(LOGIN_ITEM_NAME).toBe('io.github.enesiltas.desktopcat');
   });
 });

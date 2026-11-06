@@ -1,5 +1,6 @@
 import type { BehaviorProfileSnapshot } from '../../../shared/behaviorProfile';
 import type { LoginItemStatus, ResourceSample, SettingsAction, SettingsApi, SettingsViewState } from '../../../shared/ipc';
+import { CAPABILITY_IDS, type PlatformReport, type RuntimeCapability } from '../../../shared/platform';
 import type { SurfaceDiagnostics } from '../../../shared/surfaceDiagnostics';
 import { huntEntries, moodEntries, physicsEntries, reactionSummary, stayEntries, summaryEntries, timeRows } from '../behaviorView';
 import type { PageContext, PageView } from '../context';
@@ -16,6 +17,7 @@ import { catEntries, coordinateEntries, countRows, errorItems, seenEntries, tabS
 const D = S.diagnostics;
 const V = D.surfaces;
 const BV = D.behavior;
+const PV = D.platform;
 /** The Surfaces section re-reads main at most this often, only while the page is shown. */
 export const SURFACES_REFRESH_MS = 1000;
 /** The Behaviour section (v1.2) changes slowly: re-read every few seconds while the page is shown. */
@@ -119,6 +121,40 @@ export function statusEntries(view: SettingsViewState, now: number): Array<reado
     [D.uptime, formatElapsed(status.startedAt, now)],
   );
   return entries;
+}
+
+export interface PlatformView {
+  /** This platform's label; null when main sent no platform report. */
+  label: string | null;
+  /** Each unavailable capability (name, main's reason), in the capability table's order. */
+  unavailable: Array<readonly [string, string]>;
+}
+
+/** The Platform section (GizeVerse, ADR 0004 §2.2): this platform and what is unavailable on it. */
+export function platformView(report: PlatformReport | undefined): PlatformView {
+  if (!report) return { label: null, unavailable: [] };
+  const unavailable: Array<readonly [string, string]> = [];
+  for (const id of CAPABILITY_IDS) {
+    // A capability main did not report is not listed (an older main has fewer).
+    const cap = report.capabilities[id] as RuntimeCapability | undefined;
+    if (cap && !cap.available) unavailable.push([PV.capabilities[id], cap.reason ?? PV.noReason]);
+  }
+  return { label: report.label, unavailable };
+}
+
+function renderPlatform(card: HTMLElement, report: PlatformReport | undefined): void {
+  const v = platformView(report);
+  const note = h('p', { class: 'row-desc platform-note', text: PV.docNote });
+  if (v.label === null) {
+    card.replaceChildren(h('p', { class: 'muted', text: PV.unknown }), note);
+    return;
+  }
+  card.replaceChildren(
+    keyValues([[PV.label, v.label]]),
+    h('h3', { class: 'surface-card-title platform-subtitle', text: PV.unavailableTitle }),
+    v.unavailable.length === 0 ? h('p', { class: 'muted', text: PV.allAvailable }) : keyValues(v.unavailable),
+    note,
+  );
 }
 
 /** The 1 Hz poll of the Surfaces section: reads only while `element` is shown and the window is not minimised. */
@@ -316,6 +352,7 @@ function behaviorSection(): { rows: HTMLElement[]; render(p: BehaviorProfileSnap
 
 export function diagnosticsPage(ctx: PageContext): PageView {
   const statusCard = h('div', { class: 'row row-block' });
+  const platformCard = h('div', { class: 'row row-block' });
   const resources = h('div', { class: 'spark-row' });
   const table = h('div', { class: 'table-wrap' });
   const resourcesCard = h('div', { class: 'row row-block' }, [h('p', { class: 'row-desc', text: D.resourcesDesc }), resources, table]);
@@ -344,6 +381,7 @@ export function diagnosticsPage(ctx: PageContext): PageView {
 
   const element = page(D.title, [
     group(D.groupStatus, [statusCard]),
+    group(PV.group, [platformCard], PV.groupDesc),
     group(V.group, surfaces.rows, V.groupDesc),
     group(BV.group, behavior.rows, BV.groupDesc),
     group(D.groupResources, [resourcesCard]),
@@ -354,6 +392,7 @@ export function diagnosticsPage(ctx: PageContext): PageView {
   const render = (view: SettingsViewState): void => {
     const now = ctx.now();
     statusCard.replaceChildren(keyValues(statusEntries(view, now)));
+    renderPlatform(platformCard, view.status.platform);
     resources.replaceChildren(
       spark(D.cpu, view.resources, (s) => s.cpuPercent, formatPercentValue, 5),
       spark(D.memory, view.resources, (s) => s.workingSetMB, formatMegabytes, 100),

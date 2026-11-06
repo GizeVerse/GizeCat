@@ -40,6 +40,8 @@ describe('General page: Start with Windows status line', () => {
     expect(v).toEqual({ text: L.windowsDisabled, tone: 'warn' });
     expect(v.text).toMatch(/Task Manager › Startup apps/);
     expect(v.text).toMatch(/never overrides/);
+    // Task Manager lists the installed name until the installer names change (ADR 0004 §9).
+    expect(v.text).toBe('Disabled in Windows Startup apps. GizeCat never overrides that. To turn it back on, open Task Manager › Startup apps and enable the Desktop Cat entry.');
   });
 
   it('an entry approved again in Startup apps while the app runs reads as on, as Diagnostics says (startup#0)', () => {
@@ -49,13 +51,13 @@ describe('General page: Start with Windows status line', () => {
     expect(launchStatusView(live)).toEqual({ text: L.active, tone: 'ok' });
     expect(loginItemLabel(live)).toBe(D.active);
     // A recorded Windows disable never outranks an entry Windows does start.
-    const v = launchStatusView(status({ enabled: false, preference: 'disabled', disabledBy: 'windows', active: true, reason: 'Windows still starts Desktop Cat when you sign in.' }));
+    const v = launchStatusView(status({ enabled: false, preference: 'disabled', disabledBy: 'windows', active: true, reason: 'Windows still starts GizeCat when you sign in.' }));
     expect(v.text).not.toBe(L.windowsDisabled);
     expect(v.text).not.toMatch(/Task Manager/);
   });
 
   it('switched on in the app while Windows keeps it disabled: main’s explanation is shown', () => {
-    const reason = 'Disabled in Windows Startup apps. To turn it back on, open Task Manager › Startup apps and enable Desktop Cat.';
+    const reason = 'Disabled in Windows Startup apps. To turn it back on, open Task Manager › Startup apps and enable the Desktop Cat entry.';
     expect(launchStatusView(status({ preference: 'enabled', active: false, reason }))).toEqual({ text: reason, tone: 'warn' });
   });
 
@@ -66,7 +68,7 @@ describe('General page: Start with Windows status line', () => {
 
   it('on but not yet registered falls back to the pending wording when main gives no reason', () => {
     expect(launchStatusView(status({ active: false }))).toEqual({ text: L.pending, tone: 'warn' });
-    expect(launchStatusView(status({ active: false, reason: 'Desktop Cat could not read its Windows startup entry.' })).text).toMatch(/could not read/);
+    expect(launchStatusView(status({ active: false, reason: 'GizeCat could not read its Windows startup entry.' })).text).toMatch(/could not read/);
   });
 });
 

@@ -2,6 +2,7 @@
 // action (show/hide the cat), right click opens the context menu.
 import path from 'node:path';
 import { Menu, nativeImage, Tray, type MenuItemConstructorOptions, type NativeImage } from 'electron';
+import { BRAND } from '../shared/brand';
 import type { Logger } from './contracts';
 import type { NoticeHandlers, NoticeSurface } from './lifecycle/loginItemNotice';
 import { trayMenuModel, trayTooltip, trayIconVariant, type MenuAction, type MenuContext, type MenuItemModel, type TrayIconVariant } from './lifecycle/menuModel';
@@ -48,7 +49,7 @@ export function createTrayController(opts: TrayOptions): TrayController {
   }
 
   const tray = new Tray(icon('tray'));
-  tray.setToolTip('Desktop Cat');
+  tray.setToolTip(BRAND.product);
   tray.on('click', () => {
     try {
       opts.onClick();

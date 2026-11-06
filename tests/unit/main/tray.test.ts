@@ -56,7 +56,7 @@ function tray() {
   return { controller, fake, log };
 }
 
-const notice = { title: 'Desktop Cat now starts with Windows', body: 'Your cat appears when you sign in.' };
+const notice = { title: 'GizeCat now starts with Windows', body: 'Your cat appears when you sign in.' };
 
 describe('tray notification surface', () => {
   beforeEach(() => {

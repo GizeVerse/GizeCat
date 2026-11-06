@@ -97,13 +97,13 @@ test.describe('lifecycle', () => {
     }
   });
 
-  test('"Hidden" chosen under When Desktop Cat starts keeps the cat hidden after a restart', async ({ userData }) => {
+  test('"Hidden" chosen under When GizeCat starts keeps the cat hidden after a restart', async ({ userData }) => {
     const app = await launchApp(userData);
     try {
       await waitForCat(app);
       const page = await settingsPage(app);
       await showPage(page, 'general');
-      const choice = page.getByRole('radiogroup', { name: 'When Desktop Cat starts' });
+      const choice = page.getByRole('radiogroup', { name: 'When GizeCat starts' });
       await choice.getByRole('radio', { name: 'Hidden' }).click();
       await expect.poll(async () => (await hook(app, 'getSettings')).general.startupState).toBe('hidden');
       await expect(choice.getByRole('radio', { name: 'Hidden' })).toHaveAttribute('aria-checked', 'true');
@@ -156,8 +156,9 @@ test.describe('lifecycle', () => {
       // The visible switch is the input's label (the input itself is transparent, under the track).
       const startupToggle = startup.locator('xpath=..');
       await expect(startup).toBeChecked();
-      await expect(page.getByText('Not available in this build (development or portable).')).toBeVisible();
-      await expect(page.getByText('Desktop Cat now starts with Windows')).toBeHidden();
+      // The (hidden) Diagnostics page lists the same reason in its Platform section: match the visible one.
+      await expect(page.getByText('Not available in this build (development or portable).').filter({ visible: true })).toBeVisible();
+      await expect(page.getByText('GizeCat now starts with Windows')).toBeHidden();
 
       // The section is main-owned: a renderer patch is refused, malformed actions are rejected.
       const refused = await page.evaluate(async () => {

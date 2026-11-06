@@ -6,10 +6,11 @@
 // back on in v1.2 or later (the sidecar always mirrors the effective list after a load or patch).
 // Electron-free and pure apart from the JsonStore it is given.
 import path from 'node:path';
+import { IDENTITY } from '../../shared/identity';
 import { normalizeOptOutList } from '../../shared/settings';
 
 export const OPT_OUT_SIDECAR_FILE = 'behavior-opt-outs.json';
-export const OPT_OUT_SIDECAR_KIND = 'desktop-cat-opt-outs';
+export const OPT_OUT_SIDECAR_KIND = IDENTITY.optOutSidecarKind;
 export const OPT_OUT_SIDECAR_VERSION = 1;
 
 export interface OptOutSidecarFile {

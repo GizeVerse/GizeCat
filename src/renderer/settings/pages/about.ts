@@ -13,7 +13,8 @@ export function aboutPage(ctx: PageContext): PageView {
     h('div', { class: 'row row-block about-head' }, [
       h('div', { class: 'about-art', 'aria-hidden': 'true' }, [brandMark()]),
       h('div', {}, [
-        h('h2', { class: 'about-name', text: S.app.brand }),
+        // Reads "GizeCat — a GizeVerse character (formerly Desktop Cat)" as one heading.
+        h('h2', { class: 'about-name' }, [h('span', { text: S.app.brand }), h('span', { class: 'about-identity', text: A.identity })]),
         h('div', { class: 'row-desc', text: A.tagline }),
         version,
         h('div', { class: 'row-desc', text: `${A.license} ${A.copyright}` }),

@@ -245,7 +245,7 @@ describe('Surfaces section: refresh', () => {
     expect(outlineAction(true)).toBe('showSurfaceOutlines');
     expect(outlineAction(false)).toBe('hideSurfaceOutlines');
     expect(V.outlinesDesc).toMatch(/never captures the screen/);
-    expect(V.outlinesDesc).toMatch(/turns off when Desktop Cat restarts/);
+    expect(V.outlinesDesc).toMatch(/turns off when GizeCat restarts/);
   });
 
   it('the Behaviour page says maximized windows have no edges to climb', () => {
