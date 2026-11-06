@@ -10,6 +10,9 @@ files:
   - out/**/*
   - "!out/preview/**"
   - "!out/native/**"
+  # The web host is its own static build, not part of the desktop app (review H1).
+  - "!out/web/**"
+  - "!out/web-test/**"
   - assets/**/*
   - package.json
   - LICENSE

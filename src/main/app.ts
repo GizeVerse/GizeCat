@@ -35,7 +35,9 @@ import { createQuitSequence } from './lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndWindow } from './lifecycle/sessionEnd';
 import { createShortcutManager } from './lifecycle/shortcuts';
 import { createOverlayManager } from './overlay/overlayManager';
-import { createPlatformServices, probeFromProcess, SECRET_BACKEND_REFUSED_REASON, type PlatformServices } from './platform';
+import { WAYLAND_NO_OVERLAY_REASON } from './overlay/overlayProfile';
+import { createPlatformServices, probeFromProcess } from './platform';
+import { guardedCipher } from './platform/secrets';
 import { darwinApplicationMenu } from './platform/appMenu';
 import { explicitOzone } from './platform/boot';
 import { runtimeCapabilities } from './platform/runtime';
@@ -47,7 +49,7 @@ import { createWindowRegistry, installSecurity } from './security';
 import { createSettingsWindowController } from './settingsWindow';
 import { createCatStore } from './store/catStore';
 import { createJsonStore, type JsonReadStatus } from './store/jsonStore';
-import { createSecretFile, createSecretStore, type SecretCipher } from './store/secretStore';
+import { createSecretFile, createSecretStore } from './store/secretStore';
 import type { SettingsStore } from './store/settingsStore';
 import { createSurfaceProvider } from './surfaces';
 import { installTestHooks } from './testHooks';
@@ -92,39 +94,6 @@ function offStatus(settings: Settings, reason: string): PerceptionStatus {
   };
 }
 
-/**
- * safeStorage, refused on Linux when its backend would store keys in effect in plaintext
- * (basic_text, unknown; audit R6). Other platforms get safeStorage itself.
- */
-function guardedCipher(platform: PlatformServices, log: Logger): SecretCipher {
-  if (platform.id !== 'linux-x11' && platform.id !== 'linux-wayland') return safeStorage;
-  let refused: boolean | null = null;
-  const allowed = (): boolean => {
-    if (refused === null) {
-      let backend: string | null;
-      try {
-        backend = safeStorage.getSelectedStorageBackend();
-      } catch {
-        backend = null;
-      }
-      refused = !platform.secretBackendAllowed(backend);
-      if (refused) log.warn('API keys cannot be stored: plaintext keyring backend refused', { backend });
-    }
-    return !refused;
-  };
-  return {
-    isEncryptionAvailable: () => allowed() && safeStorage.isEncryptionAvailable(),
-    encryptString: (plain) => {
-      if (!allowed()) throw new Error(SECRET_BACKEND_REFUSED_REASON);
-      return safeStorage.encryptString(plain);
-    },
-    decryptString: (cipher) => {
-      if (!allowed()) throw new Error(SECRET_BACKEND_REFUSED_REASON);
-      return safeStorage.decryptString(cipher);
-    },
-  };
-}
-
 function attempt(log: Logger, what: string, fn: () => void): void {
   try {
     fn();
@@ -161,7 +130,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const secrets = createSecretStore({
     // No .bak or quarantined copy: a removed key must not come back from a copy.
     store: createSecretFile(path.join(boot.userData, 'secrets.json'), logger.child('store')),
-    cipher: guardedCipher(platform, log),
+    cipher: guardedCipher(platform, safeStorage, log),
     logger: logger.child('secrets'),
   });
 
@@ -173,7 +142,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const display = createDisplayService(logger, platform.coordinates);
   const tracker = createWindowTracker(win32, logger);
   // Off Windows (no GetLastInputInfo): system idle time in whole seconds (ADR 0004 §3).
-  const activity = createActivityMonitor(win32, logger, win32.available ? {} : { idleProvider: () => powerMonitor.getSystemIdleTime() * 1000, idleResolutionMs: 1000 });
+  // Only off Windows: a Windows build without koffi keeps v1.2's behaviour (no idle data; review L1).
+  const activity = createActivityMonitor(win32, logger, platform.id === 'win32' ? {} : { idleProvider: () => powerMonitor.getSystemIdleTime() * 1000, idleResolutionMs: 1000 });
   const initial = settings.get();
   // Title patterns only while screen analysis is enabled: otherwise no window title is read.
   const applyWindowExclusions = (s: Settings): void => {
@@ -452,9 +422,19 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const compositor = platform.x11CompositorRequired ? createX11CompositorProbe() : null;
   const allowOverlays = compositor
     ? () => {
-        const state = compositor.check();
+        // A throwing probe counts as no compositor here too, so the report matches the overlays (review L4).
+        let state: ReturnType<typeof compositor.check>;
+        try {
+          state = compositor.check();
+        } catch {
+          state = 'unknown';
+        }
         overlayGate =
-          state === 'present' ? { allowed: true, reason: null } : { allowed: false, reason: state === 'unknown' ? `${NO_COMPOSITOR_REASON} (${compositor.error ?? 'X11 query failed'})` : NO_COMPOSITOR_REASON };
+          state === 'present'
+            ? { allowed: true, reason: null }
+            : state === 'xwayland'
+              ? { allowed: false, reason: WAYLAND_NO_OVERLAY_REASON }
+              : { allowed: false, reason: state === 'unknown' ? `${NO_COMPOSITOR_REASON} (${compositor.error ?? 'X11 query failed'})` : NO_COMPOSITOR_REASON };
         return overlayGate;
       }
     : undefined;

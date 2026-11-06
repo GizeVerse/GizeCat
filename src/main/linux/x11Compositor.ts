@@ -7,7 +7,8 @@ import type * as koffiModule from 'koffi';
 
 type Koffi = typeof koffiModule;
 
-export type CompositorState = 'present' | 'absent' | 'unknown';
+/** 'xwayland': the X server is XWayland (its XWAYLAND extension answers): no overlay (review H2/L3). */
+export type CompositorState = 'present' | 'absent' | 'unknown' | 'xwayland';
 
 export interface CompositorProbe {
   /** Opens a display connection, asks for the selection owner and closes it again (about a millisecond). */
@@ -22,6 +23,8 @@ interface X11 {
   XInternAtom(display: unknown, name: string, onlyIfExists: number): bigint | number;
   XGetSelectionOwner(display: unknown, atom: bigint | number): bigint | number;
   XCloseDisplay(display: unknown): number;
+  /** Non-zero when the server has the named extension (out params receive opcodes). */
+  XQueryExtension(display: unknown, name: string, major: number[], firstEvent: number[], firstError: number[]): number;
 }
 
 function bindX11(): X11 {
@@ -35,6 +38,7 @@ function bindX11(): X11 {
     XInternAtom: lib.func('unsigned long XInternAtom(void *display, const char *name, int only_if_exists)') as X11['XInternAtom'],
     XGetSelectionOwner: lib.func('unsigned long XGetSelectionOwner(void *display, unsigned long atom)') as X11['XGetSelectionOwner'],
     XCloseDisplay: lib.func('int XCloseDisplay(void *display)') as X11['XCloseDisplay'],
+    XQueryExtension: lib.func('int XQueryExtension(void *display, const char *name, _Out_ int *major, _Out_ int *first_event, _Out_ int *first_error)') as X11['XQueryExtension'],
   };
 }
 
@@ -67,6 +71,12 @@ export function createX11CompositorProbe(bind: () => X11 = bindX11): CompositorP
         if (!display) {
           error = 'XOpenDisplay failed';
           return 'unknown';
+        }
+        // XWayland identifies itself with the XWAYLAND extension: the environment can be stripped
+        // by a launcher, the server cannot. XWayland gets no overlay (stale pointer, T8).
+        if (x11.XQueryExtension(display, 'XWAYLAND', [0], [0], [0]) !== 0) {
+          error = null;
+          return 'xwayland';
         }
         const screen = x11.XDefaultScreen(display);
         const atom = x11.XInternAtom(display, `_NET_WM_CM_S${screen}`, 0);

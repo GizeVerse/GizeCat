@@ -183,7 +183,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<PlatformId, Readonly<Record<Capa
     persistence: U('JSON in ~/.config.'),
   },
   'linux-wayland': {
-    characterView: B('No overlay on native Wayland (see overlay); run an X11 or XWayland session.'),
+    characterView: B('No overlay on native Wayland (see overlay); sign in to an X11 session.'),
     overlay: B('Wayland gives clients no always-on-top or positioning; a full-screen overlay could block clicks (T8), so none is created.'),
     clickThrough: B('Input regions may apply late on Mutter; the overlay is not created.'),
     globalCursor: B('Wayland does not expose the global pointer to clients.'),

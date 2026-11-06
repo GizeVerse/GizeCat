@@ -20,7 +20,10 @@ export interface RuntimeObservations {
   /** The login item can be written by this build (Windows installed builds only). */
   loginItemWritable: boolean;
   loginItemReason: string | null;
-  /** The renderer sandbox is in force (no --no-sandbox). */
+  /**
+   * The renderer sandbox is in force (no --no-sandbox). Packaged builds refuse to start without it
+   * (boot.ts); a development run only warns, so this is informational and narrows nothing (review M3).
+   */
   sandboxed: boolean;
 }
 
@@ -43,7 +46,6 @@ export function runtimeCapabilities(platform: PlatformId, o: RuntimeObservations
   } else if (o.displayCount === 0) {
     for (const id of ['characterView', 'overlay', 'clickThrough'] as const) narrow(id, false, NO_DISPLAY_REASON);
   }
-  if (!o.sandboxed) narrow('characterView', false, 'The Chromium sandbox is off (--no-sandbox), so no window is shown.');
   narrow('windowSurfaces', o.windowAwareness !== 'unavailable', 'Window awareness is unavailable on this system.');
   narrow('taskbarSurfaces', o.taskbarsAvailable, 'The taskbar could not be tracked.');
   narrow('tabStrips', o.tabStripsAvailable, 'The tab-strip helper is unavailable.');

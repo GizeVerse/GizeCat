@@ -205,8 +205,8 @@ describe('runtime capabilities', () => {
     expect(r.capabilities.perception.available).toBe(false);
   });
 
-  it('reports the missing sandbox', () => {
-    expect(runtimeCapabilities('win32', { ...base, sandboxed: false }).capabilities.characterView.available).toBe(false);
+  it('a development run without the sandbox still shows the cat: the report does not claim otherwise (review M3)', () => {
+    expect(runtimeCapabilities('win32', { ...base, sandboxed: false }).capabilities.characterView).toEqual({ available: true, reason: null });
   });
 });
 
@@ -227,7 +227,7 @@ describe('boot decisions', () => {
 });
 
 describe('X11 compositor probe (fake libX11)', () => {
-  const fakeX11 = (owner: number | bigint, opts: { open?: boolean; throwOn?: string } = {}) => {
+  const fakeX11 = (owner: number | bigint, opts: { open?: boolean; throwOn?: string; xwayland?: boolean } = {}) => {
     const log: string[] = [];
     return {
       log,
@@ -247,6 +247,10 @@ describe('X11 compositor probe (fake libX11)', () => {
           log.push('close');
           return 0;
         },
+        XQueryExtension: (_d: unknown, name: string) => {
+          log.push(`ext:${name}`);
+          return opts.xwayland ? 1 : 0;
+        },
       }),
     };
   };
@@ -254,7 +258,7 @@ describe('X11 compositor probe (fake libX11)', () => {
   it('present when _NET_WM_CM_S<screen> has an owner, absent when not; the connection is always closed', () => {
     const p = fakeX11(0x1200003);
     expect(createX11CompositorProbe(p.bind).check()).toBe('present');
-    expect(p.log).toEqual(['open', 'atom:_NET_WM_CM_S0', 'close']);
+    expect(p.log).toEqual(['open', 'ext:XWAYLAND', 'atom:_NET_WM_CM_S0', 'close']);
     expect(createX11CompositorProbe(fakeX11(0n).bind).check()).toBe('absent');
   });
 
@@ -271,6 +275,12 @@ describe('X11 compositor probe (fake libX11)', () => {
     });
     expect(missing.check()).toBe('unknown');
     expect(missing.error).toMatch(/libX11/);
+  });
+
+  it('an XWayland server is recognised by its XWAYLAND extension even when its compositor owns the selection (review L3)', () => {
+    const p = fakeX11(0x1200003, { xwayland: true });
+    expect(createX11CompositorProbe(p.bind).check()).toBe('xwayland');
+    expect(p.log).toEqual(['open', 'ext:XWAYLAND', 'close']);
   });
 
   it('compositorFromOwner', () => {

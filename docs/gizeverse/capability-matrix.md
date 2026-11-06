@@ -134,7 +134,7 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | BLOCKED_BY_PLATFORM_OR_PERMISSION | No overlay on native Wayland (see overlay); run an X11 or XWayland session. | — |
+| The character is shown and animated | BLOCKED_BY_PLATFORM_OR_PERMISSION | No overlay on native Wayland (see overlay); sign in to an X11 session. | — |
 | Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | Wayland gives clients no always-on-top or positioning; a full-screen overlay could block clicks (T8), so none is created. | — |
 | Clicks pass through everywhere except the character | BLOCKED_BY_PLATFORM_OR_PERMISSION | Input regions may apply late on Mutter; the overlay is not created. | — |
 | Sees the pointer outside its own window | BLOCKED_BY_PLATFORM_OR_PERMISSION | Wayland does not expose the global pointer to clients. | — |
