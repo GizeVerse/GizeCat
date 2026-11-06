@@ -1,0 +1,94 @@
+name: Bug report
+description: Something in GizeCat does not work as described.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Security problems do not belong here.** If the bug could expose your screen, window titles or API key, let a renderer reach the system, turn on screen analysis without consent, or make the overlay block your desktop, follow SECURITY.md in the repository root instead.
+
+        If the cat blocks your clicks right now: quit it from the tray icon, or press the show/hide shortcut (`Ctrl+Alt+Shift+C` by default).
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown in Settings → About.
+      placeholder: "1.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: build
+    attributes:
+      label: How you run it
+      options:
+        - Installed with the Windows installer
+        - Unpacked build (win-unpacked)
+        - Development run (npm run dev)
+        - Other (say below)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Edition and build, as shown by `winver`.
+      placeholder: "Windows 11 Home 10.0.26200"
+    validations:
+      required: true
+  - type: input
+    id: displays
+    attributes:
+      label: Displays and taskbar
+      description: Number of displays, resolution and scale of each, taskbar position, and whether it auto-hides.
+      placeholder: "1 display, 1920×1200 at 125 %, bottom taskbar, auto-hide on"
+  - type: dropdown
+    id: analysis
+    attributes:
+      label: Screen analysis mode
+      description: Settings → Privacy & Vision.
+      options:
+        - Off (default)
+        - Local statistics
+        - AI vision, local server
+        - AI vision, cloud
+        - Don't know
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics export
+      description: |
+        Settings → Diagnostics → export diagnostics writes a JSON file. It contains no window titles, API keys or screen images, and paths inside your user profile are replaced with %USERPROFILE%. It does contain your display sizes and scaling, the cat's position and behaviour counts. Open it and check it before you attach it.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues for this problem.
+          required: true
+        - label: This report contains no API keys, private screen content or other people's information.
+          required: true

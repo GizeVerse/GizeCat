@@ -1,14 +1,39 @@
 name: ci
 
-# NOTE: this workflow has not been executed yet (the repository has no remote and
-# GitHub Actions is unavailable for this account at the time of writing). It mirrors
-# the commands that were run locally; see docs/TEST_REPORT.md.
+# UNEXECUTED. GitHub Actions has never run this workflow for this repository: the repository
+# has no remote, and Actions on this account's private repositories have been blocked by
+# billing since 2026-10-02. Nothing below has been observed to pass or fail on a hosted
+# runner. A person must check the first real run step by step before any result from it is
+# trusted or quoted.
+#
+# What the jobs are meant to show once they run:
+# - windows-latest (the reference platform): the steps of `node .claude/scripts/verify.mjs fast`
+#   plus the build. The Playwright E2E suite runs only when started by hand with e2e = true.
+# - ubuntu-latest: typecheck, lint, unit and integration tests, build. No E2E: the overlay
+#   specs call Win32 through koffi.
+# - macos-latest: typecheck, unit and integration tests, build.
+# A green Linux or macOS job means "it builds and its unit tests pass on a hosted runner".
+# It is not evidence that the cat works on that desktop (CONTRIBUTING.md, platform statuses).
+#
+# Known before the first run (docs/gizeverse/00-baseline-audit.md section 3, risk R9): some
+# login-item unit tests pass Windows paths through the host's node:path and are expected to
+# fail on Linux and macOS until that logic uses path.win32. Those two jobs are therefore
+# non-blocking for now (continue-on-error); a failure still shows as a failed job.
 
 on:
   push:
     branches: [main, 'feat/**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      e2e:
+        description: 'Windows: also run the Playwright E2E suite (starts the real app on the runner desktop)'
+        type: boolean
+        default: false
+      package:
+        description: 'Windows: also package the NSIS installer and run the packaged smoke and install/uninstall checks'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,8 +44,23 @@ concurrency:
 
 jobs:
   check:
-    runs-on: windows-latest
-    timeout-minutes: 30
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            experimental: false
+            lint: true
+          - os: ubuntu-latest
+            experimental: true
+            lint: true
+          - os: macos-latest
+            experimental: true
+            lint: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,42 +73,55 @@ jobs:
       - name: Install (no install scripts)
         run: npm ci --ignore-scripts
       - name: Download Electron binary
+        if: runner.os == 'Windows'
         run: node node_modules/electron/install.js
       - name: Typecheck
         run: npm run typecheck
       - name: Lint
+        if: matrix.lint
         run: npm run lint
       - name: Unit and integration tests
         run: npm test
+      # On Windows the build also compiles the UI Automation helper with the .NET Framework
+      # C# compiler; elsewhere that step skips itself and logs why.
       - name: Build
         run: npm run build
-      - name: End-to-end (Playwright, Electron)
+      - name: End-to-end (Playwright, real Electron app)
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.e2e
         run: npx playwright test
       - name: Dependency audit (all dependencies; Electron and zod are devDependencies but ship)
+        if: runner.os == 'Windows'
         run: npm audit --audit-level=high
 
   package:
+    name: package (windows-latest)
     needs: check
+    if: github.event_name == 'workflow_dispatch' && inputs.package
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - run: npm ci --ignore-scripts
-      - run: node node_modules/electron/install.js
-      - name: Package NSIS installer (unsigned)
+      - name: Install (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+      - name: Package NSIS installer (unsigned, not published)
         run: npm run package
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Smoke-test the packaged exe
         run: node scripts/smoke-packaged.mjs
+      # Installs into a temporary folder on the throwaway runner, checks the per-user startup
+      # entry end to end, then uninstalls. Never run this on a machine someone uses.
       - name: Install / uninstall validation
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-cat-installer
+          name: windows-installer-ci
           path: release/*.exe
           if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,93 @@
+name: Platform report
+description: Tell us what happened when you ran GizeCat on macOS, Linux, Wayland, Windows 10, several monitors or other untested hardware.
+title: "[Platform]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        GizeCat has only been verified on one Windows 11 machine. Your report is how other setups get real evidence. A maintainer records what you saw, together with your setup, in the test report. It counts as evidence for that setup only, not for the platform as a whole.
+
+        **If the overlay ever blocks clicks to your desktop,** quit GizeCat from its tray menu or end the process (Task Manager, Activity Monitor, or `pkill` in a terminal), and say so first in your report. That is the most important result.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows 10
+        - Windows 11
+        - Other (say below)
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version and architecture
+      placeholder: "Ubuntu 24.04 x64 / macOS 15.1 arm64 / Windows 10 22H2 x64"
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Session type (Linux)
+      description: "On Linux, `echo $XDG_SESSION_TYPE` prints it. If you started GizeCat with an `--ozone-platform` flag, say so under What you observed."
+      options:
+        - X11
+        - Wayland
+        - Not Linux
+        - Don't know
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop environment or window manager
+      placeholder: "GNOME 46, KDE Plasma 6, Xfce, Sway, …"
+  - type: input
+    id: displays
+    attributes:
+      label: Displays
+      description: Number of displays, and the resolution and scale of each.
+      placeholder: "2: 2560×1440 at 150 %, 1920×1080 at 100 %"
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: GizeCat version and build
+      description: Settings → About for the version; and where the build came from (installer, AppImage, tar.gz, or built from source at which commit).
+      placeholder: "1.2.0, built from source at <commit>"
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What you observed
+      description: Keep the lines that apply and answer them; add anything else you noticed.
+      value: |
+        - Clicks pass through everywhere except the cat: yes / no / not tried
+        - The cat appears: yes / no
+        - It stays above other windows: yes / no / not tried
+        - Petting, dragging and throwing work: yes / no / not tried
+        - Tray icon and menu work: yes / no / not tried
+        - The Settings window opens: yes / no / not tried
+        - Adding, removing or rearranging displays: fine / broken / not tried
+        - Other:
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics export and logs
+      description: |
+        Settings → Diagnostics → export diagnostics writes a JSON file; attach it here. The export contains no window titles, API keys or screen images, and paths inside your user profile are replaced with %USERPROFILE%. It does contain your display sizes and scaling and the cat's position. Check it before sharing. If you started GizeCat from a terminal, the terminal output helps too.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I checked the diagnostics export and logs before attaching them.
+          required: true
+        - label: This report contains no API keys, private screen content or other people's information.
+          required: true

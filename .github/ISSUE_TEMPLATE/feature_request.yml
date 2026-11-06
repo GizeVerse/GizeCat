@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest something new for GizeCat or GizeVerse.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        GizeCat stays a click-through, privacy-first companion. Requests that need a keyboard hook, telemetry, screen analysis or cloud processing on by default, or an overlay that can catch clicks outside the cat cannot be accepted. The full list of invariants is in CONTRIBUTING.md.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation, not the solution yet.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to happen
+    validations:
+      required: true
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Platforms
+      description: Where you would use it.
+      multiple: true
+      options:
+        - Windows
+        - macOS
+        - Linux (X11)
+        - Linux (Wayland)
+        - Web browser
+        - Android
+        - iOS
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy impact
+      description: Would it need new information from your system (windows, screen, input, network)? What would be stored, and would anything leave your computer?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues for this idea.
+          required: true
+        - label: I read the invariants in CONTRIBUTING.md, and this request does not need any of them changed (or I explain why above).
+          required: true

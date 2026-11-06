@@ -1,0 +1,82 @@
+name: release-artifacts
+
+# UNEXECUTED. GitHub Actions has never run this workflow for this repository: the repository
+# has no remote, and Actions on this account's private repositories have been blocked by
+# billing since 2026-10-02. Nothing below has been observed to pass or fail on a hosted
+# runner. A person must check the first real run, and inspect every file it produces, before
+# any of them is shared.
+#
+# Manual only (workflow_dispatch). It builds unsigned packages and uploads them as workflow
+# artifacts with actions/upload-artifact, nothing else:
+# - it never creates a GitHub release and never publishes (`--publish never`);
+# - it never signs (no certificate; CSC_IDENTITY_AUTO_DISCOVERY=false);
+# - it uses no secrets.
+#
+# The Linux job depends on the `linux:` section and the per-OS packaging changes planned in
+# ADR 0004 section 11 (docs/adr/0004-gizeverse-platform.md); electron-builder.yml has neither
+# yet. Until they land, expect that job to fail or to produce a package that is not fit to
+# ship. A Linux package that builds is not evidence that the app runs on Linux
+# (CONTRIBUTING.md, platform statuses).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-artifacts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows NSIS installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: Build
+        run: node scripts/build.mjs
+      - name: Package NSIS installer (unsigned, not published)
+        run: npx electron-builder --win nsis --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-nsis-installer
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux AppImage and tar.gz
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: Build
+        run: node scripts/build.mjs
+      - name: Package AppImage and tar.gz (unsigned, not published)
+        run: npx electron-builder --linux AppImage tar.gz --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage-targz
+          path: |
+            release/*.AppImage
+            release/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
