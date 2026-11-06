@@ -110,16 +110,24 @@ async function startApp(userData: string, pids: number[], o: { interaction?: boo
   return app;
 }
 
+/** Bound once per worker: koffi refuses a second struct with the same name ('Duplicate type name'). */
+let lastInputApi: (() => number) | null = null;
+
 /** Real ms since the last input on this desk (GetLastInputInfo through user32 in this process; nothing is sent). */
 function realDeskIdleMs(): number {
-  const user32 = koffi.load('user32.dll');
-  const kernel32 = koffi.load('kernel32.dll');
-  const INFO = koffi.struct('DCAT_E2E_LASTINPUT', { cbSize: 'uint32_t', dwTime: 'uint32_t' });
-  const GetLastInputInfo = user32.func('__stdcall', 'GetLastInputInfo', 'int', [koffi.inout(koffi.pointer(INFO))]);
-  const GetTickCount = kernel32.func('__stdcall', 'GetTickCount', 'uint32_t', []);
-  const info = { cbSize: koffi.sizeof(INFO), dwTime: 0 };
-  if (!GetLastInputInfo(info)) return 0;
-  return ((GetTickCount() as number) - info.dwTime) >>> 0;
+  if (!lastInputApi) {
+    const user32 = koffi.load('user32.dll');
+    const kernel32 = koffi.load('kernel32.dll');
+    const INFO = koffi.struct('DCAT_E2E_LASTINPUT', { cbSize: 'uint32_t', dwTime: 'uint32_t' });
+    const GetLastInputInfo = user32.func('__stdcall', 'GetLastInputInfo', 'int', [koffi.inout(koffi.pointer(INFO))]);
+    const GetTickCount = kernel32.func('__stdcall', 'GetTickCount', 'uint32_t', []);
+    lastInputApi = () => {
+      const info = { cbSize: koffi.sizeof(INFO), dwTime: 0 };
+      if (!GetLastInputInfo(info)) return 0;
+      return ((GetTickCount() as number) - info.dwTime) >>> 0;
+    };
+  }
+  return lastInputApi();
 }
 
 /** The user-presence input the run was started with: real, or SIMULATED once the desk has been empty for an hour. */
