@@ -38,7 +38,7 @@ import {
   WINEVENT_OUTOFCONTEXT,
   WINEVENT_SKIPOWNPROCESS,
 } from './constants';
-import type { Hwnd, RawRect, Win32Native } from './native';
+import type { Hwnd, RawRect, Win32Native } from './nativeTypes';
 import type { Occluder } from './platforms';
 import { categorizeProcess, ExclusionRules, exeBasename } from './processNames';
 import {

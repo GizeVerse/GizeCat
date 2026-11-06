@@ -64,6 +64,7 @@ import { hasTabStripExtras, type TabStripDiagnostics } from '../uia/service';
 import type { Occluder } from '../win32/platforms';
 import { hasWin32Extensions, hasWin32InputExtensions } from '../win32/win32Api';
 import { computeEdgeBands, edgeBandStats, type EdgeBandStats } from './edgeBands';
+import type { CatPosition, ScreenEdgeGuard } from './hostTypes';
 import type { WindowChange, WindowTrackerExtras } from '../win32/windowTracker';
 import {
   ATTACH_TOLERANCE_PX,
@@ -141,25 +142,8 @@ export interface SurfaceProviderDeps {
   options?: Partial<SurfaceProviderOptions>;
 }
 
-/** Where the cat is (px) and which surface it is attached to; fed by the host every tick. */
-export interface CatPosition {
-  x: number;
-  y: number;
-  surfaceId: string | null;
-  /**
-   * The user hid the cat. The sim keeps it on its surface meanwhile, so the attachment still
-   * steers which span is served; nothing is of tab-strip interest.
-   */
-  hidden?: boolean;
-  /**
-   * The cat sleeps (or is falling asleep), is paused, or is away (out of sight for a fullscreen
-   * app). It makes no trips then, so far browsers are not measured as possible destinations and
-   * the tab-strip helper can idle; the one it is on and those within reach still are.
-   */
-  asleep?: boolean;
-  paused?: boolean;
-  away?: boolean;
-}
+// CatPosition and ScreenEdgeGuard live in hostTypes.ts (data only; the cat host imports them there).
+export type { CatPosition, ScreenEdgeGuard } from './hostTypes';
 
 // A type alias (not an interface) so it is assignable to the contract's Record<string, unknown>.
 export type SurfaceProviderDebug = {
@@ -203,13 +187,6 @@ export interface SurfaceProviderExtras {
   /** v1.2: the host's click-guard state for the diagnostics (screenEdges.guard / failClosed). */
   noteClickGuard?(state: ScreenEdgeGuard): void;
   debugInfo(): SurfaceProviderDebug;
-}
-
-/** The host's T8 screen-edge click guard as reported for the diagnostics (counts and a state only). */
-export interface ScreenEdgeGuard {
-  state: 'off' | 'idle' | 'active' | 'failClosed';
-  /** Times the guard failed closed this session. */
-  failClosed: number;
 }
 
 /** What createSurfaceProvider returns: the contract plus the host/test extras (typed debug info). */

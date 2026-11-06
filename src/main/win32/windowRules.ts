@@ -19,7 +19,7 @@ import {
   WS_EX_WINDOWEDGE,
   WS_THICKFRAME,
 } from './constants';
-import type { RawRect } from './native';
+import type { RawRect } from './nativeTypes';
 
 export type NotificationState = ReturnType<Win32Api['getNotificationState']>;
 

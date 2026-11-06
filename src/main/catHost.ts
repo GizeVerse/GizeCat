@@ -29,7 +29,7 @@ import type { WorldGeometry } from '../shared/world';
 import { simWorld } from '../core/display/simWorld';
 import type { ActivityMonitor, DisplayService, Logger, PerceptionService, SurfaceProvider, TaskbarTracker, Win32Api, WindowTracker } from './contracts';
 import { BODY_MARGIN_SIDE_DIP, presenceRectPx } from './overlay/renderMapping';
-import type { CatPosition, ScreenEdgeGuard } from './surfaces';
+import type { CatPosition, ScreenEdgeGuard } from './surfaces/hostTypes';
 import { bandXRange } from './surfaces/edgeBands';
 import { hasWin32InputExtensions, type Win32InputExtensions } from './win32/win32Api';
 

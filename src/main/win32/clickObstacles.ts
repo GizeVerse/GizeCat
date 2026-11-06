@@ -16,7 +16,7 @@
 import type { Rect } from '../../shared/geometry';
 import type { Logger } from '../contracts';
 import { CHILDID_SELF, DESKTOP_WINDOW_CLASSES, EVENT_OBJECT_DESTROY, GA_ROOT, GWL_EXSTYLE, OBJID_WINDOW, OBSTACLE_EVENT_RANGES, WINEVENT_OUTOFCONTEXT } from './constants';
-import type { Hwnd, Win32Native } from './native';
+import type { Hwnd, Win32Native } from './nativeTypes';
 import { isOverlayStyle, toRect } from './windowRules';
 
 export interface ClickObstacles {
