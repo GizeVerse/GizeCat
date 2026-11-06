@@ -151,14 +151,18 @@ Default-on startup was verified and disclosed for the Windows installer only. Of
   - unavailable stubs for the window tracker and activity monitor, imported from `win32Api.ts` directly (never `win32/index.ts`, which reaches koffi);
   - `localStorage` stores for the cat state and a settings subset, with the same zod schemas and corrupt-data recovery.
 - **Routing (M4).** Pointer routing (press, drag, lost press, hit-region freshness, gestures) currently lives in overlayManager.ts, which imports Electron. The web host gets its own small router over the same gesture recognizer and hit-region rules. No Electron code is shared.
-- **`pointerType`.** It becomes an optional field of the strict pointer schema. In the touch mode of the gesture recognizer:
-  - a slow stroke along the body pets;
-  - a hold followed by movement drags;
+- **Touch (as built).** The router listens at the document in the capture phase, so the IPC pointer schema did not change. It translates touch into the recognizer's existing mouse vocabulary, which means `gestures.ts` is unchanged and the desktop rules carry no risk:
+  - a stroke along the body pets;
+  - a hold of at least 350 ms followed by movement drags;
   - a tap clicks;
   - a fling throws;
   - a long-press `contextmenu` is ignored for touch (Android raises one; M4).
-  Mouse rules are unchanged.
-- **Security (M5).** CSP `default-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'`. No network requests after load, no key listeners. The production build (`out/web`) has no test hooks; a `--test` build goes to a separate directory, and a test scans `out/web` for hook names.
+
+  A cat-owned press suppresses the click that follows; keyboard clicks (`detail === 0`) always reach the page.
+- **Security (M5).** CSP `default-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'`. Zod runs `jitless` there, because its JIT probe would violate the CSP (the E2E test caught it).
+  - No network requests after load, no key listeners. ESLint bans the key-event literals in `src/web`.
+  - The production build (`out/web`) has no test hooks. The test build goes to `out/web-test`, and both the build and a test scan `out/web`.
+  - Results: [07-web-host.md](../gizeverse/07-web-host.md).
 - **Verification.** A Playwright project serves `out/web` locally and drives the installed Chrome and Edge through `channel`: REAL on Windows Chrome and Edge. Mobile viewport and touch emulation are SIMULATED_OR_MOCK_TESTED. An emulator run on a new, own AVD would be REAL for an emulator, not a device.
 
 ## 9. Branding and frozen identifiers

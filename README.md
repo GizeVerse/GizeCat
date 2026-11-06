@@ -1,4 +1,6 @@
-# Desktop Cat
+# GizeCat
+
+**GizeCat** (formerly Desktop Cat) is the first character of **GizeVerse**, a small platform for digital characters that live alongside you.
 
 A living desktop companion for Windows: **one** animated, persistent cat that lives on top of your desktop, wanders along the bottom of your screen, climbs the sides of windows and walks along their tops and along browser tab strips, rides an auto-hiding taskbar as it slides in, naps when you're away, watches you work, reacts to windows opening and closing, and can be petted, picked up and thrown — without ever getting in the way of your clicks. It starts with Windows (you can turn that off).
 
@@ -9,10 +11,23 @@ A living desktop companion for Windows: **one** animated, persistent cat that li
 - **Works offline, no AI required.** Optional, opt-in screen perception (local statistics, or an AI vision model you configure) with privacy enforced in code.
 
 > Status: v1.2.0, built and validated on Windows 11 (see [Tested environments](#tested-environments)). The installer is **not code-signed**. v1.2 makes the cat livelier: it explores on its own, stays on windows and tab strips for minutes, hunts the cursor, and reacts to throws in varied ways ([design](docs/adr/0003-lively-cat.md), [why it was passive](docs/research/v1.2/diagnosis.md)).
+>
+> **Windows 10/11 is the only supported platform.** The GizeVerse foundation adds macOS and Linux profiles and a web host. What each platform can do, and how much of it has actually run, is stated capability by capability in the **[capability matrix](docs/gizeverse/capability-matrix.md)** (generated from code). Nothing outside Windows is a supported release.
+
+## Platforms
+
+| Platform | What exists | Evidence |
+|---|---|---|
+| Windows 10/11 | The full app | Windows 11, REAL ([Tested environments](#tested-environments)) |
+| Web browser | The real character in a page: the same sim, host and renderer, mouse and touch | Chrome 156 and Edge 156 on Windows, REAL; phone layout only under device emulation ([report](docs/gizeverse/07-web-host.md)) |
+| Linux, X11 session with a compositing window manager | The overlay on the floor of the screen; no window surfaces | LINUX-SUMMARY |
+| Linux, Wayland session (native or XWayland) | No overlay by design: it could block clicks. Tray and Settings only | BLOCKED_BY_PLATFORM_OR_PERMISSION |
+| macOS | A platform profile (overlay panel, menus, logical coordinates) | Never run on a Mac: IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED ([report](docs/gizeverse/04-macos.md)) |
+| Android, iOS/iPadOS | The web host in the browser; no native app or overlay | Android: device emulation only; iOS: never run ([why](docs/gizeverse/08-mobile-boundaries.md)) |
 
 ## Install
 
-Build the installer with `npm run package` (see [Build, run, test](#build-run-test)) — no release is published yet — then run `release/Desktop-Cat-Setup-1.2.0.exe` (per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`, no admin). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. From then on Desktop Cat starts when you sign in to Windows (one-time notification; turn it off in Settings → General or Task Manager → Startup apps — an opt-out is never overridden). Upgrading from an earlier version keeps your cat and settings (quit the running cat from its tray menu first). Uninstall from Windows Settings → Apps (removes the startup entry too).
+Build the installer with `npm run package` (see [Build, run, test](#build-run-test)) — no release is published yet — then run `release/Desktop-Cat-Setup-1.2.0.exe` (per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`, no admin). The installer, its shortcuts and the Apps/Startup-apps entries are still named **Desktop Cat**: they are renamed only after an upgrade test on a disposable machine shows that existing installs, settings and startup entries carry over ([ADR 0004 §9](docs/adr/0004-gizeverse-platform.md)). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. From then on Desktop Cat starts when you sign in to Windows (one-time notification; turn it off in Settings → General or Task Manager → Startup apps — an opt-out is never overridden). Upgrading from an earlier version keeps your cat and settings (quit the running cat from its tray menu first). Uninstall from Windows Settings → Apps (removes the startup entry too).
 
 ## Controls
 
@@ -25,7 +40,7 @@ Build the installer with `npm run package` (see [Build, run, test](#build-run-te
 | Tray icon | Left-click show/hide; right-click menu (pause, interactions on/off, vision privacy pause, call, settings, quit) |
 | `Ctrl+Alt+Shift+C` | Show/hide (configurable) |
 
-Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
+In the web host: tap the cat, stroke it with a finger to pet it, or hold it and drag. Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## What is implemented
 
@@ -49,6 +64,15 @@ Screenshots are of the real settings window driven by the real main process (`sc
 
 **Environment surfaces (v1.1, reachable from the floor since 1.1.1).** One physics model for every surface: the floor, window tops (DWM visual frame, Windows 11 rounded corners inset, z-order occlusion aware), window sides the cat leaps up to, catches and climbs (with corner pull-up and climbing down), browser tab strips (measured for visible floating Edge/Chrome windows, reached by climbing), and the auto-hiding taskbar as a **moving** ledge (the cat may hop on, rides it up and down, and is set down calmly when it hides; never stuck on a vanished surface). Riding follows dragged windows; covered or closed surfaces end in a calm drop or a short start. Taskbars are tracked with cheap adaptive geometry sampling (no screenshots); overlays carry `NonRudeHWND` so Windows no longer strips the taskbar's always-on-top flag, and a click guard keeps taskbar clicks and auto-hide reveals working under the cat. Tab strips of Edge and Chrome come from a small bundled UI Automation helper (`DesktopCatUia.exe`): geometry only, never tab names or page content, never clicks, scoped so the browser's web accessibility is not switched on. Each behaviour has its own switch (*Play with the taskbar*, *Climb windows*, *Walk on browser tabs*). Maximized windows offer nothing to climb (they cover the screen and their top is the screen's edge). *Settings → Diagnostics → Surfaces* explains what the cat can see and reach (counts, reasons, no titles), with optional click-through outlines on the desktop.
 
+## GizeVerse architecture
+
+- **Character core** (`src/core`, `src/shared`): behaviour, movement, gestures, contracts. It is platform-agnostic (ESLint-enforced) and deterministic for a seed.
+- **Host runtime** (`createCatHost`): the simulation loop, with no Electron or Node imports. The desktop app and the web host run the same loop.
+- **Platform services** (`src/main/platform`): every per-OS decision (coordinates, overlay profile, menus, session end, secret-storage policy, sandbox rule) and runtime capability detection, which Settings › Diagnostics › Platform shows.
+- **Shells:** the Electron desktop overlay (`src/main`, `src/renderer`, `src/preload`) and the web host (`src/web`).
+
+Design and review: [ADR 0004](docs/adr/0004-gizeverse-platform.md). Reports: [docs/gizeverse/](docs/gizeverse/README.md). Roadmap: [ROADMAP.md](ROADMAP.md).
+
 ## Not implemented / future possibilities
 
 - Top, left and right taskbars as surfaces (they are tracked, but only bottom auto-hide taskbars are ledges); Firefox and vertical-tab layouts for tab strips.
@@ -58,7 +82,7 @@ Screenshots are of the real settings window driven by the real main process (`sc
 
 ## Build, run, test
 
-Requires Windows 10/11 x64, Node 22.13+, 24 or 26 (built with Node 26.4; enforced by `engines`), npm.
+The desktop app requires Windows 10/11 x64. All platforms need Node 22.13+, 24 or 26 (built with Node 26.4; enforced by `engines`) and npm.
 
 ```powershell
 npm ci --ignore-scripts                 # no dependency needs install scripts
@@ -67,6 +91,10 @@ npm run dev                             # development build + run (separate user
 npm run typecheck; npm run lint; npm test
 npm run build; npx playwright test      # E2E: launches the real app (a cat appears briefly)
 npm run package                         # -> release/Desktop-Cat-Setup-<version>.exe (+ release/win-unpacked)
+npm run package:linux                   # Linux AppImage + tar.gz (run on Linux; see docs/gizeverse/05-linux.md)
+npm run package:mac                     # macOS dmg + zip (needs a Mac; unsigned; never built here)
+npm run build:web; npm run test:web     # web host -> out/web, and its Playwright tests (installed Chrome and Edge)
+node scripts/capability-matrix.mjs      # regenerate docs/gizeverse/capability-matrix.md from src/shared/platform.ts
 node scripts/smoke-packaged.mjs         # smoke-test the packaged exe
 powershell -File scripts/install-test.ps1   # silent install -> smoke -> silent uninstall
 node scripts/bench.mjs                  # resource benchmark -> out/bench/*.json
@@ -92,8 +120,8 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 
 ## Documentation
 
-[Architecture decision record](docs/adr/0001-architecture.md) · [User guide](docs/USER_GUIDE.md) · [Privacy](docs/PRIVACY.md) · [Threat model](docs/THREAT_MODEL.md) · [AI setup](docs/AI_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Test report](docs/TEST_REPORT.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Example settings](docs/settings.example.json) · [Research notes](docs/research/)
+[GizeVerse platform (ADR 0004)](docs/adr/0004-gizeverse-platform.md) · [Capability matrix](docs/gizeverse/capability-matrix.md) · [GizeVerse reports](docs/gizeverse/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Roadmap](ROADMAP.md) · [Architecture decision record](docs/adr/0001-architecture.md) · [User guide](docs/USER_GUIDE.md) · [Privacy](docs/PRIVACY.md) · [Threat model](docs/THREAT_MODEL.md) · [AI setup](docs/AI_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Test report](docs/TEST_REPORT.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Example settings](docs/settings.example.json) · [Research notes](docs/research/)
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Artwork is original and part of this project.
+MIT — see [LICENSE](LICENSE). Artwork is original and part of this project. Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
