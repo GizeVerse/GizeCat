@@ -196,7 +196,7 @@ About reads "GizeCat, a GizeVerse character (formerly Desktop Cat)".
 
 ## 11. Packaging
 
-- **Windows.** Payload unchanged.
+- **Windows.** Builder configuration equivalent (review H1 corrected the wording): the same `out/` packaged with the v1.2 and the new config gives byte-identical payloads; the app code itself changed. `out/web*` is excluded from the desktop package.
   - The Windows-only entries (the UIA helper extraResources, the koffi-win32 asarUnpack) move under `win:`; a `--dir` payload diff before and after proves it.
   - **elevate.exe is not dropped** (`packElevateHelper` unchanged): that would change the installer, which cannot be install-tested here. It is listed as a notice item instead.
 - **Linux.** A `linux:` section with AppImage and tar.gz, category Utility, and koffi's linux-x64 binary unpacked (the compositor probe needs it).
