@@ -42,7 +42,9 @@ export function findV1OptOutInLogs(logDir: string | null, fsApi: EvidenceFs = fs
     return false;
   }
   for (const name of names) {
-    const file = path.join(logDir, name);
+    // Windows path semantics, like the rest of the login item (loginItem.ts): identical on win32;
+    // the scan only matters there (ADR 0004 §7).
+    const file = path.win32.join(logDir, name);
     try {
       const st = fsApi.statSync(file);
       if (!st.isFile() || st.size > MAX_FILE_BYTES) continue;

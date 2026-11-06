@@ -533,7 +533,9 @@ export class Pipeline {
       now: clock,
       spawnHelper: fakeHelperSpawn(mode, native, vt, this.helper, realSetImmediate),
     });
-    this.provider = createSurfaceProvider({ logger, tracker, win32, taskbars, tabStrips: this.tabs, display, settings, now: clock });
+    // The pipeline models Windows 11 (8 DIP rounded corners) on every host: the provider's default
+    // comes from os.release(), which is not a Windows 11 build in a Linux container (GizeVerse).
+    this.provider = createSurfaceProvider({ logger, tracker, win32, taskbars, tabStrips: this.tabs, display, settings, now: clock, options: { cornerRadiusDip: 8 } });
     this.sim = createCatSim({ persisted: o.cat ?? freshCat(o.seed), settings, world: simWorld(display.world), now: 0, random: mulberry32(o.seed), wallClock: () => WALL0 + vt.now });
 
     const render = (out: SimOutput, simNow: number): void => {
