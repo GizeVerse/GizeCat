@@ -19,24 +19,24 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 
 | Capability | Windows 10/11 | macOS | Linux (X11 session) | Linux (Wayland session, app under XWayland) | Linux (Wayland session, native) | Web browser (desktop) | Android | iOS / iPadOS |
 |---|---|---|---|---|---|---|---|---|
-| The character is shown and animated | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | NOT IMPL | NOT IMPL | NOT IMPL |
+| The character is shown and animated | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | VERIFIED | SIMULATED | IMPL, UNVERIFIED |
 | Drawn over other apps (transparent, always on top) | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
-| Clicks pass through everywhere except the character | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
+| Clicks pass through everywhere except the character | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | VERIFIED | BLOCKED | BLOCKED |
 | Sees the pointer outside its own window | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Several displays, mixed scaling | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Climbs and walks on other apps' windows | VERIFIED | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Rides the taskbar / dock | VERIFIED | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Walks on browser tab strips | VERIFIED | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
-| Notices when you are away | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | NOT IMPL | NOT IMPL | NOT IMPL |
+| Notices when you are away | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED |
 | Gets out of the way of fullscreen apps | VERIFIED | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Starts when you sign in | VERIFIED | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED |
 | Tray / menu-bar icon | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED |
 | Show/hide shortcut | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Encrypted API-key storage | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED |
 | Optional screen perception (opt-in) | VERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
-| Touch gestures (pet, drag, throw) | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL |
-| Optional sound | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | NOT IMPL | NOT IMPL | NOT IMPL |
-| Remembers the character between runs | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | NOT IMPL | NOT IMPL | NOT IMPL |
+| Touch gestures (pet, drag, throw) | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL | IMPL, UNVERIFIED | SIMULATED | IMPL, UNVERIFIED |
+| Optional sound | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED |
+| Remembers the character between runs | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | VERIFIED | SIMULATED | IMPL, UNVERIFIED |
 
 ## Windows 10/11 (`win32`)
 
@@ -157,30 +157,30 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | NOT_IMPLEMENTED | Web host not built yet. | — |
+| The character is shown and animated | IMPLEMENTED_AND_LOCALLY_VERIFIED | The real sim, host and renderer in a page (Chrome 156 and Edge 156 on Windows 11). | [report](../../docs/gizeverse/07-web-host.md#results) |
 | Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | A web page cannot draw over other apps; the character lives inside the page. | — |
-| Clicks pass through everywhere except the character | BLOCKED_BY_PLATFORM_OR_PERMISSION | In-page only: the page behind the character stays clickable outside its hit region. | — |
+| Clicks pass through everywhere except the character | IMPLEMENTED_AND_LOCALLY_VERIFIED | In-page: the page keeps its clicks outside the hit region; a press on the cat stays with the cat. | [report](../../docs/gizeverse/07-web-host.md#results) |
 | Sees the pointer outside its own window | BLOCKED_BY_PLATFORM_OR_PERMISSION | Browsers report the pointer only over the page. | — |
 | Several displays, mixed scaling | BLOCKED_BY_PLATFORM_OR_PERMISSION | One viewport. | — |
 | Climbs and walks on other apps' windows | BLOCKED_BY_PLATFORM_OR_PERMISSION | Browsers do not expose other windows. | — |
 | Rides the taskbar / dock | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed to pages. | — |
 | Walks on browser tab strips | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed to pages. | — |
-| Notices when you are away | NOT_IMPLEMENTED | Web host not built yet. | — |
+| Notices when you are away | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Idle from page pointer events; a hidden tab suspends the host (tested with a faked visibilityState only). | — |
 | Gets out of the way of fullscreen apps | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed to pages. | — |
 | Starts when you sign in | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not available to web pages. | — |
 | Tray / menu-bar icon | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not available to web pages. | — |
 | Show/hide shortcut | BLOCKED_BY_PLATFORM_OR_PERMISSION | Pages receive keys only while focused; no key listeners by design. | — |
 | Encrypted API-key storage | BLOCKED_BY_PLATFORM_OR_PERMISSION | No secrets: the web host has no AI or network features. | — |
 | Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not offered on the web host (no screen access, no network). | — |
-| Touch gestures (pet, drag, throw) | NOT_IMPLEMENTED | Web host not built yet. | — |
-| Optional sound | NOT_IMPLEMENTED | Web host not built yet. | — |
-| Remembers the character between runs | NOT_IMPLEMENTED | Web host not built yet. | — |
+| Touch gestures (pet, drag, throw) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Touch routing exists and passed under device emulation (see Android); no touch-screen PC was tested. | — |
+| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | The same WebAudio cues as the desktop; not tested in the web host. | — |
+| Remembers the character between runs | IMPLEMENTED_AND_LOCALLY_VERIFIED | localStorage, validated with the desktop migrations; a reload keeps the cat. | [report](../../docs/gizeverse/07-web-host.md#results) |
 
 ## Android (`android`)
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | NOT_IMPLEMENTED | Web host not built yet; it would run in-page in Chrome for Android. | — |
+| The character is shown and animated | SIMULATED_OR_MOCK_TESTED | The web host under desktop Chrome's Pixel 7 emulation; never run on Android or its Chrome. | [report](../../docs/gizeverse/07-web-host.md#results) |
 | Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | SYSTEM_ALERT_WINDOW needs a permission, and since Android 12 touches pass through only at ≤ 80 % opacity. | — |
 | Clicks pass through everywhere except the character | BLOCKED_BY_PLATFORM_OR_PERMISSION | See overlay. | — |
 | Sees the pointer outside its own window | BLOCKED_BY_PLATFORM_OR_PERMISSION | Touch devices have no hovering pointer outside the app. | — |
@@ -188,22 +188,22 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 | Climbs and walks on other apps' windows | BLOCKED_BY_PLATFORM_OR_PERMISSION | Other apps are not visible. | — |
 | Rides the taskbar / dock | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
 | Walks on browser tab strips | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
-| Notices when you are away | NOT_IMPLEMENTED | Web host not built yet. | — |
+| Notices when you are away | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code (page pointer idle); not run on Android. | — |
 | Gets out of the way of fullscreen apps | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
 | Starts when you sign in | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Tray / menu-bar icon | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Show/hide shortcut | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Encrypted API-key storage | BLOCKED_BY_PLATFORM_OR_PERMISSION | No secrets on the web host. | — |
 | Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | MediaProjection needs per-session consent; not offered. | — |
-| Touch gestures (pet, drag, throw) | NOT_IMPLEMENTED | Web host not built yet. | — |
-| Optional sound | NOT_IMPLEMENTED | Web host not built yet. | — |
-| Remembers the character between runs | NOT_IMPLEMENTED | Web host not built yet. | — |
+| Touch gestures (pet, drag, throw) | SIMULATED_OR_MOCK_TESTED | Tap, stroke-to-pet and hold-to-drag passed under Pixel 7 emulation (touch through the DevTools protocol). | [report](../../docs/gizeverse/07-web-host.md#results) |
+| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code; not run on Android. | — |
+| Remembers the character between runs | SIMULATED_OR_MOCK_TESTED | Reload keeps the cat under Pixel 7 emulation. | [report](../../docs/gizeverse/07-web-host.md#results) |
 
 ## iOS / iPadOS (`ios`)
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | NOT_IMPLEMENTED | Web host not built yet; it would run in-page in Safari. | — |
+| The character is shown and animated | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | The web host is plain web code, but it has never run in WebKit or Safari. | — |
 | Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | iOS has no public API for drawing over other apps. | — |
 | Clicks pass through everywhere except the character | BLOCKED_BY_PLATFORM_OR_PERMISSION | See overlay. | — |
 | Sees the pointer outside its own window | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
@@ -211,13 +211,13 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 | Climbs and walks on other apps' windows | BLOCKED_BY_PLATFORM_OR_PERMISSION | Other apps are not visible. | — |
 | Rides the taskbar / dock | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
 | Walks on browser tab strips | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
-| Notices when you are away | NOT_IMPLEMENTED | Web host not built yet. | — |
+| Notices when you are away | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code; never run in Safari. | — |
 | Gets out of the way of fullscreen apps | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
 | Starts when you sign in | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Tray / menu-bar icon | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Show/hide shortcut | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Encrypted API-key storage | BLOCKED_BY_PLATFORM_OR_PERMISSION | No secrets on the web host. | — |
 | Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not available to apps or pages. | — |
-| Touch gestures (pet, drag, throw) | NOT_IMPLEMENTED | Web host not built yet. | — |
-| Optional sound | NOT_IMPLEMENTED | Web host not built yet. | — |
-| Remembers the character between runs | NOT_IMPLEMENTED | Web host not built yet. | — |
+| Touch gestures (pet, drag, throw) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same touch routing; never run in Safari (WebKit touch and pointer events untested). | — |
+| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code; Safari needs a user gesture to start audio (untested). | — |
+| Remembers the character between runs | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | localStorage; Safari may evict it after 7 days without a visit (untested). | — |

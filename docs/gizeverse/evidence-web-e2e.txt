@@ -1,0 +1,49 @@
+
+> desktop-cat@1.2.0 test:web
+> node scripts/build.mjs --web-only --web-test && playwright test -c playwright.web.config.mts
+
+build: production web host written to out/web and out/web-test in 354 ms
+[WebServer] serve-web: http://127.0.0.1:41731/ serving out\web-test
+
+Running 33 tests using 1 worker
+
+[chrome] chromium 156.0.8078.76
+  ok  1 [chrome] › tests\web\web.spec.ts:155:5 › loads with no console errors and the CSP in force (header and meta) (2.7s)
+  ok  2 [chrome] › tests\web\web.spec.ts:167:5 › makes no request after load, and none but its own three files at all (4.5s)
+  ok  3 [chrome] › tests\web\web.spec.ts:187:5 › draws the cat: opaque pixels at its bounds, a transparent canvas elsewhere (965ms)
+  ok  4 [chrome] › tests\web\web.spec.ts:217:5 › the page keeps its clicks; a click or tap on the cat stays with the cat, which reacts (1.1s)
+  ok  5 [chrome] › tests\web\web.spec.ts:274:5 › mouse: stroking back and forth over the cat pets it (2.3s)
+  ok  6 [chrome] › tests\web\web.spec.ts:300:5 › mouse: dragging the cat holds it; letting go drops it (falling, then landing) (1.8s)
+  -   7 [chrome] › tests\web\web.spec.ts:321:5 › touch: a finger stroking the cat pets it (no pick-up)
+  -   8 [chrome] › tests\web\web.spec.ts:349:5 › touch: press and hold picks the cat up, a drag carries it, letting go drops it
+  ok  9 [chrome] › tests\web\web.spec.ts:372:5 › a reload keeps the cat (localStorage) (1.1s)
+  ok 10 [chrome] › tests\web\web.spec.ts:388:5 › a hidden page lets the cat nap (system suspend, not a user pause); shown again, it wakes (675ms)
+  ok 11 [chrome] › tests\web\web.spec.ts:412:5 › the production build (out/web) has no test hook and no key listener (194ms)
+[msedge] chromium 156.0.4314.58
+  ok 12 [msedge] › tests\web\web.spec.ts:155:5 › loads with no console errors and the CSP in force (header and meta) (2.9s)
+  ok 13 [msedge] › tests\web\web.spec.ts:167:5 › makes no request after load, and none but its own three files at all (4.6s)
+  ok 14 [msedge] › tests\web\web.spec.ts:187:5 › draws the cat: opaque pixels at its bounds, a transparent canvas elsewhere (972ms)
+  ok 15 [msedge] › tests\web\web.spec.ts:217:5 › the page keeps its clicks; a click or tap on the cat stays with the cat, which reacts (1.2s)
+  ok 16 [msedge] › tests\web\web.spec.ts:274:5 › mouse: stroking back and forth over the cat pets it (2.3s)
+  ok 17 [msedge] › tests\web\web.spec.ts:300:5 › mouse: dragging the cat holds it; letting go drops it (falling, then landing) (1.7s)
+  -  18 [msedge] › tests\web\web.spec.ts:321:5 › touch: a finger stroking the cat pets it (no pick-up)
+  -  19 [msedge] › tests\web\web.spec.ts:349:5 › touch: press and hold picks the cat up, a drag carries it, letting go drops it
+  ok 20 [msedge] › tests\web\web.spec.ts:372:5 › a reload keeps the cat (localStorage) (1.1s)
+  ok 21 [msedge] › tests\web\web.spec.ts:388:5 › a hidden page lets the cat nap (system suspend, not a user pause); shown again, it wakes (571ms)
+  -  22 [msedge] › tests\web\web.spec.ts:412:5 › the production build (out/web) has no test hook and no key listener
+[mobile-emulated] chromium 156.0.8078.76
+  ok 23 [mobile-emulated] › tests\web\web.spec.ts:155:5 › loads with no console errors and the CSP in force (header and meta) (2.9s)
+  ok 24 [mobile-emulated] › tests\web\web.spec.ts:167:5 › makes no request after load, and none but its own three files at all (4.8s)
+  ok 25 [mobile-emulated] › tests\web\web.spec.ts:187:5 › draws the cat: opaque pixels at its bounds, a transparent canvas elsewhere (1.1s)
+  ok 26 [mobile-emulated] › tests\web\web.spec.ts:217:5 › the page keeps its clicks; a click or tap on the cat stays with the cat, which reacts (1.3s)
+  -  27 [mobile-emulated] › tests\web\web.spec.ts:274:5 › mouse: stroking back and forth over the cat pets it
+  -  28 [mobile-emulated] › tests\web\web.spec.ts:300:5 › mouse: dragging the cat holds it; letting go drops it (falling, then landing)
+  ok 29 [mobile-emulated] › tests\web\web.spec.ts:321:5 › touch: a finger stroking the cat pets it (no pick-up) (3.0s)
+  ok 30 [mobile-emulated] › tests\web\web.spec.ts:349:5 › touch: press and hold picks the cat up, a drag carries it, letting go drops it (2.4s)
+  ok 31 [mobile-emulated] › tests\web\web.spec.ts:372:5 › a reload keeps the cat (localStorage) (1.1s)
+  ok 32 [mobile-emulated] › tests\web\web.spec.ts:388:5 › a hidden page lets the cat nap (system suspend, not a user pause); shown again, it wakes (483ms)
+  -  33 [mobile-emulated] › tests\web\web.spec.ts:412:5 › the production build (out/web) has no test hook and no key listener
+
+  8 skipped
+  25 passed (54.2s)
+exit=0

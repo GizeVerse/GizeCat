@@ -94,6 +94,7 @@ const B = (note: string): CapabilityClaim => ({ status: 'BLOCKED_BY_PLATFORM_OR_
 const N = (note: string): CapabilityClaim => ({ status: 'NOT_IMPLEMENTED', note });
 
 const WIN_REPORT = 'docs/TEST_REPORT.md#v120-2026-11-05-a-lively-cat';
+const WEB_REPORT = 'docs/gizeverse/07-web-host.md#results';
 const WIN_V11 = 'docs/TEST_REPORT.md';
 
 /**
@@ -202,27 +203,27 @@ export const CAPABILITY_MATRIX: Readonly<Record<PlatformId, Readonly<Record<Capa
     persistence: U('JSON in ~/.config.'),
   },
   web: {
-    characterView: N('Web host not built yet.'),
+    characterView: V('The real sim, host and renderer in a page (Chrome 156 and Edge 156 on Windows 11).', WEB_REPORT),
     overlay: B('A web page cannot draw over other apps; the character lives inside the page.'),
-    clickThrough: B('In-page only: the page behind the character stays clickable outside its hit region.'),
+    clickThrough: V('In-page: the page keeps its clicks outside the hit region; a press on the cat stays with the cat.', WEB_REPORT),
     globalCursor: B('Browsers report the pointer only over the page.'),
     multiDisplay: B('One viewport.'),
     windowSurfaces: B('Browsers do not expose other windows.'),
     taskbarSurfaces: B('Not exposed to pages.'),
     tabStrips: B('Not exposed to pages.'),
-    activityIdle: N('Web host not built yet.'),
+    activityIdle: U('Idle from page pointer events; a hidden tab suspends the host (tested with a faked visibilityState only).'),
     fullscreenAware: B('Not exposed to pages.'),
     loginItem: B('Not available to web pages.'),
     tray: B('Not available to web pages.'),
     globalShortcut: B('Pages receive keys only while focused; no key listeners by design.'),
     secretStorage: B('No secrets: the web host has no AI or network features.'),
     perception: B('Not offered on the web host (no screen access, no network).'),
-    touchInput: N('Web host not built yet.'),
-    sound: N('Web host not built yet.'),
-    persistence: N('Web host not built yet.'),
+    touchInput: U('Touch routing exists and passed under device emulation (see Android); no touch-screen PC was tested.'),
+    sound: U('The same WebAudio cues as the desktop; not tested in the web host.'),
+    persistence: V('localStorage, validated with the desktop migrations; a reload keeps the cat.', WEB_REPORT),
   },
   android: {
-    characterView: N('Web host not built yet; it would run in-page in Chrome for Android.'),
+    characterView: S('The web host under desktop Chrome\'s Pixel 7 emulation; never run on Android or its Chrome.', WEB_REPORT),
     overlay: B('SYSTEM_ALERT_WINDOW needs a permission, and since Android 12 touches pass through only at ≤ 80 % opacity.'),
     clickThrough: B('See overlay.'),
     globalCursor: B('Touch devices have no hovering pointer outside the app.'),
@@ -230,19 +231,19 @@ export const CAPABILITY_MATRIX: Readonly<Record<PlatformId, Readonly<Record<Capa
     windowSurfaces: B('Other apps are not visible.'),
     taskbarSurfaces: B('Not exposed.'),
     tabStrips: B('Not exposed.'),
-    activityIdle: N('Web host not built yet.'),
+    activityIdle: U('Same web code (page pointer idle); not run on Android.'),
     fullscreenAware: B('Not exposed.'),
     loginItem: B('Not applicable.'),
     tray: B('Not applicable.'),
     globalShortcut: B('Not applicable.'),
     secretStorage: B('No secrets on the web host.'),
     perception: B('MediaProjection needs per-session consent; not offered.'),
-    touchInput: N('Web host not built yet.'),
-    sound: N('Web host not built yet.'),
-    persistence: N('Web host not built yet.'),
+    touchInput: S('Tap, stroke-to-pet and hold-to-drag passed under Pixel 7 emulation (touch through the DevTools protocol).', WEB_REPORT),
+    sound: U('Same web code; not run on Android.'),
+    persistence: S('Reload keeps the cat under Pixel 7 emulation.', WEB_REPORT),
   },
   ios: {
-    characterView: N('Web host not built yet; it would run in-page in Safari.'),
+    characterView: U('The web host is plain web code, but it has never run in WebKit or Safari.'),
     overlay: B('iOS has no public API for drawing over other apps.'),
     clickThrough: B('See overlay.'),
     globalCursor: B('Not exposed.'),
@@ -250,22 +251,21 @@ export const CAPABILITY_MATRIX: Readonly<Record<PlatformId, Readonly<Record<Capa
     windowSurfaces: B('Other apps are not visible.'),
     taskbarSurfaces: B('Not exposed.'),
     tabStrips: B('Not exposed.'),
-    activityIdle: N('Web host not built yet.'),
+    activityIdle: U('Same web code; never run in Safari.'),
     fullscreenAware: B('Not exposed.'),
     loginItem: B('Not applicable.'),
     tray: B('Not applicable.'),
     globalShortcut: B('Not applicable.'),
     secretStorage: B('No secrets on the web host.'),
     perception: B('Not available to apps or pages.'),
-    touchInput: N('Web host not built yet.'),
-    sound: N('Web host not built yet.'),
-    persistence: N('Web host not built yet.'),
+    touchInput: U('Same touch routing; never run in Safari (WebKit touch and pointer events untested).'),
+    sound: U('Same web code; Safari needs a user gesture to start audio (untested).'),
+    persistence: U('localStorage; Safari may evict it after 7 days without a visit (untested).'),
   },
 };
 
-// Keep the helper constructors referenced while some statuses are unused in the table.
+// ARCHITECTURALLY_VALIDATED is part of the vocabulary but no cell uses it today.
 void A;
-void S;
 
 /** What a running app detected on this machine (ADR 0004 §2.2). */
 export interface RuntimeCapability {
