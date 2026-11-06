@@ -1,0 +1,241 @@
+{
+  "at": "2026-11-06T18:17:23.787Z",
+  "phaseSec": 60,
+  "sampleSec": 10,
+  "os": "Windows_NT 10.0.26200",
+  "cpus": 22,
+  "appPid": 57548,
+  "phases": {
+    "awake": {
+      "cpuAvgPercentOfOneCore": 1.33,
+      "cpuMaxPercentOfOneCore": 1.61,
+      "workingSetMB": {
+        "first": 575,
+        "last": 615
+      },
+      "privateMB": {
+        "first": 350,
+        "last": 382
+      },
+      "asleepShare": 0,
+      "mainHeapMB": {
+        "first": 12,
+        "last": 12
+      },
+      "timers": {
+        "first": 5,
+        "last": 5,
+        "max": 5
+      },
+      "handles": {
+        "first": 7,
+        "last": 7
+      },
+      "statesSeen": [
+        "watchingUser",
+        "resting",
+        "idle",
+        "grooming"
+      ],
+      "lastByProcess": {
+        "Browser:19704": 0.11,
+        "GPU:48380": 0.97,
+        "Utility:53356": 0,
+        "Tab:39148": 0.34,
+        "Tab:47852": 0.01
+      },
+      "uiaHelper": {
+        "runningShare": 0,
+        "cpuAvgPercentOfOneCore": 0,
+        "cpuMaxPercentOfOneCore": null,
+        "privateMB": null,
+        "workingSetMB": null,
+        "pids": []
+      },
+      "withHelper": {
+        "cpuAvgPercentOfOneCore": 1.33,
+        "privateMBLast": 382
+      }
+    },
+    "asleep": {
+      "cpuAvgPercentOfOneCore": 0.83,
+      "cpuMaxPercentOfOneCore": 1.24,
+      "workingSetMB": {
+        "first": 608,
+        "last": 624
+      },
+      "privateMB": {
+        "first": 375,
+        "last": 390
+      },
+      "asleepShare": 0.83,
+      "mainHeapMB": {
+        "first": 13,
+        "last": 13
+      },
+      "timers": {
+        "first": 5,
+        "last": 5,
+        "max": 5
+      },
+      "handles": {
+        "first": 7,
+        "last": 7
+      },
+      "statesSeen": [
+        "sleeping",
+        "seekingAttention"
+      ],
+      "lastByProcess": {
+        "Browser:19704": 0.06,
+        "GPU:48380": 0.63,
+        "Utility:53356": 0,
+        "Tab:39148": 0.23,
+        "Tab:47852": 0
+      },
+      "uiaHelper": {
+        "runningShare": 0,
+        "cpuAvgPercentOfOneCore": 0,
+        "cpuMaxPercentOfOneCore": null,
+        "privateMB": null,
+        "workingSetMB": null,
+        "pids": []
+      },
+      "withHelper": {
+        "cpuAvgPercentOfOneCore": 0.83,
+        "privateMBLast": 390
+      }
+    },
+    "hidden": {
+      "cpuAvgPercentOfOneCore": 0.03,
+      "cpuMaxPercentOfOneCore": 0.05,
+      "workingSetMB": {
+        "first": 557,
+        "last": 559
+      },
+      "privateMB": {
+        "first": 319,
+        "last": 321
+      },
+      "asleepShare": 0,
+      "mainHeapMB": {
+        "first": 14,
+        "last": 14
+      },
+      "timers": {
+        "first": 5,
+        "last": 5,
+        "max": 5
+      },
+      "handles": {
+        "first": 7,
+        "last": 7
+      },
+      "statesSeen": [
+        "away"
+      ],
+      "lastByProcess": {
+        "Browser:19704": 0.03,
+        "GPU:48380": 0,
+        "Utility:53356": 0,
+        "Tab:39148": 0,
+        "Tab:47852": 0
+      },
+      "uiaHelper": {
+        "runningShare": 0,
+        "cpuAvgPercentOfOneCore": 0,
+        "cpuMaxPercentOfOneCore": null,
+        "privateMB": null,
+        "workingSetMB": null,
+        "pids": []
+      },
+      "withHelper": {
+        "cpuAvgPercentOfOneCore": 0.03,
+        "privateMBLast": 321
+      }
+    },
+    "paused": {
+      "cpuAvgPercentOfOneCore": 0.74,
+      "cpuMaxPercentOfOneCore": 0.91,
+      "workingSetMB": {
+        "first": 581,
+        "last": 576
+      },
+      "privateMB": {
+        "first": 344,
+        "last": 338
+      },
+      "asleepShare": 0.67,
+      "mainHeapMB": {
+        "first": 14,
+        "last": 14
+      },
+      "timers": {
+        "first": 5,
+        "last": 5,
+        "max": 5
+      },
+      "handles": {
+        "first": 7,
+        "last": 7
+      },
+      "statesSeen": [
+        "resting",
+        "sleeping"
+      ],
+      "lastByProcess": {
+        "Browser:19704": 0.04,
+        "GPU:48380": 0.43,
+        "Utility:53356": 0,
+        "Tab:39148": 0.19,
+        "Tab:47852": 0
+      },
+      "uiaHelper": {
+        "runningShare": 0,
+        "cpuAvgPercentOfOneCore": 0,
+        "cpuMaxPercentOfOneCore": null,
+        "privateMB": null,
+        "workingSetMB": null,
+        "pids": []
+      },
+      "withHelper": {
+        "cpuAvgPercentOfOneCore": 0.74,
+        "privateMBLast": 338
+      }
+    }
+  },
+  "gateB12": {
+    "awake": 1.33,
+    "baselineAwake": 1.05,
+    "limit": 1.5,
+    "maxRegressionPp": 0.3,
+    "status": "pass"
+  },
+  "logProblems": {
+    "warn": 1,
+    "error": 0
+  },
+  "hostDebug": {
+    "ticks": 2683,
+    "tickErrors": 0,
+    "simNow": 274160.03959999996,
+    "timeScale": 1,
+    "paused": false,
+    "hidden": false,
+    "locked": false,
+    "pendingEvents": 0,
+    "droppedEvents": 0,
+    "surfaces": 0,
+    "taskbarSamples": 896,
+    "taskbarDelayMs": 250,
+    "clickGuard": {
+      "state": "idle",
+      "reason": null,
+      "failClosed": 0,
+      "rects": 0,
+      "armed": false
+    },
+    "edgeBands": 2
+  },
+  "exitCode": 0
+}

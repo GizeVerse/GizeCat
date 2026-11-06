@@ -1,0 +1,1003 @@
+> (.claude\state\gv\v120) node scripts/build.mjs
+build-uia-helper: out\native\DesktopCatUia.exe (41.5 KB) in 405 ms
+build: production bundle written to out/ in 965 ms
+> (.claude\state\gv\v120) node scripts/bench.mjs --phase-sec=90
+bench: awake done {"cpuAvgPercentOfOneCore":1.23,"cpuMaxPercentOfOneCore":1.58,"workingSetMB":{"first":549,"last":613},"privateMB":{"first":322,"last":375},"asleepShare":0,"mainHeapMB":{"first":12,"last":13},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["resting","watchingUser","grooming","idle"],"lastByProcess":{"Browser:59256":0.1,"GPU:39396":1.13,"Utility:8040":0,"Tab:52264":0,"Tab:24512":0.35},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":1.23,"privateMBLast":375}}
+bench: asleep done {"cpuAvgPercentOfOneCore":0.68,"cpuMaxPercentOfOneCore":0.75,"workingSetMB":{"first":620,"last":595},"privateMB":{"first":383,"last":355},"asleepShare":1,"mainHeapMB":{"first":13,"last":13},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["sleeping"],"lastByProcess":{"Browser:59256":0.04,"GPU:39396":0.45,"Utility:8040":0,"Tab:52264":0,"Tab:24512":0.19},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.68,"privateMBLast":355}}
+bench: hidden done {"cpuAvgPercentOfOneCore":0.03,"cpuMaxPercentOfOneCore":0.08,"workingSetMB":{"first":550,"last":551},"privateMB":{"first":310,"last":310},"asleepShare":0,"mainHeapMB":{"first":14,"last":15},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["away"],"lastByProcess":{"Browser:59256":0.07,"GPU:39396":0,"Utility:8040":0,"Tab:52264":0.01,"Tab:24512":0},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.03,"privateMBLast":310}}
+bench: paused done {"cpuAvgPercentOfOneCore":0.66,"cpuMaxPercentOfOneCore":0.68,"workingSetMB":{"first":551,"last":558},"privateMB":{"first":310,"last":319},"asleepShare":1,"mainHeapMB":{"first":14,"last":15},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["sleeping"],"lastByProcess":{"Browser:59256":0.04,"GPU:39396":0.43,"Utility:8040":0,"Tab:52264":0,"Tab:24512":0.2},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.66,"privateMBLast":319}}
+bench: wrote out\bench\bench-2026-11-06T18-30-54-206Z.json
+{
+ "at": "2026-11-06T18:30:54.206Z",
+ "phaseSec": 90,
+ "sampleSec": 10,
+ "os": "Windows_NT 10.0.26200",
+ "cpus": 22,
+ "appPid": 57264,
+ "phases": {
+  "awake": {
+   "cpuAvgPercentOfOneCore": 1.23,
+   "cpuMaxPercentOfOneCore": 1.58,
+   "workingSetMB": {
+    "first": 549,
+    "last": 613
+   },
+   "privateMB": {
+    "first": 322,
+    "last": 375
+   },
+   "asleepShare": 0,
+   "mainHeapMB": {
+    "first": 12,
+    "last": 13
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "resting",
+    "watchingUser",
+    "grooming",
+    "idle"
+   ],
+   "lastByProcess": {
+    "Browser:59256": 0.1,
+    "GPU:39396": 1.13,
+    "Utility:8040": 0,
+    "Tab:52264": 0,
+    "Tab:24512": 0.35
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 1.23,
+    "privateMBLast": 375
+   }
+  },
+  "asleep": {
+   "cpuAvgPercentOfOneCore": 0.68,
+   "cpuMaxPercentOfOneCore": 0.75,
+   "workingSetMB": {
+    "first": 620,
+    "last": 595
+   },
+   "privateMB": {
+    "first": 383,
+    "last": 355
+   },
+   "asleepShare": 1,
+   "mainHeapMB": {
+    "first": 13,
+    "last": 13
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "sleeping"
+   ],
+   "lastByProcess": {
+    "Browser:59256": 0.04,
+    "GPU:39396": 0.45,
+    "Utility:8040": 0,
+    "Tab:52264": 0,
+    "Tab:24512": 0.19
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.68,
+    "privateMBLast": 355
+   }
+  },
+  "hidden": {
+   "cpuAvgPercentOfOneCore": 0.03,
+   "cpuMaxPercentOfOneCore": 0.08,
+   "workingSetMB": {
+    "first": 550,
+    "last": 551
+   },
+   "privateMB": {
+    "first": 310,
+    "last": 310
+   },
+   "asleepShare": 0,
+   "mainHeapMB": {
+    "first": 14,
+    "last": 15
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "away"
+   ],
+   "lastByProcess": {
+    "Browser:59256": 0.07,
+    "GPU:39396": 0,
+    "Utility:8040": 0,
+    "Tab:52264": 0.01,
+    "Tab:24512": 0
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.03,
+    "privateMBLast": 310
+   }
+  },
+  "paused": {
+   "cpuAvgPercentOfOneCore": 0.66,
+   "cpuMaxPercentOfOneCore": 0.68,
+   "workingSetMB": {
+    "first": 551,
+    "last": 558
+   },
+   "privateMB": {
+    "first": 310,
+    "last": 319
+   },
+   "asleepShare": 1,
+   "mainHeapMB": {
+    "first": 14,
+    "last": 15
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "sleeping"
+   ],
+   "lastByProcess": {
+    "Browser:59256": 0.04,
+    "GPU:39396": 0.43,
+    "Utility:8040": 0,
+    "Tab:52264": 0,
+    "Tab:24512": 0.2
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.66,
+    "privateMBLast": 319
+   }
+  }
+ },
+ "gateB12": {
+  "awake": 1.23,
+  "baselineAwake": 1.05,
+  "limit": 1.5,
+  "maxRegressionPp": 0.3,
+  "status": "pass"
+ },
+ "logProblems": {
+  "warn": 1,
+  "error": 0
+ },
+ "hostDebug": {
+  "ticks": 3284,
+  "tickErrors": 0,
+  "simNow": 399952.7266000004,
+  "timeScale": 1,
+  "paused": false,
+  "hidden": false,
+  "locked": false,
+  "pendingEvents": 0,
+  "droppedEvents": 0,
+  "surfaces": 0,
+  "taskbarSamples": 1248,
+  "taskbarDelayMs": 250,
+  "clickGuard": {
+   "state": "idle",
+   "reason": null,
+   "failClosed": 0,
+   "rects": 0,
+   "armed": false
+  },
+  "edgeBands": 2
+ },
+ "exitCode": 0
+}
+AB v1.2.0 round 1: awake=1.23%(max 1.58) asleep=0.68%(max 0.75) hidden=0.03%(max 0.08) paused=0.66%(max 0.68) file=.claude\state\gv\v120\out\bench\bench-2026-11-06T18-30-54-206Z.json
+> (.) node scripts/build.mjs
+build-uia-helper: out\native\DesktopCatUia.exe (41.5 KB) in 390 ms
+build: production bundle written to out/ in 686 ms
+> (.) node scripts/bench.mjs --phase-sec=90
+bench: awake done {"cpuAvgPercentOfOneCore":1.48,"cpuMaxPercentOfOneCore":1.72,"workingSetMB":{"first":585,"last":625},"privateMB":{"first":357,"last":386},"asleepShare":0,"mainHeapMB":{"first":12,"last":12},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["playing","walking","seekingAttention","watchingUser","resting"],"lastByProcess":{"Browser:49252":0.08,"GPU:48236":0.78,"Utility:51064":0,"Tab:50068":0.29,"Tab:21648":0.01},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":1.48,"privateMBLast":386}}
+bench: asleep done {"cpuAvgPercentOfOneCore":0.67,"cpuMaxPercentOfOneCore":0.75,"workingSetMB":{"first":629,"last":613},"privateMB":{"first":389,"last":372},"asleepShare":1,"mainHeapMB":{"first":13,"last":13},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["sleeping"],"lastByProcess":{"Browser:49252":0.04,"GPU:48236":0.43,"Utility:51064":0,"Tab:50068":0.19,"Tab:21648":0},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.67,"privateMBLast":372}}
+bench: hidden done {"cpuAvgPercentOfOneCore":0.03,"cpuMaxPercentOfOneCore":0.04,"workingSetMB":{"first":566,"last":567},"privateMB":{"first":324,"last":325},"asleepShare":0,"mainHeapMB":{"first":14,"last":14},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["away"],"lastByProcess":{"Browser:49252":0.04,"GPU:48236":0,"Utility:51064":0,"Tab:50068":0,"Tab:21648":0},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.03,"privateMBLast":325}}
+bench: paused done {"cpuAvgPercentOfOneCore":0.6,"cpuMaxPercentOfOneCore":0.62,"workingSetMB":{"first":569,"last":574},"privateMB":{"first":328,"last":332},"asleepShare":1,"mainHeapMB":{"first":15,"last":15},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["sleeping"],"lastByProcess":{"Browser:49252":0.04,"GPU:48236":0.39,"Utility:51064":0,"Tab:50068":0.18,"Tab:21648":0},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.6,"privateMBLast":332}}
+bench: wrote out\bench\bench-2026-11-06T18-37-50-730Z.json
+{
+ "at": "2026-11-06T18:37:50.730Z",
+ "phaseSec": 90,
+ "sampleSec": 10,
+ "os": "Windows_NT 10.0.26200",
+ "cpus": 22,
+ "appPid": 3640,
+ "phases": {
+  "awake": {
+   "cpuAvgPercentOfOneCore": 1.48,
+   "cpuMaxPercentOfOneCore": 1.72,
+   "workingSetMB": {
+    "first": 585,
+    "last": 625
+   },
+   "privateMB": {
+    "first": 357,
+    "last": 386
+   },
+   "asleepShare": 0,
+   "mainHeapMB": {
+    "first": 12,
+    "last": 12
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "playing",
+    "walking",
+    "seekingAttention",
+    "watchingUser",
+    "resting"
+   ],
+   "lastByProcess": {
+    "Browser:49252": 0.08,
+    "GPU:48236": 0.78,
+    "Utility:51064": 0,
+    "Tab:50068": 0.29,
+    "Tab:21648": 0.01
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 1.48,
+    "privateMBLast": 386
+   }
+  },
+  "asleep": {
+   "cpuAvgPercentOfOneCore": 0.67,
+   "cpuMaxPercentOfOneCore": 0.75,
+   "workingSetMB": {
+    "first": 629,
+    "last": 613
+   },
+   "privateMB": {
+    "first": 389,
+    "last": 372
+   },
+   "asleepShare": 1,
+   "mainHeapMB": {
+    "first": 13,
+    "last": 13
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "sleeping"
+   ],
+   "lastByProcess": {
+    "Browser:49252": 0.04,
+    "GPU:48236": 0.43,
+    "Utility:51064": 0,
+    "Tab:50068": 0.19,
+    "Tab:21648": 0
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.67,
+    "privateMBLast": 372
+   }
+  },
+  "hidden": {
+   "cpuAvgPercentOfOneCore": 0.03,
+   "cpuMaxPercentOfOneCore": 0.04,
+   "workingSetMB": {
+    "first": 566,
+    "last": 567
+   },
+   "privateMB": {
+    "first": 324,
+    "last": 325
+   },
+   "asleepShare": 0,
+   "mainHeapMB": {
+    "first": 14,
+    "last": 14
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "away"
+   ],
+   "lastByProcess": {
+    "Browser:49252": 0.04,
+    "GPU:48236": 0,
+    "Utility:51064": 0,
+    "Tab:50068": 0,
+    "Tab:21648": 0
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.03,
+    "privateMBLast": 325
+   }
+  },
+  "paused": {
+   "cpuAvgPercentOfOneCore": 0.6,
+   "cpuMaxPercentOfOneCore": 0.62,
+   "workingSetMB": {
+    "first": 569,
+    "last": 574
+   },
+   "privateMB": {
+    "first": 328,
+    "last": 332
+   },
+   "asleepShare": 1,
+   "mainHeapMB": {
+    "first": 15,
+    "last": 15
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "sleeping"
+   ],
+   "lastByProcess": {
+    "Browser:49252": 0.04,
+    "GPU:48236": 0.39,
+    "Utility:51064": 0,
+    "Tab:50068": 0.18,
+    "Tab:21648": 0
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.6,
+    "privateMBLast": 332
+   }
+  }
+ },
+ "gateB12": {
+  "awake": 1.48,
+  "baselineAwake": 1.05,
+  "limit": 1.5,
+  "maxRegressionPp": 0.3,
+  "status": "fail"
+ },
+ "logProblems": {
+  "warn": 1,
+  "error": 0
+ },
+ "hostDebug": {
+  "ticks": 3557,
+  "tickErrors": 0,
+  "simNow": 400000.3345000005,
+  "timeScale": 1,
+  "paused": false,
+  "hidden": false,
+  "locked": false,
+  "pendingEvents": 0,
+  "droppedEvents": 0,
+  "surfaces": 0,
+  "taskbarSamples": 1251,
+  "taskbarDelayMs": 250,
+  "clickGuard": {
+   "state": "idle",
+   "reason": null,
+   "failClosed": 0,
+   "rects": 0,
+   "armed": false
+  },
+  "edgeBands": 2
+ },
+ "exitCode": 0
+}
+AB current round 1: awake=1.48%(max 1.72) asleep=0.67%(max 0.75) hidden=0.03%(max 0.04) paused=0.6%(max 0.62) file=out\bench\bench-2026-11-06T18-37-50-730Z.json
+> (.claude\state\gv\v120) node scripts/build.mjs
+build-uia-helper: out\native\DesktopCatUia.exe (41.5 KB) in 365 ms
+build: production bundle written to out/ in 530 ms
+> (.claude\state\gv\v120) node scripts/bench.mjs --phase-sec=90
+bench: awake done {"cpuAvgPercentOfOneCore":1.31,"cpuMaxPercentOfOneCore":1.53,"workingSetMB":{"first":566,"last":605},"privateMB":{"first":342,"last":368},"asleepShare":0,"mainHeapMB":{"first":12,"last":14},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["seekingAttention","walking","curious","idle","watchingCursor","resting"],"lastByProcess":{"Browser:54392":0.1,"GPU:57432":0.68,"Utility:26588":0,"Tab:55632":0.24,"Tab:21684":0.01},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":1.31,"privateMBLast":368}}
+bench: asleep done {"cpuAvgPercentOfOneCore":0.92,"cpuMaxPercentOfOneCore":1.59,"workingSetMB":{"first":617,"last":597},"privateMB":{"first":379,"last":359},"asleepShare":1,"mainHeapMB":{"first":13,"last":14},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["sleeping"],"lastByProcess":{"Browser:54392":0.11,"GPU:57432":1.03,"Utility:26588":0,"Tab:55632":0.37,"Tab:21684":0},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.92,"privateMBLast":359}}
+bench: hidden done {"cpuAvgPercentOfOneCore":0.03,"cpuMaxPercentOfOneCore":0.05,"workingSetMB":{"first":554,"last":555},"privateMB":{"first":315,"last":316},"asleepShare":0,"mainHeapMB":{"first":15,"last":15},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["away"],"lastByProcess":{"Browser:54392":0.04,"GPU:57432":0,"Utility:26588":0,"Tab:55632":0,"Tab:21684":0},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.03,"privateMBLast":316}}
+bench: paused done {"cpuAvgPercentOfOneCore":0.64,"cpuMaxPercentOfOneCore":0.69,"workingSetMB":{"first":556,"last":561},"privateMB":{"first":318,"last":322},"asleepShare":1,"mainHeapMB":{"first":16,"last":16},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["sleeping"],"lastByProcess":{"Browser:54392":0.07,"GPU:57432":0.43,"Utility:26588":0,"Tab:55632":0.19,"Tab:21684":0},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.64,"privateMBLast":322}}
+bench: wrote out\bench\bench-2026-11-06T18-44-46-945Z.json
+{
+ "at": "2026-11-06T18:44:46.945Z",
+ "phaseSec": 90,
+ "sampleSec": 10,
+ "os": "Windows_NT 10.0.26200",
+ "cpus": 22,
+ "appPid": 57404,
+ "phases": {
+  "awake": {
+   "cpuAvgPercentOfOneCore": 1.31,
+   "cpuMaxPercentOfOneCore": 1.53,
+   "workingSetMB": {
+    "first": 566,
+    "last": 605
+   },
+   "privateMB": {
+    "first": 342,
+    "last": 368
+   },
+   "asleepShare": 0,
+   "mainHeapMB": {
+    "first": 12,
+    "last": 14
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "seekingAttention",
+    "walking",
+    "curious",
+    "idle",
+    "watchingCursor",
+    "resting"
+   ],
+   "lastByProcess": {
+    "Browser:54392": 0.1,
+    "GPU:57432": 0.68,
+    "Utility:26588": 0,
+    "Tab:55632": 0.24,
+    "Tab:21684": 0.01
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 1.31,
+    "privateMBLast": 368
+   }
+  },
+  "asleep": {
+   "cpuAvgPercentOfOneCore": 0.92,
+   "cpuMaxPercentOfOneCore": 1.59,
+   "workingSetMB": {
+    "first": 617,
+    "last": 597
+   },
+   "privateMB": {
+    "first": 379,
+    "last": 359
+   },
+   "asleepShare": 1,
+   "mainHeapMB": {
+    "first": 13,
+    "last": 14
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "sleeping"
+   ],
+   "lastByProcess": {
+    "Browser:54392": 0.11,
+    "GPU:57432": 1.03,
+    "Utility:26588": 0,
+    "Tab:55632": 0.37,
+    "Tab:21684": 0
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.92,
+    "privateMBLast": 359
+   }
+  },
+  "hidden": {
+   "cpuAvgPercentOfOneCore": 0.03,
+   "cpuMaxPercentOfOneCore": 0.05,
+   "workingSetMB": {
+    "first": 554,
+    "last": 555
+   },
+   "privateMB": {
+    "first": 315,
+    "last": 316
+   },
+   "asleepShare": 0,
+   "mainHeapMB": {
+    "first": 15,
+    "last": 15
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "away"
+   ],
+   "lastByProcess": {
+    "Browser:54392": 0.04,
+    "GPU:57432": 0,
+    "Utility:26588": 0,
+    "Tab:55632": 0,
+    "Tab:21684": 0
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.03,
+    "privateMBLast": 316
+   }
+  },
+  "paused": {
+   "cpuAvgPercentOfOneCore": 0.64,
+   "cpuMaxPercentOfOneCore": 0.69,
+   "workingSetMB": {
+    "first": 556,
+    "last": 561
+   },
+   "privateMB": {
+    "first": 318,
+    "last": 322
+   },
+   "asleepShare": 1,
+   "mainHeapMB": {
+    "first": 16,
+    "last": 16
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "sleeping"
+   ],
+   "lastByProcess": {
+    "Browser:54392": 0.07,
+    "GPU:57432": 0.43,
+    "Utility:26588": 0,
+    "Tab:55632": 0.19,
+    "Tab:21684": 0
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.64,
+    "privateMBLast": 322
+   }
+  }
+ },
+ "gateB12": {
+  "awake": 1.31,
+  "baselineAwake": 1.05,
+  "limit": 1.5,
+  "maxRegressionPp": 0.3,
+  "status": "pass"
+ },
+ "logProblems": {
+  "warn": 1,
+  "error": 0
+ },
+ "hostDebug": {
+  "ticks": 3484,
+  "tickErrors": 0,
+  "simNow": 400751.1489000006,
+  "timeScale": 1,
+  "paused": false,
+  "hidden": false,
+  "locked": false,
+  "pendingEvents": 0,
+  "droppedEvents": 0,
+  "surfaces": 0,
+  "taskbarSamples": 1254,
+  "taskbarDelayMs": 250,
+  "clickGuard": {
+   "state": "idle",
+   "reason": null,
+   "failClosed": 0,
+   "rects": 0,
+   "armed": false
+  },
+  "edgeBands": 2
+ },
+ "exitCode": 0
+}
+AB v1.2.0 round 2: awake=1.31%(max 1.53) asleep=0.92%(max 1.59) hidden=0.03%(max 0.05) paused=0.64%(max 0.69) file=.claude\state\gv\v120\out\bench\bench-2026-11-06T18-44-46-945Z.json
+> (.) node scripts/build.mjs
+build-uia-helper: out\native\DesktopCatUia.exe (41.5 KB) in 330 ms
+build: production bundle written to out/ in 614 ms
+> (.) node scripts/bench.mjs --phase-sec=90
+bench: awake done {"cpuAvgPercentOfOneCore":1.15,"cpuMaxPercentOfOneCore":1.54,"workingSetMB":{"first":581,"last":638},"privateMB":{"first":355,"last":404},"asleepShare":0,"mainHeapMB":{"first":12,"last":13},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["walking","playing","idle","resting","watchingUser"],"lastByProcess":{"Browser:55612":0.08,"GPU:36916":0.83,"Utility:58908":0,"Tab:55600":0.01,"Tab:52736":0.26},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":1.15,"privateMBLast":404}}
+bench: asleep done {"cpuAvgPercentOfOneCore":0.66,"cpuMaxPercentOfOneCore":0.95,"workingSetMB":{"first":632,"last":630},"privateMB":{"first":397,"last":393},"asleepShare":0.89,"mainHeapMB":{"first":13,"last":14},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["sleeping","resting"],"lastByProcess":{"Browser:55612":0.06,"GPU:36916":0.53,"Utility:58908":0,"Tab:55600":0.01,"Tab:52736":0.2},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.66,"privateMBLast":393}}
+bench: hidden done {"cpuAvgPercentOfOneCore":0.02,"cpuMaxPercentOfOneCore":0.04,"workingSetMB":{"first":567,"last":567},"privateMB":{"first":327,"last":328},"asleepShare":0,"mainHeapMB":{"first":14,"last":14},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["away"],"lastByProcess":{"Browser:55612":0.02,"GPU:36916":0,"Utility:58908":0,"Tab:55600":0,"Tab:52736":0},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.02,"privateMBLast":328}}
+bench: paused done {"cpuAvgPercentOfOneCore":0.59,"cpuMaxPercentOfOneCore":0.61,"workingSetMB":{"first":584,"last":589},"privateMB":{"first":346,"last":351},"asleepShare":1,"mainHeapMB":{"first":15,"last":16},"timers":{"first":5,"last":5,"max":5},"handles":{"first":7,"last":7},"statesSeen":["sleeping"],"lastByProcess":{"Browser:55612":0.04,"GPU:36916":0.38,"Utility:58908":0,"Tab:55600":0,"Tab:52736":0.16},"uiaHelper":{"runningShare":0,"cpuAvgPercentOfOneCore":0,"cpuMaxPercentOfOneCore":null,"privateMB":null,"workingSetMB":null,"pids":[]},"withHelper":{"cpuAvgPercentOfOneCore":0.59,"privateMBLast":351}}
+bench: wrote out\bench\bench-2026-11-06T18-51-44-091Z.json
+{
+ "at": "2026-11-06T18:51:44.091Z",
+ "phaseSec": 90,
+ "sampleSec": 10,
+ "os": "Windows_NT 10.0.26200",
+ "cpus": 22,
+ "appPid": 42552,
+ "phases": {
+  "awake": {
+   "cpuAvgPercentOfOneCore": 1.15,
+   "cpuMaxPercentOfOneCore": 1.54,
+   "workingSetMB": {
+    "first": 581,
+    "last": 638
+   },
+   "privateMB": {
+    "first": 355,
+    "last": 404
+   },
+   "asleepShare": 0,
+   "mainHeapMB": {
+    "first": 12,
+    "last": 13
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "walking",
+    "playing",
+    "idle",
+    "resting",
+    "watchingUser"
+   ],
+   "lastByProcess": {
+    "Browser:55612": 0.08,
+    "GPU:36916": 0.83,
+    "Utility:58908": 0,
+    "Tab:55600": 0.01,
+    "Tab:52736": 0.26
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 1.15,
+    "privateMBLast": 404
+   }
+  },
+  "asleep": {
+   "cpuAvgPercentOfOneCore": 0.66,
+   "cpuMaxPercentOfOneCore": 0.95,
+   "workingSetMB": {
+    "first": 632,
+    "last": 630
+   },
+   "privateMB": {
+    "first": 397,
+    "last": 393
+   },
+   "asleepShare": 0.89,
+   "mainHeapMB": {
+    "first": 13,
+    "last": 14
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "sleeping",
+    "resting"
+   ],
+   "lastByProcess": {
+    "Browser:55612": 0.06,
+    "GPU:36916": 0.53,
+    "Utility:58908": 0,
+    "Tab:55600": 0.01,
+    "Tab:52736": 0.2
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.66,
+    "privateMBLast": 393
+   }
+  },
+  "hidden": {
+   "cpuAvgPercentOfOneCore": 0.02,
+   "cpuMaxPercentOfOneCore": 0.04,
+   "workingSetMB": {
+    "first": 567,
+    "last": 567
+   },
+   "privateMB": {
+    "first": 327,
+    "last": 328
+   },
+   "asleepShare": 0,
+   "mainHeapMB": {
+    "first": 14,
+    "last": 14
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "away"
+   ],
+   "lastByProcess": {
+    "Browser:55612": 0.02,
+    "GPU:36916": 0,
+    "Utility:58908": 0,
+    "Tab:55600": 0,
+    "Tab:52736": 0
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.02,
+    "privateMBLast": 328
+   }
+  },
+  "paused": {
+   "cpuAvgPercentOfOneCore": 0.59,
+   "cpuMaxPercentOfOneCore": 0.61,
+   "workingSetMB": {
+    "first": 584,
+    "last": 589
+   },
+   "privateMB": {
+    "first": 346,
+    "last": 351
+   },
+   "asleepShare": 1,
+   "mainHeapMB": {
+    "first": 15,
+    "last": 16
+   },
+   "timers": {
+    "first": 5,
+    "last": 5,
+    "max": 5
+   },
+   "handles": {
+    "first": 7,
+    "last": 7
+   },
+   "statesSeen": [
+    "sleeping"
+   ],
+   "lastByProcess": {
+    "Browser:55612": 0.04,
+    "GPU:36916": 0.38,
+    "Utility:58908": 0,
+    "Tab:55600": 0,
+    "Tab:52736": 0.16
+   },
+   "uiaHelper": {
+    "runningShare": 0,
+    "cpuAvgPercentOfOneCore": 0,
+    "cpuMaxPercentOfOneCore": null,
+    "privateMB": null,
+    "workingSetMB": null,
+    "pids": []
+   },
+   "withHelper": {
+    "cpuAvgPercentOfOneCore": 0.59,
+    "privateMBLast": 351
+   }
+  }
+ },
+ "gateB12": {
+  "awake": 1.15,
+  "baselineAwake": 1.05,
+  "limit": 1.5,
+  "maxRegressionPp": 0.3,
+  "status": "pass"
+ },
+ "logProblems": {
+  "warn": 1,
+  "error": 0
+ },
+ "hostDebug": {
+  "ticks": 3583,
+  "tickErrors": 0,
+  "simNow": 397723.65599999984,
+  "timeScale": 1,
+  "paused": false,
+  "hidden": false,
+  "locked": false,
+  "pendingEvents": 0,
+  "droppedEvents": 0,
+  "surfaces": 0,
+  "taskbarSamples": 1244,
+  "taskbarDelayMs": 250,
+  "clickGuard": {
+   "state": "idle",
+   "reason": null,
+   "failClosed": 0,
+   "rects": 0,
+   "armed": false
+  },
+  "edgeBands": 2
+ },
+ "exitCode": 0
+}
+AB current round 2: awake=1.15%(max 1.54) asleep=0.66%(max 0.95) hidden=0.02%(max 0.04) paused=0.59%(max 0.61) file=out\bench\bench-2026-11-06T18-51-44-091Z.json
+AB-DONE
+exit=0
