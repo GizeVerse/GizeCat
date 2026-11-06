@@ -1,5 +1,12 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import { builtinModules } from 'node:module';
+
+// GizeVerse (ADR 0004, audit R11): src/shared is bundled into the sandboxed renderers and the web
+// host, so Node built-ins (in either spelling) and Node/DOM globals must not appear there or in core.
+// Exact names (paths), not patterns: a pattern 'constants' would also match './constants'.
+const NODE_BUILTINS = builtinModules.filter((m) => !m.startsWith('_')).map((name) => ({ name, message: 'core/shared must stay platform-agnostic (Node built-in).' }));
+const PURE_GLOBALS = ['process', 'Buffer', '__dirname', '__filename', 'require', 'module', 'global', 'setImmediate', 'clearImmediate', 'window', 'document', 'navigator', 'localStorage', 'sessionStorage'];
 
 export default tseslint.config(
   { ignores: ['out/**', 'dist/**', 'release/**', 'node_modules/**', '.claude/**', 'scripts/**', 'build/**', '*.config.mts', '*.config.mjs'] },
@@ -29,12 +36,14 @@ export default tseslint.config(
       'no-restricted-imports': [
         'error',
         {
+          paths: NODE_BUILTINS,
           patterns: [
-            { group: ['electron', 'electron/*', 'node:*', 'fs', 'path', 'os', 'child_process', 'koffi'], message: 'core/shared must stay platform-agnostic.' },
+            { group: ['electron', 'electron/*', 'node:*', 'koffi'], message: 'core/shared must stay platform-agnostic.' },
             { group: ['**/main/**', '**/renderer/**', '**/preload/**'], message: 'core/shared must not depend on process-specific code.' },
           ],
         },
       ],
+      'no-restricted-globals': ['error', ...PURE_GLOBALS.map((name) => ({ name, message: 'core/shared run in Electron main, sandboxed renderers and the browser: inject what you need.' }))],
     },
   },
   {
