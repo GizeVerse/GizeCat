@@ -236,7 +236,9 @@ describe('review BEH-4 (band B16): the Attention seeking slider bounds the reque
     expect(requests(0, [31])).toBe(0);
     // At 5 % it rarely asks: at most the quiet gap's 2.4 an hour, over 2 x 2 sim-h.
     expect(low).toBeLessThanOrEqual(10);
-  });
+    // Seven multi-sim-hour runs (about 50 s alone): a hang guard that survives a loaded shared machine,
+    // not an assertion (it reached 68.9 s against the default 60 s during a GizeVerse verify run).
+  }, 180_000);
 
   it('ignoring it teaches it: a cat whose requests went unanswered asks less', () => {
     const count = (acceptance: number): number => {
