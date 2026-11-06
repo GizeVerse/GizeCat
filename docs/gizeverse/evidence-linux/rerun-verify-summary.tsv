@@ -1,0 +1,16 @@
+image	PASS	Debian GNU/Linux 12 (bookworm) node v24.21.0 x86_64
+apt	PASS	
+npm-ci	PASS	
+electron-install	PASS	
+typecheck	PASS	
+lint	PASS	
+vitest	PASS	
+build	PASS	
+xvfb	PASS	1920x1080x24
+sandbox	PASS	Chromium sandbox on (setuid helper, user node)
+platform-line	PASS	"m":"platform","d":{"id":"linux-x11","coordinates":"logical","overlay":true}
+phaseA-no-compositor	PASS	withheld, 0 overlays
+phaseB-compositor	PASS	overlays created=1
+phaseB-click-through	PASS	click at (300,300) reached the window below the overlay
+phaseC-compositor-dies	PASS	created then withdrawn
+app-errors	PASS	error lines: 0

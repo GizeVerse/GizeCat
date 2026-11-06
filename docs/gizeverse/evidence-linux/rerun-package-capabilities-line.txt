@@ -1,0 +1,1 @@
+"m":"platform capabilities","d":{"id":"linux-x11","unavailable":["windowSurfaces","taskbarSurfaces","tabStrips","fullscreenAware","loginItem","secretStorage","perception","touchInput"]}}

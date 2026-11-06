@@ -1,0 +1,12 @@
+apt	PASS	
+npm-ci	PASS	
+electron-install	PASS	
+package-linux	PASS	
+artifacts	PASS	GizeCat-1.2.0-linux-x86_64.AppImage	126524084 GizeCat-1.2.0-linux-x64.tar.gz	120332777 
+packaged-exe	PASS	/pkg/GizeCat-1.2.0-linux-x64/desktop-cat
+koffi-linux-unpacked	PASS	
+pkg-started	PASS	started=1 overlays=1
+pkg-test-hooks-ignored	PASS	packaged:true test:false despite DESKTOP_CAT_TEST=1
+pkg-capabilities	PASS	"m":"platform capabilities","d":{"id":"linux-x11","unavailable":["windowSurfaces","taskbarSurfaces","tabStrips","fullscreenAware","loginItem","secretStorage","perception","touchInput"]}}
+pkg-errors	PASS	error lines: 0
+pkg-no-sandbox-refused	PASS	refusal printed, exit 1, no logger, no overlay

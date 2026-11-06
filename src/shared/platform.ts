@@ -95,6 +95,7 @@ const N = (note: string): CapabilityClaim => ({ status: 'NOT_IMPLEMENTED', note 
 
 const WIN_REPORT = 'docs/TEST_REPORT.md#v120-2026-11-05-a-lively-cat';
 const WEB_REPORT = 'docs/gizeverse/07-web-host.md#results';
+const LINUX_XVFB = 'docs/gizeverse/05-linux.md#the-app-under-xvfb-simulated-desktop';
 const WIN_V11 = 'docs/TEST_REPORT.md';
 
 /**
@@ -143,9 +144,9 @@ export const CAPABILITY_MATRIX: Readonly<Record<PlatformId, Readonly<Record<Capa
     persistence: U('JSON in ~/Library/Application Support.'),
   },
   'linux-x11': {
-    characterView: U('Same renderer; logical coordinates. On the floor of the work area only.'),
-    overlay: U('Transparent, non-focusable windows (outside window-manager control, so on top on all workspaces); created only while a compositing manager runs.'),
-    clickThrough: U('setIgnoreMouseEvents plus the shared hit-region poll; X11 click-through fixes are in the Electron 44.5 notes (UNVERIFIED here).'),
+    characterView: S('Ran under Xvfb in a container (Chromium sandbox on): created with a compositing manager, on the floor only. No real desktop session.', LINUX_XVFB),
+    overlay: S('Override-redirect window, created only while a compositing manager owns _NET_WM_CM_S<n>, withdrawn when it stops (Xvfb + xcompmgr).', LINUX_XVFB),
+    clickThrough: S('X-server click routing passes through the overlay, except one pixel: Chromium leaves a 1x1 input rectangle at the window origin (a click at the top-left corner is swallowed).', LINUX_XVFB),
     globalCursor: U('screen.getCursorScreenPoint (X11 pointer query).'),
     multiDisplay: U('Logical coordinates; synthetic layouts only.'),
     windowSurfaces: N('_NET_CLIENT_LIST_STACKING could provide geometry; not implemented.'),

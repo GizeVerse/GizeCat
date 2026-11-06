@@ -1,0 +1,16 @@
+"m":"linux display session","d":{"ozone":"x11","waylandDisplay":false,"x11Display":true,"sessionType":null}
+"m":"platform","d":{"id":"linux-x11","coordinates":"logical","overlay":true}
+"m":"overlays withheld","d":{"reason":"No compositing window manager is running, so a transparent window could cover the desktop; the cat is not shown. Turn on compositing (for example in your window manager settings, or start picom) and the cat appears within a few seconds."}
+"m":"started","d":{"version":"1.2.0","displays":1,"windowAwareness":"unavailable","win32":false,"perception":"off","launchedAtLogin":false,"startState":"visible","test":false}
+"m":"platform capabilities","d":{"id":"linux-x11","unavailable":["characterView","overlay","clickThrough","windowSurfaces","taskbarSurfaces","tabStrips","fullscreenAware","loginItem","secretStorage","perception","touchInput"]}
+"m":"linux display session","d":{"ozone":"x11","waylandDisplay":false,"x11Display":true,"sessionType":null}
+"m":"platform","d":{"id":"linux-x11","coordinates":"logical","overlay":true}
+"m":"overlay created","d":{"displayId":"60","workAreaDip":{"x":0,"y":0,"width":1920,"height":1080}
+"m":"started","d":{"version":"1.2.0","displays":1,"windowAwareness":"unavailable","win32":false,"perception":"off","launchedAtLogin":false,"startState":"visible","test":false}
+"m":"platform capabilities","d":{"id":"linux-x11","unavailable":["windowSurfaces","taskbarSurfaces","tabStrips","fullscreenAware","loginItem","secretStorage","perception","touchInput"]}
+"m":"linux display session","d":{"ozone":"x11","waylandDisplay":false,"x11Display":true,"sessionType":null}
+"m":"platform","d":{"id":"linux-x11","coordinates":"logical","overlay":true}
+"m":"overlay created","d":{"displayId":"60","workAreaDip":{"x":0,"y":0,"width":1920,"height":1080}
+"m":"started","d":{"version":"1.2.0","displays":1,"windowAwareness":"unavailable","win32":false,"perception":"off","launchedAtLogin":false,"startState":"visible","test":false}
+"m":"platform capabilities","d":{"id":"linux-x11","unavailable":["windowSurfaces","taskbarSurfaces","tabStrips","fullscreenAware","loginItem","secretStorage","perception","touchInput"]}
+"m":"overlays withdrawn","d":{"reason":"No compositing window manager is running, so a transparent window could cover the desktop; the cat is not shown. Turn on compositing (for example in your window manager settings, or start picom) and the cat appears within a few seconds."}

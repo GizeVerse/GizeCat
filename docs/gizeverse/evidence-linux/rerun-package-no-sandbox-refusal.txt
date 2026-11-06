@@ -1,0 +1,3 @@
+[5617:1106/180801.626104:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+GizeCat cannot start safely
+GizeCat was started with --no-sandbox, which turns off the protection that keeps its windows isolated from your system. It does not run that way. On Linux this usually means the system blocks the Chromium sandbox for this package (for example an AppImage on Ubuntu 24.04 or later); install a package that supports the sandbox instead.

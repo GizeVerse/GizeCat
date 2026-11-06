@@ -1,0 +1,12 @@
+apt	PASS	
+npm-ci	PASS	
+electron-install	PASS	
+package-linux	PASS	
+artifacts	PASS	GizeCat-1.2.0-linux-x86_64.AppImage	126761781 GizeCat-1.2.0-linux-x64.tar.gz	120556977 
+packaged-exe	PASS	/pkg/GizeCat-1.2.0-linux-x64/desktop-cat
+koffi-linux-unpacked	PASS	
+pkg-started	FAIL	started=0 overlays=0
+pkg-test-hooks-ignored	FAIL	
+pkg-capabilities	FAIL	
+pkg-errors	PASS	error lines: 0
+pkg-no-sandbox-refused	FAIL	exit 1; see pkg-nosandbox-tree.txt

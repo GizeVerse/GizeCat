@@ -19,9 +19,9 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 
 | Capability | Windows 10/11 | macOS | Linux (X11 session) | Linux (Wayland session, app under XWayland) | Linux (Wayland session, native) | Web browser (desktop) | Android | iOS / iPadOS |
 |---|---|---|---|---|---|---|---|---|
-| The character is shown and animated | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | VERIFIED | SIMULATED | IMPL, UNVERIFIED |
-| Drawn over other apps (transparent, always on top) | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
-| Clicks pass through everywhere except the character | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | VERIFIED | BLOCKED | BLOCKED |
+| The character is shown and animated | VERIFIED | IMPL, UNVERIFIED | SIMULATED | BLOCKED | BLOCKED | VERIFIED | SIMULATED | IMPL, UNVERIFIED |
+| Drawn over other apps (transparent, always on top) | VERIFIED | IMPL, UNVERIFIED | SIMULATED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
+| Clicks pass through everywhere except the character | VERIFIED | IMPL, UNVERIFIED | SIMULATED | BLOCKED | BLOCKED | VERIFIED | BLOCKED | BLOCKED |
 | Sees the pointer outside its own window | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Several displays, mixed scaling | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Climbs and walks on other apps' windows | VERIFIED | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
@@ -88,9 +88,9 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same renderer; logical coordinates. On the floor of the work area only. | — |
-| Drawn over other apps (transparent, always on top) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Transparent, non-focusable windows (outside window-manager control, so on top on all workspaces); created only while a compositing manager runs. | — |
-| Clicks pass through everywhere except the character | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | setIgnoreMouseEvents plus the shared hit-region poll; X11 click-through fixes are in the Electron 44.5 notes (UNVERIFIED here). | — |
+| The character is shown and animated | SIMULATED_OR_MOCK_TESTED | Ran under Xvfb in a container (Chromium sandbox on): created with a compositing manager, on the floor only. No real desktop session. | [report](../../docs/gizeverse/05-linux.md#the-app-under-xvfb-simulated-desktop) |
+| Drawn over other apps (transparent, always on top) | SIMULATED_OR_MOCK_TESTED | Override-redirect window, created only while a compositing manager owns _NET_WM_CM_S<n>, withdrawn when it stops (Xvfb + xcompmgr). | [report](../../docs/gizeverse/05-linux.md#the-app-under-xvfb-simulated-desktop) |
+| Clicks pass through everywhere except the character | SIMULATED_OR_MOCK_TESTED | X-server click routing passes through the overlay, except one pixel: Chromium leaves a 1x1 input rectangle at the window origin (a click at the top-left corner is swallowed). | [report](../../docs/gizeverse/05-linux.md#the-app-under-xvfb-simulated-desktop) |
 | Sees the pointer outside its own window | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | screen.getCursorScreenPoint (X11 pointer query). | — |
 | Several displays, mixed scaling | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Logical coordinates; synthetic layouts only. | — |
 | Climbs and walks on other apps' windows | NOT_IMPLEMENTED | _NET_CLIENT_LIST_STACKING could provide geometry; not implemented. | — |
