@@ -8,12 +8,15 @@ import type { DisplayGeometry } from '../../shared/world';
 import type { Logger } from '../contracts';
 import type { Hwnd } from '../win32/native';
 import { loadOverlayShellNative, type OverlayShellNative } from '../win32/taskbar/windowProps';
+import { WIN32_OVERLAY_PROFILE, type OverlayProfile } from './overlayProfile';
 
 export interface OverlayWindowOptions {
   display: DisplayGeometry;
   preloadPath: string;
   devTools: boolean;
   contentProtection: boolean;
+  /** Platform window profile (ADR 0004 §5); the Windows profile when absent. */
+  profile?: OverlayProfile;
 }
 
 export function overlayUrl(displayId: string): string {
@@ -21,6 +24,7 @@ export function overlayUrl(displayId: string): string {
 }
 
 export function createOverlayWindow(opts: OverlayWindowOptions): BrowserWindow {
+  const profile = opts.profile ?? WIN32_OVERLAY_PROFILE;
   const wa = opts.display.workAreaDip;
   const win = new BrowserWindow({
     x: Math.round(wa.x),
@@ -41,8 +45,10 @@ export function createOverlayWindow(opts: OverlayWindowOptions): BrowserWindow {
     fullscreenable: false,
     focusable: false,
     skipTaskbar: true,
-    // WS_EX_TOOLWINDOW: never listed in Alt-Tab.
-    type: 'toolbar',
+    // Windows: 'toolbar' = WS_EX_TOOLWINDOW, never listed in Alt-Tab (overlayProfile.ts).
+    ...(profile.windowType ? { type: profile.windowType } : {}),
+    ...(profile.acceptFirstMouse ? { acceptFirstMouse: true } : {}),
+    ...(profile.hiddenInMissionControl ? { hiddenInMissionControl: true } : {}),
     alwaysOnTop: true,
     title: 'Desktop Cat',
     enableLargerThanScreen: false,
@@ -58,7 +64,7 @@ export function createOverlayWindow(opts: OverlayWindowOptions): BrowserWindow {
     },
   });
   // 'floating' (the default) sits below the taskbar; 'screen-saver' stays above it.
-  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setAlwaysOnTop(true, profile.topmostLevel);
   win.setIgnoreMouseEvents(true);
   win.setContentProtection(opts.contentProtection);
   return win;

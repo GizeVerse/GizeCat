@@ -11,6 +11,7 @@ import {
   type LoginItemServiceOptions,
 } from '../../../src/main/lifecycle/loginItem';
 import { findV1OptOutInLogs, isV1OptOutLine } from '../../../src/main/lifecycle/loginItemEvidence';
+import { UNSUPPORTED_PLATFORM_LOGIN_REASON } from '../../../src/main/lifecycle/loginItemReconcile';
 import type { JsonReadStatus } from '../../../src/main/store/jsonStore';
 import { migrateSettings, type Settings } from '../../../src/shared/settings';
 import { memoryLogger } from './helpers';
@@ -557,5 +558,25 @@ describe('v1 log evidence', () => {
     expect(findV1OptOutInLogs(LOGS, fs)).toBe(true);
     expect(findV1OptOutInLogs('C:\\nowhere', fs)).toBe(false);
     expect(findV1OptOutInLogs(null, fs)).toBe(false);
+  });
+});
+
+describe('GizeVerse: platforms without login items (ADR 0004 §7)', () => {
+  it('an installed copy on an unsupported platform writes nothing and explains why', () => {
+    const r = rig();
+    const svc = r.boot({ platformSupported: false });
+    expect(r.win.writes).toEqual([]);
+    expect(r.win.run.size).toBe(0);
+    const s = svc.status();
+    expect(s.writable).toBe(false);
+    expect(s.reason).toBe(UNSUPPORTED_PLATFORM_LOGIN_REASON);
+    svc.setLaunchAtLogin(true);
+    expect(r.win.writes).toEqual([]);
+  });
+
+  it('the Windows default (platformSupported omitted) still registers the installed copy', () => {
+    const r = rig();
+    r.boot();
+    expect(r.win.runText()).toBe(EXPECTED_RUN);
   });
 });

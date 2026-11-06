@@ -112,9 +112,13 @@ export interface WriteGateInput {
   uninstallerPresent: boolean;
   /** Length of the command line the app would register. */
   commandLineChars: number;
+  /** GizeVerse (ADR 0004 §7): login items are implemented for Windows only; false blocks every write. Default true. */
+  platformSupported?: boolean;
 }
 
-export type WriteGateBlock = 'unpackaged' | 'test' | 'env-off' | 'no-uninstaller' | 'command-too-long';
+export type WriteGateBlock = 'unpackaged' | 'test' | 'env-off' | 'no-uninstaller' | 'command-too-long' | 'unsupported-platform';
+
+export const UNSUPPORTED_PLATFORM_LOGIN_REASON = 'Starting at sign-in is not supported on this platform yet; nothing is registered.';
 
 export interface WriteGate {
   writable: boolean;
@@ -129,6 +133,7 @@ export function evaluateWriteGate(g: WriteGateInput): WriteGate {
   if (g.envOff) blockedBy.push('env-off');
   if (!g.uninstallerPresent) blockedBy.push('no-uninstaller');
   if (g.commandLineChars > MAX_RUN_COMMAND_CHARS) blockedBy.push('command-too-long');
+  if (g.platformSupported === false) blockedBy.push('unsupported-platform');
   return { writable: blockedBy.length === 0, blockedBy };
 }
 
@@ -437,6 +442,7 @@ export function writeTookEffect(write: LoginItemWrite, state: WindowsLoginState,
 
 /** Why this build may not write its entry, for the status line (null: a dev, test or portable build). */
 function gateReason(blockedBy: readonly WriteGateBlock[]): string | null {
+  if (blockedBy.includes('unsupported-platform')) return UNSUPPORTED_PLATFORM_LOGIN_REASON;
   // Only an installed copy (packaged, uninstaller present, not under test) gets a specific reason.
   if (blockedBy.some((b) => b === 'unpackaged' || b === 'test' || b === 'no-uninstaller')) return null;
   if (blockedBy.includes('env-off')) return 'Turned off on this computer by the DESKTOP_CAT_LOGIN_ITEM=off environment setting.';

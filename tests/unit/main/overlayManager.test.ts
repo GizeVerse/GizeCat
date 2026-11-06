@@ -13,6 +13,7 @@ import type { DisplayService } from '../../../src/main/contracts';
 import type { WindowRegistry } from '../../../src/main/security';
 import { createGestureRecognizer } from '../../../src/core/interaction/gestures';
 import { createOverlayManager, type OverlayManager, type OverlayManagerOptions } from '../../../src/main/overlay/overlayManager';
+import { overlayProfileFor } from '../../../src/main/overlay/overlayProfile';
 import type { Hwnd, RawRect } from '../../../src/main/win32/native';
 import { createTaskbarTracker, type TaskbarNative } from '../../../src/main/win32/taskbar';
 import { memoryLogger } from './helpers';
@@ -993,5 +994,94 @@ describe('overlay manager v1.2: each sound cue is sent once, to one overlay (glo
     rig = makeRig();
     rig.mgr.render(output({ x: 800, y: 860 }, { sound: { kind: 'hiss', at: 300 } }), 300, false);
     expect(cuesSent('A')).toEqual([]);
+  });
+});
+
+describe('overlay manager: GizeVerse platform gates (ADR 0004 §5)', () => {
+  function bare(extra: Partial<OverlayManagerOptions> = {}): { mgr: OverlayManager; log: ReturnType<typeof memoryLogger> } {
+    const log = memoryLogger();
+    const mgr = createOverlayManager({
+      logger: log,
+      display: displayService,
+      registry,
+      preloadPath: 'preload.js',
+      devTools: false,
+      debugOverlay: false,
+      getSettings: () => defaultSettings(),
+      gestures: createGestureRecognizer(),
+      onSimEvents: () => undefined,
+      onContextMenu: () => undefined,
+      onSessionEnd: () => undefined,
+      isLeftButtonDown: () => false,
+      clock: () => 0,
+      ...extra,
+    });
+    return { mgr, log };
+  }
+  const live = (): number => fakes.windows.filter((w) => !w.destroyed).length;
+  const logged = (log: ReturnType<typeof memoryLogger>, msg: string): boolean => log.entries.some((e) => e.msg === msg);
+
+  it('creates no overlay where the profile forbids one (native Wayland, XWayland)', () => {
+    for (const id of ['linux-wayland', 'linux-xwayland'] as const) {
+      const before = fakes.windows.length;
+      const { mgr, log } = bare({ profile: overlayProfileFor(id) });
+      mgr.start();
+      expect(fakes.windows.length - before).toBe(0);
+      expect(logged(log, 'overlays are not created on this platform')).toBe(true);
+      mgr.dispose();
+    }
+  });
+
+  it('withholds overlays while the gate is closed, creates them when it opens, withdraws them when it closes again', () => {
+    let allowed = false;
+    const before = live();
+    const { mgr, log } = bare({ allowOverlays: () => ({ allowed, reason: allowed ? null : 'no compositor' }) });
+    mgr.start();
+    expect(live() - before).toBe(0);
+    allowed = true;
+    vi.advanceTimersByTime(10_000);
+    expect(live() - before).toBe(2);
+    allowed = false;
+    vi.advanceTimersByTime(10_000);
+    expect(live() - before).toBe(0);
+    expect(logged(log, 'overlays withdrawn')).toBe(true);
+    mgr.dispose();
+  });
+
+  it('a throwing gate counts as closed (fail closed)', () => {
+    const before = live();
+    const { mgr, log } = bare({
+      allowOverlays: () => {
+        throw new Error('X11 query failed');
+      },
+    });
+    mgr.start();
+    expect(live() - before).toBe(0);
+    expect(logged(log, 'overlays withheld')).toBe(true);
+    mgr.dispose();
+  });
+
+  it('without a profile the Windows behaviour is unchanged: overlays are created and report session end', () => {
+    let ended = 0;
+    const before = fakes.windows.length;
+    const { mgr } = bare({ onSessionEnd: () => ended++ });
+    mgr.start();
+    const mine = fakes.windows.slice(before);
+    expect(mine.length).toBe(2);
+    mine[0]!.emit('query-session-end');
+    expect(ended).toBe(1);
+    mgr.dispose();
+  });
+
+  it('profiles without session-end events do not listen for them (macOS, Linux)', () => {
+    let ended = 0;
+    const before = fakes.windows.length;
+    const { mgr } = bare({ profile: overlayProfileFor('darwin'), onSessionEnd: () => ended++ });
+    mgr.start();
+    const mine = fakes.windows.slice(before);
+    expect(mine.length).toBe(2);
+    mine[0]!.emit('query-session-end');
+    expect(ended).toBe(0);
+    mgr.dispose();
   });
 });

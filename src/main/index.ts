@@ -9,11 +9,14 @@ import { createLogger, type LogLevel, type RootLogger } from './diagnostics/logg
 import { appVersion } from './lifecycle/appInfo';
 import { createCrashGuard } from './lifecycle/crashGuard';
 import { hasFlag, isTestMode, LAUNCHED_AT_LOGIN_FLAG, parseTimeScale, parseUserDataOverride } from './lifecycle/launchArgs';
+import { explicitOzone, NO_SANDBOX_MESSAGE, NO_SANDBOX_TITLE, sandboxDecision } from './platform/boot';
 import { registerAppSchemePrivileges } from './protocol';
 import { createJsonStore } from './store/jsonStore';
 import { createSettingsStore } from './store/settingsStore';
 
 export const APP_USER_MODEL_ID = 'io.github.enesiltas.desktopcat';
+/** macOS: 'activate' events this soon after start belong to the launch itself. */
+const MAC_ACTIVATE_GRACE_MS = 3000;
 
 /**
  * A process that fails to start must exit: with no tray or window it would be invisible,
@@ -60,12 +63,22 @@ function start(test: boolean, boot: { logger: RootLogger | null }): void {
   const dev = hasFlag(process.argv, '--dev') && !app.isPackaged;
   const launchedAtLogin = hasFlag(process.argv, LAUNCHED_AT_LOGIN_FLAG);
 
+  // GizeVerse (ADR 0004 §6), before the lock and the logger: a packaged build never runs its
+  // renderers without the Chromium sandbox.
+  const sandbox = sandboxDecision(app.isPackaged, app.commandLine.hasSwitch('no-sandbox'));
+  if (sandbox === 'refuse') {
+    if (!test) dialog.showErrorBox(NO_SANDBOX_TITLE, NO_SANDBOX_MESSAGE);
+    app.exit(1);
+    return;
+  }
+
   const userDataOverride = parseUserDataOverride(process.env, process.argv);
   if (userDataOverride) {
     fs.mkdirSync(userDataOverride, { recursive: true });
     app.setPath('userData', userDataOverride);
   }
-  app.setAppUserModelId(APP_USER_MODEL_ID);
+  // Windows only (taskbar grouping, notifications); the id itself is frozen (ADR 0004 §9).
+  if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
 
   if (!app.requestSingleInstanceLock({ kind: 'desktop-cat:second-instance' })) {
     // The running instance surfaces the cat (second-instance event); nothing else to do here.
@@ -80,6 +93,13 @@ function start(test: boolean, boot: { logger: RootLogger | null }): void {
     if (running) running.onSecondInstance();
     else pendingSecondInstance = true;
   });
+  // macOS (ADR 0004 §6, review M3): a Dock click or a Finder launch while running emits 'activate',
+  // not 'second-instance'. The first activation of a fresh launch is ignored (it is the launch itself).
+  if (process.platform === 'darwin') {
+    app.on('activate', () => {
+      if (running && Date.now() - startedAt > MAC_ACTIVATE_GRACE_MS) running.onSecondInstance();
+    });
+  }
 
   registerAppSchemePrivileges();
   app.enableSandbox();
@@ -114,6 +134,16 @@ function start(test: boolean, boot: { logger: RootLogger | null }): void {
     log.info('hardware acceleration disabled by setting');
   }
   log.info('starting', { version: appVersion(() => app.getVersion()), electron: process.versions.electron, packaged: app.isPackaged, dev, test, launchedAtLogin, settings: loaded.status });
+  if (process.platform === 'linux') {
+    // Names and presence only, never values (a display string can hold a host name).
+    log.info('linux display session', {
+      ozone: explicitOzone((name) => app.commandLine.getSwitchValue(name)),
+      waylandDisplay: Boolean(process.env.WAYLAND_DISPLAY),
+      x11Display: Boolean(process.env.DISPLAY),
+      sessionType: process.env.XDG_SESSION_TYPE ?? null,
+    });
+  }
+  if (sandbox === 'warn') log.warn('running without the Chromium sandbox (--no-sandbox): development only; packaged builds refuse this');
 
   app
     .whenReady()

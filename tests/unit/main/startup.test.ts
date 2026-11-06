@@ -14,6 +14,8 @@ const h = vi.hoisted(() => {
     resolveReady: (): void => undefined,
     ready: Promise.resolve(),
     processHandlers: new Map<string, (err: unknown) => void>(),
+    /** Chromium switches the fake process was started with (GizeVerse boot decisions). */
+    switches: new Map<string, string>(),
   };
   const step = (name: string) => () => {
     state.order.push(name);
@@ -42,6 +44,10 @@ const h = vi.hoisted(() => {
     relaunch: step('relaunch'),
     getVersion: () => '0.0.0-test',
     isPackaged: false,
+    commandLine: {
+      hasSwitch: (name: string) => state.switches.has(name),
+      getSwitchValue: (name: string) => state.switches.get(name) ?? '',
+    },
   };
   return {
     state,
@@ -63,6 +69,8 @@ describe('startup (index.ts)', () => {
     h.state.order = [];
     h.state.failAt = null;
     h.state.processHandlers.clear();
+    h.state.switches.clear();
+    h.app.isPackaged = false;
     h.state.ready = new Promise<void>((r) => (h.state.resolveReady = r));
     h.dialog.showErrorBox.mockClear();
     h.startApp.mockReset();
@@ -120,7 +128,8 @@ describe('startup (index.ts)', () => {
   });
 
   it('under test, the failure exits without a blocking dialog', async () => {
-    h.state.failAt = 'setAppUserModelId';
+    // enableSandbox runs on every OS (setAppUserModelId is Windows-only since GizeVerse).
+    h.state.failAt = 'enableSandbox';
     await boot(true);
     expect(exits()).toEqual(['exit:1']);
     expect(h.dialog.showErrorBox).not.toHaveBeenCalled();
@@ -150,5 +159,58 @@ describe('startup (index.ts)', () => {
     expect(h.startApp).toHaveBeenCalled();
     h.state.processHandlers.get('uncaughtException')!(new Error('after start'));
     expect(exits()).toEqual([]);
+  });
+});
+
+describe('startup (index.ts): GizeVerse boot decisions (ADR 0004 §6)', () => {
+  beforeEach(() => {
+    h.state.userData = tempDir();
+    h.state.order = [];
+    h.state.failAt = null;
+    h.state.switches.clear();
+    h.app.isPackaged = false;
+    h.dialog.showErrorBox.mockClear();
+    h.startApp.mockReset();
+    h.startApp.mockReturnValue({ onSecondInstance: () => undefined });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // index.ts installs crash handlers: keep them off the test worker.
+    vi.spyOn(process, 'on').mockImplementation((() => process) as never);
+  });
+
+  afterEach(() => {
+    h.app.isPackaged = false;
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    removeDir(h.state.userData);
+  });
+
+  async function bootPackaged(): Promise<void> {
+    vi.resetModules();
+    vi.stubEnv('DESKTOP_CAT_USER_DATA', h.state.userData);
+    vi.stubEnv('DESKTOP_CAT_TEST', '0');
+    await import('../../../src/main/index');
+  }
+
+  it('a packaged build started with --no-sandbox tells the user and exits before taking the lock', async () => {
+    h.app.isPackaged = true;
+    h.state.switches.set('no-sandbox', '');
+    await bootPackaged();
+    expect(h.state.order).toEqual(['exit:1']);
+    expect(h.dialog.showErrorBox).toHaveBeenCalledTimes(1);
+    expect(String(h.dialog.showErrorBox.mock.calls[0]![1])).toMatch(/--no-sandbox/);
+    expect(h.startApp).not.toHaveBeenCalled();
+  });
+
+  it('a packaged build with the sandbox starts normally', async () => {
+    h.app.isPackaged = true;
+    await bootPackaged();
+    expect(h.state.order).toContain('lock');
+    expect(h.state.order).toContain('whenReady');
+    expect(h.state.order.filter((s) => s.startsWith('exit:'))).toEqual([]);
+  });
+
+  it('the AppUserModelID is set on Windows only', async () => {
+    await bootPackaged();
+    expect(h.state.order.includes('setAppUserModelId')).toBe(process.platform === 'win32');
   });
 });

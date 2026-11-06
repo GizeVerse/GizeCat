@@ -19,6 +19,8 @@ export interface TrayOptions {
   onAction: (action: MenuAction) => void;
   /** Left click. */
   onClick: () => void;
+  /** Balloon notices exist on Windows only (ADR 0004 §3); elsewhere notify() reports false. */
+  balloons?: boolean;
 }
 
 export function toMenuTemplate(items: readonly MenuItemModel[], onAction: (a: MenuAction) => void): MenuItemConstructorOptions[] {
@@ -96,7 +98,7 @@ export function createTrayController(opts: TrayOptions): TrayController {
       }
     },
     notify(notice, handlers) {
-      if (disposed || tray.isDestroyed()) return false;
+      if (disposed || tray.isDestroyed() || opts.balloons === false) return false;
       balloon = handlers;
       // Quiet time and Do not disturb suppress it; the handlers then never run.
       tray.displayBalloon({ title: notice.title, content: notice.body, icon: icon('tray'), respectQuietTime: true });

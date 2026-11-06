@@ -264,3 +264,51 @@ describe('lifecycle', () => {
     expect(monitor.idleMs).toBe(1234);
   });
 });
+
+describe('coarse idle source off Windows (ADR 0004 §3: powerMonitor.getSystemIdleTime, whole seconds)', () => {
+  function coarse(idleResolutionMs: number | undefined) {
+    const api = new FakeWin32Api();
+    let t = 0;
+    let lastInput = 0;
+    const monitor = createActivityMonitor(api, createTestLogger(), {
+      // What powerMonitor gives, in ms: whole seconds since the last input.
+      idleProvider: () => Math.floor(Math.max(0, t - lastInput) / 1000) * 1000,
+      ...(idleResolutionMs === undefined ? {} : { idleResolutionMs }),
+    });
+    monitor.start();
+    const events: SimEvent[] = [];
+    const run = (ms: number) => {
+      const end = t + ms;
+      while (t < end) {
+        // The host's normal cursor-poll interval (DEFAULT_POLL_INTERVALS.normalMs).
+        t += 50;
+        monitor.sample(t, { x: 500, y: 500 });
+        events.push(...monitor.drainEvents());
+      }
+    };
+    return { events, run, input: () => (lastInput = t) };
+  }
+  const kinds = (evs: SimEvent[]) => evs.map((e) => e.type);
+
+  it('the fine-grained rule would read a 1 s source as constant new input (why the coarse mode exists)', () => {
+    const r = coarse(undefined);
+    r.run(70_000);
+    expect(kinds(r.events)).toContain('activity.typingStart');
+  });
+
+  it('coarse mode: a user away for 70 s gets one idle event, no typing and no spurious return', () => {
+    const r = coarse(1000);
+    r.run(70_000);
+    expect(kinds(r.events)).toEqual(['activity.userIdle']);
+  });
+
+  it('coarse mode: input after a long absence is a return', () => {
+    const r = coarse(1000);
+    r.run(70_000);
+    r.input();
+    r.run(2000);
+    const back = r.events.filter((e) => e.type === 'activity.userReturned');
+    expect(back).toHaveLength(1);
+    expect(kinds(r.events)).not.toContain('activity.typingStart');
+  });
+});

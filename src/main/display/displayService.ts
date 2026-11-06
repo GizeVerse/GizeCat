@@ -1,14 +1,15 @@
 // DisplayService (src/main/contracts.ts) over Electron's screen module. Create it after
-// app 'ready'. Physical rects come from screen.dipToScreenRect(null, rect), which scales
-// relative to the display nearest to the rect (correct for mixed-DPI layouts).
+// app 'ready'. World rects come from the platform's coordinate strategy (ADR 0004 §4): on
+// Windows screen.dipToScreenRect(null, rect), which scales relative to the display nearest to
+// the rect (correct for mixed-DPI layouts), as since v1.0.
 import { screen } from 'electron';
-import type { Display, Rectangle } from 'electron';
 import { displayAtPoint, findDisplay, localDipToPx, nearestDisplay, primaryDisplay, pxToLocalDip } from '../../core/display/displayMath';
 import { createTopologyTracker } from '../../core/display/topology';
 import type { RawDisplay } from '../../core/display/topology';
-import type { Point, Rect } from '../../shared/geometry';
+import type { Point } from '../../shared/geometry';
 import type { WorldGeometry } from '../../shared/world';
 import type { DisplayService, Logger, Unsubscribe } from '../contracts';
+import { createDisplayCoordinates, type DisplayCoordinates } from './coordinates';
 
 export interface DisplayServiceExtras {
   /** Re-reads the topology immediately (e.g. after resume). Returns true if it changed. */
@@ -17,28 +18,16 @@ export interface DisplayServiceExtras {
 
 const DEBOUNCE_MS = 400;
 
-const rectOf = (r: Rectangle): Rect => ({ x: r.x, y: r.y, width: r.width, height: r.height });
-
-function readDisplays(): RawDisplay[] {
-  const primaryId = screen.getPrimaryDisplay().id;
-  return screen.getAllDisplays().map((d: Display) => ({
-    id: String(d.id),
-    primary: d.id === primaryId,
-    scaleFactor: d.scaleFactor,
-    boundsDip: rectOf(d.bounds),
-    workAreaDip: rectOf(d.workArea),
-    boundsPx: rectOf(screen.dipToScreenRect(null, d.bounds)),
-    workAreaPx: rectOf(screen.dipToScreenRect(null, d.workArea)),
-  }));
-}
-
-const describe = (w: WorldGeometry): Record<string, unknown> => ({
+const describe = (w: WorldGeometry, strategy: string): Record<string, unknown> => ({
   version: w.version,
+  coordinates: strategy,
   displays: w.displays.map((d) => ({ id: d.id, primary: d.primary, scale: d.scaleFactor, boundsPx: d.boundsPx, workAreaPx: d.workAreaPx })),
 });
 
-export function createDisplayService(logger: Logger): DisplayService & DisplayServiceExtras {
+/** `coordinates` defaults to the Windows strategy (the only one before GizeVerse). */
+export function createDisplayService(logger: Logger, coordinates: DisplayCoordinates = createDisplayCoordinates('win32', screen)): DisplayService & DisplayServiceExtras {
   const log = logger.child('display');
+  const readDisplays = (): RawDisplay[] => coordinates.readDisplays();
   const tracker = createTopologyTracker({
     read: readDisplays,
     schedule: (fn, ms) => {
@@ -50,8 +39,8 @@ export function createDisplayService(logger: Logger): DisplayService & DisplaySe
   });
 
   if (tracker.world.displays.length === 0) log.error('no usable display found at startup');
-  else log.info('display topology', describe(tracker.world));
-  const offChange = tracker.onChange((w) => log.info('display topology changed', describe(w)));
+  else log.info('display topology', describe(tracker.world, coordinates.strategy));
+  const offChange = tracker.onChange((w) => log.info('display topology changed', describe(w, coordinates.strategy)));
 
   const onScreenEvent = (): void => tracker.notify();
   screen.on('display-added', onScreenEvent);

@@ -16,6 +16,7 @@ import { crashBackoff, boundsDiffer, planOverlaySync } from './displayDiff';
 import { cursorInHitZone, decideInteractive, EVERYWHERE } from '../../core/interaction/clickThrough';
 import { SCREEN_EDGE_KIND } from '../../shared/surfaces';
 import type { GestureRecognizer } from '../../core/interaction/gestures';
+import { WIN32_OVERLAY_PROFILE, type OverlayProfile } from './overlayProfile';
 import { createOverlayShell, createOverlayWindow, overlayUrl, type OverlayShell } from './overlayWindow';
 import { displaysShowingCat, hiddenRenderState, mapRenderState } from './renderMapping';
 import { surfaceLinesForDisplay, type SurfaceLinesSink } from './surfaceLines';
@@ -47,6 +48,8 @@ const WATCHDOG_MAX_STEP_MS = 250;
 /** Every overlay receives the TaskbarCreated broadcast: forward one notification per broadcast. */
 const TASKBAR_CREATED_DEDUPE_MS = 1000;
 const NO_RECTS: readonly Rect[] = Object.freeze([]);
+/** Platforms without the Windows shell extras (ADR 0004 §5): nothing to set or hook. */
+const NO_SHELL: OverlayShell = Object.freeze({ beforeShow: () => false, beforeDestroy: () => false, hookTaskbarCreated: () => false });
 /**
  * v1.2 hover dwell (ADR 0003 §6.1): a cat clinging to a screen edge takes the mouse only after the
  * cursor has rested on it this long, so a passing click goes to the window behind it.
@@ -104,6 +107,16 @@ export interface OverlayManagerOptions {
    * takes the mouse (an ongoing drag keeps its captured pointer).
    */
   excludedRectsPx?: () => readonly Rect[];
+  /** Platform window profile (ADR 0004 §5); the Windows profile when absent. */
+  profile?: OverlayProfile;
+  /** DIP rect of an overlay → world px for info(); Windows' screen.dipToScreenRect when absent. */
+  rectToWorld?: (win: BrowserWindow, rect: Rect) => Rect;
+  /**
+   * Run-time condition for having overlays at all (X11: a compositing manager runs; review H3).
+   * Checked at start and with the periodic topmost check: closing destroys every overlay, opening
+   * re-creates them. A throwing gate counts as closed. Absent: always open (Windows, macOS).
+   */
+  allowOverlays?: () => { allowed: boolean; reason: string | null };
 }
 
 export interface OverlayManager extends SurfaceLinesSink {
@@ -182,6 +195,8 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
   let topmostTimer: ReturnType<typeof setInterval> | null = null;
   let offDisplay: Unsubscribe | null = null;
   let disposed = false;
+  /** allowOverlays() at the last check (ADR 0004 §5). */
+  let gateOpen = true;
   let lastWatchdogAt: number | null = null;
   let lastTaskbarCreatedAt: number | null = null;
   let excludedErrors = 0;
@@ -193,7 +208,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
   let lastSoundAt: number | null = null;
   let soundDisplayId: string | null = null;
   const topmostReasserts: number[] = [];
-  const shell = opts.shell ?? createOverlayShell(log.child('shell'));
+  const profile = opts.profile ?? WIN32_OVERLAY_PROFILE;
+  const shell = opts.shell ?? (profile.shellIntegration ? createOverlayShell(log.child('shell')) : NO_SHELL);
+  const rectToWorld = opts.rectToWorld ?? ((win: BrowserWindow, rect: Rect): Rect => screen.dipToScreenRect(win, rect));
 
   function hwndOf(win: BrowserWindow): string {
     try {
@@ -233,7 +250,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     if (topmostReasserts.length >= MAX_TOPMOST_REASSERTS_PER_MIN) return;
     topmostReasserts.push(now);
     log.debug('re-asserting always-on-top', { displayId: e.displayId, reason });
-    e.win.setAlwaysOnTop(true, 'screen-saver');
+    e.win.setAlwaysOnTop(true, profile.topmostLevel);
   }
 
   function configFor(e: Entry): OverlayConfig {
@@ -253,8 +270,33 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     }
   }
 
+  function readGate(): { allowed: boolean; reason: string | null } {
+    if (!opts.allowOverlays) return { allowed: true, reason: null };
+    try {
+      return opts.allowOverlays();
+    } catch (err) {
+      return { allowed: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Re-reads the gate; withdraws or restores every overlay when it changed. */
+  function applyGate(): void {
+    const g = readGate();
+    if (g.allowed === gateOpen) return;
+    gateOpen = g.allowed;
+    if (!g.allowed) {
+      log.warn('overlays withdrawn', { reason: g.reason });
+      for (const t of pendingRecreate.values()) clearTimeout(t);
+      pendingRecreate.clear();
+      for (const e of [...entries.values()]) destroyEntry(e);
+    } else {
+      log.info('overlays allowed again');
+      sync(opts.display.world);
+    }
+  }
+
   function create(d: DisplayGeometry): void {
-    if (disposed || entries.has(d.id)) return;
+    if (disposed || !gateOpen || entries.has(d.id)) return;
     let win: BrowserWindow;
     try {
       win = createOverlayWindow({
@@ -262,6 +304,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
         preloadPath: opts.preloadPath,
         devTools: opts.devTools,
         contentProtection: opts.getSettings().appearance.hideFromScreenCapture,
+        profile,
       });
     } catch (err) {
       log.error('creating overlay failed', { displayId: d.id, error: err });
@@ -321,8 +364,10 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     win.on('always-on-top-changed', (_ev, isOnTop) => {
       if (!isOnTop) reassertTopmost(e, 'always-on-top-changed');
     });
-    win.on('query-session-end', () => opts.onSessionEnd());
-    win.on('session-end', () => opts.onSessionEnd());
+    if (profile.sessionEndEvents) {
+      win.on('query-session-end', () => opts.onSessionEnd());
+      win.on('session-end', () => opts.onSessionEnd());
+    }
     // Closed from outside (WM_CLOSE from another process): 'closed' only fires once the window is
     // gone, so the property is removed here, before Electron destroys it. Our own paths go through
     // destroyEntry, which calls destroy() and never emits 'close'.
@@ -678,6 +723,14 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
 
   return {
     start() {
+      // G5: a platform that cannot guarantee click-through gets no overlay at all.
+      if (!profile.create) {
+        log.warn('overlays are not created on this platform', { reason: profile.reason });
+        return;
+      }
+      const g = readGate();
+      gateOpen = g.allowed;
+      if (!gateOpen) log.warn('overlays withheld', { reason: g.reason });
       for (const d of opts.display.world.displays) create(d);
       offDisplay = opts.display.onChange((world) => {
         if (displayTimer) clearTimeout(displayTimer);
@@ -687,6 +740,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
         }, DISPLAY_DEBOUNCE_MS);
       });
       topmostTimer = setInterval(() => {
+        if (opts.allowOverlays) applyGate();
         for (const e of entries.values()) {
           if (alive(e) && !e.win.isAlwaysOnTop()) reassertTopmost(e, 'periodic');
         }
@@ -827,7 +881,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           webContentsId: e.wcId,
           hwnd: hwndOf(e.win),
           bounds,
-          boundsPx: screen.dipToScreenRect(e.win, bounds),
+          boundsPx: rectToWorld(e.win, bounds),
           expectedBounds: e.geometry.workAreaDip,
           visible: e.win.isVisible(),
           ignoreMouse: e.ignoreMouse,

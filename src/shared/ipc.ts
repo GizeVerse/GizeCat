@@ -3,6 +3,7 @@
 // against the known webContents/origin in main.
 import { z } from 'zod';
 import type { BehaviorProfileSnapshot } from './behaviorProfile';
+import type { PlatformReport } from './platform';
 import type { BehaviorState, CatRenderState, HitRegion } from './cat';
 import type { CatSummary } from './catState';
 import type { PerceptionStatus, SceneReport, VisualEventKind, VisualFeatures } from './perception';
@@ -155,6 +156,8 @@ export interface AppStatus {
   surfaceOutlines?: boolean;
   shortcutRegistered: boolean;
   startedAt: number;
+  /** GizeVerse (ADR 0004 §2.2): this platform and what it can do here. */
+  platform?: PlatformReport;
 }
 
 export interface ResourceSample {

@@ -6,6 +6,11 @@
 // paths with spaces. Electron-free: the writer, registry and file system are injected.
 import nodeFs from 'node:fs';
 import path from 'node:path';
+
+// The login item is Windows semantics end to end (HKCU Run, the NSIS uninstall marker, the
+// uninstaller beside the exe), so its paths are Windows paths on every host: on win32 this is the
+// same module as `path`; elsewhere the write gate is closed and nothing is written (ADR 0004 §7).
+const winPath = path.win32;
 import type { ActionResult, LoginItemStatus } from '../../shared/ipc';
 import type { Logger } from '../contracts';
 import type { JsonReadStatus } from '../store/jsonStore';
@@ -45,7 +50,7 @@ export const LOGIN_ITEM_ENV = 'DESKTOP_CAT_LOGIN_ITEM';
  * exe's own base name in every configuration (VERIFIED on a real install: `Uninstall DesktopCat.exe`).
  */
 export function uninstallerFileFor(execPath: string): string {
-  return `Uninstall ${path.win32.parse(execPath).name}.exe`;
+  return `Uninstall ${winPath.parse(execPath).name}.exe`;
 }
 /** This build's uninstaller (electron-builder.yml: executableName DesktopCat). */
 export const UNINSTALLER_FILE = uninstallerFileFor('DesktopCat.exe');
@@ -74,6 +79,8 @@ export interface LoginItemServiceOptions {
   logDir: string | null;
   packaged: boolean;
   test: boolean;
+  /** Login items are implemented on this platform (ADR 0004 §7: Windows only). Default true. */
+  platformSupported?: boolean;
   launchedAtLogin: boolean;
   env: Record<string, string | undefined>;
   settingsLoadStatus: JsonReadStatus;
@@ -126,7 +133,7 @@ export function createLoginItemService(opts: LoginItemServiceOptions): LoginItem
   const log = opts.logger;
   const fsApi: LoginItemFs = opts.fs ?? nodeFs;
   const target: LoginTarget = { execPath: opts.execPath, args: LOGIN_ITEM_ARGS };
-  const markerPath = path.join(opts.userData, UNINSTALL_MARKER_FILE);
+  const markerPath = winPath.join(opts.userData, UNINSTALL_MARKER_FILE);
 
   const exists = (p: string): boolean => {
     try {
@@ -140,8 +147,9 @@ export function createLoginItemService(opts: LoginItemServiceOptions): LoginItem
     packaged: opts.packaged,
     test: opts.test,
     envOff: (opts.env[LOGIN_ITEM_ENV] ?? '').trim().toLowerCase() === 'off',
-    uninstallerPresent: exists(path.join(path.dirname(opts.execPath), uninstallerFileFor(opts.execPath))),
+    uninstallerPresent: exists(winPath.join(winPath.dirname(opts.execPath), uninstallerFileFor(opts.execPath))),
     commandLineChars: commandLineFor(target).length,
+    platformSupported: opts.platformSupported ?? true,
   });
   const writeTarget = { ...target, writable: gate.writable, blockedBy: gate.blockedBy };
 

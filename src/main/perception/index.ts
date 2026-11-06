@@ -14,5 +14,5 @@ export { createVisionAdapter } from './adapters';
  * backend is used (call after app 'ready').
  */
 export function createPerceptionService(deps: PerceptionServiceDeps): PerceptionService {
-  return createPerceptionServiceWith({ ...deps, capture: deps.capture ?? createElectronFrameCapturer(deps.logger) });
+  return createPerceptionServiceWith({ ...deps, capture: deps.capture ?? createElectronFrameCapturer(deps.logger, {}, deps.toWorldRect) });
 }

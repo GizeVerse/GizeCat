@@ -107,3 +107,17 @@ describe('tray notification surface', () => {
     expect(fake.balloons).toHaveLength(1);
   });
 });
+
+describe('tray notices off Windows (ADR 0004 §3)', () => {
+  beforeEach(() => {
+    electron.FakeTray.last = null;
+  });
+
+  it('without balloons notify() reports false and shows nothing (displayBalloon exists on Windows only)', () => {
+    const controller = createTrayController({ iconDir: '/app/assets/tray', logger: memoryLogger(), onAction: () => undefined, onClick: () => undefined, balloons: false });
+    const handlers = { onShown: vi.fn(), onClick: vi.fn() };
+    expect(controller.notify(notice, handlers)).toBe(false);
+    expect(electron.FakeTray.last?.balloons).toEqual([]);
+    expect(handlers.onShown).not.toHaveBeenCalled();
+  });
+});

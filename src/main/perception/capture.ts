@@ -103,7 +103,15 @@ const wipeGrab = (g: Grab): void => {
   g.jpeg?.fill(0);
 };
 
-export function createElectronFrameCapturer(logger: Logger, clock: Partial<BurstClock> = {}): FrameCapturer {
+/**
+ * `toWorldRect` maps a screen DIP rect to world px (ADR 0004 §4); it defaults to Windows'
+ * screen.dipToScreenRect(null, rect), the only conversion before GizeVerse.
+ */
+export function createElectronFrameCapturer(
+  logger: Logger,
+  clock: Partial<BurstClock> = {},
+  toWorldRect: (rect: electron.Rectangle) => electron.Rectangle = (rect) => electron.screen.dipToScreenRect(null, rect),
+): FrameCapturer {
   const log = logger.child('capture');
 
   function getDisplays(): CaptureDisplay[] {
@@ -111,7 +119,7 @@ export function createElectronFrameCapturer(logger: Logger, clock: Partial<Burst
     const primaryId = screen.getPrimaryDisplay().id;
     return screen.getAllDisplays().map((d) => ({
       id: String(d.id),
-      boundsPx: screen.dipToScreenRect(null, d.bounds),
+      boundsPx: toWorldRect(d.bounds),
       scaleFactor: d.scaleFactor,
       primary: d.id === primaryId,
     }));

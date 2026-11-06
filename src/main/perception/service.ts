@@ -80,6 +80,8 @@ export interface PerceptionServiceDeps {
   /** Clock (ms); defaults to Date.now. */
   now?: () => number;
   capture?: FrameCapturer;
+  /** Screen DIP rect → world px for the default capturer (ADR 0004 §4); Windows' conversion when absent. */
+  toWorldRect?: (rect: Rect) => Rect;
   fetchImpl?: typeof fetch;
   /** Test seam; defaults to createVisionAdapter. */
   adapterFactory?: AdapterFactory;

@@ -20,6 +20,12 @@ export interface ActivityMonitorOptions {
   now?: () => number;
   /** ms since the last input of any kind; defaults to api.getIdleMs(). */
   idleProvider?: () => number;
+  /**
+   * Resolution of idleProvider (ms). GizeVerse (ADR 0004 §3): off Windows idle comes from
+   * powerMonitor.getSystemIdleTime() in whole seconds; at 500 ms or coarser, new input counts only
+   * when idle drops, and typing is not inferred (a 1 s reading cannot tell typing from a pause).
+   */
+  idleResolutionMs?: number;
   /** Idle time at which a second activity.userIdle fires (the cat's sleep threshold). */
   sleepThresholdMs?: number;
 }
@@ -51,6 +57,7 @@ export function createActivityMonitor(api: Win32Api, logger: Logger, opts: Activ
   const log = logger.child('activity');
   const clock = opts.now ?? (() => performance.now());
   const readIdle = opts.idleProvider ?? (() => api.getIdleMs());
+  const coarseIdle = (opts.idleResolutionMs ?? 0) >= 500;
   const events = new BoundedQueue<SimEvent>(64);
   const bucketIdx = new Array<number>(ACTIVITY.intensityBuckets).fill(-1);
   const input = hasWin32InputExtensions(api) ? api : null;
@@ -160,14 +167,15 @@ export function createActivityMonitor(api: Win32Api, logger: Logger, opts: Activ
   }
 
   function updateIdle(t: number, dt: number, idle: number, cursorMoved: boolean, cursorKnown: boolean, mouse: () => boolean): void {
-    if (prevIdle !== null && idle < prevIdle + dt - ACTIVITY.inputEpsilonMs) {
+    const newInput = coarseIdle ? prevIdle !== null && idle < prevIdle : prevIdle !== null && idle < prevIdle + dt - ACTIVITY.inputEpsilonMs;
+    if (prevIdle !== null && newInput) {
       // New input since the previous sample. The stretch it ended is from the previous
       // last-input time to this one (at most one sample interval too long).
       const stretch = Math.max(prevIdle, prevIdle + dt - idle);
       if (stretch >= ACTIVITY.idleMs) events.push({ type: 'activity.userReturned', idleMs: Math.round(stretch) });
       idleNotified = false;
       sleepNotified = false;
-      if (cursorKnown && !cursorMoved && !mouse()) onKeyboardLike(t);
+      if (!coarseIdle && cursorKnown && !cursorMoved && !mouse()) onKeyboardLike(t);
     }
     if (!idleNotified && idle >= ACTIVITY.idleMs) {
       idleNotified = true;

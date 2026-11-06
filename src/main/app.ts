@@ -9,6 +9,7 @@ import { createGestureRecognizer } from '../core/interaction/gestures';
 import type { AppStatus, SettingsViewState } from '../shared/ipc';
 import { IPC } from '../shared/ipc';
 import type { PerceptionStatus } from '../shared/perception';
+import { CAPABILITY_MATRIX, type PlatformReport } from '../shared/platform';
 import type { Settings } from '../shared/settings';
 import { parseSurfaceDiagnostics } from '../shared/surfaceDiagnosticsSchema';
 import { createCatHost, type CatHost } from './catHost';
@@ -34,6 +35,11 @@ import { createQuitSequence } from './lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndWindow } from './lifecycle/sessionEnd';
 import { createShortcutManager } from './lifecycle/shortcuts';
 import { createOverlayManager } from './overlay/overlayManager';
+import { createPlatformServices, probeFromProcess, SECRET_BACKEND_REFUSED_REASON, type PlatformServices } from './platform';
+import { darwinApplicationMenu } from './platform/appMenu';
+import { explicitOzone } from './platform/boot';
+import { runtimeCapabilities } from './platform/runtime';
+import { createX11CompositorProbe, NO_COMPOSITOR_REASON } from './linux/x11Compositor';
 import { createSurfaceOutlines } from './overlay/surfaceLines';
 import { createPerceptionService } from './perception';
 import { installAppProtocol } from './protocol';
@@ -41,7 +47,7 @@ import { createWindowRegistry, installSecurity } from './security';
 import { createSettingsWindowController } from './settingsWindow';
 import { createCatStore } from './store/catStore';
 import { createJsonStore, type JsonReadStatus } from './store/jsonStore';
-import { createSecretFile, createSecretStore } from './store/secretStore';
+import { createSecretFile, createSecretStore, type SecretCipher } from './store/secretStore';
 import type { SettingsStore } from './store/settingsStore';
 import { createSurfaceProvider } from './surfaces';
 import { installTestHooks } from './testHooks';
@@ -86,6 +92,39 @@ function offStatus(settings: Settings, reason: string): PerceptionStatus {
   };
 }
 
+/**
+ * safeStorage, refused on Linux when its backend would store keys in effect in plaintext
+ * (basic_text, unknown; audit R6). Other platforms get safeStorage itself.
+ */
+function guardedCipher(platform: PlatformServices, log: Logger): SecretCipher {
+  if (platform.id !== 'linux-x11' && platform.id !== 'linux-wayland') return safeStorage;
+  let refused: boolean | null = null;
+  const allowed = (): boolean => {
+    if (refused === null) {
+      let backend: string | null;
+      try {
+        backend = safeStorage.getSelectedStorageBackend();
+      } catch {
+        backend = null;
+      }
+      refused = !platform.secretBackendAllowed(backend);
+      if (refused) log.warn('API keys cannot be stored: plaintext keyring backend refused', { backend });
+    }
+    return !refused;
+  };
+  return {
+    isEncryptionAvailable: () => allowed() && safeStorage.isEncryptionAvailable(),
+    encryptString: (plain) => {
+      if (!allowed()) throw new Error(SECRET_BACKEND_REFUSED_REASON);
+      return safeStorage.encryptString(plain);
+    },
+    decryptString: (cipher) => {
+      if (!allowed()) throw new Error(SECRET_BACKEND_REFUSED_REASON);
+      return safeStorage.decryptString(cipher);
+    },
+  };
+}
+
 function attempt(log: Logger, what: string, fn: () => void): void {
   try {
     fn();
@@ -103,7 +142,10 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const appRoot = appRootFrom(mainDir);
   const version = appVersion(() => app.getVersion());
 
-  Menu.setApplicationMenu(null);
+  // GizeVerse (ADR 0004 §3): every per-OS choice of the shell comes from here.
+  const platform = createPlatformServices(probeFromProcess(process.platform, process.env, explicitOzone((name) => app.commandLine.getSwitchValue(name))), screen);
+  log.info('platform', { id: platform.id, coordinates: platform.coordinates.strategy, overlay: platform.overlayProfile.create });
+  Menu.setApplicationMenu(platform.applicationMenu === 'darwin-minimal' ? Menu.buildFromTemplate(darwinApplicationMenu()) : null);
   installSecurity(app, session.defaultSession, logger.child('security'));
   installAppProtocol(session.defaultSession, rendererRoot, logger.child('protocol'));
 
@@ -119,7 +161,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const secrets = createSecretStore({
     // No .bak or quarantined copy: a removed key must not come back from a copy.
     store: createSecretFile(path.join(boot.userData, 'secrets.json'), logger.child('store')),
-    cipher: safeStorage,
+    cipher: guardedCipher(platform, log),
     logger: logger.child('secrets'),
   });
 
@@ -128,9 +170,10 @@ export function startApp(boot: AppBootstrap): RunningApp {
   let dpiAwareness = 'unknown';
   const win32 = createWin32Api(watchDpiAwareness(logger, (a) => (dpiAwareness = a)));
   if (!win32.available) dpiAwareness = 'unavailable';
-  const display = createDisplayService(logger);
+  const display = createDisplayService(logger, platform.coordinates);
   const tracker = createWindowTracker(win32, logger);
-  const activity = createActivityMonitor(win32, logger);
+  // Off Windows (no GetLastInputInfo): system idle time in whole seconds (ADR 0004 §3).
+  const activity = createActivityMonitor(win32, logger, win32.available ? {} : { idleProvider: () => powerMonitor.getSystemIdleTime() * 1000, idleResolutionMs: 1000 });
   const initial = settings.get();
   // Title patterns only while screen analysis is enabled: otherwise no window title is read.
   const applyWindowExclusions = (s: Settings): void => {
@@ -178,7 +221,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
   };
   let perception: PerceptionService | null = null;
   try {
-    perception = createPerceptionService({ logger, host: perceptionHost, secrets, settings: initial });
+    perception = createPerceptionService({ logger, host: perceptionHost, secrets, settings: initial, toWorldRect: (r) => platform.coordinates.rectToWorld(null, r) });
   } catch (err) {
     log.error('perception unavailable', { error: err });
   }
@@ -203,7 +246,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
   const behaviorLog = createBehaviorLog(logger.child('behavior'));
   let surfaceSummaryTimer: ReturnType<typeof setInterval> | null = null;
 
-  const cursorFallback = () => screen.dipToScreenPoint(screen.getCursorScreenPoint());
+  const cursorFallback = () => platform.coordinates.cursorFallback();
   const settingsWindow = createSettingsWindowController({
     preloadPath: path.join(preloadDir, 'settings.js'),
     registry,
@@ -223,6 +266,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     logDir: logger.logDir,
     packaged: app.isPackaged,
     test: boot.flags.test,
+    platformSupported: platform.loginItemSupported,
     launchedAtLogin: boot.flags.launchedAtLogin,
     env: process.env,
     settingsLoadStatus: boot.settingsLoadStatus,
@@ -259,6 +303,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       loginItem: loginItem.status(),
       shortcutRegistered: shortcuts.registered,
       startedAt: boot.startedAt,
+      platform: platformReport(),
     };
   }
 
@@ -311,7 +356,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
     save: saveAllSync,
     logger: logger.child('session-end'),
     clock: () => performance.now(),
-    createWindow: (): SessionEndWindow => {
+    // Windows only (ADR 0004 §3): macOS and Linux save on powerMonitor 'shutdown' below.
+    createWindow: !platform.sessionEndWindow ? undefined : (): SessionEndWindow => {
       const win = new BaseWindow({ show: false, width: 1, height: 1, frame: false, skipTaskbar: true, focusable: false, resizable: false });
       return {
         onSessionEnd: (listener) => {
@@ -324,6 +370,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
       };
     },
   });
+  const onPowerShutdown = (): void => sessionEnd.notify('power-shutdown');
+  if (platform.saveOnPowerShutdown) powerMonitor.on('shutdown', onPowerShutdown);
 
   function buildReport(): Record<string, unknown> {
     const h = requireHost();
@@ -399,6 +447,18 @@ export function startApp(boot: AppBootstrap): RunningApp {
     void actions.run(a);
   };
 
+  // Linux X11 (review H3): overlays only while a compositing manager runs; checked at start and every 10 s.
+  let overlayGate: { allowed: boolean; reason: string | null } = { allowed: true, reason: null };
+  const compositor = platform.x11CompositorRequired ? createX11CompositorProbe() : null;
+  const allowOverlays = compositor
+    ? () => {
+        const state = compositor.check();
+        overlayGate =
+          state === 'present' ? { allowed: true, reason: null } : { allowed: false, reason: state === 'unknown' ? `${NO_COMPOSITOR_REASON} (${compositor.error ?? 'X11 query failed'})` : NO_COMPOSITOR_REASON };
+        return overlayGate;
+      }
+    : undefined;
+
   const overlays = createOverlayManager({
     logger: logger.child('overlay'),
     display,
@@ -429,6 +489,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
     },
     isLeftButtonDown: () => (win32.available ? win32.isLeftButtonDown() : null),
     clock: () => performance.now(),
+    profile: platform.overlayProfile,
+    rectToWorld: (win, r) => platform.coordinates.rectToWorld(win, r),
+    allowOverlays,
   });
   // v1.1.1 on-desktop surface outlines: session-only debug aid, off at every start (never a setting).
   // They stay off displays with a fullscreen app in front unless the cat ignores those (the overlay
@@ -447,12 +510,32 @@ export function startApp(boot: AppBootstrap): RunningApp {
         logger: logger.child('tray'),
         onAction: runAction,
         onClick: () => runAction(requireHost().hidden ? 'show' : 'hide'),
+        balloons: platform.trayBalloons,
       });
     } catch (err) {
       log.error('tray unavailable', { error: err });
       return null;
     }
   })();
+
+  function platformReport(): PlatformReport {
+    const s = surfaces.status;
+    return runtimeCapabilities(platform.id, {
+      overlayAllowed: platform.overlayProfile.create && overlayGate.allowed,
+      overlayBlockedReason: platform.overlayProfile.reason ?? overlayGate.reason,
+      displayCount: display.world.displays.length,
+      nativeCursor: win32.available,
+      windowAwareness: tracker.mode,
+      taskbarsAvailable: s.taskbar === 'tracked',
+      tabStripsAvailable: s.tabStrips !== 'unavailable',
+      secretStorageReason: secrets.unavailableReason,
+      trayCreated: tray !== null,
+      shortcutRegistered: shortcuts.registered,
+      loginItemWritable: platform.loginItemSupported && loginItem.status().writable,
+      loginItemReason: platform.loginItemSupported ? (loginItem.status().reason ?? null) : CAPABILITY_MATRIX[platform.id].loginItem.note,
+      sandboxed: !app.commandLine.hasSwitch('no-sandbox'),
+    });
+  }
 
   const broadcast = createThrottle(
     () => {
@@ -600,6 +683,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
         },
       ],
       ['session-end window', () => sessionEnd.dispose()],
+      ['power shutdown listener', () => powerMonitor.removeListener('shutdown', onPowerShutdown)],
       ['window tracker', () => tracker.stop()],
       ['activity monitor', () => activity.stop()],
       ['perception', () => perception?.dispose()],
@@ -709,6 +793,14 @@ export function startApp(boot: AppBootstrap): RunningApp {
     launchedAtLogin: boot.flags.launchedAtLogin,
     startState: plan.view,
     test: boot.flags.test,
+  });
+  // GizeVerse (ADR 0004 §2.2): what this platform can do here, by capability id (no values).
+  attempt(log, 'platform capabilities', () => {
+    const report = platformReport();
+    const unavailable = Object.entries(report.capabilities)
+      .filter(([, c]) => !c.available)
+      .map(([id]) => id);
+    log.info('platform capabilities', { id: report.id, unavailable });
   });
 
   // Opened by the app itself, not by the user: never request the foreground (see OpenOptions.activate).
