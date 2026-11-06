@@ -16,16 +16,10 @@ files:
   - THIRD_PARTY_NOTICES.md
   - "!**/*.map"
 asar: true
-# UI Automation helper (browser tab strips), spawned from <resources>/native; absent when the
-# build machine has no csc.exe (the feature then reports itself unavailable).
-extraResources:
-  - from: out/native/DesktopCatUia.exe
-    to: native/DesktopCatUia.exe
-asarUnpack:
-  - node_modules/koffi/**
-  - node_modules/@koromix/koffi-win32-x64/**
 extraMetadata:
   main: out/main/index.js
+# GizeVerse (ADR 0004 §11): every platform section lists its own native files. The Windows
+# section carries exactly the entries that were top-level up to v1.2 (payload unchanged).
 win:
   target:
     - target: nsis
@@ -33,6 +27,47 @@ win:
   icon: build/icon.ico
   executableName: DesktopCat
   requestedExecutionLevel: asInvoker
+  # UI Automation helper (browser tab strips), spawned from <resources>/native; absent when the
+  # build machine has no csc.exe (the feature then reports itself unavailable).
+  extraResources:
+    - from: out/native/DesktopCatUia.exe
+      to: native/DesktopCatUia.exe
+  asarUnpack:
+    - node_modules/koffi/**
+    - node_modules/@koromix/koffi-win32-x64/**
+# Linux (ADR 0004 §11): IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED; built in a container only.
+# deb/rpm need a homepage and a maintainer e-mail, which the owner has not chosen yet.
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: tar.gz
+      arch: [x64]
+  category: Utility
+  icon: build/icon.png
+  # Frozen with the other identifiers (ADR 0004 §9): launchers and later autostart entries use it.
+  executableName: desktop-cat
+  synopsis: GizeCat, a desktop cat (GizeVerse)
+  description: An animated cat in a transparent, click-through overlay. Shown only on X11 sessions with a compositing window manager.
+  artifactName: GizeCat-${version}-linux-${arch}.${ext}
+  # koffi binds libX11 for the compositor check (src/main/linux/x11Compositor.ts).
+  asarUnpack:
+    - node_modules/koffi/**
+    - node_modules/@koromix/koffi-linux-x64/**
+# macOS (ADR 0004 §11): IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED; needs a Mac to build, and a
+# Developer ID plus notarization to distribute. koffi is not used on macOS, so it is not shipped.
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  category: public.app-category.utilities
+  icon: build/icon.png
+  artifactName: GizeCat-${version}-mac-${arch}.${ext}
+  files:
+    - "!node_modules/koffi/**"
+    - "!node_modules/@koromix/**"
 nsis:
   oneClick: false
   perMachine: false

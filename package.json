@@ -24,6 +24,9 @@
     "icons": "electron scripts/gen-icons.cjs",
     "package": "node scripts/build.mjs && electron-builder --win nsis --publish never",
     "package:dir": "node scripts/build.mjs && electron-builder --win dir --publish never",
+    "package:linux": "node scripts/build.mjs && electron-builder --linux AppImage tar.gz --publish never",
+    "package:mac": "node scripts/build.mjs && electron-builder --mac dmg zip --publish never",
+    "capability-matrix": "node scripts/capability-matrix.mjs",
     "check": "npm run typecheck && npm run lint && npm test",
     "verify": "node scripts/with-lock.mjs verify -- npm run check"
   },
