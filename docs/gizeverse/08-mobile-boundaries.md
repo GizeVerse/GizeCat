@@ -1,0 +1,42 @@
+# GizeVerse on Android and iOS/iPadOS: experience boundaries
+
+Status: 2026-11-06, branch `feat/gizeverse-foundation`. Research and design only: **no native mobile code exists**, and no physical phone or tablet was used. Source ids (M1–M17) refer to [00-baseline-audit.md](00-baseline-audit.md), "Sources"; those marked [\*] there were not opened by the auditor and are UNVERIFIED as quoted.
+
+## The short answer
+
+- A desktop-style GizeCat **over other apps is not possible on iOS** and is **not a fit on Android**.
+- The mobile GizeCat is the **web host**: the same character, simulation and renderer, inside a page, driven by touch (ADR 0004 §8). Status: see the web, Android and iOS columns of the [capability matrix](capability-matrix.md).
+
+## Android
+
+| Option | What it gives | Blocker or cost | Status |
+|---|---|---|---|
+| Web host in Chrome for Android | The full character in a tab; touch gestures; persistence | In-page only; throttled or frozen in the background (M2, M3) | Built as the web host. On Android: SIMULATED_OR_MOCK_TESTED via desktop Chrome's device emulation at best; real Android Chrome not run unless an own-AVD emulator run is recorded in the web-host report |
+| Capacitor/WebView app wrapping the web host | Store distribution, home-screen icon | A second build and store review; same in-app limits (M5) | NOT_IMPLEMENTED |
+| `SYSTEM_ALERT_WINDOW` overlay over other apps | Something close to the desktop cat | Needs the "Display over other apps" permission, which Play reviews (M9). Since Android 12, touches pass through an overlay only if it is at most 80 % opaque (M6), so a full-screen click-through overlay is ruled out. A visible overlay also needs a foreground service whose type Play accepts (M7, M8). Impossible on Go devices. | BLOCKED_BY_PLATFORM_OR_PERMISSION for the desktop design; a small touchable bubble window is a different product: NOT_IMPLEMENTED |
+| Live wallpaper | A cat living on the home screen | Home screen only; animates only while visible (M10) | NOT_IMPLEMENTED; research candidate |
+| Widgets, bubbles, picture-in-picture | — | Widgets are not continuously animated (M11); bubbles are for conversations (M12); picture-in-picture is for video (M13). Using them for a pet risks policy rejection. | Not recommended |
+
+## iOS and iPadOS
+
+| Option | What it gives | Blocker or cost | Status |
+|---|---|---|---|
+| Web host in Safari | The character in a tab | In-page only; suspended in the background; WebKit differences not tested (no Safari or iOS device here) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED once the web host exists (the code is plain web, but it has never run in WebKit) |
+| Overlay over other apps | — | iOS has no public API for drawing over other apps | BLOCKED_BY_PLATFORM_OR_PERMISSION |
+| WidgetKit, Live Activities | A glanceable cat on the Home or Lock Screen | Archived snapshots with a reload budget, not continuous animation; Live Activities are time-limited and carry at most 4 KB of attributes (M14–M16) | NOT_IMPLEMENTED; research candidate for a "status" companion |
+| Native or WKWebView app | An in-app character | App Store guideline 4.2 (minimum functionality) applies to thin web wrappers (M17) | NOT_IMPLEMENTED |
+
+## What the shared core already gives a future mobile app
+
+- **Behaviour.** The simulation (`src/core`) is platform-agnostic and deterministic for a seed (ESLint-enforced). It runs unchanged in a browser bundle (REAL, esbuild `--platform=browser`).
+- **Art.** The renderer draws with Canvas 2D only, and depends on the host only through `OverlayApi`.
+- **Touch.** The web host translates touch into the gesture recognizer's vocabulary (tap, stroke to pet, hold to drag, fling to throw) without changing the desktop's gesture rules.
+- **Not shared yet:**
+  - Persistence formats stay per host (desktop JSON files, web localStorage). A cross-device sync of the cat's memory would need a server, and that is outside the privacy design: no network by default.
+  - Perception is desktop-only and off by default. Mobile screen capture needs per-session OS consent (Android MediaProjection) or does not exist for third-party apps (iOS), so GizeCat does not offer it on mobile.
+
+## Recommendation
+
+1. Ship and verify the web host first; it is the only mobile experience this project can test.
+2. If a store app is wanted, wrap the web host with Capacitor. Run the store review question (guideline 4.2) first.
+3. Keep Android overlays and live wallpapers as research items. Do not build an overlay that relies on the 80 % opacity rule; it would not match the product.

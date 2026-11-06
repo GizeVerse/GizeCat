@@ -1,0 +1,12 @@
+{
+  "a": ".claude/state/gv/pkg-before/win-unpacked",
+  "b": ".claude/state/gv/pkg-after/win-unpacked",
+  "files": {
+    "a": 144,
+    "b": 144
+  },
+  "onlyA": [],
+  "onlyB": [],
+  "differ": [],
+  "identical": true
+}
