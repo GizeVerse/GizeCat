@@ -2,6 +2,8 @@
 // titles, process lists, images or the user's profile path (it holds the Windows
 // account name); exclusion lists are reduced to counts and the whole report is
 // passed through redaction once more. Pure.
+import type { CatHostDebug, ClickGuardStats } from '../catHost';
+import type { OverlayInteractionStats } from '../overlay/overlayManager';
 import type { BehaviorProfileSnapshot } from '../../shared/behaviorProfile';
 import { parseBehaviorProfile } from '../../shared/behaviorProfileSchema';
 import { IDENTITY } from '../../shared/identity';
@@ -33,9 +35,49 @@ export interface DiagnosticsInput {
    * session; never which windows or apps). Missing or invalid: the section is null.
    */
   behaviorProfile?: BehaviorProfileSnapshot | null;
+  /**
+   * Long-run interaction counters (diagnosis F8): the overlay press path, the T8 click guard (time
+   * per reason, episodes, fail-closed polls) and the lock/suspend recoveries. Exported as the
+   * `interaction` section, numbers and booleans only (exportedInteraction).
+   */
+  interaction?: InteractionDiagnostics | null;
   services: Record<string, unknown>;
   resources: readonly ResourceSample[];
   logs: readonly LogEntry[];
+}
+
+export interface InteractionDiagnostics {
+  overlays: OverlayInteractionStats | null;
+  clickGuard: ClickGuardStats | null;
+  lifecycle: CatHostDebug['lifecycle'] | null;
+}
+
+const INTERACTION_MAX_DEPTH = 3;
+
+/** Finite numbers and booleans of a plain object tree; strings, arrays and anything deeper are dropped. */
+function countersOnly(v: unknown, depth: number): unknown {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'boolean') return v;
+  if (v === null || typeof v !== 'object' || Array.isArray(v) || depth >= INTERACTION_MAX_DEPTH) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    const c = countersOnly(x, depth + 1);
+    if (c !== undefined) out[k] = c;
+  }
+  return out;
+}
+
+/**
+ * The `interaction` section: only the counters (finite numbers, booleans), so no id, title, path or
+ * rect can reach the export through it whatever a source adds later. Missing input: null. Never throws.
+ */
+export function exportedInteraction(input: InteractionDiagnostics | null | undefined): Record<string, unknown> | null {
+  if (!input) return null;
+  return {
+    overlays: input.overlays ? countersOnly(input.overlays, 0) : null,
+    clickGuard: input.clickGuard ? countersOnly(input.clickGuard, 0) : null,
+    lifecycle: input.lifecycle ? countersOnly(input.lifecycle, 0) : null,
+  };
 }
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {
@@ -113,6 +155,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): Record<string, 
     cat: input.cat,
     surfaces: input.surfaces ?? null,
     behaviorProfile: exportedBehaviorProfile(input.behaviorProfile),
+    interaction: exportedInteraction(input.interaction),
     services: input.services,
   };
   // Resource samples are plain numbers and would be truncated by the generic redactor.

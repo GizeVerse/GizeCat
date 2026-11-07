@@ -12,7 +12,7 @@ import type { PerceptionStatus } from '../shared/perception';
 import { CAPABILITY_MATRIX, type PlatformReport } from '../shared/platform';
 import type { Settings } from '../shared/settings';
 import { parseSurfaceDiagnostics } from '../shared/surfaceDiagnosticsSchema';
-import { createCatHost, type CatHost } from './catHost';
+import { createCatHost, perceptionPausedFor, type CatHost } from './catHost';
 import type { Logger, PerceptionHost, PerceptionService } from './contracts';
 import { buildDiagnosticsReport } from './diagnostics/diagnosticsReport';
 import { watchDpiAwareness } from './diagnostics/dpiAwareness';
@@ -187,7 +187,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
     isExcludedAt: (p) => tracker.isExcludedAt(p),
     getExcludedRects: () => tracker.getExcludedRects(),
     isForegroundExcluded: () => tracker.isForegroundExcluded(),
-    isLocked: () => host?.locked ?? false,
+    // An unconfirmed unlock (cleared on the OS's word alone) still counts as locked for the privacy gate.
+    isLocked: () => (host ? host.locked || host.unlockUnconfirmed : false),
   };
   let perception: PerceptionService | null = null;
   try {
@@ -345,6 +346,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
 
   function buildReport(): Record<string, unknown> {
     const h = requireHost();
+    const hostDebug = h.debug();
     return buildDiagnosticsReport({
       generatedAt: new Date(),
       versions: { app: version, electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node, v8: process.versions.v8 },
@@ -357,8 +359,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
       cat: sim.debugInfo(),
       surfaces: surfaceDiagnostics.get().diagnostics,
       behaviorProfile: sim.behaviorProfile(),
+      interaction: { overlays: overlays.interactionStats(), clickGuard: hostDebug.clickGuardStats, lifecycle: hostDebug.lifecycle },
       services: {
-        host: h.debug(),
+        host: hostDebug,
         overlays: overlays.info().map(({ hwnd: _hwnd, ...o }) => o),
         windowTracker: tracker.debugInfo(),
         surfaces: surfaces.debugInfo(),
@@ -549,10 +552,21 @@ export function startApp(boot: AppBootstrap): RunningApp {
     timeScale: boot.timeScale,
     surfaces,
     taskbars,
+    // Diagnosis H5: the lock is re-derived on resume and while held, so a lost unlock-screen event
+    // cannot block the cat for good. Windows only: elsewhere 'locked' may be unsupported, and an
+    // unknown state must never end a lock (perception pauses while locked).
+    isSystemLocked:
+      platform.id === 'win32'
+        ? () => {
+            const s = powerMonitor.getSystemIdleState(1);
+            return s === 'locked' ? true : s === 'active' || s === 'idle' ? false : null;
+          }
+        : undefined,
     onStatusChange: () => {
       const h = host;
       if (h) {
-        perception?.setPaused(h.hidden || h.locked);
+        // A lock the host let go of on the OS's word alone keeps perception paused (docs/PRIVACY.md).
+        perception?.setPaused(perceptionPausedFor(h));
         attempt(log, 'remember cat state', () => viewMemory.update(h));
       }
       refreshUi();
@@ -619,6 +633,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
     host?.onSystem('suspend');
     saveAllSync();
   };
+  // The host resets the overlays' input state (overlays.noteResume) on resume and unlock, and also
+  // when it recovers one of them itself (diagnosis F3/F5).
   const onResume = (): void => host?.onSystem('resume');
   const onLock = (): void => {
     host?.onSystem('lock');
@@ -626,7 +642,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
   };
   const onUnlock = (): void => {
     host?.onSystem('unlock');
-    if (host) perception?.setPaused(host.hidden);
+    if (host) perception?.setPaused(perceptionPausedFor(host));
   };
   powerMonitor.on('suspend', onSuspend);
   powerMonitor.on('resume', onResume);
@@ -739,6 +755,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
     openSettings: () => settingsWindow.open(),
     saveNow: saveAllSync,
     quit: () => app.quit(),
+    // The same closures powerMonitor calls (onLock, onUnlock, onSuspend, onResume above).
+    systemEvent: (kind) => ({ lock: onLock, unlock: onUnlock, suspend: onSuspend, resume: onResume })[kind](),
+    interactionOverlays: overlays,
   });
 
   // Start everything. The start state is applied before the first tick, so a cat that

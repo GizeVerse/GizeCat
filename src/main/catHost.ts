@@ -15,9 +15,27 @@
 // - clickGuardRectsPx(): the T8 guard. While the cat clings to a screen edge, while it flies to or
 //   from one, and while it bails out of a covered or vanished window ledge, every obstacle window
 //   meeting its bounds (GetWindowRect grown by 8 DIP) is cut out of its hit region. Anywhere else,
-//   the floor next to a screen side included, it takes the mouse as usual. Fail closed: a stale,
-//   incomplete or failing obstacle source makes the whole cat click-through in those states. The
+//   the floor next to a screen side included, it takes the mouse as usual. Fail closed: a stale (past
+//   a 250 ms grace, see below), incomplete or failing obstacle source makes the whole cat
+//   click-through in those states. The
 //   overlay manager asks only with the cursor on the cat: otherwise no window is read or hooked.
+//
+// Long-run hardening (diagnosis H2, H5, H8; 2026-11):
+// - A bail-out guard episode starts when the window support is reported covered or gone, or when the
+//   cat leaves a lost window support (the bail-out crouch, take-off or drop the Mover reports through
+//   support and jumpKind); it ends on the landing (floor, a listed surface, a wall caught after the
+//   leap, or a grab) and never spends longer than BAIL_GUARD_MAX_MS grounded (time in the air does
+//   not count; BAIL_GUARD_CEILING_MS in all). A support that stays unlisted while the cat keeps
+//   standing on it starts no second episode.
+// - A momentarily stale obstacle list reuses the last fresh one for at most OBSTACLE_STALE_GRACE_MS
+//   (the ADR's 250 ms cache age); after that, and on any failing read, the guard still fails closed.
+// - The lock flag is re-derived on resume and every LOCK_RECHECK_MS while set, and cleared on native
+//   input after the lock, so a lost unlock event cannot block interaction for good. A lock cleared on
+//   the OS's word alone (the probe) restores interaction only: perceptionPausedFor() keeps perception
+//   paused until an unlock event or native input confirms the user is back (docs/PRIVACY.md).
+// - Every resume and unlock, seen or recovered by the host, resets the overlays' input state
+//   (HostOverlays.noteResume).
+// - The event caps never drop pointer, lifecycle, system or command events.
 import { distanceToRect } from '../core/display/displayMath';
 import { EVERYWHERE, suggestPollIntervalMs, wallGuardRects } from '../core/interaction/clickThrough';
 import { CAT_BASE_WIDTH_DIP, type BehaviorState } from '../shared/cat';
@@ -28,6 +46,7 @@ import { SCREEN_EDGE_KIND, type ScreenEdgeBand, type Surface } from '../shared/s
 import type { WorldGeometry } from '../shared/world';
 import { simWorld } from '../core/display/simWorld';
 import type { ActivityMonitor, DisplayService, Logger, PerceptionService, SurfaceProvider, TaskbarTracker, Win32Api, WindowTracker } from './contracts';
+import type { OverlayInteractionStats } from './overlay/overlayManager';
 import { BODY_MARGIN_SIDE_DIP, presenceRectPx } from './overlay/renderMapping';
 import type { CatPosition, ScreenEdgeGuard } from './surfaces/hostTypes';
 import { bandXRange } from './surfaces/edgeBands';
@@ -40,7 +59,14 @@ export const MAX_DT_MS = 250;
 export const MAX_CATCHUP_MS = 1000;
 const HIDDEN_MIN_TICK_MS = 250;
 const HIDDEN_POLL_MS = 500;
-const MAX_EVENTS_PER_TICK = 64;
+export const MAX_EVENTS_PER_TICK = 64;
+/** Queued events beyond this are trimmed, the oldest non-priority ones first. */
+export const MAX_PENDING_EVENTS = MAX_EVENTS_PER_TICK * 4;
+/**
+ * Memory bound for a host that is not ticking (stopped): only then can priority events pile up this
+ * far (a ticking host drains the queue at least once a second, the IPC layer rate-limits pointers).
+ */
+export const PENDING_HARD_CAP = 4096;
 export const PLATFORM_MAX_AGE_MS = 1000;
 /** While hidden the surface set is fully re-read at most this often (event-driven updates still apply). */
 export const HIDDEN_SURFACE_MAX_AGE_MS = 5000;
@@ -70,6 +96,53 @@ const GUARD_DISARM_AFTER_MS = 2000;
 /** Window surfaces whose loss (covered, gone) starts a bail-out guard. */
 const WINDOW_SURFACE_KINDS: ReadonlySet<string> = new Set(['windowTop', 'tabStrip', 'windowSide']);
 const BAIL_SPAN_TOLERANCE_PX = 2;
+/**
+ * Longest time a bail-out guard episode may spend grounded (ms). The Mover takes off within
+ * bailOutMaxDelayMs (600 ms) of a cover; longer on the ground means the cat is still standing on a
+ * support the list no longer holds, which is no bail-out (diagnosis H2). Time in the air does not
+ * count: a drop from a high ledge on a tall screen takes well over a second, and ending the guard
+ * mid-fall would hand the covering window's clicks to the falling cat.
+ */
+export const BAIL_GUARD_MAX_MS = 1500;
+/** No bail-out guard episode outlasts this, whatever the support says (a fall from the top of the tallest screen takes under 2 s). */
+export const BAIL_GUARD_CEILING_MS = 10_000;
+/** A stale obstacle list reuses the last fresh one this long (ms; ADR 0003 §6.1(a) cache age) before failing closed. */
+export const OBSTACLE_STALE_GRACE_MS = 250;
+/** Click-guard info lines at most this often (ms); the suppressed ones are counted into the next. */
+export const GUARD_LOG_GAP_MS = 15_000;
+/** While the host holds the session locked, the OS lock state is re-checked this often (ms). */
+export const LOCK_RECHECK_MS = 10_000;
+/** Native input seen at least this long after a lock event is evidence the session is unlocked (ms). */
+export const LOCK_INPUT_SETTLE_MS = 2000;
+/** Input-driven lock re-checks at most this often (ms). */
+const LOCK_INPUT_PROBE_GAP_MS = 1000;
+
+/** Why the T8 click guard holds. */
+export type GuardReason = 'band' | 'edgeFlight' | 'bailOut';
+
+/** v1.2 long-run counters of the click guard (diagnostics export; counts and ms only). */
+export interface ClickGuardStats {
+  /** Episodes per reason (a reason taking over counts as a new episode). */
+  episodes: Record<GuardReason, number>;
+  /** Time the cat spent in each guard phase, whether or not the cursor was on it (ms). */
+  timeInGuardMs: Record<GuardReason, number>;
+  /** The longest single episode (ms). */
+  longestEpisodeMs: number;
+  /** Bail-out episodes ended by BAIL_GUARD_MAX_MS rather than by a landing. */
+  bailOutsCapped: number;
+  /** Polls the guard answered with EVERYWHERE (stale past the grace, failing or throwing source). */
+  failClosedPolls: number;
+  /** Polls answered from the last fresh obstacle list within OBSTACLE_STALE_GRACE_MS. */
+  staleGracePolls: number;
+  /** Polls answered from a fresh obstacle list. */
+  activePolls: number;
+}
+
+/** Events the caps never drop (diagnosis H8): the user's pointer, lifecycle, system and command events. */
+export function isPriorityEvent(ev: SimEvent): boolean {
+  const t = ev.type;
+  return t.startsWith('pointer.') || t.startsWith('lifecycle.') || t.startsWith('system.') || t.startsWith('command.') || t === 'display.changed';
+}
 
 /** The surface provider as the host uses it (noteCat is the provider's host-feedback extra; v1.2 edge bands and guard state). */
 export type HostSurfaceProvider = SurfaceProvider & {
@@ -85,6 +158,13 @@ export interface HostOverlays {
   readonly dragging: boolean;
   readonly pressed: boolean;
   readonly interactive: boolean;
+  /** Press-path counters (diagnosis F8), shown in the host debug state when the overlays keep them. */
+  interactionStats?(): OverlayInteractionStats;
+  /**
+   * After a resume or unlock, whether an OS event reported it or the host recovered it: forget press,
+   * hover and clock state from before (OverlayManager.noteResume).
+   */
+  noteResume?(): void;
 }
 
 export interface HostTimers {
@@ -116,6 +196,12 @@ export interface CatHostOptions {
   surfaces?: HostSurfaceProvider | null;
   /** Taskbar observer, sampled from the cursor-poll timer at the rate it asks for. */
   taskbars?: TaskbarTracker | null;
+  /**
+   * The OS's own lock state where it can tell (powerMonitor.getSystemIdleState(1) === 'locked'), else
+   * null. Read on resume, every LOCK_RECHECK_MS while the host holds the session locked, and on input
+   * after a lock; never polled while unlocked.
+   */
+  isSystemLocked?: () => boolean | null;
 }
 
 export interface CatHostDebug {
@@ -134,9 +220,15 @@ export interface CatHostDebug {
   /** Delay before the next taskbar sample (ms), null without a taskbar tracker. */
   taskbarDelayMs: number | null;
   /** v1.2 T8 screen-edge click guard: state, why it is on, and how often it failed closed. */
-  clickGuard: { state: ScreenEdgeGuard['state']; reason: 'band' | 'edgeFlight' | 'bailOut' | null; failClosed: number; rects: number; armed: boolean };
+  clickGuard: { state: ScreenEdgeGuard['state']; reason: GuardReason | null; failClosed: number; rects: number; armed: boolean };
+  /** Long-run counters of the click guard (time per reason, episodes, fail-closed polls). */
+  clickGuardStats: ClickGuardStats;
   /** v1.2: edge bands handed to the sim on the last tick (null: none, the host has no guard). */
   edgeBands: number | null;
+  /** Session lock and suspend bookkeeping: how often a lost unlock or resume was recovered. */
+  lifecycle: { suspended: boolean; locks: number; lockRecoveries: number; resumeRecoveries: number };
+  /** The overlays' press-path counters (null: the overlays keep none). */
+  interaction: OverlayInteractionStats | null;
 }
 
 export interface CatHost {
@@ -146,6 +238,11 @@ export interface CatHost {
   readonly paused: boolean;
   readonly hidden: boolean;
   readonly locked: boolean;
+  /**
+   * The host let go of a lock on the OS's word alone (the lock probe), with no unlock event or native
+   * input since: interaction is back, perception stays paused (perceptionPausedFor).
+   */
+  readonly unlockUnconfirmed: boolean;
   setPaused(paused: boolean): void;
   setHidden(hidden: boolean): void;
   /** Calls the cat to `at` (default: the cursor); shows it first if hidden. */
@@ -182,6 +279,15 @@ export interface CatHost {
   /** Test mode only (E2E, via test hooks): the sim sees `ms` as the user's idle time; null restores the real one. */
   setInjectedUserIdle(ms: number | null): void;
   debug(): CatHostDebug;
+}
+
+/**
+ * Whether perception must be paused for this host state (app.ts applies it on every status change and
+ * on the unlock event): hidden, locked, or a lock the host let go of on the OS's word alone, not yet
+ * confirmed by an unlock event or native input (docs/PRIVACY.md: never analyse an away session).
+ */
+export function perceptionPausedFor(h: Pick<CatHost, 'hidden' | 'locked' | 'unlockUnconfirmed'>): boolean {
+  return h.hidden || h.locked || h.unlockUnconfirmed;
 }
 
 /** No extra click-guard rects (the guard is not needed right now). */
@@ -254,15 +360,49 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   let edgeBands: readonly ScreenEdgeBand[] | null = null;
   /** The cat flies to or from a screen edge (left one, or a leap / wall jump near a band) until it lands. */
   let edgeFlight = false;
-  /** The window ledge or side under the cat is covered or gone: guarded from then until it lands. */
-  let bailGuard = false;
+  /**
+   * A bail-out guard episode: since when, what started it (see the header), and its grounded time
+   * (ms grounded up to `at`, and whether the cat was grounded from `at` on).
+   */
+  let bail: { since: number; why: 'covered' | 'tookOff'; groundedMs: number; at: number; grounded: boolean } | null = null;
+  /** A support whose unlisted spell already had its (capped) episode: no second one until it changes or is listed again. */
+  let bailSpent: string | null = null;
   let guard: ScreenEdgeGuard = { state: input === null ? 'off' : 'idle', failClosed: 0 };
-  let guardReason: CatHostDebug['clickGuard']['reason'] = null;
+  let guardReason: GuardReason | null = null;
   let guardRects = 0;
   let armed = false;
   let guardNeededAt = Number.NEGATIVE_INFINITY;
   /** An overlay asked for the guard rects since the last poll started. */
   let guardAsked = false;
+  /** The last obstacle list the source called fresh, and when: reused within OBSTACLE_STALE_GRACE_MS. */
+  let lastFreshObstacles: { rects: readonly Rect[]; at: number } | null = null;
+  /** The guard phase of the last tick and since when (time-in-guard accounting). */
+  let phase: GuardReason | null = null;
+  let phaseSince = 0;
+  const guardStats: ClickGuardStats = {
+    episodes: { band: 0, edgeFlight: 0, bailOut: 0 },
+    timeInGuardMs: { band: 0, edgeFlight: 0, bailOut: 0 },
+    longestEpisodeMs: 0,
+    bailOutsCapped: 0,
+    failClosedPolls: 0,
+    staleGracePolls: 0,
+    activePolls: 0,
+  };
+  const guardLogs = { episode: { at: Number.NEGATIVE_INFINITY, suppressed: 0 }, alert: { at: Number.NEGATIVE_INFINITY, suppressed: 0 } };
+
+  // ---- session lock and suspend (diagnosis H5)
+  let lockedAt = Number.NEGATIVE_INFINITY;
+  let lockCheckAt = Number.POSITIVE_INFINITY;
+  let lockInputProbeAt = Number.NEGATIVE_INFINITY;
+  /** Native cursor and press count when the session locked or suspended: input past them means it is back. */
+  let awayMark: { at: number; cursor: Point | null; presses: number | null } | null = null;
+  let suspended = false;
+  /** A lock cleared on the OS's word alone, not yet confirmed by an unlock event or native input. */
+  let unlockUnconfirmed = false;
+  let hardCapDrops = 0;
+  /** The last cursor read from Win32 itself (null: none, or it failed: GetCursorPos fails while locked). */
+  let nativeCursor: Point | null = null;
+  const lifecycleStats = { locks: 0, lockRecoveries: 0, resumeRecoveries: 0 };
 
   function sampleButtons(): void {
     if (input === null || !input.available) return;
@@ -332,24 +472,127 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     return (s.orientation === 'ledge' && (out.jumpKind ?? null) === null) || supportLost(prev, lastSurfaces);
   }
 
-  /** After each tick: edge flights and bail-outs start and end with the support. */
-  function trackGuardPhases(prev: SimOutput | null, out: SimOutput): void {
+  /**
+   * Info line about the click guard, per channel at most one per GUARD_LOG_GAP_MS (the suppressed ones
+   * are counted into the next): `episode` for every ended episode, `alert` for capped bail-outs and
+   * fail-closed spells, so routine episodes never hide those.
+   */
+  function guardLog(channel: 'episode' | 'alert', msg: string, data: Record<string, unknown>, t: number): void {
+    const c = guardLogs[channel];
+    if (t - c.at < GUARD_LOG_GAP_MS) {
+      c.suppressed++;
+      return;
+    }
+    c.at = t;
+    log.info(msg, c.suppressed > 0 ? { ...data, suppressed: c.suppressed } : data);
+    c.suppressed = 0;
+  }
+
+  function startBail(t: number, why: 'covered' | 'tookOff', out: SimOutput): void {
+    bail = { since: t, why, groundedMs: 0, at: t, grounded: out.support.kind !== 'air' };
+  }
+
+  /** Time the episode spent grounded up to `t` (the support of the last output holds between ticks). */
+  function bailGroundedMs(t: number): number {
+    if (bail === null) return 0;
+    return bail.groundedMs + (bail.grounded ? Math.max(0, t - bail.at) : 0);
+  }
+
+  /** On each tick: books the time since the last one, then whether the cat is grounded from now on. */
+  function noteBailSupport(t: number, out: SimOutput): void {
+    if (bail === null) return;
+    bail.groundedMs = bailGroundedMs(t);
+    bail.at = t;
+    bail.grounded = out.support.kind !== 'air';
+  }
+
+  function endBail(t: number, why: 'landed' | 'held' | 'capped'): void {
+    if (bail === null) return;
+    const data = { reason: 'bailOut', ms: Math.round(t - bail.since), groundedMs: Math.round(bailGroundedMs(t)), start: bail.why, end: why };
+    bail = null;
+    if (why === 'capped') guardStats.bailOutsCapped++;
+    guardLog(why === 'capped' ? 'alert' : 'episode', 'click guard episode', data, t);
+  }
+
+  /**
+   * The cap: BAIL_GUARD_MAX_MS grounded (time in the air never counts, so a long drop stays guarded
+   * to its landing), BAIL_GUARD_CEILING_MS in all. It holds also between ticks (a stalled or slow tick
+   * loop cannot stretch an episode).
+   */
+  function expireBail(t: number, out: SimOutput | null): void {
+    if (bail === null || (bailGroundedMs(t) < BAIL_GUARD_MAX_MS && t - bail.since < BAIL_GUARD_CEILING_MS)) return;
+    if (out && supportLost(out, lastSurfaces) && out.support.kind === 'surface') bailSpent = out.support.surfaceId;
+    endBail(t, 'capped');
+  }
+
+  /** Why the guard holds for this output (null: it does not). */
+  function phaseOf(out: SimOutput | null): GuardReason | null {
+    if (!out || !out.visible || hidden) return null;
+    if (bail !== null) return 'bailOut';
+    if (edgeFlight) return 'edgeFlight';
+    return out.support.kind === 'surface' && out.support.surfaceKind === SCREEN_EDGE_KIND ? 'band' : null;
+  }
+
+  /** Time-in-guard and episode accounting, and an info line per change (rate-limited). */
+  function notePhase(next: GuardReason | null, t: number): void {
+    if (next === phase) return;
+    if (phase !== null) {
+      const ms = Math.max(0, t - phaseSince);
+      guardStats.timeInGuardMs[phase] += ms;
+      guardStats.longestEpisodeMs = Math.max(guardStats.longestEpisodeMs, ms);
+    }
+    if (next !== null) guardStats.episodes[next]++;
+    // Bail-out episodes are logged where they end (endBail, with the cause).
+    if (phase !== null && phase !== 'bailOut') guardLog('episode', 'click guard episode', { reason: phase, ms: Math.round(t - phaseSince) }, t);
+    phase = next;
+    phaseSince = t;
+  }
+
+  /** A copy of the guard counters, the phase still running included. */
+  function clickGuardStats(): ClickGuardStats {
+    const time = { ...guardStats.timeInGuardMs };
+    let longest = guardStats.longestEpisodeMs;
+    if (phase !== null) {
+      const open = Math.max(0, clock() - phaseSince);
+      time[phase] += open;
+      longest = Math.max(longest, open);
+    }
+    for (const k of Object.keys(time) as GuardReason[]) time[k] = Math.round(time[k]);
+    return { ...guardStats, episodes: { ...guardStats.episodes }, timeInGuardMs: time, longestEpisodeMs: Math.round(longest) };
+  }
+
+  /** After each tick: edge flights and bail-outs start and end with the support (see the header). */
+  function trackGuardPhases(prev: SimOutput | null, out: SimOutput, t: number): void {
     const airborne = out.support.kind === 'air';
     const k = out.jumpKind ?? null;
     const wasEdge = prev?.support.kind === 'surface' && prev.support.surfaceKind === SCREEN_EDGE_KIND;
     if (airborne) {
       if (wasEdge || ((k === 'leap' || k === 'wallJump') && out.visible && nearBand(out.boundsPx))) edgeFlight = true;
     } else edgeFlight = false;
-    if (supportLost(out, lastSurfaces) || leftLostSupport(prev, out)) bailGuard = true;
-    // A leap reports the wall as support from the take-off on: it ends at the catch, not before.
-    else if (!airborne && k === null) bailGuard = false;
+
+    const lost = supportLost(out, lastSurfaces);
+    const sid = out.support.kind === 'surface' ? out.support.surfaceId : null;
+    if (bailSpent !== null && (!lost || sid !== bailSpent)) bailSpent = null;
+    if (bail === null) {
+      // The bail-out itself (the crouch on a vanished ledge, the take-off or drop off a lost support), or
+      // the cover that the Mover answers with one within its grace.
+      if (leftLostSupport(prev, out)) startBail(t, 'tookOff', out);
+      else if (lost && sid !== bailSpent) startBail(t, 'covered', out);
+    } else noteBailSupport(t, out);
+    if (bail !== null) {
+      // The landing: grounded on a support the list holds (the floor, a listed ledge, a wall caught
+      // after the leap, which reports the wall as support from the take-off on), or a grab.
+      if (!airborne && k === null && !lost) endBail(t, out.support.kind === 'held' ? 'held' : 'landed');
+      else expireBail(t, out);
+    }
+    notePhase(phaseOf(out), t);
   }
 
-  function setGuard(state: ScreenEdgeGuard['state'], reason: CatHostDebug['clickGuard']['reason']): void {
+  function setGuard(state: ScreenEdgeGuard['state'], reason: GuardReason | null): void {
     guardReason = reason;
     if (state === guard.state) return;
     guard = { state, failClosed: guard.failClosed + (state === 'failClosed' ? 1 : 0) };
-    if (state === 'failClosed') log.debug('click guard failed closed (obstacle source stale)');
+    if (state === 'failClosed') guardLog('alert', 'click guard failed closed (obstacle source stale or failing)', { reason, failClosed: guard.failClosed }, clock());
     attempt(() => surfaces?.noteClickGuard?.(guard), 'click guard state');
   }
 
@@ -360,6 +603,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     const want = next || t - guardNeededAt < GUARD_DISARM_AFTER_MS;
     if (want === armed) return;
     armed = want;
+    // Unhooked, the source watched no events: a list read before is no basis for the stale grace.
+    if (!want) lastFreshObstacles = null;
     attempt(() => input.setObstacleWatch(want), 'obstacle watch');
   }
 
@@ -380,9 +625,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       return NO_GUARD_RECTS;
     }
     const out = lastOutput;
-    const bounds = out && out.visible && !hidden ? out.boundsPx : null;
-    const clinging = out?.support.kind === 'surface' && out.support.surfaceKind === SCREEN_EDGE_KIND;
-    const reason: CatHostDebug['clickGuard']['reason'] = !bounds ? null : bailGuard ? 'bailOut' : edgeFlight ? 'edgeFlight' : clinging ? 'band' : null;
+    expireBail(t, out);
+    const reason = phaseOf(out);
     if (!out || reason === null) {
       restGuard(t);
       return NO_GUARD_RECTS;
@@ -394,16 +638,27 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     } catch (err) {
       log.warn('click-guard obstacles failed', { error: err });
     }
-    if (obstacles === null || !obstacles.fresh) {
+    let list: readonly Rect[];
+    if (obstacles !== null && obstacles.fresh) {
+      lastFreshObstacles = { rects: obstacles.rects, at: t };
+      list = obstacles.rects;
+      guardStats.activePolls++;
+    } else if (obstacles !== null && lastFreshObstacles !== null && t - lastFreshObstacles.at <= OBSTACLE_STALE_GRACE_MS) {
+      // Momentarily stale (WinEvent chatter between two enumerations): the last fresh cut-outs, at most
+      // OBSTACLE_STALE_GRACE_MS old, the age the ADR allows a cache.
+      list = lastFreshObstacles.rects;
+      guardStats.staleGracePolls++;
+    } else {
       // Fail closed: the whole cat is click-through until the obstacle list is current again. Not just
       // its bounds: the renderer's hit rects reach past them at large scales and sizes.
+      guardStats.failClosedPolls++;
       setGuard('failClosed', reason);
       guardRects = 1;
       return EVERYWHERE;
     }
     // 8 DIP at the largest scale of the displays the window touches.
     const displays = opts.display.world.displays;
-    const grown = obstacles.rects.map((r) => {
+    const grown = list.map((r) => {
       let scale = 1;
       for (const d of displays) if (rectGap(d.boundsPx, r) === 0 && d.scaleFactor > scale) scale = d.scaleFactor;
       return growRect(r, Math.ceil(GUARD_OBSTACLE_MARGIN_DIP * scale));
@@ -570,6 +825,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
     let p: Point | null = null;
     if (win32.available) p = win32.getCursorPos();
+    nativeCursor = p;
     if (!p) {
       try {
         p = opts.cursorFallback();
@@ -606,12 +862,25 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     if (surfaces) evs.push(...safe(() => surfaces.drainEvents(), [], 'surface events'));
     evs.push(...safe(() => activity.drainEvents(), [], 'activity events'));
     if (perception) evs.push(...safe(() => perception.drainEvents(), [], 'perception events'));
-    if (evs.length > MAX_EVENTS_PER_TICK) {
-      droppedEvents += evs.length - MAX_EVENTS_PER_TICK;
-      log.debug('dropping excess events', { count: evs.length - MAX_EVENTS_PER_TICK });
-      evs.length = MAX_EVENTS_PER_TICK;
+    if (evs.length <= MAX_EVENTS_PER_TICK) return evs;
+    // Over the cap: the newest window, surface, activity and perception events go first. A pointer,
+    // lifecycle, system or command event is never dropped (a lost dragEnd leaves the cat held, a lost
+    // quit request hangs the quit), even if that leaves more than MAX_EVENTS_PER_TICK for this tick.
+    let excess = evs.length - MAX_EVENTS_PER_TICK;
+    const kept: SimEvent[] = [];
+    for (let i = evs.length - 1; i >= 0; i--) {
+      const ev = evs[i] as SimEvent;
+      if (excess > 0 && !isPriorityEvent(ev)) {
+        excess--;
+        continue;
+      }
+      kept.push(ev);
     }
-    return evs;
+    kept.reverse();
+    const count = evs.length - kept.length;
+    droppedEvents += count;
+    if (count > 0) log.debug('dropping excess events', { count });
+    return kept;
   }
 
   function resolveQuit(): void {
@@ -624,7 +893,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     for (const r of requests) {
       switch (r.type) {
         case 'perception':
-          if (perception && !hidden && !locked) attempt(() => perception.request(r.reason, r.focus), 'perception request');
+          if (perception && !hidden && !locked && !unlockUnconfirmed) attempt(() => perception.request(r.reason, r.focus), 'perception request');
           break;
         case 'save':
           void opts.catStore.save();
@@ -690,7 +959,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
     if (!out) return MAX_TICK_MS;
     ticks++;
-    attempt(() => trackGuardPhases(lastOutput, out), 'click guard phases');
+    attempt(() => trackGuardPhases(lastOutput, out, nowReal), 'click guard phases');
     lastOutput = out;
     overlays.render(out, simNow, hidden);
     opts.catStore.markDirty();
@@ -719,6 +988,143 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     scheduleTick(next);
   }
 
+  // ---- session lock and suspend (diagnosis H5): a lost unlock or resume event must not latch
+
+  /** The OS's own lock state (null: it cannot tell, or asking failed). */
+  function systemLocked(): boolean | null {
+    if (!opts.isSystemLocked) return null;
+    try {
+      const v = opts.isSystemLocked();
+      return typeof v === 'boolean' ? v : null;
+    } catch (err) {
+      log.warn('lock state failed', { error: err });
+      return null;
+    }
+  }
+
+  function markAway(t: number): void {
+    awayMark = { at: t, cursor: nativeCursor, presses: buttons?.presses ?? null };
+  }
+
+  /**
+   * Native input since the mark: the Win32 cursor moved or a button went down. Neither is seen from
+   * a locked or sleeping session: GetCursorPos fails off the input desktop (the fallback cursor does
+   * not count) and GetAsyncKeyState reports no presses there.
+   */
+  function inputSinceMark(): boolean {
+    const m = awayMark;
+    if (m === null) return false;
+    const c = nativeCursor;
+    const scale = c ? displayScale(safe(() => opts.display.displayAt(c), null, 'display at cursor')) : 1;
+    const moved = c !== null && (m.cursor === null || Math.hypot(c.x - m.cursor.x, c.y - m.cursor.y) > CURSOR_IDLE_MOVE_DIP * scale);
+    const pressed = buttons !== null && m.presses !== null && buttons.presses > m.presses;
+    return moved || pressed;
+  }
+
+  function setLocked(t: number, why: string): void {
+    if (!locked) lifecycleStats.locks++;
+    locked = true;
+    unlockUnconfirmed = false;
+    lockedAt = t;
+    lockCheckAt = t + LOCK_RECHECK_MS;
+    markAway(t);
+    log.info('session locked', { why });
+  }
+
+  /**
+   * A resume or unlock, seen or recovered: the overlays forget press, hover and clock state from before.
+   * A press in progress is the user's first input after the resume (a recovered resume is detected
+   * from that very input): it is never cancelled; the reset runs on the first poll after it ends.
+   */
+  let overlayResumePending = false;
+  function overlaysResumed(): void {
+    if (!overlays.noteResume) return;
+    if (overlays.pressed) {
+      overlayResumePending = true;
+      return;
+    }
+    overlayResumePending = false;
+    attempt(() => overlays.noteResume?.(), 'overlay resume');
+  }
+
+  /** The machine evidently runs: tell the sim the resume it missed. True when one was recovered (the caller resets the overlays). */
+  function recoverResume(why: string): boolean {
+    if (!suspended) return false;
+    suspended = false;
+    lifecycleStats.resumeRecoveries++;
+    log.info('resume recovered without a resume event', { why });
+    enqueue({ type: 'system.resume' });
+    return true;
+  }
+
+  /**
+   * The session is unlocked although no unlock event came: the host and the sim let go of the lock.
+   * `confirmed`: native input showed the user is back. Without it (the OS's word alone: the periodic
+   * probe, or the state read on resume) interaction comes back but perception stays paused until an
+   * unlock event or native input (perceptionPausedFor; the probe may misread a disconnected session).
+   */
+  function clearLock(t: number, why: string, confirmed: boolean): void {
+    if (!locked) return;
+    locked = false;
+    unlockUnconfirmed = !confirmed;
+    lockCheckAt = Number.POSITIVE_INFINITY;
+    lifecycleStats.lockRecoveries++;
+    log.info('session lock cleared without an unlock event', { why, confirmed, lockedForS: Math.round((t - lockedAt) / 1000) });
+    recoverResume(why);
+    // Unconfirmed, the mark stays: native input past it confirms the unlock.
+    if (confirmed) awayMark = null;
+    enqueue({ type: 'system.unlock' });
+    fullscreenAt = Number.NEGATIVE_INFINITY;
+    overlaysResumed();
+    statusChanged();
+    nudge();
+  }
+
+  /** An unlock the host cleared on the OS's word is confirmed (unlock event or native input): perception may run again. */
+  function confirmUnlock(why: string): void {
+    if (!unlockUnconfirmed) return;
+    unlockUnconfirmed = false;
+    log.info('unlock confirmed', { why });
+    statusChanged();
+  }
+
+  /**
+   * On the cursor poll while locked, suspended or after an unconfirmed unlock: re-check the lock now
+   * and then, and on native input.
+   */
+  function checkAway(t: number): void {
+    const m = awayMark;
+    if (m === null) return;
+    // The lock screen or sleep takes a moment to come up: input until then proves nothing.
+    if (t - m.at < LOCK_INPUT_SETTLE_MS) {
+      markAway(m.at);
+      return;
+    }
+    const seen = inputSinceMark();
+    if (!locked) {
+      if (seen) {
+        if (recoverResume('input after suspend')) overlaysResumed();
+        confirmUnlock('input after unlock');
+      }
+      if (!suspended && !unlockUnconfirmed) awayMark = null;
+      return;
+    }
+    if (seen && t - lockInputProbeAt >= LOCK_INPUT_PROBE_GAP_MS) {
+      lockInputProbeAt = t;
+      const os = systemLocked();
+      if (os !== true) {
+        clearLock(t, os === false ? 'input after lock, system reports unlocked' : 'input after lock', true);
+        return;
+      }
+      // Still locked by the OS's own account (it decides when it can tell): new input is needed next time.
+      markAway(m.at);
+    }
+    if (t >= lockCheckAt) {
+      lockCheckAt = t + LOCK_RECHECK_MS;
+      if (systemLocked() === false) clearLock(t, 'system reports unlocked', false);
+    }
+  }
+
   /** One timer, two cadences: cursor/click-through polling and taskbar sampling, each when due. */
   function poll(): void {
     pollTimer = null;
@@ -729,6 +1135,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       cursor = sampleCursor();
       // Presses between ticks are counted here too (the poll runs at 8-60 Hz).
       sampleButtons();
+      if (locked || suspended || unlockUnconfirmed) attempt(() => checkAway(t), 'lock check');
+      if (overlayResumePending && !overlays.pressed) overlaysResumed();
       if (t >= cursorDueAt) {
         const blocked = hidden || paused || locked || !opts.getSettings().interaction.enabled;
         guardAsked = false;
@@ -760,10 +1168,23 @@ export function createCatHost(opts: CatHostOptions): CatHost {
 
   function enqueue(ev: SimEvent): void {
     pending.push(ev);
-    if (pending.length > MAX_EVENTS_PER_TICK * 4) {
-      droppedEvents += pending.length - MAX_EVENTS_PER_TICK * 4;
-      pending.splice(0, pending.length - MAX_EVENTS_PER_TICK * 4);
+    if (pending.length <= MAX_PENDING_EVENTS) return;
+    // The oldest non-priority events go first; pointer, lifecycle, system and command events stay.
+    const before = pending.length;
+    let excess = before - MAX_PENDING_EVENTS;
+    pending = pending.filter((e) => {
+      if (excess > 0 && !isPriorityEvent(e)) {
+        excess--;
+        return false;
+      }
+      return true;
+    });
+    if (pending.length > PENDING_HARD_CAP) {
+      // Only a host that does not tick gets here: a memory bound, not a policy.
+      pending.splice(0, pending.length - PENDING_HARD_CAP);
+      if (hardCapDrops++ % 1000 === 0) log.warn('event queue at its hard cap (the host is not ticking)', { cap: PENDING_HARD_CAP });
     }
+    droppedEvents += before - pending.length;
   }
 
   return {
@@ -797,6 +1218,9 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     },
     get locked() {
       return locked;
+    },
+    get unlockUnconfirmed() {
+      return unlockUnconfirmed;
     },
     setPaused(p) {
       if (paused === p) return;
@@ -841,10 +1265,51 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     },
     onSystem(kind) {
       const type = kind === 'lock' ? 'system.lock' : kind === 'unlock' ? 'system.unlock' : kind === 'suspend' ? 'system.suspend' : 'system.resume';
-      if (kind === 'lock') locked = true;
-      if (kind === 'unlock') locked = false;
-      if (kind === 'resume' || kind === 'unlock') fullscreenAt = -Infinity;
+      const t = clock();
       enqueue({ type });
+      switch (kind) {
+        case 'lock':
+          setLocked(t, 'lock event');
+          break;
+        case 'unlock':
+          if (locked) log.info('session unlocked', { lockedForS: Math.round((t - lockedAt) / 1000) });
+          locked = false;
+          // The real unlock event: perception may run again (app.ts re-evaluates it after this).
+          unlockUnconfirmed = false;
+          lockCheckAt = Number.POSITIVE_INFINITY;
+          // An unlocked session runs: a resume event that never came is made up for.
+          recoverResume('unlock event');
+          awayMark = null;
+          overlaysResumed();
+          break;
+        case 'suspend':
+          suspended = true;
+          log.info('system suspending');
+          markAway(t);
+          break;
+        case 'resume': {
+          suspended = false;
+          const recoveriesBefore = lifecycleStats.lockRecoveries;
+          // Re-derived (diagnosis H5): a lock that happened unseen holds, one that ended unseen goes.
+          const os = systemLocked();
+          log.info('system resumed', { locked, systemLocked: os });
+          if (os === true && !locked) {
+            setLocked(t, 'system reports locked on resume');
+            enqueue({ type: 'system.lock' });
+            statusChanged();
+          } else if (os === false && locked) {
+            // Resets the overlays too.
+            clearLock(t, 'system reports unlocked on resume', false);
+          } else if (locked) {
+            lockCheckAt = Math.min(lockCheckAt, t + LOCK_RECHECK_MS);
+          }
+          if (!locked && !unlockUnconfirmed) awayMark = null;
+          // Clock offsets and any press or hover from before the sleep are stale now (diagnosis F3/F5).
+          if (lifecycleStats.lockRecoveries === recoveriesBefore) overlaysResumed();
+          break;
+        }
+      }
+      if (kind === 'resume' || kind === 'unlock') fullscreenAt = -Infinity;
       nudge();
     },
     onDisplayChanged(world) {
@@ -902,7 +1367,10 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       taskbarSamples,
       taskbarDelayMs,
       clickGuard: { state: guard.state, reason: guardReason, failClosed: guard.failClosed, rects: guardRects, armed },
+      clickGuardStats: clickGuardStats(),
       edgeBands: edgeBands === null ? null : edgeBands.length,
+      lifecycle: { suspended, ...lifecycleStats },
+      interaction: overlays.interactionStats ? safe(() => overlays.interactionStats?.() ?? null, null, 'interaction stats') : null,
     }),
   };
 }
