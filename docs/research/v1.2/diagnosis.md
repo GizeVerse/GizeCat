@@ -4,7 +4,7 @@ Date: 2026-10-29. Code: `feat/v1.2-lively` at `e9133bd` (= shipped v1.1.1). Phas
 
 **Labels.** REAL = executed or observed on this machine (own windows and builds only), or read from the user's 1.1.1 install as counts. REAL(code) = read in the code at the cited line. SIMULATED = the real `src/core` (and, where stated, the real provider/helper pipeline) run headless on synthetic input. MOCKED = OS side stubbed. UNVERIFIED = not executed (inference, desk research, design proposal).
 
-**Sources.** Six investigations; raw output under `C:\Users\enes1\.claude\jobs\4f08f8fb\tmp\v12\<key>\`.
+**Sources.** Six investigations; raw output under `<local scratch>\v12\<key>\`.
 
 | Key | Method | Labels |
 |---|---|---|

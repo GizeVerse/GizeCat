@@ -140,7 +140,7 @@ Other pitfalls:
 - The helper must call `SetProcessDpiAwarenessContext(-4)` first; with it, the desktop root reads 1920×1200 (VERIFIED). Without it, rects come back in logical units (INFERRED).
 - Write numbers in JSON with InvariantCulture (this machine runs a Turkish locale).
 
-Scratch evidence, all in `C:\Users\enes1\.claude\jobs\4f08f8fb\tmp\v11research\uia-tabstrip\`:
+Scratch evidence, all in `<local scratch>\v11research\uia-tabstrip\`:
 - `probe\probe.cs` (probe source)
 - `edge-run2.jsonl`, `chrome-run1.jsonl` (run logs)
 - `koffi-uia\uia-vtable.cjs`, `koffi-uia\electron-apartment.cjs`, `koffi-uia\tlb.cs` (koffi and type-library checks)

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Runs a command under the machine-wide verification lock used by ~/claude-standard
-// (verify.mjs). This PC is shared: heavy work (test suites, builds, Electron runs,
-// packaging, benchmarks) must run one at a time across all sessions.
+// Runs a command under the machine-wide verification lock used by .claude/scripts/verify.mjs.
+// On a shared PC, heavy work (test suites, builds, Electron runs, packaging, benchmarks)
+// should run one at a time across all sessions.
 //
 // Usage: node scripts/with-lock.mjs <label> -- <command> [args...]
 import { spawn } from 'node:child_process';

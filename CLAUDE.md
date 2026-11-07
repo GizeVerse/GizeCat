@@ -1,6 +1,6 @@
-# Desktop Cat
+# GizeCat (formerly Desktop Cat)
 
-A Windows 10/11 desktop companion: one animated, persistent cat in transparent, always-on-top, click-through Electron overlays, with optional opt-in screen perception. Status: v1.0.0, validated on Windows 11 (see docs/TEST_REPORT.md); installer unsigned.
+GizeCat, the first GizeVerse character: one animated, persistent cat in transparent, always-on-top, click-through Electron overlays, with optional opt-in screen perception. Windows 10/11 is the supported platform (validated on Windows 11, see docs/TEST_REPORT.md and docs/gizeverse/); a web host and macOS/Linux foundations exist (docs/gizeverse/capability-matrix.md); installer unsigned. Display strings say GizeCat; persistent identifiers stay frozen (src/shared/identity.ts).
 
 ## Invariants
 Never violate these. If a task seems to require changing one, stop and ask.
@@ -28,8 +28,8 @@ Never violate these. If a task seems to require changing one, stop and ask.
 ## Project notes
 - Electron 44 downloads its binary lazily: run `node node_modules/electron/install.js` after a fresh install.
 - `npm run build` wipes `out/` (previews, QA images, bench output); copy anything worth keeping elsewhere first.
-- Never contact `localhost:11434` (the user's Ollama) or real AI providers from tests; adapters are tested against mock servers.
+- Never contact a local AI server (e.g. Ollama on `localhost:11434`) or real AI providers from tests; adapters are tested against mock servers.
 - Overlay windows are never hidden/moved (Electron transparent-window bugs); display changes recreate them.
-- The machine's taskbar auto-hides (work area = full screen); multi-monitor/mixed DPI and Windows 10 are untested on hardware.
+- The validation machine has an auto-hiding taskbar (work area = full screen); multi-monitor/mixed DPI and Windows 10 are untested on hardware.
 
 The engineering standard (definition of done, honesty labels, git rules, skills, agents) loads from `.claude/rules/standard.md`.

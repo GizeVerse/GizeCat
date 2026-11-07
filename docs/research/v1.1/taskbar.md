@@ -2,7 +2,7 @@
 
 **Probe machine:** Windows 11 25H2, build 26200.9711. One 1920x1200 display at 120 dpi (125%), auto-hide taskbar at the bottom. All rects are physical pixels on a per-monitor-v2 thread.
 
-**Scratch files:** `C:\Users\enes1\.claude\jobs\4f08f8fb\tmp\v11research\taskbar\` holds `probe.cjs`, `zorder-electron.cjs`, `rude-electron.cjs`, `koffi-names.cjs` and the logs `run-2s.txt`, `run-20s.txt`, `run-300s.txt`, `zorder-run.txt`, `zorder-nonrude-run.txt`, `rude-run.txt`. No repository files were changed.
+**Scratch files:** `<local scratch>\v11research\taskbar\` holds `probe.cjs`, `zorder-electron.cjs`, `rude-electron.cjs`, `koffi-names.cjs` and the logs `run-2s.txt`, `run-20s.txt`, `run-300s.txt`, `zorder-run.txt`, `zorder-nonrude-run.txt`, `rude-run.txt`. No repository files were changed.
 
 ## 1. Main finding: our overlay knocks the taskbar out of always-on-top (VERIFIED, affects v1 now)
 

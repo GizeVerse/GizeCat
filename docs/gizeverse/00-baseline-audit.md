@@ -31,7 +31,7 @@ Inputs were five auditor reports (portability map; build, packaging, tests and C
 | Pinned Electron patch | The repo pins 44.9.3 (package.json:38, electron-builder.yml:4). The latest 44.x is **44.10.2**, released 2026-11-03 [E2]. | REAL (doc) |
 | Screen API platform tags | dipToScreenRect and screenToDipRect are Windows-only. dipToScreenPoint and screenToDipPoint are Windows and Linux, not Wayland. getCursorScreenPoint is "not supported on Wayland" [S5]. The repo uses them at displayService.ts:30-31, overlayManager.ts:830, capture.ts:114 and app.ts:206. The auditors agree. | REAL (doc and grep) |
 | "registry.ts:52 throws" (desktop report) | The throw sits inside bindRegGetValue, and createLoginItemRegistry catches it (registry.ts:105-109) and returns `available: false` (:119). It fails soft, as the portability report says. | REAL |
-| Owner's installed version | Memory says 1.1.0; `.claude/handoff.md:3` says 1.1.1. Not inspected, because the install is off-limits. Treated here as "1.1.x, installed and running". | UNVERIFIED |
+| Owner's installed version | Not inspected here, because the install is off-limits. Treated as "1.1.x, installed and running" (later found to be 1.2.0). | UNVERIFIED |
 | release/ contents | The worktree's release/ has 1.1.0, 1.1.1 and 1.2.0, plus blockmaps, builder-debug.yml and win-unpacked. The main checkout's release/ has 1.0.0 through 1.2.0. | REAL (listing) |
 | Citation fixes | The Playwright config is `playwright.config.mts`, not `.ts`. asarUnpack is electron-builder.yml:24-26 and `win:` is :29-35. Electron 44 went stable on 2026-08-24 per the schedule. | REAL |
 

@@ -14,7 +14,7 @@ Labels: **REAL** = executed on this machine against windows this research starte
 
 ## 1. Method and safety (REAL)
 
-- **Probe.** `C:\Users\enes1\.claude\jobs\4f08f8fb\tmp\v12\tabs\src\TabProbe.cs`: C# 5, compiled with the .NET Framework `csc.exe` and the same WPF UIA references as `scripts/build-uia-helper.mjs`; `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` is its first call.
+- **Probe.** `<local scratch>\v12\tabs\src\TabProbe.cs`: C# 5, compiled with the .NET Framework `csc.exe` and the same WPF UIA references as `scripts/build-uia-helper.mjs`; `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` is its first call.
 - **What the probe never does.**
   - It never requests `Name`; a grep of the source finds no `NameProperty`, `Current.Name`, Value, Text or LegacyIAccessible access.
   - `AutomationId` is compared in process against a fixed list of template-part names; any other value is printed as `*`.
@@ -225,7 +225,7 @@ Everything else is `rejected` without `FromHandle`. `FromHandle` alone sends `WM
 
 ## Evidence (scratch, outside the repository)
 
-`C:\Users\enes1\.claude\jobs\4f08f8fb\tmp\v12\tabs\`:
+`<local scratch>\v12\tabs\`:
 
 - Sources: `src\TabProbe.cs` (probe), `src\TabApp.cs` (own WinForms/WPF windows).
 - Raw JSON lines: `runs\{explorer,wt,wt-control,sysdm,winforms,winforms-pmv2,wpf}.jsonl` (rects, timings, memory, events; no names or titles).

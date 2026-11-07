@@ -1,6 +1,6 @@
 # Desktop Cat v1.1: code map of what to extend (worktree `v1.1`)
 
-Everything below was read in the source (VERIFIED) unless it is labelled INFERRED or MEASURED. No repository files were changed. The only scratch file is `C:\Users\enes1\.claude\jobs\4f08f8fb\tmp\v11research\codemap\taskbar.ps1`.
+Everything below was read in the source (VERIFIED) unless it is labelled INFERRED or MEASURED. No repository files were changed. The only scratch file is `<local scratch>\v11research\codemap\taskbar.ps1`.
 
 ## 1. Movement (`src/core/movement`)
 

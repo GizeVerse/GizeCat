@@ -136,7 +136,7 @@ Unpackaged and dev runs only read the status and never write, which removes both
 - Get the owner's decision on option (a) or (b) for v1 `false`.
 - Don't use Task Scheduler or the Startup folder, and don't touch the startup-delay settings.
 
-Scratch files are in `C:\Users\enes1\.claude\jobs\4f08f8fb\tmp\v11research\login\`:
+Scratch files are in `<local scratch>\v11research\login\`:
 - `probe\main.js`, `probe2\main.js`
 - `probe-result.json`, `probe2-result.json`
 - `koffi-reg.cjs`
