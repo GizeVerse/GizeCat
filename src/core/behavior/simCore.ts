@@ -1268,12 +1268,20 @@ export abstract class SimCore {
     this.hooks.onDecision?.(r);
   }
 
+  // The lifetime counters shown in Settings (Counters, v1.2) are bumped where their records are
+  // emitted. They are never read by behaviour and draw no random numbers: the sim stays deterministic.
+
   protected emitExcursion(r: ExcursionRecord): void {
+    // A trip up high: every stay that starts on a window top or tab strip.
+    if (r.phase === 'arrive') bumpCounter(this.cat.memory, 'excursions');
+    // A jump between windows: a stay the cat left by its own hop onto another elevated surface.
+    else if (r.endReason === 'leave' && r.leaveKind === 'hop') bumpCounter(this.cat.memory, 'surfaceHops');
     this.profile.excursion(r);
     this.hooks.onExcursion?.(r);
   }
 
   protected emitFall(r: FallRecord): void {
+    if (r.impact === 'hard') bumpCounter(this.cat.memory, 'hardLandings');
     this.profile.fall(r);
     this.hooks.onFall?.(r);
   }
@@ -1291,12 +1299,15 @@ export abstract class SimCore {
   }
 
   protected emitSlip(r: SlipRecord): void {
+    bumpCounter(this.cat.memory, 'slips');
     this.profile.slip(r);
     this.hooks.onSlip?.(r);
   }
 
-  /** v1.2 screen-edge entry point (not called before the behaviour package lands). */
+  /** v1.2 screen-edge visit, once the cat is off the wall. */
   protected emitEdgeVisit(r: EdgeVisitRecord): void {
+    // A screen-edge climb: a visit up a clear band; a low peek at a covered one is not a climb.
+    if (!r.covered) bumpCounter(this.cat.memory, 'edgeClimbs');
     this.profile.edgeVisit(r);
     this.hooks.onEdgeVisit?.(r);
   }
