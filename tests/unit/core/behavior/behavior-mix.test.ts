@@ -47,7 +47,9 @@ describe('behaviour mix over a working session', () => {
     const perHour = transitions / (hours * seeds.length);
     expect(perHour).toBeGreaterThan(40);
     expect(perHour).toBeLessThan(400);
-  });
+    // Several 2 sim-hour runs: a hang guard that survives a loaded shared machine, not an assertion
+    // (124 s and 60+ s against the default 60 s in two loaded verify runs on 2026-11-07).
+  }, 180_000);
 });
 
 describe('behaviour mix with v1.1 surfaces (default settings)', () => {
