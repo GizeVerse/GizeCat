@@ -26,7 +26,7 @@ Status: 2026-11-06, branch `feat/gizeverse-foundation`.
 
 The project must not invent any of these:
 
-1. **Contacts.** A security contact for SECURITY.md and an enforcement contact for CODE_OF_CONDUCT.md. Both are clearly marked placeholders now. Alternatively, GitHub private vulnerability reporting can be turned on after the repository is public.
+1. **Contacts.** SECURITY.md and CODE_OF_CONDUCT.md now point to GitHub private vulnerability reporting (the repository Security tab), turned on when the repository is created. The owner may add a dedicated e-mail address later; none is invented here.
 2. **Where the code lives.** The GizeVerse organization (name, account), the repository name, and whether `io.github.enesiltas.desktopcat` stays the appId. It is frozen: changing it orphans every install (ADR 0004 §9).
 3. **Linux deb/rpm metadata.** electron-builder needs a `homepage` and a maintainer e-mail for deb and rpm, and none is set. Only the AppImage and tar.gz are configured.
 4. **SECURITY.md response goals** (7, 14 and 90 days). They were drafted as goals and need the owner's confirmation.

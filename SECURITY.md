@@ -15,8 +15,8 @@ Only the Windows build is supported. Builds for macOS, Linux or the web are expe
 
 Please do not open a public issue, pull request or discussion for a security problem.
 
-- **Contact:** [private security contact — to be set by the project owner before publishing]
-- Once the repository is public, GitHub's private vulnerability reporting may be turned on for it. If it is, the repository's Security tab shows a "Report a vulnerability" button, and you can use that instead.
+- **How:** use GitHub's private vulnerability reporting: on the repository's **Security** tab, choose **Report a vulnerability** (https://github.com/GizeVerse/GizeCat/security/advisories/new). Only the maintainers see the report.
+- If that button is not available, open a normal issue that only says you have a security report and asks for a private channel. Put no details in it.
 
 Please include:
 - the version (Settings → About) and where the build came from;
