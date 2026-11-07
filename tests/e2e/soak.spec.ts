@@ -181,13 +181,16 @@ test.describe('interaction soak: the real app under random gestures and perturba
     const between = (a: number, b: number): number => a + rnd() * (b - a);
     const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)] as T;
 
-    const own: OwnWindow = openOwnWindow({ layout: 'hidden' });
+    let own: OwnWindow = openOwnWindow({ layout: 'hidden' });
+    // Harness incidents (not app failures): the own-window helper ending or not answering. The soak
+    // reopens it and goes on; they are counted in the report (a 120-min run lost its whole result to one).
+    const harnessIncidents: string[] = [];
     let app: ElectronApplication | null = null;
     // Mutable from the helpers below (a holder, so the finally block sees what they set).
     const live: { stopTopmost: (() => void) | null; cdpFreeze: CDPSession | null } = { stopTopmost: null, cdpFreeze: null };
     const hogs: ChildProcess[] = [];
     try {
-      const win = await own.next();
+      let win = await own.next();
       app = await launchApp(userData);
       const a = app;
       await waitForCat(a);
@@ -655,16 +658,37 @@ test.describe('interaction soak: the real app under random gestures and perturba
         for (const h of hogs.splice(0)) if (h.exitCode === null && h.signalCode === null) h.kill();
       };
 
+      const reopenOwn = async (why: string): Promise<void> => {
+        harnessIncidents.push(`${new Date().toISOString()} ${why}`);
+        live.stopTopmost?.();
+        live.stopTopmost = null;
+        await own.close().catch(() => undefined);
+        own = openOwnWindow({ layout: 'hidden' });
+        win = await own.next();
+        maximized = false;
+        await hook(a, 'restrictSurfacesToPids', [win.pid]);
+      };
+
       const perturb = async (k: Perturbation): Promise<void> => {
         perturbations[k] = (perturbations[k] ?? 0) + 1;
         switch (k) {
-          case 'maxWindow':
+          case 'maxWindow': {
+            if (own.proc.exitCode !== null) {
+              await reopenOwn(`own window helper had exited (code ${String(own.proc.exitCode)})`);
+              break;
+            }
             maximized = !maximized;
             own.send({ op: maximized ? 'maximize' : 'minimize' });
-            await own.next();
+            try {
+              await own.next();
+            } catch (err) {
+              await reopenOwn(`own window did not answer: ${err instanceof Error ? err.message : String(err)}`);
+              break;
+            }
             live.stopTopmost?.();
             live.stopTopmost = maximized ? keepTopmost([win.hwnd], (await hook(a, 'getOverlays')).map((o) => o.hwnd)) : null;
             break;
+          }
           case 'hideShow':
             await hook(a, 'runAction', 'hide');
             hidden = true;
@@ -744,7 +768,7 @@ test.describe('interaction soak: the real app under random gestures and perturba
         }
         await runGesture(pick(LOOP_GESTURES));
       }
-      if (maximized) {
+      if (maximized && own.proc.exitCode === null) {
         own.send({ op: 'minimize' });
         await own.next();
         live.stopTopmost?.();
@@ -766,6 +790,7 @@ test.describe('interaction soak: the real app under random gestures and perturba
         return Object.fromEntries(Object.keys(y).map((kk) => [kk, (y as Record<string, number>)[kk]! - ((x as Record<string, number>)[kk] ?? 0)]));
       };
       const report = {
+        harnessIncidents,
         minutes: Math.round(hours * 600) / 10,
         seed: SEED,
         timeScale: SCALE,
