@@ -841,23 +841,49 @@ async function overlayPage(app: ElectronApplication): Promise<Page> {
 
 /**
  * One throw through the renderer's real pointer path: CDP mouse events on the overlay page (never
- * the OS cursor), the injected cursor alongside them, as the host reads it while dragging. It has to
- * end within the overlay manager's 400 ms lost-press window, because the real button is not down.
+ * the OS cursor), the injected cursor alongside them, as the host reads it while dragging. Like a
+ * hand, it winds up for about 0.6 s before the flick, so the press lasts well past 400 ms. The real
+ * button is not down: CDP never reaches GetAsyncKeyState, so Win32 never sees this press down and
+ * main treats its button state as unknown for the press (overlayManager): no release is made up from
+ * Win32's "up" (neither the 400 ms LOST_PRESS_MS nor the 1.5 s LOST_PRESS_HELD_MS bound applies), and
+ * only a cursor that moves on with no pointer event for 400 ms would end it. The renderer reports
+ * every move (one every 70 ms here), which keeps the press and its everywhere-capture alive, as for a
+ * real slow drag.
+ * The overlay is held click-through meanwhile (CDP input reaches the page anyway): with the injected
+ * cursor on the cat the press makes the whole overlay take the mouse, and any real mouse move Windows
+ * then sends the page carries the button up, which ends the drag as a release (seen in
+ * tests/e2e/soak.spec.ts; see docs/gizeverse/13-interaction-reliability.md).
  */
 async function throwOnce(app: ElectronApplication, page: Page, ov: { boundsPx: Rect }, scale: number, stepPx: Point): Promise<{ gestureMs: number }> {
   const o = (await observe(app)).out!;
   const c = center(o.boundsPx);
-  const local = (p: Point): Point => ({ x: (p.x - ov.boundsPx.x) / scale, y: (p.y - ov.boundsPx.y) / scale });
-  await hook(app, 'injectCursor', c);
-  await page.mouse.move(local(c).x, local(c).y);
-  const t0 = Date.now();
-  await page.mouse.down();
-  for (let i = 1; i <= 5; i++) {
-    const p = { x: c.x + stepPx.x * i, y: c.y + stepPx.y * i };
-    await Promise.all([hook(app, 'injectCursor', p), page.mouse.move(local(p).x, local(p).y)]);
+  const b = ov.boundsPx;
+  const inside = (p: Point): Point => ({ x: Math.min(b.x + b.width - 12, Math.max(b.x + 12, p.x)), y: Math.min(b.y + b.height - 12, Math.max(b.y + 12, p.y)) });
+  const local = (p: Point): Point => ({ x: (p.x - b.x) / scale, y: (p.y - b.y) / scale });
+  await hook(app, 'forceInteractive', false);
+  try {
+    await hook(app, 'injectCursor', c);
+    await page.mouse.move(local(c).x, local(c).y);
+    const t0 = Date.now();
+    await page.mouse.down();
+    // The wind-up: a small horizontal pull back, one move about every 70 ms.
+    const from = inside({ x: c.x - stepPx.x * 0.4, y: c.y });
+    for (let i = 1; i <= 8; i++) {
+      const p = { x: c.x + ((from.x - c.x) * i) / 8, y: c.y };
+      await Promise.all([hook(app, 'injectCursor', p), page.mouse.move(local(p).x, local(p).y)]);
+      await sleep(70);
+    }
+    // The flick to where the throw used to end: the release speed comes from the last ~100 ms of samples.
+    const to = { x: c.x + stepPx.x * 5, y: c.y + stepPx.y * 5 };
+    for (let i = 1; i <= 5; i++) {
+      const p = inside({ x: from.x + ((to.x - from.x) * i) / 5, y: from.y + ((to.y - from.y) * i) / 5 });
+      await Promise.all([hook(app, 'injectCursor', p), page.mouse.move(local(p).x, local(p).y)]);
+    }
+    await page.mouse.up();
+    return { gestureMs: Date.now() - t0 };
+  } finally {
+    await hook(app, 'forceInteractive', null);
   }
-  await page.mouse.up();
-  return { gestureMs: Date.now() - t0 };
 }
 
 test.describe('v1.2 lively: throws through the real drag path (app REAL, input SIMULATED)', () => {
