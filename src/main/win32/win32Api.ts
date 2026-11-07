@@ -397,8 +397,10 @@ export function createKoffiWin32Api(native: Win32Native, logger: Logger, opts: W
         return last === null ? null : idleFromTicks(native.getTickCount(), last);
       }),
 
+    // A failed read is unknown (null), never "released": the overlay manager then judges a press by
+    // its renderer's input and the cursor movement instead of ending it (diagnosis H1).
     isLeftButtonDown: () =>
-      guard('GetAsyncKeyState', false, () => {
+      guard<boolean | null>('GetAsyncKeyState', null, () => {
         // Mouse buttons only; keyboard state is never read. GetAsyncKeyState reports physical
         // buttons, so follow the user's primary-button swap.
         const vk = native.getSystemMetrics(SM_SWAPBUTTON) !== 0 ? VK_RBUTTON : VK_LBUTTON;

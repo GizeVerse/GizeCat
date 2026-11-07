@@ -235,7 +235,8 @@ export class FakeWin32Api implements Win32Api {
   notification: ReturnType<Win32Api['getNotificationState']> = 'normal';
   cursor: Point | null = { x: 0, y: 0 };
   idle: number | null = 0;
-  leftDown = false;
+  /** null: the read failed (GetAsyncKeyState guard), as createKoffiWin32Api reports it. */
+  leftDown: boolean | null = false;
   handler: ((ev: RawWinEvent) => void) | null = null;
   listCalls = 0;
   describeCalls = 0;

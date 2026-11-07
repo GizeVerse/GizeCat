@@ -267,6 +267,16 @@ describe('queries', () => {
     expect(api.isLeftButtonDown()).toBe(true);
   });
 
+  it('a GetAsyncKeyState failure reads as unknown (null), not as a released button (diagnosis H1)', () => {
+    const { native, api } = setup();
+    native.keyState.set(0x01, -32768);
+    expect(api.isLeftButtonDown()).toBe(true);
+    native.getAsyncKeyState = () => {
+      throw new Error('GetAsyncKeyState: simulated failure');
+    };
+    expect(api.isLeftButtonDown()).toBeNull();
+  });
+
   it('maps the user notification state', () => {
     const { native, api } = setup();
     const cases: Array<[number | null, string]> = [

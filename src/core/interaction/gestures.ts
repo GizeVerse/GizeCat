@@ -1,6 +1,8 @@
 // Pointer gesture recognition for the cat (pure). Input positions are px, times ms
-// (monotonic per recogniser; call reset() when the event source changes).
-// Context-menu events are handled by the host and ignored here.
+// (monotonic per recogniser; call reset() when the event source changes; time running
+// backwards only forgets timing state, it never wedges a press).
+// The host opens the context menu; here a context event only ends a press or drag in
+// progress (the menu's modal loop swallows the release), as a cancel does.
 import type { Point } from '../../shared/geometry';
 import type { SimEvent } from '../../shared/sim';
 
@@ -58,6 +60,8 @@ export interface GestureRecognizer {
   feed(e: GesturePointerEvent): SimEvent[];
   readonly dragging: boolean;
   readonly hovering: boolean;
+  /** A primary press (tap candidate or drag) is in progress. Optional for other recognisers. */
+  readonly pressed?: boolean;
   /** Clears all state without emitting events (feed a 'cancel' first to end a drag cleanly). */
   reset(): void;
 }
@@ -221,7 +225,10 @@ export function createGestureRecognizer(opts: Partial<GestureThresholds> = {}): 
         }
         break;
       case 'down':
-        if (e.button === PRIMARY && !press) {
+        if (e.button === PRIMARY) {
+          // A primary press while one is still open: its release was lost (a mouse reports one
+          // pointerdown per press). End it without a throw, then start the new one.
+          if (dragging) endDrag(s, false, out);
           press = s;
           dragSamples = [];
           resetStroke();
@@ -254,11 +261,11 @@ export function createGestureRecognizer(opts: Partial<GestureThresholds> = {}): 
         if (e.button === PRIMARY && press) release(s, out);
         break;
       case 'cancel':
+      case 'context':
+        // A context menu takes the release with it (modal loop): the press ends here, without a throw.
         if (dragging) endDrag(s, false, out);
         press = null;
         resetStroke();
-        break;
-      case 'context':
         break;
     }
     return out;
@@ -271,6 +278,9 @@ export function createGestureRecognizer(opts: Partial<GestureThresholds> = {}): 
     },
     get hovering() {
       return hovering;
+    },
+    get pressed() {
+      return press !== null;
     },
     reset() {
       hovering = false;

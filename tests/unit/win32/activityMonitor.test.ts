@@ -93,6 +93,14 @@ describe('typing heuristic', () => {
     expect(s.types()).toEqual([]);
   });
 
+  it('an unknown button state (the read failed: null) counts as not held, so typing is still recognised', () => {
+    const s = setup();
+    s.api.leftDown = null;
+    s.run(1000);
+    s.run(2500, s.typing());
+    expect(s.types()).toContain('activity.typingStart');
+  });
+
   it('does not classify input when the cursor position is unknown', () => {
     const s = setup();
     s.setCursorKnown(false);

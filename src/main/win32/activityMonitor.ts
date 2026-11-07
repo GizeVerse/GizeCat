@@ -66,10 +66,11 @@ export function createActivityMonitor(api: Win32Api, logger: Logger, opts: Activ
 
   /**
    * Read once per sample: a mouse button is held now, or was pressed since the previous sample
-   * (clicks are not typing). Without the input extension: the primary button held, as in v1.1.
+   * (clicks are not typing). Without the input extension: the primary button held, as in v1.1; an
+   * unknown state (null: the read failed) counts as not held.
    */
   function mouseActivity(): boolean {
-    if (input === null) return api.isLeftButtonDown();
+    if (input === null) return api.isLeftButtonDown() === true;
     const b = input.mouseButtons();
     const pressed = lastPresses !== null && b.presses !== lastPresses;
     lastPresses = b.presses;

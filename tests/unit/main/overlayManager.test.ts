@@ -11,6 +11,7 @@ import type { SurfaceDebugLine } from '../../../src/shared/surfaceDiagnostics';
 import type { DisplayGeometry, WorldGeometry } from '../../../src/shared/world';
 import type { DisplayService } from '../../../src/main/contracts';
 import type { WindowRegistry } from '../../../src/main/security';
+import { EVERYWHERE } from '../../../src/core/interaction/clickThrough';
 import { createGestureRecognizer } from '../../../src/core/interaction/gestures';
 import { createOverlayManager, type OverlayManager, type OverlayManagerOptions } from '../../../src/main/overlay/overlayManager';
 import { overlayProfileFor } from '../../../src/main/overlay/overlayProfile';
@@ -922,6 +923,29 @@ describe('overlay manager v1.2: hover dwell while clinging to a screen edge (T8)
     expect(takes(OVER)).toBe(false);
   });
 
+  it('a source failing closed on alternate polls does not restart the dwell (diagnosis H2); those polls stay click-through', () => {
+    let n = 0;
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    // WinEvent chatter: the guard's obstacle list is stale on every other 16 ms poll.
+    rig = makeRig({ excludedRectsPx: () => (n++ % 2 === 1 ? EVERYWHERE : []) });
+    show(cling);
+    const fresh: boolean[] = [];
+    const stale: boolean[] = [];
+    for (let t = 0; t <= 640; t += 16) {
+      const stalePoll = n % 2 === 1;
+      const on = takes(OVER);
+      if (t >= 340) (stalePoll ? stale : fresh).push(on);
+      rig.advance(16);
+    }
+    // The cursor rested on the cat for 300 ms: every fresh answer after that takes the mouse ...
+    expect(fresh.length).toBeGreaterThan(5);
+    expect(fresh.every(Boolean)).toBe(true);
+    // ... and every fail-closed one still gives it to the window behind (the policy is unchanged).
+    expect(stale.length).toBeGreaterThan(5);
+    expect(stale.some(Boolean)).toBe(false);
+  });
+
   it('a guard rect over the cat wins after the dwell too, and a blocked overlay never dwells', () => {
     let guard: Array<{ x: number; y: number; width: number; height: number }> = [];
     rig.mgr.dispose();
@@ -1083,5 +1107,44 @@ describe('overlay manager: GizeVerse platform gates (ADR 0004 §5)', () => {
     mine[0]!.emit('query-session-end');
     expect(ended).toBe(0);
     mgr.dispose();
+  });
+});
+
+// Diagnosis F8: press-path counters and info lines for the field (Export diagnostics). MOCKED Electron.
+describe('overlay manager: interaction stats and field logs (F8)', () => {
+  it('counts presses and setIgnoreMouseEvents calls, and hands out a copy', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    rig.report('A', 800, 860);
+    rig.mgr.updateInteractivity({ x: 800, y: 830 }, false);
+    rig.pointer('A', 'down', 800, 830);
+    rig.advance(60);
+    rig.pointer('A', 'up', 800, 830);
+    rig.mgr.updateInteractivity({ x: 100, y: 100 }, false);
+    const stats = rig.mgr.interactionStats();
+    expect(stats).toMatchObject({ presses: 1, ignoreToggles: 2, lostPresses: { buttonUp: 0, silent: 0, moved: 0 } });
+    stats.lostPresses.buttonUp = 99;
+    expect(rig.mgr.interactionStats().lostPresses.buttonUp).toBe(0);
+  });
+
+  it('reports a long fail-closed spell with the cursor on the cat once, and its end', () => {
+    let failing = true;
+    rig.mgr.dispose();
+    fakes.windows.length = 0;
+    rig = makeRig({ excludedRectsPx: () => (failing ? EVERYWHERE : []) });
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    for (let t = 0; t < 3000; t += 16) {
+      if (t % 480 === 0) rig.report('A', 800, 860);
+      rig.mgr.updateInteractivity({ x: 800, y: 830 }, false);
+      rig.advance(16);
+    }
+    expect(rig.win('A').ignoreMouse).toBe(true);
+    const lines = () => rig.log.entries.filter((e) => e.level === 'info' && e.msg.startsWith('click-through exclusions'));
+    expect(lines().map((e) => e.msg)).toEqual(['click-through exclusions failing closed with the cursor on the cat']);
+    failing = false;
+    rig.report('A', 800, 860);
+    rig.mgr.updateInteractivity({ x: 800, y: 830 }, false);
+    expect(rig.win('A').ignoreMouse).toBe(false);
+    expect(lines().map((e) => e.msg)).toEqual(['click-through exclusions failing closed with the cursor on the cat', 'click-through exclusions answering again']);
+    expect(rig.mgr.interactionStats().failClosedPolls).toBeGreaterThan(150);
   });
 });

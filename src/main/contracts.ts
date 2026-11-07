@@ -24,7 +24,8 @@ export interface Win32Api {
   getCursorPos(): Point | null;
   /** ms since last input of any kind (GetLastInputInfo, wrap-safe). */
   getIdleMs(): number | null;
-  isLeftButtonDown(): boolean;
+  /** Primary (swap-aware) mouse button held; null when the state could not be read. */
+  isLeftButtonDown(): boolean | null;
   getForegroundWindowId(): string | null;
   /** Describes a top-level window; null if it is not an app window or is gone. Titles stay inside. */
   describeWindow(id: string): WindowInfo | null;

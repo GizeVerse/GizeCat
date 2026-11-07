@@ -2,12 +2,35 @@
 // main recognises gestures. Moves are coalesced to the latest one per animation frame
 // and sent at most every MOVE_MIN_INTERVAL_MS, so a 240/360 Hz display does not send
 // a move per refresh; every other kind is sent at once (after the pending move).
+// Every event carries its own timestamp (Event.timeStamp, the performance.now() time
+// base), not the time its handler ran: a busy renderer then still reports a 90 ms click
+// as 90 ms and a throw with its real speed (diagnosis H3).
 import type { OverlayPointerEvent } from '../../shared/ipc';
 
 type Kind = OverlayPointerEvent['kind'];
 
 /** At most ~166 moves per second, whatever the refresh rate (main budgets per time). */
 export const MOVE_MIN_INTERVAL_MS = 6;
+/** An event timestamp older than this (or in the future) is not trusted: handler time is used instead. */
+export const MAX_EVENT_AGE_MS = 60_000;
+
+/** The event's own time in the performance.now() time base; handler time when it has none usable. */
+export function eventTime(e: { timeStamp?: number }, now: number): number {
+  const ts = e.timeStamp;
+  if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0 || ts > now + 1 || now - ts > MAX_EVENT_AGE_MS) return now;
+  return ts;
+}
+
+/** The newest raw sample behind a (possibly coalesced) pointermove. */
+function latestSample(e: PointerEvent): PointerEvent {
+  try {
+    const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : null;
+    const last = list && list.length > 0 ? list[list.length - 1] : undefined;
+    return last ?? e;
+  } catch {
+    return e;
+  }
+}
 
 const clampInt = (v: number, lo: number, hi: number): number => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : lo);
 const clampCoord = (v: number): number => (Number.isFinite(v) ? Math.min(100000, Math.max(-100000, v)) : 0);
@@ -29,6 +52,7 @@ export function attachPointerInput(
   send: (e: OverlayPointerEvent) => void,
   raf: (cb: FrameRequestCallback) => number = (cb) => requestAnimationFrame(cb),
   cancelRaf: (id: number) => void = (id) => cancelAnimationFrame(id),
+  now: () => number = () => performance.now(),
 ): () => void {
   let pendingMove: OverlayPointerEvent | null = null;
   let rafId = 0;
@@ -64,7 +88,7 @@ export function attachPointerInput(
     flush();
   };
   const make = (kind: Kind, e: PointerEvent | MouseEvent): OverlayPointerEvent =>
-    toPointerEvent(kind, e.clientX, e.clientY, kind === 'move' ? -1 : e.button, e.buttons, performance.now());
+    toPointerEvent(kind, e.clientX, e.clientY, kind === 'move' ? -1 : e.button, e.buttons, eventTime(e, now()));
 
   const onDown = (e: PointerEvent): void => {
     flush();
@@ -76,7 +100,7 @@ export function attachPointerInput(
     emit(make('down', e));
   };
   const onMove = (e: PointerEvent): void => {
-    pendingMove = make('move', e);
+    pendingMove = make('move', latestSample(e));
     if (rafId === 0) rafId = raf(onFrame);
   };
   const onUp = (e: PointerEvent): void => {
