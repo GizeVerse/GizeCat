@@ -153,12 +153,19 @@ app.whenReady().then(() => {
   if (layout === 'maximized') w.maximize();
   else if (layout !== 'hidden') w.showInactive();
   const hwnd = w.getNativeWindowHandle().readBigUInt64LE(0).toString();
+  // The helper ends itself only through app.exit (or the test kills the process), neither of which
+  // emits 'close': a 'close' is a close request from outside the test (its close button, Alt+F4 or
+  // another program), and the window then goes. Nothing touches the window after that, so the
+  // record is not buried under an "Object has been destroyed" error.
+  let closed = false;
+  w.on('close', () => { closed = true; write({ closedFromOutside: true, at: Date.now() }); });
   let seq = 0;
-  const report = () => write({ seq, hwnd, pid: process.pid, state: w.isMinimized() ? 'minimized' : w.isMaximized() ? 'maximized' : w.isVisible() ? 'normal' : 'hidden' });
+  const report = () => { if (!closed && !w.isDestroyed()) write({ seq, hwnd, pid: process.pid, state: w.isMinimized() ? 'minimized' : w.isMaximized() ? 'maximized' : w.isVisible() ? 'normal' : 'hidden' }); };
   setTimeout(report, 800);
   let done = 0;
   setInterval(() => {
     try { process.kill(parentPid, 0); } catch { app.exit(0); return; }
+    if (closed || w.isDestroyed()) return;
     let lines = [];
     try { lines = fs.readFileSync(cmdFile, 'utf8').split('\n').filter(Boolean); } catch { return; }
     for (; done < lines.length; done++) {
@@ -186,6 +193,8 @@ export interface OwnWindow {
   /** The report answering the latest command (or the first one, after it was created). */
   next(): Promise<OwnWindowReport>;
   send(cmd: { op: 'maximize' | 'restore' | 'minimize' }): void;
+  /** True once its window was closed from outside the test (an environment event, not an app failure). */
+  closedFromOutside(): boolean;
   /** Asks it to quit, ends it if it does not, deletes its profile; resolves once it has exited. */
   close(): Promise<void>;
 }
@@ -213,32 +222,45 @@ export function openOwnWindow(o: { layout: 'typical' | 'floating' | 'maximized' 
   const proc = spawn(exe, [script, `--user-data-dir=${path.join(dir, 'profile')}`], { env, stdio: 'ignore' });
   const exited = new Promise<void>((resolve) => proc.once('exit', () => resolve()));
   let sent = 0;
-  const reports = (): Array<OwnWindowReport | { error: string }> =>
-    fs
-      .readFileSync(outFile, 'utf8')
-      .split(/\r?\n/)
-      .flatMap((l) => {
-        // A line still being written is skipped until it is complete.
-        try {
-          return l ? [JSON.parse(l) as OwnWindowReport | { error: string }] : [];
-        } catch {
-          return [];
-        }
-      });
+  type Line = OwnWindowReport | { error: string } | { closedFromOutside: true };
+  // The folder is gone once close() has run.
+  const readOut = (): string | null => {
+    try {
+      return fs.readFileSync(outFile, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const reports = (): Line[] => {
+    const text = readOut();
+    if (text === null) return [];
+    return text.split(/\r?\n/).flatMap((l) => {
+      // A line still being written is skipped until it is complete.
+      try {
+        return l ? [JSON.parse(l) as Line] : [];
+      } catch {
+        return [];
+      }
+    });
+  };
+  const closedFromOutside = (): boolean => reports().some((x) => 'closedFromOutside' in x);
   return {
     proc,
     next: async () => {
       const deadline = Date.now() + 20_000;
       for (;;) {
         const all = reports();
-        const failed = all.find((x): x is { error: string } => 'error' in x);
-        if (failed) throw new Error(`own window failed: ${failed.error}`);
+        // The answer, if it came; else the cause: a close from outside before any error it led to.
         const rep = all.find((x): x is OwnWindowReport => 'seq' in x && x.seq === sent);
         if (rep) return rep;
+        if (all.some((x) => 'closedFromOutside' in x)) throw new Error('own window was closed from outside the test');
+        const failed = all.find((x): x is { error: string } => 'error' in x);
+        if (failed) throw new Error(`own window failed: ${failed.error}`);
         if (proc.exitCode !== null || Date.now() > deadline) throw new Error(`own window did not report (exit ${String(proc.exitCode)})`);
         await sleep(100);
       }
     },
+    closedFromOutside,
     send: (cmd) => {
       sent++;
       fs.appendFileSync(cmdFile, `${JSON.stringify(cmd)}\n`);

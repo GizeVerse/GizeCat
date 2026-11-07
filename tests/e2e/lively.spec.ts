@@ -29,7 +29,7 @@ import type { SimOutput } from '../../src/shared/sim';
 import type { LedgeSurface } from '../../src/shared/surfaces';
 import { closeBrowser, enablePerMonitorDpiAwareness, findBrowser, instancePids, launchBrowser, openTabs, waitForBrowserWindow, type BrowserInstance, type BrowserKind } from '../integration/uia/realBrowser';
 import { expect, hook, launchApp, quitApp, readLogLines, test, waitForCat } from './fixtures';
-import { frameOf, keepTopmost, moveOwnWindow, openExplorerWindow, openOwnWindow, openTerminalWindow, rectOf, type OwnWindow } from './ownWindows';
+import { frameOf, keepTopmost, moveOwnWindow, openExplorerWindow, openOwnWindow, openTerminalWindow, rectOf, type OwnWindow, type OwnWindowReport } from './ownWindows';
 import { win32Probe, WS_EX_TRANSPARENT } from './win32Probe';
 
 const LIVELY = process.env.DESKTOP_CAT_E2E_LIVELY === '1';
@@ -149,11 +149,24 @@ async function keepPresentAtEmptyDesk(app: ElectronApplication): Promise<void> {
   await hook(app, 'injectUserIdle', 90_000);
 }
 
+/** An own window's first report; one closed from outside before it (e.g. someone at the desk) skips the run. */
+async function ownReport(info: TestInfo, own: OwnWindow, what: string): Promise<OwnWindowReport> {
+  try {
+    return await own.next();
+  } catch (err) {
+    if (own.closedFromOutside()) skipBecause(info, `environment: ${what} was closed from outside the test before the run started`);
+    throw err;
+  }
+}
+
 /** Precondition: our own window is really in front at its top edge and sides; otherwise the run says nothing. */
-async function requireInFront(info: TestInfo, hwnd: string, what: string): Promise<void> {
+async function requireInFront(info: TestInfo, hwnd: string, what: string, own?: OwnWindow): Promise<void> {
   const w32 = win32Probe();
   await sleep(500);
   const f = frameOf(hwnd);
+  // Closed from outside (its close button, Alt+F4 or another program; e.g. someone at the desk):
+  // the run says nothing about the app, so it is skipped, not failed.
+  if (!f && own?.closedFromOutside()) skipBecause(info, `environment: ${what} was closed from outside the test before the run started`);
   if (!f) throw new Error(`${what}: no frame`);
   const points: Array<[number, number]> = [
     [f.x + f.width / 2, f.y + 4],
@@ -408,11 +421,11 @@ test.describe('v1.2 lively: an own typical window (REAL)', () => {
     let app: ElectronApplication | null = null;
     let stop: (() => void) | null = null;
     try {
-      const r = await win.next();
+      const r = await ownReport(info, win, 'the own window');
       app = await startApp(userData, [r.pid]);
       stop = keepTopmost([r.hwnd], await overlayHwnds(app));
       record(info, 'pids', { app: app.process().pid, window: r.pid });
-      await requireInFront(info, r.hwnd, 'the own window');
+      await requireInFront(info, r.hwnd, 'the own window', win);
       const { scale, bw } = await scaleOf(app);
       const f = frameOf(r.hwnd)!;
       const topId = `windowTop:${r.hwnd}`;
@@ -990,7 +1003,7 @@ test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)',
     let app: ElectronApplication | null = null;
     let stop: (() => void) | null = null;
     try {
-      const win = await front.next();
+      const win = await ownReport(info, front, 'the own maximized window');
       record(info, 'window', { state: win.state, frame: frameOf(win.hwnd) });
       expect(win.state).toBe('maximized');
       app = await startApp(userData, [win.pid], { interaction: true });
@@ -999,7 +1012,7 @@ test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)',
       expect((await hook(app, 'patchSettings', { behavior: { disabledExtras: [] } })).ok).toBe(true);
       const overlays = await overlayHwnds(app);
       stop = keepTopmost([win.hwnd], overlays);
-      await requireInFront(info, win.hwnd, 'the own maximized window');
+      await requireInFront(info, win.hwnd, 'the own maximized window', front);
       await hook(app, 'setTimeScale', 12);
       const tr = new Tracker(app, null);
       const cling = await tr.until((o) => supportKind(o.out) === 'screenEdge', 80 * 60_000, 7 * 60_000);
@@ -1118,13 +1131,13 @@ test.describe('v1.2 lively: covered support bails out (REAL)', () => {
     let app: ElectronApplication | null = null;
     let stop: (() => void) | null = null;
     try {
-      const sup = await support.next();
-      const cov = await cover.next();
+      const sup = await ownReport(info, support, 'the own support window');
+      const cov = await ownReport(info, cover, 'the own cover window');
       app = await startApp(userData, [sup.pid, cov.pid], { interaction: true });
       record(info, 'pids', { app: app.process().pid, support: sup.pid, cover: cov.pid });
       const overlays = await overlayHwnds(app);
       stop = keepTopmost([sup.hwnd], overlays);
-      await requireInFront(info, sup.hwnd, 'the own support window');
+      await requireInFront(info, sup.hwnd, 'the own support window', support);
       await hook(app, 'setTimeScale', 12);
       const topId = `windowTop:${sup.hwnd}`;
       const tr = new Tracker(app, sup.hwnd);

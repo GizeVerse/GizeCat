@@ -99,6 +99,13 @@ interface GestureResult {
   ok: number;
   /** Refused by design: the cat hidden, or in a state where the press means nothing (held, airborne, landing). */
   designed: number;
+  /**
+   * Not a valid gesture as the page received it (a "double tap" 500 ms apart, a flick under the throw
+   * speed, a cat that walked off the strokes): the harness's input, not the app, so not judged. Counted
+   * apart from the designed states, with samples, so the report shows how much was not judged.
+   */
+  harness: number;
+  harnessSamples: Array<Record<string, unknown>>;
   failed: Array<Record<string, unknown>>;
 }
 
@@ -153,6 +160,72 @@ const STRAY_PROBE = `(() => {
   return true;
 })()`;
 const STRAY_TAKE = `(() => { const s = window.__soakStray; return s ? s.events.splice(0) : []; })()`;
+
+/**
+ * What the page actually received for the primary button (down, held moves with their coalesced
+ * samples, up), with each event's own timestamp. CDP input arrives with the harness's own timing: on a
+ * loaded machine a "double tap" can reach the page 500 ms apart, or a flick at a walking pace. The
+ * oracle judges the app against the input it was given, not against what the harness meant to send.
+ */
+const DELIVERED_PROBE = `(() => {
+  if (window.__soakIn) return true;
+  const s = { events: [] };
+  window.__soakIn = s;
+  const push = (k, e) => { if (s.events.length < 600) s.events.push({ k, t: e.timeStamp, x: e.clientX, y: e.clientY }); };
+  document.addEventListener('pointerdown', (e) => { if (e.button === 0) push('down', e); }, true);
+  document.addEventListener('pointerup', (e) => { if (e.button === 0) push('up', e); }, true);
+  document.addEventListener('pointermove', (e) => {
+    if ((e.buttons & 1) === 0) return;
+    let list = [];
+    try { list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : []; } catch { list = []; }
+    if (list.length > 0) for (const c of list) push('move', c); else push('move', e);
+  }, true);
+  return true;
+})()`;
+const DELIVERED_TAKE = `(() => { const s = window.__soakIn; return s ? s.events.splice(0) : []; })()`;
+
+/** Gesture thresholds the oracle applies to the delivered input (src/core/interaction/gestures.ts defaults, THROW_SPEED_DIP). */
+const DOUBLE_TAP_MS = 350;
+const TAP_MAX_MS = 600;
+const VELOCITY_WINDOW_MS = 100;
+const THROW_SPEED_DIP = 1100;
+
+interface InSample {
+  k: 'down' | 'move' | 'up';
+  t: number;
+  x: number;
+  y: number;
+}
+
+/** The delivered presses: each down with the samples up to and including its up (if it came). */
+function deliveredPresses(ev: readonly InSample[]): InSample[][] {
+  const out: InSample[][] = [];
+  let cur: InSample[] | null = null;
+  for (const e of ev) {
+    if (e.k === 'down') {
+      cur = [e];
+      out.push(cur);
+    } else if (cur) {
+      cur.push(e);
+      if (e.k === 'up') cur = null;
+    }
+  }
+  return out;
+}
+
+/**
+ * The release speed (DIP/s; overlay pages are in DIP) of a delivered press, by the app's own rule
+ * (gestures.ts releaseVelocity): the samples in the last 100 ms before the up, first to up.
+ */
+function deliveredReleaseSpeed(press: readonly InSample[]): { speed: number; windowSamples: number; flickSpanMs: number } | null {
+  const up = press[press.length - 1];
+  if (!up || up.k !== 'up') return null;
+  const win = press.slice(1).filter((s) => up.t - s.t <= VELOCITY_WINDOW_MS);
+  const first = win[0];
+  const dt = first ? up.t - first.t : 0;
+  const speed = first && win.length >= 2 && dt >= 8 ? (Math.hypot(up.x - first.x, up.y - first.y) / dt) * 1000 : 0;
+  return { speed: Math.round(speed), windowSamples: win.length, flickSpanMs: Math.round(dt) };
+}
 
 /** The cat's overlay (the one whose display the cat is on) and its page. */
 async function catOverlay(app: ElectronApplication, out: SimOutput): Promise<{ ov: OverlayInfo; page: Page; scale: number } | null> {
@@ -305,7 +378,7 @@ test.describe('interaction soak: the real app under random gestures and perturba
       const heapStart = await heaps();
       const profile0 = await hook(a, 'getBehaviorProfile');
       const stats0 = s0;
-      const results = Object.fromEntries(GESTURES.map((g): [Gesture, GestureResult] => [g, { attempts: 0, ok: 0, designed: 0, failed: [] }])) as Record<Gesture, GestureResult>;
+      const results = Object.fromEntries(GESTURES.map((g): [Gesture, GestureResult] => [g, { attempts: 0, ok: 0, designed: 0, harness: 0, harnessSamples: [], failed: [] }])) as Record<Gesture, GestureResult>;
       const latencyMs: number[] = [];
       const loopSamples: Array<{ p50Ms: number; p99Ms: number; maxMs: number }> = [];
       const stuck: Array<Record<string, unknown>> = [];
@@ -363,6 +436,22 @@ test.describe('interaction soak: the real app under random gestures and perturba
         }
         return p;
       };
+      /**
+       * A flick: five CDP moves about 10 ms apart (a hand's 40-60 ms flick, over several frames), with
+       * no test-hook round trip in between: on a loaded machine a hook call can take 100+ ms, which
+       * stretched flicks and turned throws into drops. The injected cursor follows after the release.
+       */
+      const flick = async (page: Page, toLocal: (p: Point) => Point, from: Point, to: Point): Promise<Point> => {
+        const end = clampIn(to);
+        let p = from;
+        for (let i = 1; i <= 5; i++) {
+          p = { x: Math.round(from.x + ((end.x - from.x) * i) / 5), y: Math.round(from.y + ((end.y - from.y) * i) / 5) };
+          const l = toLocal(p);
+          await page.mouse.move(l.x, l.y);
+          if (i < 5) await sleep(10);
+        }
+        return p;
+      };
       /** Polls until the sim is held (ms since `t0`), or null after 1.5 s. */
       const heldWithin = async (t0: number): Promise<number | null> => {
         for (;;) {
@@ -403,6 +492,13 @@ test.describe('interaction soak: the real app under random gestures and perturba
         let ok = false;
         await page.evaluate(STRAY_PROBE).catch(() => undefined);
         await page.evaluate(STRAY_TAKE).catch(() => undefined);
+        await page.evaluate(DELIVERED_PROBE).catch(() => undefined);
+        await page.evaluate(DELIVERED_TAKE).catch(() => undefined);
+        const takeDelivered = async (): Promise<InSample[]> => ((await page.evaluate(DELIVERED_TAKE).catch(() => [])) as InSample[]);
+        const mainPresses = async (): Promise<number | null> => {
+          const s1 = await stats(true);
+          return s1?.overlay && pre.stats?.overlay ? s1.overlay.presses - pre.stats.overlay.presses : null;
+        };
         try {
           if (!OS_MOUSE) await hook(a, 'forceInteractive', false);
           await hook(a, 'injectCursor', c);
@@ -426,7 +522,18 @@ test.describe('interaction soak: the real app under random gestures and perturba
               const after = await counters();
               detail.clicks = after.clicks - pre.counters.clicks;
               detail.doubleClicks = after.doubleClicks - pre.counters.doubleClicks;
+              detail.mainPresses = await mainPresses();
               ok = g === 'tap' ? after.clicks > pre.counters.clicks : after.doubleClicks > pre.counters.doubleClicks;
+              // Judge against the input the page received (its own event times), not the harness's intent.
+              const ps = deliveredPresses(await takeDelivered());
+              const ups = ps.map((q) => q[q.length - 1]!).filter((s) => s.k === 'up');
+              detail.delivered = ps.map((q) => ({ pressMs: Math.round(q[q.length - 1]!.t - q[0]!.t), released: q[q.length - 1]!.k === 'up' }));
+              const need = g === 'tap' ? 1 : 2;
+              if (why === null && !ok) {
+                if (ps.length < need || ups.length < ps.length) why = `harness: ${ps.length} press(es) and ${ups.length} release(s) reached the page`;
+                else if (ps.some((q) => q[q.length - 1]!.t - q[0]!.t > TAP_MAX_MS)) why = `harness: a press reached the page lasting over ${TAP_MAX_MS} ms`;
+                else if (g === 'doubleTap' && ups[1]!.t - ups[0]!.t > DOUBLE_TAP_MS) why = `harness: the releases reached the page ${Math.round(ups[1]!.t - ups[0]!.t)} ms apart (a double tap is within ${DOUBLE_TAP_MS} ms)`;
+              }
               break;
             }
             case 'stroke': {
@@ -447,6 +554,13 @@ test.describe('interaction soak: the real app under random gestures and perturba
               const after = await counters();
               detail.pets = after.pets - pre.counters.pets;
               ok = after.pets > pre.counters.pets;
+              // The strokes stay where the cat was at the start: a cat that walked off them was not stroked.
+              if (why === null && !ok && post) {
+                const b = post.boundsPx;
+                const onPath = c.y >= b.y && c.y <= b.y + b.height && c.x + 24 * scale >= b.x && c.x - 24 * scale <= b.x + b.width;
+                detail.catAfter = b;
+                if (!onPath) why = 'harness: the cat moved off the stroke path';
+              }
               break;
             }
             case 'drag':
@@ -454,6 +568,7 @@ test.describe('interaction soak: the real app under random gestures and perturba
             case 'slowThrow':
             case 'throw': {
               const t0 = Date.now();
+              let before: BehaviorProfileSnapshot | null = null;
               await page.mouse.down();
               let p = await pathMove(page, toLocal, c, { x: c.x, y: c.y - 14 * scale }, 2, 16);
               const latency = await heldWithin(t0);
@@ -482,24 +597,42 @@ test.describe('interaction soak: the real app under random gestures and perturba
                 detail.slowMs = Math.round(ms);
                 if (leftHeld) detail.leftHeld = leftHeld;
                 const step = between(90, 150) * scale;
-                p = await pathMove(page, toLocal, p, { x: p.x + side * step * 5, y: p.y - step * 3.5 }, 5, 0);
+                before = await hook(a, 'getBehaviorProfile');
+                p = await flick(page, toLocal, p, { x: p.x + side * step * 5, y: p.y - step * 3.5 });
               } else if (g === 'throw') {
                 // A wind-up of ~0.3-0.7 s, then the flick: the release speed comes from the last ~100 ms.
                 p = await pathMove(page, toLocal, p, { x: p.x - side * 30 * scale, y: p.y + 10 * scale }, Math.round(between(5, 10)), 60);
                 const step = between(90, 150) * scale;
-                p = await pathMove(page, toLocal, p, { x: p.x + side * step * 5, y: p.y - step * 3.5 }, 5, 0);
+                before = await hook(a, 'getBehaviorProfile');
+                p = await flick(page, toLocal, p, { x: p.x + side * step * 5, y: p.y - step * 3.5 });
               } else {
                 p = await pathMove(page, toLocal, p, { x: p.x + side * 30 * scale, y: p.y - 90 * scale }, 6, 40);
                 await pathMove(page, toLocal, p, { x: p.x + side * 2, y: p.y - 2 }, 3, 40);
               }
-              const before = await hook(a, 'getBehaviorProfile');
+              // Taken before the flick for throws: a hook round trip between the flick and the release is a
+              // pause of the hand, and a hand that stops before letting go drops the cat (by design).
+              before ??= await hook(a, 'getBehaviorProfile');
               await page.mouse.up();
+              await hook(a, 'injectCursor', p);
               const d = await awaitFall(before);
               const mid = await stats(true);
               const lostAfter = mid?.overlay ? Object.values(mid.overlay.lostPresses).reduce((x, y) => x + y, 0) : null;
               detail.falls = d;
               detail.lostPressesDuringHold = lostBefore !== null && lostAfter !== null ? lostAfter - lostBefore : null;
               const landed = d.thrown + d.dropped >= 1;
+              const presses = deliveredPresses(await takeDelivered());
+              const last = presses[presses.length - 1];
+              // The longest stretch the page received nothing during the press (CDP input waits on a
+              // starved renderer; main's "cursor moved, no pointer event" rule then sees silence).
+              detail.maxDeliveredGapMs = last && last.length > 1 ? Math.round(Math.max(...last.slice(1).map((s, i) => s.t - last[i]!.t))) : null;
+              detail.mainPresses = await mainPresses();
+              if (g === 'throw' || g === 'slowThrow') {
+                // The release speed the page received, by the app's own rule: a flick that reached it under
+                // the throw speed is a drop by design, whatever the harness meant to send.
+                const rel = last ? deliveredReleaseSpeed(last) : null;
+                detail.delivered = rel;
+                if (why === null && d.thrown === 0 && rel && rel.speed < THROW_SPEED_DIP) why = `harness: the flick reached the page at ${rel.speed} DIP/s (a throw is over ${THROW_SPEED_DIP})`;
+              }
               if (g === 'throw') ok = latency !== null && d.thrown >= 1;
               else if (g === 'slowThrow') ok = latency !== null && d.thrown >= 1 && detail.heldBeforeUp === true && (detail.lostPressesDuringHold ?? 0) === 0;
               else if (g === 'slowDrag') ok = latency !== null && landed && detail.heldBeforeUp === true && (detail.lostPressesDuringHold ?? 0) === 0;
@@ -556,7 +689,10 @@ test.describe('interaction soak: the real app under random gestures and perturba
         }
         await settle(g);
         if (why !== null && !ok) {
-          res.designed++;
+          if (why.startsWith('harness:')) {
+            res.harness++;
+            if (res.harnessSamples.length < 10) res.harnessSamples.push({ ...detail, why, tS: Math.round((Date.now() - soakStart) / 1000) });
+          } else res.designed++;
           return;
         }
         if (ok) res.ok++;
@@ -664,17 +800,25 @@ test.describe('interaction soak: the real app under random gestures and perturba
         live.stopTopmost = null;
         await own.close().catch(() => undefined);
         own = openOwnWindow({ layout: 'hidden' });
-        win = await own.next();
         maximized = false;
-        await hook(a, 'restrictSurfacesToPids', [win.pid]);
+        try {
+          win = await own.next();
+          await hook(a, 'restrictSurfacesToPids', [win.pid]);
+        } catch (err) {
+          // Still no own window: the next maxWindow draw tries again; the run goes on either way.
+          harnessIncidents.push(`${new Date().toISOString()} reopening the own window failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       };
+      const helperGone = (why: string): string => `${why}${own.closedFromOutside() ? ' (its window was closed from outside the test)' : ''}`;
 
       const perturb = async (k: Perturbation): Promise<void> => {
         perturbations[k] = (perturbations[k] ?? 0) + 1;
         switch (k) {
           case 'maxWindow': {
+            // A draw that only reopens the helper is a harness incident, not a maximize perturbation.
             if (own.proc.exitCode !== null) {
-              await reopenOwn(`own window helper had exited (code ${String(own.proc.exitCode)})`);
+              perturbations[k] = (perturbations[k] ?? 1) - 1;
+              await reopenOwn(helperGone(`own window helper had exited (code ${String(own.proc.exitCode)})`));
               break;
             }
             maximized = !maximized;
@@ -682,7 +826,8 @@ test.describe('interaction soak: the real app under random gestures and perturba
             try {
               await own.next();
             } catch (err) {
-              await reopenOwn(`own window did not answer: ${err instanceof Error ? err.message : String(err)}`);
+              perturbations[k] = (perturbations[k] ?? 1) - 1;
+              await reopenOwn(helperGone(`own window did not answer: ${err instanceof Error ? err.message : String(err)}`));
               break;
             }
             live.stopTopmost?.();
@@ -770,10 +915,11 @@ test.describe('interaction soak: the real app under random gestures and perturba
       }
       if (maximized && own.proc.exitCode === null) {
         own.send({ op: 'minimize' });
-        await own.next();
-        live.stopTopmost?.();
-        live.stopTopmost = null;
+        // A helper that no longer answers here must not cost the run its report.
+        await own.next().catch((err: unknown) => harnessIncidents.push(`${new Date().toISOString()} ${helperGone(`own window did not answer the final minimize: ${err instanceof Error ? err.message : String(err)}`)}`));
       }
+      live.stopTopmost?.();
+      live.stopTopmost = null;
       await scaled(false);
 
       // ---- report --------------------------------------------------------------------------------
@@ -795,8 +941,21 @@ test.describe('interaction soak: the real app under random gestures and perturba
         seed: SEED,
         timeScale: SCALE,
         options: { only: ONLY, perturb: PERTURB ? LOOP_PERTURBATIONS : [], osMouse: OS_MOUSE },
-        gestures: Object.fromEntries(GESTURES.map((g) => [g, { attempts: results[g].attempts, ok: results[g].ok, designed: results[g].designed, failed: results[g].failed.length, rate: results[g].attempts - results[g].designed > 0 ? Math.round((results[g].ok / (results[g].attempts - results[g].designed)) * 1000) / 10 : null }])),
-        failures: GESTURES.flatMap((g) => results[g].failed.slice(0, 10)),
+        gestures: Object.fromEntries(
+          GESTURES.map((g) => {
+            const r = results[g];
+            const judged = r.attempts - r.designed - r.harness;
+            return [g, { attempts: r.attempts, ok: r.ok, designed: r.designed, harness: r.harness, failed: r.failed.length, rate: judged > 0 ? Math.round((r.ok / judged) * 1000) / 10 : null }];
+          }),
+        ),
+        failures: GESTURES.flatMap((g) => results[g].failed.slice(0, 40)),
+        harnessSamples: GESTURES.flatMap((g) => results[g].harnessSamples),
+        // The whole run's main log by level, scope and message (no debug): hangs, lost presses, guard
+        // episodes and recoveries over all of it, where the attached tail covers only the last minutes.
+        log: readLogLines(userData).reduce<Record<string, number>>((acc, l) => {
+          if (l.l !== 'debug') acc[`${l.l} ${l.s}: ${l.m}`] = (acc[`${l.l} ${l.s}: ${l.m}`] ?? 0) + 1;
+          return acc;
+        }, {}),
         heldLatencyMs: { n: latencyMs.length, p50: percentile(latencyMs, 0.5), p95: percentile(latencyMs, 0.95), max: latencyMs.length ? Math.max(...latencyMs) : null },
         falls: { thrown: falls(profile1, 'thrown') - falls(profile0, 'thrown'), dropped: falls(profile1, 'dropped') - falls(profile0, 'dropped') },
         interaction: stats1 ? { presses: delta('presses'), lostPresses: delta('lostPresses'), win32Disagreements: delta('win32Disagreements'), contextCancels: delta('contextCancels'), failClosedPolls: delta('failClosedPolls'), ignoreToggles: delta('ignoreToggles'), recreates: delta('recreates'), staleRegionDenials: delta('staleRegionDenials'), clickGuard: stats1.clickGuard, lifecycle: stats1.lifecycle } : null,
@@ -811,10 +970,18 @@ test.describe('interaction soak: the real app under random gestures and perturba
         capabilities: { interactionStats: statsAvailable, overlayStats: overlayStatsAvailable, eventLoopDelay: loopDelayAvailable, systemEvent: systemAvailable },
       };
       await info.attach('soak-report.json', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
+      // The line reporter keeps only the console: the whole report also goes to a file in the test's
+      // output folder (out/e2e-results/<test>/), which stays until the next Playwright run.
       record(info, 'soak', report);
+      const reportFile = info.outputPath('soak-report.json');
+      fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));
+      record(info, 'soak-report-file', reportFile);
 
       // ---- pass criteria -----------------------------------------------------------------------
       for (const g of GESTURES) expect(results[g].failed, `${g}: every attempt outside a designed guard state lands`).toEqual([]);
+      // The oracle may set aside input the page did not receive as a valid gesture; the run must still
+      // judge most of each kind, or it says little about that kind.
+      for (const g of GESTURES) expect(results[g].harness, `${g}: at most a quarter set aside as harness input (${results[g].attempts} attempts)`).toBeLessThanOrEqual(Math.max(3, Math.floor(results[g].attempts / 4)));
       expect(stuck, 'no press, drag or hold left behind after a gesture').toEqual([]);
       expect(clickThrough.offCatBlocking, 'T8: the overlay never takes the mouse off the cat').toEqual([]);
       expect(clickThrough.onCatDenied, 'the cat takes the mouse when no designed guard says otherwise').toEqual([]);
