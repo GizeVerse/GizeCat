@@ -1051,9 +1051,13 @@ test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)',
       const t0 = Date.now();
       let held = 0;
       let lastCursor: Point | null = null;
+      // Why a pass did not check: the overlay behind our window (or its HWND gone: recreated), or the cat off the wall.
+      let passes = 0;
+      let notInFront = 0;
       while (Date.now() - t0 < 30_000) {
         const o = (await observe(app)).out;
         if (!o || supportKind(o) !== 'screenEdge') break;
+        passes++;
         if (trace.length === 0 || trace[trace.length - 1]!['clip'] !== o.clip) trace.push({ ms: Date.now() - t0, y: Math.round(o.y), clip: o.clip, state: o.state });
         const c = center(o.boundsPx);
         // The cursor comes to rest over the cat: if the dwell were to open the overlay, this is when.
@@ -1063,7 +1067,10 @@ test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)',
           held = Date.now();
         }
         await sleep(40);
-        if (!overlayInFront(overlays, win.hwnd)) continue;
+        if (!overlayInFront(overlays, win.hwnd)) {
+          notInFront++;
+          continue;
+        }
         checks++;
         const overlay = (await hook(app, 'getOverlays')).find((x) => c.x >= x.boundsPx.x && c.x < x.boundsPx.x + x.boundsPx.width);
         const clickThrough = overlay ? (probe.exStyle(overlay.hwnd) & WS_EX_TRANSPARENT) === WS_EX_TRANSPARENT : false;
@@ -1077,7 +1084,11 @@ test.describe('v1.2 lively: screen edge next to an own maximized window (REAL)',
       await hook(app, 'injectCursor', null);
       const diag = await hook(app, 'getSurfaceDiagnostics');
       const dbg = await hook(app, 'getHostDebug');
-      record(info, 'clickThrough', { checks, wrong: wrong.length, sample: wrong.slice(0, 5), clingMs, trace: trace.slice(0, 12), screenEdges: diag?.provider.screenEdges, clickGuard: dbg.clickGuard });
+      const overlaysNow = (await hook(app, 'getOverlays')).map((x) => x.hwnd);
+      const overlaysChanged = overlaysNow.some((h) => !overlays.includes(h)) || overlays.some((h) => !overlaysNow.includes(h));
+      record(info, 'clickThrough', { checks, passes, notInFront, overlaysChanged, wrong: wrong.length, sample: wrong.slice(0, 5), clingMs, trace: trace.slice(0, 12), screenEdges: diag?.provider.screenEdges, clickGuard: dbg.clickGuard });
+      // An overlay re-created during the run (new HWND) would leave every check out: name it, it is not the cat's doing.
+      expect(overlaysChanged, 'the overlay windows were not re-created during the edge check').toBe(false);
       expect(checks, 'WindowFromPoint checks with the overlay in front').toBeGreaterThan(0);
       expect(wrong, 'the injected cursor over the clinging cat hit the overlay').toEqual([]);
       expect(clingMs, 'the cat climbed down from the cursor, wall ms').toBeLessThan(15_000);
