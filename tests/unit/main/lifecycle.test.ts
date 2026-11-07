@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCrashGuard, readRelaunchHistory } from '../../../src/main/lifecycle/crashGuard';
 import { hasFlag, parseTimeScale, parseUserDataOverride } from '../../../src/main/lifecycle/launchArgs';
 import { LOGIN_ITEM_NAME, UNINSTALL_MARKER_FILE, UNINSTALLER_FILE, uninstallerFileFor } from '../../../src/main/lifecycle/loginItem';
-import { createQuitSequence } from '../../../src/main/lifecycle/quitSequence';
+import { createQuitSequence, EXPEDITED_DISPOSE_MS } from '../../../src/main/lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndKind } from '../../../src/main/lifecycle/sessionEnd';
 import { createShortcutManager } from '../../../src/main/lifecycle/shortcuts';
 import { IDENTITY } from '../../../src/shared/identity';
@@ -70,6 +70,78 @@ describe('quit sequence', () => {
     });
     await thrower.seq.run();
     expect(thrower.calls).toEqual(['notify', 'save', 'dispose', 'exit:0']);
+  });
+});
+
+describe('quit sequence, expedited at logout or shutdown (1.4.0 macOS, D7)', () => {
+  function setup(opts: { notify?: () => Promise<void>; dispose?: () => Promise<void> | void } = {}) {
+    const timers = manualTimers();
+    const calls: string[] = [];
+    const seq = createQuitSequence({
+      notifySim: () => {
+        calls.push('notify');
+        return (opts.notify ?? (() => new Promise<void>(() => undefined)))();
+      },
+      saveSync: () => calls.push('save'),
+      dispose: () => {
+        calls.push('dispose');
+        return opts.dispose?.();
+      },
+      exit: (code) => calls.push(`exit:${code}`),
+      logger: memoryLogger(),
+      simTimeoutMs: 1500,
+      setTimer: timers.setTimeout,
+      clearTimer: timers.clearTimeout,
+    });
+    return { seq, calls, timers };
+  }
+
+  it('expedited before the quit: no animation is requested, the save runs at once, then disposal and exit', async () => {
+    const { seq, calls } = setup();
+    seq.expedite();
+    expect(seq.expedited).toBe(true);
+    // expedite() alone never starts a quit.
+    expect(calls).toEqual([]);
+    expect(seq.phase).toBe('idle');
+    await seq.run();
+    expect(calls).toEqual(['save', 'dispose', 'exit:0']);
+  });
+
+  it('expedited while the quit animation runs: the wait is cut short instead of lasting 1.5 s', async () => {
+    const { seq, calls, timers } = setup();
+    const done = seq.run();
+    await Promise.resolve();
+    expect(calls).toEqual(['notify']);
+    timers.advance(100);
+    seq.expedite();
+    await done;
+    expect(calls).toEqual(['notify', 'save', 'dispose', 'exit:0']);
+    expect(timers.now).toBe(100);
+  });
+
+  it('bounds a hanging disposal at 500 ms when expedited (1.5 s otherwise)', async () => {
+    const { seq, calls, timers } = setup({ dispose: () => new Promise<void>(() => undefined) });
+    seq.expedite();
+    const done = seq.run();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toEqual(['save', 'dispose']);
+    timers.advance(EXPEDITED_DISPOSE_MS - 1);
+    await Promise.resolve();
+    expect(calls).toEqual(['save', 'dispose']);
+    timers.advance(1);
+    await done;
+    expect(calls).toEqual(['save', 'dispose', 'exit:0']);
+    expect(EXPEDITED_DISPOSE_MS).toBe(500);
+  });
+
+  it('a second expedite() or one after the quit changes nothing; without expedite() the v1 sequence is unchanged', async () => {
+    const plain = setup({ notify: () => Promise.resolve() });
+    await plain.seq.run();
+    expect(plain.calls).toEqual(['notify', 'save', 'dispose', 'exit:0']);
+    plain.seq.expedite();
+    plain.seq.expedite();
+    expect(plain.calls).toEqual(['notify', 'save', 'dispose', 'exit:0']);
   });
 });
 

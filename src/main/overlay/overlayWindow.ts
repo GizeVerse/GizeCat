@@ -64,7 +64,8 @@ export function createOverlayWindow(opts: OverlayWindowOptions): BrowserWindow {
       devTools: opts.devTools,
     },
   });
-  // 'floating' (the default) sits below the taskbar; 'screen-saver' stays above it.
+  // Windows: 'floating' (the default) sits below the taskbar; 'screen-saver' stays above it.
+  // macOS uses 'floating' on purpose: menus, the menu bar and the Dock stay above the cat (overlayProfile.ts).
   win.setAlwaysOnTop(true, profile.topmostLevel);
   win.setIgnoreMouseEvents(true);
   win.setContentProtection(opts.contentProtection);

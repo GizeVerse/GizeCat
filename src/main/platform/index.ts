@@ -24,12 +24,37 @@ export interface PlatformServices {
   readonly applicationMenu: 'none' | 'darwin-minimal';
   /**
    * macOS: a click on the Dock icon or a launch from Finder while running emits 'activate', not
-   * 'second-instance'; it surfaces the cat and Settings like a second launch. The Dock icon stays
-   * (review M3: a menu-bar icon hidden by the notch would otherwise leave the app unreachable).
+   * 'second-instance'; it surfaces the cat and Settings like a second launch. The Dock icon stays by
+   * default (review M3: a menu-bar icon hidden by the notch would otherwise leave the app
+   * unreachable); 1.4.0 lets the user turn it off (dockPolicyConfigurable, platform/dock.ts).
    */
   readonly activateOpensSettings: boolean;
-  /** Registering launch at sign-in is implemented (Windows only, ADR 0004 §7). */
+  /**
+   * Which launch-at-sign-in backend this platform uses (ADR 0004 §7): the verified Windows HKCU Run
+   * reconcile (lifecycle/loginItem.ts), macOS SMAppService through setLoginItemSettings
+   * (lifecycle/loginItemDarwin.ts, 1.4.0: opt-in, never run on a Mac), or none.
+   */
+  readonly loginItemBackend: 'win32-run-key' | 'darwin-smappservice' | 'none';
+  /** Registering launch at sign-in is implemented (loginItemBackend is not 'none'). */
   readonly loginItemSupported: boolean;
+  /**
+   * macOS: template menu-bar images (black plus alpha, tinted by the system for light, dark and
+   * tinted menu bars). Elsewhere the coloured tray icons.
+   */
+  readonly trayIconStyle: 'color' | 'template';
+  /**
+   * A left click on the tray icon shows or hides the cat (Windows convention). False on macOS:
+   * Electron 44 emits 'click' and then opens the menu on the same mouse-down (tray_icon_cocoa.mm),
+   * so a toggle there would hide or show the cat every time the menu is opened.
+   */
+  readonly trayClickToggles: boolean;
+  /** macOS: Settings offers "Show GizeCat in the Dock" (general.showDockIcon, activation policy). */
+  readonly dockPolicyConfigurable: boolean;
+  /**
+   * macOS: powerMonitor 'shutdown' (logout, restart, shutdown) expedites the quit sequence: no
+   * quit animation, a synchronous save and a short disposal bound, so logout never waits on the cat.
+   */
+  readonly expediteQuitOnPowerShutdown: boolean;
   /** Windows' AppUserModelID (taskbar grouping, notifications). */
   readonly appUserModelId: boolean;
   /** A safeStorage backend may hold API keys (Linux refuses the plaintext ones, audit R6). */
@@ -51,6 +76,7 @@ export function probeFromProcess(os: string, env: Readonly<Record<string, string
 export function createPlatformServices(probe: PlatformProbe, screen: ScreenLike): PlatformServices {
   const id = resolvePlatformId(probe);
   const linux = id === 'linux-x11' || id === 'linux-xwayland' || id === 'linux-wayland';
+  const loginItemBackend = id === 'win32' ? 'win32-run-key' : id === 'darwin' ? 'darwin-smappservice' : 'none';
   return {
     id,
     label: PLATFORM_LABELS[id],
@@ -62,7 +88,12 @@ export function createPlatformServices(probe: PlatformProbe, screen: ScreenLike)
     trayBalloons: id === 'win32',
     applicationMenu: id === 'darwin' ? 'darwin-minimal' : 'none',
     activateOpensSettings: id === 'darwin',
-    loginItemSupported: id === 'win32',
+    loginItemBackend,
+    loginItemSupported: loginItemBackend !== 'none',
+    trayIconStyle: id === 'darwin' ? 'template' : 'color',
+    trayClickToggles: id !== 'darwin',
+    dockPolicyConfigurable: id === 'darwin',
+    expediteQuitOnPowerShutdown: id === 'darwin',
     appUserModelId: id === 'win32',
     secretBackendAllowed(backend) {
       if (!linux) return true;

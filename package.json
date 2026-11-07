@@ -29,7 +29,7 @@
     "package:win": "node scripts/stage-koffi-arch.mjs --arch arm64 && node scripts/build.mjs && electron-builder --win nsis --x64 --arm64 --publish never",
     "package:dir": "node scripts/build.mjs && electron-builder --win dir --x64 --publish never",
     "package:linux": "node scripts/build.mjs && electron-builder --linux AppImage tar.gz --publish never",
-    "package:mac": "node scripts/build.mjs && electron-builder --mac dmg zip --publish never",
+    "package:mac": "node scripts/build.mjs && electron-builder --mac dmg zip --x64 --arm64 --publish never",
     "package:mac:universal": "node scripts/build.mjs && electron-builder --mac dmg zip --universal --publish never",
     "package:mac:adhoc-docker": "node scripts/with-lock.mjs mac-docker -- node scripts/package-mac-docker.mjs",
     "package:web": "node scripts/build.mjs --web-only && node scripts/package-web.mjs",

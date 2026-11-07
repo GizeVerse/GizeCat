@@ -21,6 +21,28 @@ const status: AppStatus = {
 };
 
 describe('diagnostics report', () => {
+  // 1.4.0: an x64 build under Rosetta (Apple Silicon) or x64 emulation (Windows on Arm) says so.
+  it('carries os.arm64Translation as given (true, false or null), and an older caller without it still builds', () => {
+    const base = {
+      generatedAt: new Date('2026-11-08T00:00:00Z'),
+      versions: { app: '1.4.0' },
+      world: { version: 1 as const, displays: [] },
+      settings: defaultSettings(),
+      apiKeysStored: { anthropic: false, openaiCompatible: false },
+      status,
+      cat: {},
+      services: {},
+      resources: [],
+      logs: [],
+    };
+    for (const arm64Translation of [true, false, null]) {
+      const report = buildDiagnosticsReport({ ...base, os: { platform: 'darwin', release: '24.0.0', arch: 'x64', totalMemoryMB: 16000, arm64Translation } });
+      expect((report.os as { arm64Translation: unknown }).arm64Translation).toBe(arm64Translation);
+    }
+    const old = buildDiagnosticsReport({ ...base, os: { platform: 'win32', release: '10.0.26200', arch: 'x64', totalMemoryMB: 16000 } });
+    expect(old.os).not.toHaveProperty('arm64Translation');
+  });
+
   it('contains no secrets, titles or exclusion contents and caps logs at 500 lines', () => {
     const settings = defaultSettings();
     settings.ai.openaiBaseUrl = 'http://user:pa55word@127.0.0.1:1234/v1?token=abc';

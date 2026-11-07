@@ -63,17 +63,51 @@ linux:
   asarUnpack:
     - node_modules/koffi/**
     - node_modules/@koromix/koffi-linux-x64/**
-# macOS (ADR 0004 §11): IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED; needs a Mac to build, and a
-# Developer ID plus notarization to distribute. koffi is not used on macOS, so it is not shipped.
+# macOS (ADR 0004 §11; 1.4.0): THEORETICALLY_COMPATIBLE_NOT_EXECUTED (never run on a Mac).
+# - Floor-only (decision D1): no window climbing and no FFI, so koffi is not shipped and the payload
+#   has no native module; universal builds only need lipo for Electron's own binaries.
+# - Bundle 'Desktop Cat.app' with the frozen appId (D15: Keychain items and login items are keyed
+#   by bundle); artifacts are named GizeCat-*. mac.artifactName also names the DMGs (the dmg target
+#   falls back to it: app-builder-lib 26.18.1 platformPackager.artifactPatternConfig).
+# - Targets (D11): dmg and zip for x64, arm64 and universal. DMG and universal need a macOS host
+#   (dmgbuild, lipo); the Linux container route (scripts/package-mac-docker.mjs) builds `--mac dir`
+#   for x64 and arm64 only and re-signs ad hoc (GizeCat-<v>-mac-<arch>-adhoc.zip).
+# - Signing and notarization: REQUIRES_OWNER_CREDENTIALS (Developer ID Application certificate,
+#   App Store Connect API key or Apple ID). `notarize` is deliberately unset: electron-builder 26
+#   then notarizes only after a successful Developer ID signing, and only when a complete env set
+#   exists (APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, or APPLE_ID +
+#   APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID, or APPLE_KEYCHAIN_PROFILE). With none it logs
+#   "skipped macOS notarization"; a partial set fails the build. A build without an identity
+#   (CSC_IDENTITY_AUTO_DISCOVERY=false) is unsigned and never reaches notarization
+#   (app-builder-lib/out/macPackager.js sign(), mac/MacTargetHelper.js notarizeIfProvided()).
+# - Entitlements (D10): com.apple.security.cs.allow-jit only, for the app and every helper. No
+#   device.* (no camera, microphone, USB, print or location use), no disable-library-validation
+#   (no third-party dylibs, one Team ID), no allow-unsigned-executable-memory (plugin helpers only).
+#   Documented fallback, UNVERIFIED until the first signed build runs: if it dies at launch with a
+#   code-signing crash in V8, add com.apple.security.cs.allow-unsigned-executable-memory to both files.
+# - Permissions (D9): 1.4.0 requests no Accessibility, Screen Recording or Input Monitoring and adds
+#   no screen-capture usage string. Electron's default camera, microphone, audio-capture and
+#   Bluetooth usage strings are replaced with honest text, so a prompt that should never appear
+#   would at least say what is true.
 mac:
   target:
     - target: dmg
-      arch: [x64, arm64]
+      arch: [x64, arm64, universal]
     - target: zip
-      arch: [x64, arm64]
+      arch: [x64, arm64, universal]
   category: public.app-category.utilities
   icon: build/icon.png
   artifactName: GizeCat-${version}-mac-${arch}.${ext}
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  extendInfo:
+    NSCameraUsageDescription: "GizeCat never uses the camera. If macOS asks, choose Don't Allow."
+    NSMicrophoneUsageDescription: "GizeCat never uses the microphone. If macOS asks, choose Don't Allow."
+    NSAudioCaptureUsageDescription: "GizeCat never records audio. If macOS asks, choose Don't Allow."
+    NSBluetoothAlwaysUsageDescription: "GizeCat never uses Bluetooth. If macOS asks, choose Don't Allow."
+    NSBluetoothPeripheralUsageDescription: "GizeCat never uses Bluetooth. If macOS asks, choose Don't Allow."
   files:
     - "!node_modules/koffi/**"
     - "!node_modules/@koromix/**"

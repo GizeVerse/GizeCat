@@ -6,6 +6,7 @@ import { app, BaseWindow, BrowserWindow, globalShortcut, ipcMain, Menu, powerMon
 import { createCatSim, migrateCatState, summarizeCat } from '../core/behavior';
 import { simWorld } from '../core/display/simWorld';
 import { createGestureRecognizer } from '../core/interaction/gestures';
+import { BRAND } from '../shared/brand';
 import type { AppStatus, SettingsViewState } from '../shared/ipc';
 import { IPC } from '../shared/ipc';
 import type { PerceptionStatus } from '../shared/perception';
@@ -29,6 +30,7 @@ import { applyViewState, createViewStateMemory, startupPlan } from './ipc/startu
 import { appRootFrom, appVersion } from './lifecycle/appInfo';
 import type { CrashGuard } from './lifecycle/crashGuard';
 import { createLoginItemService, LOGIN_ITEM_NAME } from './lifecycle/loginItem';
+import { createDarwinLoginItemService, DARWIN_LOGIN_ITEMS_SETTINGS_URL, type LoginItemPort } from './lifecycle/loginItemDarwin';
 import { announceLaunchAtLogin } from './lifecycle/loginItemNotice';
 import { catContextMenuModel, type MenuContext } from './lifecycle/menuModel';
 import { createQuitSequence } from './lifecycle/quitSequence';
@@ -40,6 +42,7 @@ import { createPlatformServices, probeFromProcess } from './platform';
 import { guardedCipher } from './platform/secrets';
 import { darwinApplicationMenu } from './platform/appMenu';
 import { explicitOzone } from './platform/boot';
+import { applyDockPolicy } from './platform/dock';
 import { runtimeCapabilities } from './platform/runtime';
 import { createX11CompositorProbe, NO_COMPOSITOR_REASON } from './linux/x11Compositor';
 import { createSurfaceOutlines } from './overlay/surfaceLines';
@@ -114,7 +117,10 @@ export function startApp(boot: AppBootstrap): RunningApp {
   // GizeVerse (ADR 0004 §3): every per-OS choice of the shell comes from here.
   const platform = createPlatformServices(probeFromProcess(process.platform, process.env, explicitOzone((name) => app.commandLine.getSwitchValue(name))), screen);
   log.info('platform', { id: platform.id, coordinates: platform.coordinates.strategy, overlay: platform.overlayProfile.create });
-  Menu.setApplicationMenu(platform.applicationMenu === 'darwin-minimal' ? Menu.buildFromTemplate(darwinApplicationMenu()) : null);
+  Menu.setApplicationMenu(platform.applicationMenu === 'darwin-minimal' ? Menu.buildFromTemplate(darwinApplicationMenu(BRAND.product)) : null);
+  // macOS (1.4.0, D4): "Show GizeCat in the Dock" (general.showDockIcon, on by default). 'regular' is
+  // Electron's default policy, so only an 'off' choice needs a call at start (no Dock flicker otherwise).
+  if (platform.dockPolicyConfigurable && !settings.get().general.showDockIcon) applyDockPolicy(app, false, logger.child('dock'));
   installSecurity(app, session.defaultSession, logger.child('security'));
   installAppProtocol(session.defaultSession, rendererRoot, logger.child('protocol'));
 
@@ -227,22 +233,35 @@ export function startApp(boot: AppBootstrap): RunningApp {
 
   // Launch at sign-in: reconciled once, before the host starts (two registry reads, microseconds).
   // Only an installed, non-test build may write its entry (see the write gate in loginItemReconcile.ts).
-  const loginItem = createLoginItemService({
-    writer: app,
-    registry: createLoginItemRegistry(LOGIN_ITEM_NAME),
-    settings,
-    logger: logger.child('login-item'),
-    execPath: process.execPath,
-    userData: boot.userData,
-    logDir: logger.logDir,
-    packaged: app.isPackaged,
-    test: boot.flags.test,
-    platformSupported: platform.loginItemSupported,
-    launchedAtLogin: boot.flags.launchedAtLogin,
-    env: process.env,
-    settingsLoadStatus: boot.settingsLoadStatus,
-    clock: () => performance.now(),
-  });
+  // macOS (1.4.0, D6) has its own opt-in SMAppService backend, which never writes at startup
+  // (loginItemDarwin.ts); every other platform keeps the Windows service exactly as before.
+  const loginItem: LoginItemPort =
+    platform.loginItemBackend === 'darwin-smappservice'
+      ? createDarwinLoginItemService({
+          app,
+          settings,
+          logger: logger.child('login-item'),
+          packaged: app.isPackaged,
+          test: boot.flags.test,
+          env: process.env,
+          clock: () => performance.now(),
+        })
+      : createLoginItemService({
+          writer: app,
+          registry: createLoginItemRegistry(LOGIN_ITEM_NAME),
+          settings,
+          logger: logger.child('login-item'),
+          execPath: process.execPath,
+          userData: boot.userData,
+          logDir: logger.logDir,
+          packaged: app.isPackaged,
+          test: boot.flags.test,
+          platformSupported: platform.loginItemBackend === 'win32-run-key',
+          launchedAtLogin: boot.flags.launchedAtLogin,
+          env: process.env,
+          settingsLoadStatus: boot.settingsLoadStatus,
+          clock: () => performance.now(),
+        });
   loginItem.reconcileAtStartup();
 
   // Status, UI refresh
@@ -341,7 +360,13 @@ export function startApp(boot: AppBootstrap): RunningApp {
       };
     },
   });
-  const onPowerShutdown = (): void => sessionEnd.notify('power-shutdown');
+  // macOS (1.4.0, D7): logout, restart and shutdown arrive here before Electron routes the
+  // terminate request through before-quit, so the quit sequence (set below) is expedited first.
+  let expediteQuit: (() => void) | null = null;
+  const onPowerShutdown = (): void => {
+    if (platform.expediteQuitOnPowerShutdown) attempt(log, 'expedite quit', () => expediteQuit?.());
+    sessionEnd.notify('power-shutdown');
+  };
   if (platform.saveOnPowerShutdown) powerMonitor.on('shutdown', onPowerShutdown);
 
   function buildReport(): Record<string, unknown> {
@@ -350,7 +375,15 @@ export function startApp(boot: AppBootstrap): RunningApp {
     return buildDiagnosticsReport({
       generatedAt: new Date(),
       versions: { app: version, electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node, v8: process.versions.v8 },
-      os: { platform: process.platform, release: os.release(), arch: os.arch(), totalMemoryMB: Math.round(os.totalmem() / 1048576), locale: app.getLocale() },
+      os: {
+        platform: process.platform,
+        release: os.release(),
+        arch: os.arch(),
+        totalMemoryMB: Math.round(os.totalmem() / 1048576),
+        locale: app.getLocale(),
+        // 1.4.0: an x64 build under Rosetta (Apple Silicon) or x64 emulation (Windows on Arm); null elsewhere.
+        arm64Translation: typeof app.runningUnderARM64Translation === 'boolean' ? app.runningUnderARM64Translation : null,
+      },
       world: display.world,
       settings: settings.get(),
       userProfile: os.homedir(),
@@ -413,6 +446,19 @@ export function startApp(boot: AppBootstrap): RunningApp {
       return err ? { ok: false, message: err } : { ok: true };
     },
     openSettings: () => settingsWindow.open(),
+    // macOS (1.4.0, D6): a constant System Settings URL, never one from a renderer; darwin only.
+    openLoginItemsSettings:
+      platform.loginItemBackend === 'darwin-smappservice'
+        ? async () => {
+            try {
+              await shell.openExternal(DARWIN_LOGIN_ITEMS_SETTINGS_URL);
+              return { ok: true };
+            } catch (err) {
+              log.warn('opening Login Items settings failed', { error: err });
+              return { ok: false, message: 'Open System Settings › General › Login Items.' };
+            }
+          }
+        : undefined,
     quit: () => app.quit(),
   };
   const actions = createActionRunner({ targets, settings, logger: logger.child('actions') });
@@ -494,6 +540,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
         onAction: runAction,
         onClick: () => runAction(requireHost().hidden ? 'show' : 'hide'),
         balloons: platform.trayBalloons,
+        // macOS (1.4.0, D5): template menu-bar images, and a click only opens the menu.
+        template: platform.trayIconStyle === 'template',
+        clickToggles: platform.trayClickToggles,
       });
     } catch (err) {
       log.error('tray unavailable', { error: err });
@@ -602,6 +651,10 @@ export function startApp(boot: AppBootstrap): RunningApp {
     }
     if (prev.diagnostics.hardwareAcceleration !== next.diagnostics.hardwareAcceleration) {
       log.info('hardware acceleration setting changes at next launch', { enabled: next.diagnostics.hardwareAcceleration });
+    }
+    // macOS (1.4.0, D4): the Dock switch applies at once; ignored on other platforms.
+    if (platform.dockPolicyConfigurable && prev.general.showDockIcon !== next.general.showDockIcon) {
+      applyDockPolicy(app, next.general.showDockIcon, logger.child('dock'));
     }
     refreshUi();
   });
@@ -715,6 +768,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     logger: logger.child('quit'),
     simTimeoutMs: QUIT_ANIMATION_MS,
   });
+  expediteQuit = () => quit.expedite();
   app.on('before-quit', (e) => quit.onBeforeQuit(e));
   // The cat lives in the tray: closing the settings window must not quit the app.
   app.on('window-all-closed', () => undefined);

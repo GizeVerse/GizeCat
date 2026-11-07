@@ -181,6 +181,18 @@ export const S = {
       pending: `On. Windows will start ${PRODUCT} once its startup entry is in place.`,
       unsupported: 'Not available on this platform.',
     },
+    /** macOS (1.4.0): the same row in macOS terms; main's reason covers approval and errors. */
+    launchTitleMac: 'Open at login',
+    launchStatusMac: {
+      active: `On. macOS opens ${PRODUCT} when you log in.`,
+      off: `Off. ${PRODUCT} starts only when you open it.`,
+      pending: `On, but macOS does not open ${PRODUCT} at login yet.`,
+      notAvailable: 'Not available in this build.',
+    },
+    launchOpenLoginItems: 'Open Login Items settings',
+    /** macOS only (1.4.0): general.showDockIcon. The Applications folder lists the app as INSTALLED. */
+    dockTitle: `Show ${PRODUCT} in the Dock`,
+    dockDesc: `When off, only the menu-bar icon remains. To open Settings again, use the menu-bar icon or open ${INSTALLED} from the Applications folder.`,
     launchNoticeTitle: `${PRODUCT} now starts with Windows`,
     launchNoticeText: 'Your cat appears when you sign in. You can turn this off here at any time, or in Task Manager › Startup apps.',
     launchNoticeDismiss: 'Got it',

@@ -19,7 +19,11 @@ export const DIAGNOSTICS_LOG_LINES = 500;
 export interface DiagnosticsInput {
   generatedAt: Date;
   versions: Record<string, string>;
-  os: { platform: string; release: string; arch: string; totalMemoryMB: number; locale?: string };
+  /**
+   * arm64Translation (1.4.0): app.runningUnderARM64Translation, true for an x64 build under Rosetta
+   * (Apple Silicon) or x64 emulation (Windows on Arm); null where Electron does not report it (Linux).
+   */
+  os: { platform: string; release: string; arch: string; totalMemoryMB: number; locale?: string; arm64Translation?: boolean | null };
   world: WorldGeometry;
   settings: Settings;
   /** The user's profile folder (os.homedir()), replaced by %USERPROFILE% wherever it appears. */

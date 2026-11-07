@@ -63,6 +63,8 @@ function start(test: boolean, boot: { logger: RootLogger | null }): void {
   const startedAt = Date.now();
   // DevTools and other development affordances never exist in packaged builds.
   const dev = hasFlag(process.argv, '--dev') && !app.isPackaged;
+  // Windows: the Run entry passes this flag. macOS (1.4.0) passes no arguments to SMAppService login
+  // items and wasOpenedAtLogin is not reliable there, so a login start reads as a user start (false).
   const launchedAtLogin = hasFlag(process.argv, LAUNCHED_AT_LOGIN_FLAG);
 
   // GizeVerse (ADR 0004 §6), before the lock and the logger: a packaged build never runs its
@@ -104,6 +106,10 @@ function start(test: boolean, boot: { logger: RootLogger | null }): void {
   });
   // macOS (ADR 0004 §6, review M3): a Dock click or a Finder launch while running emits 'activate',
   // not 'second-instance'. The first activation of a fresh launch is ignored (it is the launch itself).
+  // 1.4.0: with "Show GizeCat in the Dock" off (accessory policy, platform/dock.ts) there is no Dock
+  // icon to click; opening the app again from Spotlight, Finder or Launchpad is the route back, and
+  // whether it emits 'activate' for an accessory app is UNVERIFIED (no Mac run). The menu-bar icon
+  // stays either way.
   if (process.platform === 'darwin') {
     app.on('activate', () => {
       if (running && Date.now() - startedAt > MAC_ACTIVATE_GRACE_MS) running.onSecondInstance();

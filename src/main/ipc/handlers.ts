@@ -201,7 +201,9 @@ export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
     if (ok) {
       log.info(key === null ? 'API key removed' : 'API key stored (encrypted)', { provider });
       deps.onSecretsChanged();
-      return { ok: true, message: key === null ? 'API key removed.' : 'API key saved (encrypted with Windows DPAPI).' };
+      // 1.4.0: macOS names its own store (safeStorage uses the Keychain there); other platforms unchanged.
+      const saved = process.platform === 'darwin' ? 'API key saved (encrypted with the macOS Keychain).' : 'API key saved (encrypted with Windows DPAPI).';
+      return { ok: true, message: key === null ? 'API key removed.' : saved };
     }
     return { ok: false, message: 'Could not save the API key; see the log for details.' };
   });

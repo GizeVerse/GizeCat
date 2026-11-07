@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { AppStatus } from '../../../../src/shared/ipc';
 import { CAPABILITY_IDS, CAPABILITY_LABELS, CAPABILITY_MATRIX, declaredRuntime, PLATFORM_LABELS, type PlatformId, type PlatformReport, type RuntimeCapability } from '../../../../src/shared/platform';
 import { platformView } from '../../../../src/renderer/settings/pages/diagnostics';
-import { launchRowView } from '../../../../src/renderer/settings/pages/general';
+import { dockRowVisible, launchRowView, launchStatusViewMac } from '../../../../src/renderer/settings/pages/general';
 import { S } from '../../../../src/renderer/settings/strings';
 
 const G = S.general;
@@ -29,13 +29,20 @@ describe('General page: the launch-at-sign-in row', () => {
   });
 
   it('off Windows, when main reports it unavailable, hides the switch and shows main’s reason', () => {
-    for (const id of ['darwin', 'linux-x11', 'linux-xwayland', 'linux-wayland'] as const) {
+    for (const id of ['linux-x11', 'linux-xwayland', 'linux-wayland'] as const) {
       const r = report(id);
       expect(r.capabilities.loginItem.available).toBe(false);
       expect(launchRowView(status(r))).toEqual({ showSwitch: false, title: G.launchTitleElsewhere, reason: CAPABILITY_MATRIX[id].loginItem.note });
     }
     // The row no longer says "Windows" there.
     expect(G.launchTitleElsewhere).not.toMatch(/Windows/);
+  });
+
+  it('macOS (1.4.0): "Open at login"; unavailable (e.g. not in Applications) hides the switch with main’s reason', () => {
+    const reason = 'Move Desktop Cat to the Applications folder, then open it from there to use Open at login.';
+    expect(launchRowView(status(report('darwin', { loginItem: { available: false, reason } })))).toEqual({ showSwitch: false, title: G.launchTitleMac, reason });
+    expect(launchRowView(status(report('darwin', { loginItem: { available: true, reason: null } })))).toEqual({ showSwitch: true, title: G.launchTitleMac });
+    expect(G.launchTitleMac).not.toMatch(/Windows/);
   });
 
   it('off Windows without a reason falls back to a plain sentence', () => {
@@ -47,7 +54,36 @@ describe('General page: the launch-at-sign-in row', () => {
   });
 
   it('off Windows with the capability available (a later implementation) keeps the switch', () => {
-    expect(launchRowView(status(report('darwin', { loginItem: { available: true, reason: null } })))).toEqual({ showSwitch: true });
+    expect(launchRowView(status(report('linux-x11', { loginItem: { available: true, reason: null } })))).toEqual({ showSwitch: true });
+  });
+});
+
+describe('General page, macOS (1.4.0): the Open at login status line and the Dock row', () => {
+  const base = { enabled: false, preference: 'unset' as const, disabledBy: null, active: false, writable: true, reason: null, showNotice: false };
+  const M = G.launchStatusMac;
+
+  it('on and active, off, and not writable read in macOS terms', () => {
+    expect(launchStatusViewMac({ ...base, enabled: true, preference: 'enabled', active: true })).toEqual({ text: M.active, tone: 'ok', openSettings: false });
+    expect(launchStatusViewMac(base)).toEqual({ text: M.off, tone: 'info', openSettings: false });
+    expect(launchStatusViewMac({ ...base, writable: false, reason: 'Not available in this build (development build).' })).toEqual({
+      text: 'Not available in this build (development build).',
+      tone: 'info',
+      openSettings: false,
+    });
+    expect(M.active).toMatch(/macOS/);
+    expect(M.active).not.toMatch(/Windows/);
+  });
+
+  it('wanted on but not opened by macOS (approval, not registered): main’s reason, a warning and the Login Items button', () => {
+    const v = launchStatusViewMac({ ...base, enabled: true, preference: 'enabled', active: false, reason: 'Waiting for your approval: turn on Desktop Cat in System Settings › General › Login Items.' });
+    expect(v).toEqual({ text: 'Waiting for your approval: turn on Desktop Cat in System Settings › General › Login Items.', tone: 'warn', openSettings: true });
+  });
+
+  it('the Dock row exists on macOS only', () => {
+    expect(dockRowVisible(status(report('darwin')))).toBe(true);
+    for (const id of ['win32', 'linux-x11', 'web'] as const) expect(dockRowVisible(status(report(id))), id).toBe(false);
+    expect(dockRowVisible(status(undefined))).toBe(false);
+    expect(G.dockTitle).toMatch(/Dock/);
   });
 });
 

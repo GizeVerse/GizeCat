@@ -27,6 +27,11 @@ export interface ActionTargets {
   dismissLaunchNotice(): ActionResult;
   /** v1.1.1 on-desktop surface outlines (session-only, never persisted). */
   setSurfaceOutlines?(on: boolean): void;
+  /**
+   * 1.4.0, macOS only: opens System Settings › General › Login Items at a constant URL (never one
+   * from a renderer). Absent elsewhere, where the action reports failure.
+   */
+  openLoginItemsSettings?(): Promise<ActionResult>;
   quit(): void;
 }
 
@@ -108,6 +113,9 @@ export function createActionRunner(deps: {
         if (!targets.setSurfaceOutlines) return { ok: false, message: 'Surface outlines are not available.' };
         targets.setSurfaceOutlines(action === 'showSurfaceOutlines');
         return { ok: true };
+      case 'openLoginItemsSettings':
+        if (!targets.openLoginItemsSettings) return { ok: false, message: 'Login Items settings exist on macOS only.' };
+        return targets.openLoginItemsSettings();
       case 'quit':
         // Let the IPC reply reach the renderer before windows start closing.
         defer(() => targets.quit());

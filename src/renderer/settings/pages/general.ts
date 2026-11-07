@@ -27,20 +27,40 @@ export function launchStatusView(s: LoginItemStatus): { text: string; tone: Note
   return { text: s.reason ?? (s.enabled ? L.pending : L.off), tone: 'warn' };
 }
 
-export type LaunchRowView = { showSwitch: true } | { showSwitch: false; title: string; reason: string };
+/**
+ * macOS (1.4.0): the status line under "Open at login". Main's reason covers the macOS states
+ * (waiting for approval, not registered, not found, on outside the app); `openSettings` asks for
+ * the "Open Login Items settings" button while the user wants it on and macOS does not open the app.
+ */
+export function launchStatusViewMac(s: LoginItemStatus): { text: string; tone: NoteTone; openSettings: boolean } {
+  const L = G.launchStatusMac;
+  if (!s.writable) return { text: s.reason ?? L.notAvailable, tone: 'info', openSettings: false };
+  if (s.enabled && s.active) return { text: s.reason ?? L.active, tone: 'ok', openSettings: false };
+  if (!s.enabled && !s.active) return { text: L.off, tone: 'info', openSettings: false };
+  return { text: s.reason ?? L.pending, tone: 'warn', openSettings: s.enabled && !s.active };
+}
+
+export type LaunchRowView = { showSwitch: true; title?: string } | { showSwitch: false; title: string; reason: string };
 
 /**
  * Whether the launch-at-sign-in row offers its switch (GizeVerse, ADR 0004 §7). Off Windows, when
  * main reports the loginItem capability unavailable, the switch is hidden and main's reason is
  * shown instead. On Windows the row stays exactly as it was, also in development builds (where
- * the capability is unavailable too), and so it does without a platform report.
+ * the capability is unavailable too), and so it does without a platform report. macOS (1.4.0)
+ * titles the row "Open at login", its own term.
  */
 export function launchRowView(status: Pick<AppStatus, 'platform'>): LaunchRowView {
   const platform = status.platform;
   if (!platform || platform.id === 'win32') return { showSwitch: true };
+  const mac = platform.id === 'darwin';
   const cap = platform.capabilities.loginItem as RuntimeCapability | undefined;
-  if (!cap || cap.available) return { showSwitch: true };
-  return { showSwitch: false, title: G.launchTitleElsewhere, reason: cap.reason ?? G.launchStatus.unsupported };
+  if (!cap || cap.available) return mac ? { showSwitch: true, title: G.launchTitleMac } : { showSwitch: true };
+  return { showSwitch: false, title: mac ? G.launchTitleMac : G.launchTitleElsewhere, reason: cap.reason ?? G.launchStatus.unsupported };
+}
+
+/** macOS only (1.4.0): the "Show GizeCat in the Dock" row (general.showDockIcon); hidden elsewhere. */
+export function dockRowVisible(status: Pick<AppStatus, 'platform'>): boolean {
+  return status.platform?.id === 'darwin';
 }
 
 /**
@@ -91,12 +111,23 @@ export function generalPage(ctx: PageContext): PageView {
   launch.control.append(launchSwitch.root);
   launch.note.setAttribute('aria-live', 'polite');
   const launchTitle = launch.row.querySelector<HTMLElement>('.row-title');
+  // macOS (1.4.0): opens System Settings › General › Login Items (main uses a constant URL).
+  const loginItemsBtn = button(G.launchOpenLoginItems);
+  const launchActions = h('div', { class: 'callout-actions', hidden: true }, [loginItemsBtn]);
+  launch.row.insertBefore(launchActions, launch.note);
+  loginItemsBtn.addEventListener('click', () => void runAction(ctx, 'openLoginItemsSettings', loginItemsBtn, launch.error));
   let launchBusy = false;
   let unavailableShown: string | null = null;
-  const syncLaunch = (s: LoginItemStatus): void => {
+  const syncLaunch = (s: LoginItemStatus, mac: boolean): void => {
     if (!launchBusy) {
       launchSwitch.input.checked = s.enabled;
       launchSwitch.refresh();
+    }
+    if (mac) {
+      const line = launchStatusViewMac(s);
+      setNote(launch.note, line.text, line.tone);
+      launchActions.hidden = !line.openSettings;
+      return;
     }
     const line = launchStatusView(s);
     setNote(launch.note, line.text, line.tone);
@@ -104,16 +135,19 @@ export function generalPage(ctx: PageContext): PageView {
   /** Shows the switch with main's state, or (off Windows, unavailable) only the reason. */
   const syncLaunchRow = (status: AppStatus): void => {
     const view = launchRowView(status);
-    const title = view.showSwitch ? G.launchTitle : view.title;
+    const title = view.showSwitch ? (view.title ?? G.launchTitle) : view.title;
     if (launchTitle && launchTitle.textContent !== title) launchTitle.textContent = title;
     launchSwitch.root.hidden = !view.showSwitch;
     if (view.showSwitch) {
       unavailableShown = null;
-      syncLaunch(status.loginItem);
-    } else if (unavailableShown !== view.reason) {
-      // Only a changed sentence is announced (main broadcasts on every state change).
-      unavailableShown = view.reason;
-      setNote(launch.note, view.reason, 'info');
+      syncLaunch(status.loginItem, status.platform?.id === 'darwin');
+    } else {
+      launchActions.hidden = true;
+      if (unavailableShown !== view.reason) {
+        // Only a changed sentence is announced (main broadcasts on every state change).
+        unavailableShown = view.reason;
+        setNote(launch.note, view.reason, 'info');
+      }
     }
   };
   launchSwitch.input.addEventListener('change', () => {
@@ -137,7 +171,7 @@ export function generalPage(ctx: PageContext): PageView {
       } catch {
         // The next broadcast from main brings the switch up to date.
       }
-      syncLaunch(ctx.store.view.status.loginItem);
+      syncLaunch(ctx.store.view.status.loginItem, ctx.store.view.status.platform?.id === 'darwin');
     })();
   });
 
@@ -173,6 +207,10 @@ export function generalPage(ctx: PageContext): PageView {
   const registration = h('div', { class: 'row-note', 'aria-live': 'polite', hidden: true });
   shortcut.parts.row.insertBefore(registration, shortcut.parts.note);
 
+  // macOS only (1.4.0, D4): the Dock icon (activation policy in main); hidden on every other platform.
+  const dock = toggleRow(ctx, 'general', 'showDockIcon', { title: G.dockTitle, desc: G.dockDesc, icon: 'pin' });
+  dock.parts.row.hidden = !dockRowVisible(ctx.store.view.status);
+
   const quit = row({ title: G.quitTitle, desc: G.quitDesc, icon: 'power' });
   const quitBtn = button(G.quit);
   quit.control.append(quitBtn);
@@ -182,7 +220,7 @@ export function generalPage(ctx: PageContext): PageView {
     group(G.groupCat, [name.parts.row, call.row, visibility.row, pause.row]),
     group(G.groupStartup, [notice, launch.row, startState.parts.row]),
     group(G.groupShortcuts, [shortcuts.parts.row, shortcut.parts.row]),
-    group(G.groupApp, [quit.row]),
+    group(G.groupApp, [dock.parts.row, quit.row]),
   ]);
 
   ctx.store.subscribe((view) => {
@@ -201,6 +239,7 @@ export function generalPage(ctx: PageContext): PageView {
 
     syncLaunchRow(status);
     notice.hidden = !status.loginItem.showNotice;
+    dock.parts.row.hidden = !dockRowVisible(status);
 
     const enabled = ctx.store.intended('general', 'shortcutsEnabled');
     shortcut.input.disabled = !enabled;

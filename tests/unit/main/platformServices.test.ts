@@ -9,8 +9,10 @@ import { overlayProfileFor, WIN32_OVERLAY_PROFILE } from '../../../src/main/over
 import { createPlatformServices, PLAINTEXT_SECRET_BACKENDS, probeFromProcess } from '../../../src/main/platform';
 import { darwinApplicationMenu } from '../../../src/main/platform/appMenu';
 import { explicitOzone, sandboxDecision } from '../../../src/main/platform/boot';
+import { applyDockPolicy, dockPolicyFor } from '../../../src/main/platform/dock';
 import { NO_DISPLAY_REASON, runtimeCapabilities, type RuntimeObservations } from '../../../src/main/platform/runtime';
 import { PLATFORM_IDS, type PlatformId } from '../../../src/shared/platform';
+import { memoryLogger } from './helpers';
 
 function fakeDisplay(id: number, scaleFactor: number, bounds: Display['bounds'], workArea: Display['workArea'] = bounds): Display {
   return { id, scaleFactor, bounds, workArea } as Display;
@@ -100,14 +102,36 @@ describe('platform services factory', () => {
     expect([w.saveOnPowerShutdown, w.x11CompositorRequired, w.activateOpensSettings]).toEqual([false, false, false]);
     expect(w.applicationMenu).toBe('none');
     expect(w.secretBackendAllowed(null)).toBe(true);
+    // 1.4.0: the macOS additions leave Windows exactly as it was.
+    expect(w.loginItemBackend).toBe('win32-run-key');
+    expect([w.trayIconStyle, w.trayClickToggles, w.dockPolicyConfigurable, w.expediteQuitOnPowerShutdown]).toEqual(['color', true, false, false]);
   });
 
   it('macOS: app menu, activate opens Settings, no Windows-only features, saves on power shutdown', () => {
     const m = services('darwin');
     expect(m.applicationMenu).toBe('darwin-minimal');
     expect(m.activateOpensSettings).toBe(true);
-    expect([m.sessionEndWindow, m.trayBalloons, m.loginItemSupported, m.appUserModelId]).toEqual([false, false, false, false]);
+    expect([m.sessionEndWindow, m.trayBalloons, m.appUserModelId]).toEqual([false, false, false]);
     expect(m.saveOnPowerShutdown).toBe(true);
+  });
+
+  it('macOS 1.4.0: SMAppService login items, template menu-bar icon without a click toggle, the Dock switch, expedited quit at logout', () => {
+    const m = services('darwin');
+    expect(m.loginItemBackend).toBe('darwin-smappservice');
+    expect(m.loginItemSupported).toBe(true);
+    expect(m.trayIconStyle).toBe('template');
+    expect(m.trayClickToggles).toBe(false);
+    expect(m.dockPolicyConfigurable).toBe(true);
+    expect(m.expediteQuitOnPowerShutdown).toBe(true);
+  });
+
+  it('Linux and the other ids: no login-item backend and none of the macOS additions', () => {
+    for (const id of ['linux-x11', 'linux-xwayland', 'linux-wayland', 'web', 'android', 'ios'] as const) {
+      const p = services(id);
+      expect(p.loginItemBackend, id).toBe('none');
+      expect(p.loginItemSupported, id).toBe(false);
+      expect([p.trayIconStyle, p.trayClickToggles, p.dockPolicyConfigurable, p.expediteQuitOnPowerShutdown], id).toEqual(['color', true, false, false]);
+    }
   });
 
   it('Linux: a compositor is required on X11 only, and plaintext keyrings are refused on every Linux id', () => {
@@ -131,8 +155,69 @@ describe('platform services factory', () => {
     expect(probeFromProcess('linux', {}, '').ozonePlatform).toBeNull();
   });
 
-  it('the macOS menu uses roles only (no custom handlers or key listeners)', () => {
-    expect(darwinApplicationMenu()).toEqual([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]);
+  it('the macOS menu uses roles only (no custom handlers or key listeners) and has no Hide item (1.4.0, D8)', () => {
+    const menu = darwinApplicationMenu('GizeCat');
+    expect(menu).toEqual([
+      {
+        label: 'GizeCat',
+        submenu: [
+          { role: 'about', label: 'About GizeCat' },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit', label: 'Quit GizeCat' },
+        ],
+      },
+      { role: 'editMenu' },
+      { role: 'windowMenu' },
+    ]);
+    // Cmd+H would order out every window, overlays included: neither 'hide' nor the 'appMenu' role (which contains it).
+    const roles = JSON.stringify(menu);
+    expect(roles).not.toMatch(/"role":"hide"/);
+    expect(roles).not.toMatch(/"role":"appMenu"/);
+    expect(roles).not.toMatch(/"click"/);
+  });
+});
+
+describe('macOS Dock policy (1.4.0, D4; MOCKED app)', () => {
+  const fakeApp = (opts: { throwOnPolicy?: boolean; noDock?: boolean } = {}) => {
+    const calls: string[] = [];
+    const target = {
+      calls,
+      setActivationPolicy(p: 'regular' | 'accessory') {
+        calls.push(`policy:${p}`);
+        if (opts.throwOnPolicy) throw new Error('not on this platform');
+      },
+      dock: opts.noDock
+        ? undefined
+        : {
+            show: () => {
+              calls.push('dock.show');
+              return Promise.resolve();
+            },
+          },
+    };
+    return target;
+  };
+
+  it('off makes the app an accessory (menu-bar icon only); on returns to regular and shows the Dock icon again', () => {
+    expect(dockPolicyFor(false)).toBe('accessory');
+    expect(dockPolicyFor(true)).toBe('regular');
+    const a = fakeApp();
+    expect(applyDockPolicy(a, false, memoryLogger())).toBe(true);
+    expect(a.calls).toEqual(['policy:accessory']);
+    expect(applyDockPolicy(a, true, memoryLogger())).toBe(true);
+    expect(a.calls).toEqual(['policy:accessory', 'policy:regular', 'dock.show']);
+  });
+
+  it('never throws: a failing policy call is logged and reported, a missing app.dock is fine', () => {
+    const log = memoryLogger();
+    expect(applyDockPolicy(fakeApp({ throwOnPolicy: true }), false, log)).toBe(false);
+    expect(log.entries.some((e) => e.level === 'error' && /Dock policy/.test(e.msg))).toBe(true);
+    expect(applyDockPolicy(fakeApp({ noDock: true }), true, memoryLogger())).toBe(true);
   });
 });
 
@@ -148,6 +233,12 @@ describe('overlay profiles', () => {
       shellIntegration: true,
       sessionEndEvents: true,
     });
+  });
+
+  it('macOS (1.4.0, D3) floats at the floating level, below menus, the menu bar and the Dock; Windows and X11 stay at screen-saver', () => {
+    expect(overlayProfileFor('darwin').topmostLevel).toBe('floating');
+    expect(overlayProfileFor('win32').topmostLevel).toBe('screen-saver');
+    expect(overlayProfileFor('linux-x11').topmostLevel).toBe('screen-saver');
   });
 
   it('macOS uses a panel that accepts the first click; Linux X11 sets no type; Wayland, XWayland and unknown ids create nothing', () => {
@@ -199,10 +290,18 @@ describe('runtime capabilities', () => {
   });
 
   it('never upgrades a capability the table declares unavailable', () => {
+    // 1.4.0 keeps these NOT_IMPLEMENTED / fail-closed on macOS (decisions D1, D9); loginItem has a
+    // backend from 1.4.0, so it is no longer used as the example here.
     const r = runtimeCapabilities('darwin', base);
     expect(r.capabilities.windowSurfaces.available).toBe(false);
-    expect(r.capabilities.loginItem.available).toBe(false);
+    expect(r.capabilities.taskbarSurfaces.available).toBe(false);
     expect(r.capabilities.perception.available).toBe(false);
+  });
+
+  it('macOS login item: whatever the table declares, a darwin service that cannot write narrows it with its reason', () => {
+    const r = runtimeCapabilities('darwin', { ...base, loginItemWritable: false, loginItemReason: 'Move Desktop Cat to the Applications folder.' });
+    expect(r.capabilities.loginItem.available).toBe(false);
+    expect(r.capabilities.loginItem.reason).toBeTruthy();
   });
 
   it('a development run without the sandbox still shows the cat: the report does not claim otherwise (review M3)', () => {

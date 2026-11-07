@@ -108,6 +108,8 @@ export const SETTINGS_ACTIONS = [
   /** v1.1.1 on-desktop surface outlines: session-only, never persisted (off after a restart). */
   'showSurfaceOutlines',
   'hideSurfaceOutlines',
+  /** 1.4.0, macOS only: main opens System Settings › General › Login Items (a constant URL); elsewhere it fails. */
+  'openLoginItemsSettings',
   'quit',
 ] as const;
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number];
