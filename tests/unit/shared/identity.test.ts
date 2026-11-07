@@ -13,6 +13,7 @@ import { TEST_HOOK_GLOBAL } from '../../../src/main/testHooks';
 import { UIA_HELPER_EXE } from '../../../src/main/uia';
 import { IDENTITY } from '../../../src/shared/identity';
 import { APP_SCHEME, OVERLAY_URL, SETTINGS_URL } from '../../../src/shared/ipc';
+import { PROFILE_KIND } from '../../../src/shared/profileTransfer';
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const read = (...parts: string[]): string => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
@@ -38,6 +39,11 @@ const FROZEN = {
   testHookGlobal: '__desktopCatTest',
   uiaHelperExe: 'DesktopCatUia.exe',
   logFile: 'main.log',
+  // 1.4.0: frozen from their first release (the Android app's store identity and storage origin,
+  // and the tag of exported profile files on users' disks).
+  androidApplicationId: 'io.github.gizeverse.gizecat',
+  androidWebOrigin: 'https://appassets.androidplatform.net',
+  profileKind: 'gizeverse-character-profile',
 };
 
 /** A top-level scalar of electron-builder.yml. */
@@ -132,6 +138,56 @@ describe('frozen identifiers (identity.ts)', () => {
     expect(parseUserDataOverride({ [FROZEN.env.userData]: dir }, [])).toBe(path.resolve(dir));
     expect(isTestMode({ [FROZEN.env.test]: '1' })).toBe(true);
     expect(parseTimeScale({ [FROZEN.env.timeScale]: '4' })).toBe(4);
+  });
+
+  it('android/app/build.gradle.kts: applicationId and namespace; it is a different app from the desktop one', () => {
+    const gradle = read('android', 'app', 'build.gradle.kts');
+    const assigned = (key: string): string[] => [...gradle.matchAll(new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*"([^"]*)"`, 'gm'))].map((m) => m[1] ?? '');
+    expect(assigned('applicationId')).toEqual([FROZEN.androidApplicationId]);
+    expect(assigned('namespace')).toEqual([FROZEN.androidApplicationId]);
+    // A build-type suffix (the trial build) makes a separate app; the release id itself never changes.
+    for (const suffix of [...gradle.matchAll(/applicationIdSuffix[ \t]*=[ \t]*"([^"]*)"/g)].map((m) => m[1] ?? '')) expect(suffix).toMatch(/^\.[a-z][a-z0-9]*$/);
+    expect(FROZEN.androidApplicationId).not.toBe(FROZEN.appId);
+    expect(FROZEN.androidApplicationId).not.toBe(FROZEN.appUserModelId);
+    expect(FROZEN.androidApplicationId).toMatch(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/);
+  });
+
+  it('MainActivity.kt: the package and the web origin the Android cat\'s storage is keyed by', () => {
+    const segments = FROZEN.androidApplicationId.split('.');
+    const candidates = ['java', 'kotlin'].map((dir) => path.join(ROOT, 'android', 'app', 'src', 'main', dir, ...segments, 'MainActivity.kt'));
+    const file = candidates.find((p) => fs.existsSync(p));
+    expect(file, `MainActivity.kt under ${candidates.join(' or ')}`).toBeDefined();
+    const kt = fs.readFileSync(file!, 'utf8');
+    expect(kt).toMatch(new RegExp(`^package ${FROZEN.androidApplicationId.replaceAll('.', '\\.')}\\s*$`, 'm'));
+    // The origin is WebViewAssetLoader's reserved https domain, with no path.
+    const origin = new URL(FROZEN.androidWebOrigin);
+    expect(origin.protocol).toBe('https:');
+    expect(origin.origin).toBe(FROZEN.androidWebOrigin);
+    // Every asset-loader host or URL literal in the activity names the frozen host, over https
+    // (either style: a literal origin, or a host constant used as "https://$HOST").
+    const literals = [...kt.matchAll(/"([^"\n]*androidplatform\.net[^"\n]*)"/g)].map((m) => m[1] ?? '');
+    expect(literals.length).toBeGreaterThan(0);
+    for (const lit of literals) {
+      if (lit.includes('://')) expect(lit.startsWith('https://')).toBe(true);
+      expect(lit.replace(/^https:\/\//, '').split('/')[0]).toBe(origin.host);
+    }
+    expect(kt).not.toContain(`http://${origin.host}`);
+    expect(kt).not.toMatch(/setHttpAllowed\(\s*true\s*\)/);
+    // A custom WebViewAssetLoader domain would move every Android cat's storage: it must be the same host,
+    // given as a literal or as a constant holding it.
+    for (const m of kt.matchAll(/setDomain\(\s*([^)]*?)\s*\)/g)) {
+      const arg = m[1] ?? '';
+      const literal = /^"([^"]*)"$/.exec(arg)?.[1];
+      const constant = /^[A-Za-z_]\w*$/.test(arg) ? new RegExp(`\\b(?:const\\s+)?val\\s+${arg}\\s*(?::\\s*String)?\\s*=\\s*"([^"]*)"`).exec(kt)?.[1] : undefined;
+      expect(literal ?? constant, `setDomain(${arg})`).toBe(origin.host);
+    }
+  });
+
+  it('the profile file kind is used by the profile format module', () => {
+    expect(PROFILE_KIND).toBe(FROZEN.profileKind);
+    const src = read('src', 'shared', 'profileTransfer.ts');
+    expect(src).toContain('PROFILE_KIND = IDENTITY.profileKind;');
+    expect(src).not.toContain(`'${FROZEN.profileKind}'`);
   });
 
   it('preload globals, the test hook, the UIA helper and the log file', async () => {
