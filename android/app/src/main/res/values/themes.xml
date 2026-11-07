@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- isLightTheme drives the page's prefers-color-scheme (targetSdk 33+). -->
+    <style name="Theme.GizeCat" parent="android:Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:isLightTheme">true</item>
+        <item name="android:windowBackground">@color/gizecat_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+</resources>

@@ -9,3 +9,21 @@ release/
 # Claude Code engineering standard (local state)
 .claude/handoff.md
 .claude/settings.local.json
+
+# Android app (android/): Gradle and IDE state, the generated web bundle, local SDK paths,
+# signing secrets and build outputs (release/android holds collected APK/AAB files).
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/app/release/
+android/app/src/main/assets/
+android/local.properties
+android/keystore.properties
+android/.idea/
+android/captures/
+*.iml
+*.jks
+*.keystore
+*.apk
+*.aab

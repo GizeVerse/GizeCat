@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 22% inset on each side keeps the cat inside the adaptive icon's 66 dp safe zone. gizecat_icon.png is a byte copy of build/icon.png. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/gizecat_icon"
+    android:inset="22%" />

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  allowBackup="false" turns cloud backup off at every API level (GizeCat has no cloud features).
+  Android 12+ device-to-device transfer (targetSdk 31+ keeps it despite allowBackup="false") takes
+  the WebView's storage along, so a new phone or tablet keeps the cat. There is deliberately no
+  <cloud-backup> section.
+-->
+<data-extraction-rules>
+    <device-transfer>
+        <include domain="root" path="app_webview/" />
+    </device-transfer>
+</data-extraction-rules>

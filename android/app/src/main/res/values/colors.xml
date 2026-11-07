@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The web page's palette (src/web/web.css :root), so the system bars and messages match it. -->
+<resources>
+    <color name="gizecat_bg">#F6F1E7</color>
+    <color name="gizecat_fg">#231D16</color>
+    <color name="ic_launcher_background">#F6F1E7</color>
+</resources>

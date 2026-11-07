@@ -9,7 +9,7 @@ const NODE_BUILTINS = builtinModules.filter((m) => !m.startsWith('_')).map((name
 const PURE_GLOBALS = ['process', 'Buffer', '__dirname', '__filename', 'require', 'module', 'global', 'setImmediate', 'clearImmediate', 'window', 'document', 'navigator', 'localStorage', 'sessionStorage'];
 
 export default tseslint.config(
-  { ignores: ['out/**', 'dist/**', 'release/**', 'node_modules/**', '.claude/**', 'scripts/**', 'build/**', '*.config.mts', '*.config.mjs'] },
+  { ignores: ['out/**', 'dist/**', 'release/**', 'node_modules/**', '.claude/**', 'scripts/**', 'build/**', 'android/**', '*.config.mts', '*.config.mjs'] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- src/web/web.css @media (prefers-color-scheme: dark). The launcher background stays light. -->
+<resources>
+    <color name="gizecat_bg">#1B1814</color>
+    <color name="gizecat_fg">#F1E9DC</color>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GizeCat</string>
+    <string name="webview_unavailable">GizeCat needs Android System WebView. Update or enable it, then open GizeCat again.</string>
+    <string name="renderer_failed">GizeCat stopped drawing several times. Close the app and open it again.</string>
+</resources>
