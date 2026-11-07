@@ -24,9 +24,11 @@ extraMetadata:
 # GizeVerse (ADR 0004 §11): every platform section lists its own native files. The Windows
 # section carries exactly the entries that were top-level up to v1.2 (payload unchanged).
 win:
+  # 1.4.0: one installer per architecture (x64, and ARM64 for Windows on Arm PCs). The CLI ignores
+  # this list unless --x64/--arm64 are passed, so the package scripts pass them explicitly.
   target:
     - target: nsis
-      arch: [x64]
+      arch: [x64, arm64]
   icon: build/icon.ico
   executableName: DesktopCat
   requestedExecutionLevel: asInvoker
@@ -35,9 +37,13 @@ win:
   extraResources:
     - from: out/native/DesktopCatUia.exe
       to: native/DesktopCatUia.exe
+  # Each installer carries only its own koffi binary (scripts/stage-koffi-arch.mjs puts the ARM64
+  # package on an x64 build host; scripts/check-win-payload.mjs inspects the result statically).
   asarUnpack:
     - node_modules/koffi/**
-    - node_modules/@koromix/koffi-win32-x64/**
+    - node_modules/@koromix/koffi-win32-${arch}/**
+  files:
+    - "!node_modules/@koromix/koffi-win32-!(${arch})/**"
 # Linux (ADR 0004 §11): IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED; built in a container only.
 # deb/rpm need a homepage and a maintainer e-mail, which the owner has not chosen yet.
 linux:
@@ -84,7 +90,10 @@ nsis:
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   uninstallDisplayName: Desktop Cat
-  artifactName: Desktop-Cat-Setup-${version}.${ext}
+  # 1.4.0: per-architecture names (the NSIS GUID derives from appId, so upgrades are unaffected);
+  # no combined installer (it would carry both payloads, ~240 MB).
+  artifactName: Desktop-Cat-Setup-${version}-${arch}.${ext}
+  buildUniversalInstaller: false
   license: LICENSE
   include: build/installer.nsh
 electronFuses:

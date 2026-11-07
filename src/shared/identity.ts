@@ -84,6 +84,23 @@ export const IDENTITY = Object.freeze({
   uiaHelperExe: 'DesktopCatUia.exe',
   /** The log file in userData/logs (src/main/diagnostics/logger.ts); support instructions and tools name it. */
   logFile: 'main.log',
+  /**
+   * 1.4.0: the Android app's applicationId (android/app/build.gradle.kts), derived from the
+   * GizeVerse GitHub organization. Permanent once published on a store; it is a different app from
+   * the desktop appId above and must never equal it.
+   */
+  androidApplicationId: 'io.github.gizeverse.gizecat',
+  /**
+   * 1.4.0: the origin the Android app serves its web bundle from (WebViewAssetLoader's reserved
+   * domain, android/app/src/main/java/.../MainActivity.kt). The cat's localStorage is keyed by it:
+   * changing it loses every Android cat.
+   */
+  androidWebOrigin: 'https://appassets.androidplatform.net',
+  /**
+   * 1.4.0: the `kind` of an exported GizeCat character profile (src/shared/profileTransfer.ts).
+   * Files on users' disks and other devices match on it, so it is frozen from its first release.
+   */
+  profileKind: 'gizeverse-character-profile',
 } as const);
 
 export type Identity = typeof IDENTITY;
