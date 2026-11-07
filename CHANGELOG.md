@@ -5,7 +5,7 @@ GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is th
 ## 1.3.0 — first public release
 
 ### Fixed
-- **Clicking, dragging and throwing the cat could stop working after it had run for a while.** A safety check ended any press 400 ms after Windows reported the mouse button up, even while the cat's window was still receiving the held button. That button state can read "up" by mistake, and a busy PC delays the check, so taps were lost, drags were cut short and throws fell flat, silently. The cat's own window input is now authoritative while it is alive. Also: the click guard no longer gets stuck after a bail-out or a momentarily stale window list; lock and sleep states always recover (also when Windows misses the unlock or resume event); a right-click, a hung or reloaded renderer, or a resume no longer leave a half-finished gesture behind; overlays recover after repeated renderer failures. About 100 new long-run tests ([details](docs/gizeverse/13-interaction-reliability.md)).
+- **Clicking, dragging and throwing the cat could stop working after it had run for a while.** A safety check ended any press 400 ms after Windows reported the mouse button up, even while the cat's window was still receiving the held button. That button state can read "up" by mistake, and a busy PC delays the check, so taps were lost, drags were cut short and throws fell flat, silently. The cat's own window input is now authoritative while it is alive. Also: the click guard no longer gets stuck after a bail-out or a momentarily stale window list; lock and sleep states always recover (also when Windows misses the unlock or resume event); a right-click, a hung or reloaded renderer, or a resume no longer leave a half-finished gesture behind; overlays recover after repeated renderer failures. More than 80 new tests: long-run, fuzz and 24-hour simulated suites, plus an opt-in soak of the real app, which passed a two-hour run with simulated input ([details](docs/gizeverse/13-interaction-reliability.md)).
 - **Profile counters** for edge climbs, excursions, surface hops, slips and hard landings were shown in Settings but never counted.
 
 ### Added
@@ -22,7 +22,7 @@ GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is th
 - **Open-source files:** contributing guide, code of conduct, security policy, issue and pull-request templates, CI and release workflows, roadmap.
 
 ### Changed
-- **The product is now called GizeCat**, "a GizeVerse character". Persistent identifiers are unchanged, so existing installs keep their cat, settings, API keys and startup entry: the app ID, the `%APPDATA%\Desktop Cat` data folder, the executable name and the `DESKTOP_CAT_*` environment variables. The installer, shortcuts and Apps entry keep the name "Desktop Cat" for now.
+- **The product is now called GizeCat**, "a GizeVerse character". Persistent identifiers are unchanged, so that existing installs keep their cat, settings, API keys and startup entry: the app ID, the `%APPDATA%\Desktop Cat` data folder, the executable name and the `DESKTOP_CAT_*` environment variables. The installer, shortcuts and Apps entry keep the name "Desktop Cat" for now.
 - **Your data folder is pinned explicitly** to `%APPDATA%\Desktop Cat`, so a future product rename can never move it.
 
 ### Security

@@ -1,9 +1,8 @@
 name: release-artifacts
 
-# UNEXECUTED. GitHub Actions has never run this workflow for this repository: the repository
-# has no remote, and Actions on this account's private repositories have been blocked by
-# billing since 2026-10-02. Nothing below has been observed to pass or fail on a hosted
-# runner. A person must check the first real run, and inspect every file it produces, before
+# UNEXECUTED when written (2026-11-07). The repository had no remote before its publication,
+# so GitHub Actions had never run this workflow, and nothing below had been observed to pass or
+# fail on a hosted runner. A person must check the first real run, and inspect every file it produces, before
 # any of them is shared.
 #
 # Manual only (workflow_dispatch). It builds unsigned packages and uploads them as workflow

@@ -1,6 +1,6 @@
 # GizeVerse foundation: reports
 
-Branch `feat/gizeverse-foundation` (no remote; nothing pushed or published). It was cut from `feat/v1.2-lively` at `58b4cd6` (v1.2.0). Mission: turn Desktop Cat into GizeCat, the first character of the GizeVerse platform, on a cross-platform foundation without breaking the validated Windows app.
+Branch `feat/gizeverse-foundation`, cut from `feat/v1.2-lively` at `58b4cd6` (v1.2.0). Mission: turn Desktop Cat into GizeCat, the first character of the GizeVerse platform, on a cross-platform foundation without breaking the validated Windows app. The first public release, 1.3.0, is cut from this branch; it adds the long-run interaction fix ([13-interaction-reliability.md](13-interaction-reliability.md)).
 
 **Labels.**
 - REAL = executed here and observed.
@@ -30,6 +30,7 @@ Branch `feat/gizeverse-foundation` (no remote; nothing pushed or published). It 
 | 16 | Unverified items needing hardware | [02-verification.md](02-verification.md#needs-hardware-or-accounts) |
 | 17 | Risks and next milestone | [below](#risks-and-next-milestone), [ROADMAP.md](../../ROADMAP.md) |
 | 18 | Changed files, commits, branch, status | [below](#branch-and-status) |
+| 19 | Long-run interaction reliability (1.3.0): diagnosis, fix, long-run suites, soak | [13-interaction-reliability.md](13-interaction-reliability.md) |
 
 ## Status in one table
 
@@ -45,7 +46,7 @@ Branch `feat/gizeverse-foundation` (no remote; nothing pushed or published). It 
 
 ## Risks and next milestone
 
-1. **Owner decisions before any publication.** Security and conduct contacts; the organization and repository; the deb/rpm homepage and maintainer; whether the persistent identifiers ever change. See [11-open-source-readiness.md](11-open-source-readiness.md).
+1. **Owner decisions still open.** Security and conduct reports now go through GitHub private vulnerability reporting ([SECURITY.md](../../SECURITY.md)); no maintainer contact or legal identity is named. Still open: the deb/rpm homepage and maintainer, and whether the persistent identifiers ever change. See [11-open-source-readiness.md](11-open-source-readiness.md).
 2. **The installer-name rename to GizeCat.** It needs `scripts/upgrade-test.ps1` from 1.2.0 on a disposable Windows user or VM ([12-branding.md](12-branding.md)).
 3. **Electron runway.** Bump 44.9.3 → 44.10.x behind a Windows regression run. 44 is end-of-life on 2027-03-02; Electron 45 deprecates synchronous safeStorage.
 4. **Real-hardware runs.**
@@ -59,10 +60,8 @@ Branch `feat/gizeverse-foundation` (no remote; nothing pushed or published). It 
 
 ## Branch and status
 
-- **Branch:** `feat/gizeverse-foundation`, in the worktree `.claude/worktrees/v1.1`.
-  - No remote: nothing was pushed, merged or published.
-  - `main` is untouched (v1.0); `feat/v1.2-lively` (v1.2.0) is the base.
-- **Commits:** about 20 on top of `58b4cd6`. The branch log from `58b4cd6` lists them; each has a conventional message saying what it proves. The diff spans about 160 files, roughly +9.5k/-0.3k lines; much of it is tests, docs and evidence.
+- **Branch:** `feat/gizeverse-foundation`; `feat/v1.2-lively` (v1.2.0) is the base. Nothing was merged into the local `main` (v1.0).
+- **Commits:** 35 on top of `58b4cd6` before the 1.3.0 documentation commit (20 for the foundation, the rest for publication and the 1.3.0 interaction work). The branch log from `58b4cd6` lists them; each has a conventional message saying what it proves. The diff spans about 200 files, roughly +18k/-0.4k lines; much of it is tests, docs and evidence.
 - **Main code areas:**
   - `src/shared/{platform,capabilityMatrixDoc,brand,identity,character}.ts`;
   - `src/core/display/coordinates.ts`;

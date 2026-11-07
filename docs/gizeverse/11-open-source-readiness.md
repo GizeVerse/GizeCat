@@ -1,8 +1,8 @@
 # Open-source readiness
 
-Status: 2026-11-06, branch `feat/gizeverse-foundation`.
-- **Nothing has been published.** No public repository and no GitHub organization were created, and nothing was pushed: the repository has no remote, and creating either needs the owner's explicit authorization and credentials.
-- **This report covers what a first public release would need, and what exists now.**
+Status: 2026-11-07, branch `feat/gizeverse-foundation`, written before publication.
+- **Publication.** On 2026-11-07 the owner authorized creating the GizeVerse organization, the public repository `GizeVerse/GizeCat`, and the first public release (1.3.0). This file does not record whether they exist; GitHub does.
+- **This report covers what a first public release needs, and what exists.**
 - Labels: REAL means checked here, UNVERIFIED means not checked.
 
 ## What exists
@@ -16,7 +16,7 @@ Status: 2026-11-06, branch `feat/gizeverse-foundation`.
 | Code of conduct | [CODE_OF_CONDUCT.md](../../CODE_OF_CONDUCT.md) | Contributor Covenant 2.1, verbatim from EthicalSource/contributor_covenant (REAL fetch) |
 | Security policy | [SECURITY.md](../../SECURITY.md) | Scope, out of scope, reporting, response goals |
 | Issue and PR templates | `.github/ISSUE_TEMPLATE/` (bug, feature, platform report; blank issues off), `.github/pull_request_template.md` | YAML parses (REAL); GitHub's acceptance of the forms is UNVERIFIED |
-| CI | `.github/workflows/ci.yml` | Windows, Ubuntu and macOS matrix. **UNEXECUTED**: Actions on this account's private repositories have not started a job since 2026-10-02 (billing), and there is no remote. |
+| CI | `.github/workflows/ci.yml` | Windows, Ubuntu and macOS matrix. **UNEXECUTED** when written: the repository had no remote before publication. |
 | Release workflow | `.github/workflows/release.yml` | Manual only. Builds the Windows NSIS installer and the Linux AppImage/tar.gz, then uploads them as workflow artifacts. It never publishes, signs or uses secrets. **UNEXECUTED.** |
 | Platform support matrix | [capability-matrix.md](capability-matrix.md) | Generated from `src/shared/platform.ts`; a test fails if it is stale (REAL) |
 | Roadmap | [ROADMAP.md](../../ROADMAP.md) | Directions, no dates |
@@ -27,7 +27,7 @@ Status: 2026-11-06, branch `feat/gizeverse-foundation`.
 The project must not invent any of these:
 
 1. **Contacts.** SECURITY.md and CODE_OF_CONDUCT.md now point to GitHub private vulnerability reporting (the repository Security tab), turned on when the repository is created. The owner may add a dedicated e-mail address later; none is invented here.
-2. **Where the code lives.** The GizeVerse organization (name, account), the repository name, and whether `io.github.enesiltas.desktopcat` stays the appId. It is frozen: changing it orphans every install (ADR 0004 §9).
+2. **Where the code lives.** Decided by the owner on 2026-11-07: the organization `GizeVerse` and the public repository `GizeVerse/GizeCat`. The appId `io.github.enesiltas.desktopcat` stays: it is frozen, and changing it orphans every install (ADR 0004 §9).
 3. **Linux deb/rpm metadata.** electron-builder needs a `homepage` and a maintainer e-mail for deb and rpm, and none is set. Only the AppImage and tar.gz are configured.
 4. **SECURITY.md response goals** (7, 14 and 90 days). They were drafted as goals and need the owner's confirmation.
 5. **Signing.** Windows Authenticode, and a macOS Developer ID with notarization. Without them, SmartScreen and Gatekeeper warn, and macOS distribution is effectively blocked.
@@ -56,12 +56,11 @@ The project must not invent any of these:
   - machine-specific notes in CLAUDE.md.
 
   All are reworded in HEAD (`d44b182`). The **history is published unrewritten**, so older commits still contain those paths and names. They are low-sensitivity (the user name is visible in the public author e-mail anyway), and rewriting would change every commit hash that these reports cite as evidence.
-- **Commit metadata.** Author and committer are `enesiltas <enes1iltas2@gmail.com>`, the address already public on that GitHub profile. The commits carry `Co-Authored-By` and `Claude-Session` trailers.
-- **Contact addresses.** The Code of Conduct and the notices contain only the verbatim upstream addresses.
+- **Commit metadata.** Author and committer are `enesiltas` with the owner's own e-mail address, which the owner states is already public. It appears in commit metadata only, never in file content. The commits carry `Co-Authored-By` and `Claude-Session` trailers.
+- **Contact addresses.** The Code of Conduct and SECURITY.md name no person and no address: reports go through GitHub private vulnerability reporting (or GitHub's abuse reporting for conduct). THIRD_PARTY_NOTICES.md contains only the verbatim upstream addresses.
 - **Sample settings files** contain no keys (docs/settings.example.json is the template).
 - **Reproducible steps.** CONTRIBUTING and the README give the commands; `verify.mjs` is part of the repository.
 
 ## Not done
 
-- No public repository, organization, release, tag or package registry entry was created.
-- No CI run was observed. The workflows are unexecuted drafts that a person must check on the first real run.
+- As of this report (2026-11-07, written before publication): no package registry entry exists, and no CI run had been observed. The workflows were unexecuted drafts that a person must check on the first real run. Whether the repository, the `v1.3.0` tag and the release exist is shown by GitHub itself, not by this file.

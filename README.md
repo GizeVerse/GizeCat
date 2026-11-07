@@ -30,7 +30,7 @@ Download the latest `Desktop-Cat-Setup-<version>.exe` from **[Releases](https://
 - **SmartScreen.** The installer is **not code-signed**, so Windows may warn: choose **More info → Run anyway**.
 - **First start.** The cat appears at the bottom of your screen, and a Welcome page explains the controls.
 - **Startup.** GizeCat starts when you sign in to Windows (a one-time notification tells you). Turn it off in Settings → General, or in Task Manager → Startup apps; an opt-out is never overridden.
-- **Upgrading.** Your cat and settings are kept: they live in `%APPDATA%\Desktop Cat`, which every version uses. Quit the running cat from its tray menu first.
+- **Upgrading.** Your cat and settings are built to carry over: they live in `%APPDATA%\Desktop Cat`, which every version uses. A real upgrade from 1.0 to 1.1 kept them. For 1.2 to 1.3, the `installer-check` workflow runs the upgrade on a disposable machine; its results are in the repository's Actions tab. Quit the running cat from its tray menu first.
 - **Uninstall** from Windows Settings → Apps. This removes the startup entry too.
 
 The installer, shortcuts and Apps entry are still named **Desktop Cat**. They are renamed only after an upgrade test on a disposable machine shows that existing installs carry over ([why](docs/gizeverse/12-branding.md)).

@@ -2,6 +2,42 @@
 
 Labels: **REAL** = executed and observed on the machine below; **MOCKED** = executed against fakes/mock servers; **SIMULATED** = real code driven with synthetic geometry/events; **UNVERIFIED** = not executed.
 
+# v1.3.0 (2026-11-07): first public release; clicks, drags and throws over long runs
+
+Code: branch `feat/gizeverse-foundation`, application code at `0ec2dd2` (later commits change tests and docs only; nothing that ships). Installer `release/1.3.0/Desktop-Cat-Setup-1.3.0.exe`, 121,530,241 bytes, SHA-256 `57BEC0A7DE46EE6A7178620EC43D74877120C120DC70F8EFF4CBA2B280B113C7`, unsigned. Same machine as v1.2.0 (Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide bottom taskbar). Someone was using the desk during most runs. The owner's installed 1.2.0 kept running and was never touched. The report, root cause, fix and every run: [docs/gizeverse/13-interaction-reliability.md](gizeverse/13-interaction-reliability.md). Platform work since v1.2.0: [docs/gizeverse/](gizeverse/README.md).
+
+## Automated suites
+
+| Tier | Result |
+|---|---|
+| `node .claude/scripts/verify.mjs full` on `4d00e38` plus this documentation | **PASS**, not stale: typecheck, lint, unit, build, e2e |
+| Vitest (unit + integration) | **3884 passed, 26 skipped, 1 todo** (198 of 200 files). v1.2.0: 3645 passed |
+| Playwright default suite (real app) | **32 passed, 14 skipped**: the 12 opt-in lively scenarios and the opt-in soak (run separately, below), and the opt-in real-browser test |
+
+## The long-run interaction failure
+
+| Check | Result | Label |
+|---|---|---|
+| Press-path tests against the 1.2.0 code (scratch copy, five press-path files reverted) | 36 of the 41 new tests fail: 30 on the old behaviour, 6 for calling new API; 5 controls pass on both. All pass on 1.3.0 | REAL run, SIMULATED input |
+| 24 h simulated day, seeds 1–11 | pass; seed 1: 1,254 gestures, 59 recoveries, falls exactly the oracle's | REAL run, SIMULATED behaviour |
+| Real-app soak, 120 min, all gestures and perturbations (delivered-input oracle, `c8402a9`) | **pass**: 1,251 of 1,251 judged gestures; 0 stuck; on-cat probes 272/272 interactive, 0 off-cat blocking (T8); 18 renderer freezes recovered in 282–338 ms; 660 Win32 "up" readings during a hold ended **no** press (each ended one in 1.2.0); 0 lost presses; 0 recreates; heap main 11.4 → 20.3 MB | app REAL, input SIMULATED |
+| The earlier 120-minute run on the same app code (`ca7f0a2`) | full length; failed its gesture check, 29 of 1,203, on harness timing (flicks paused before the release by hook round trips; doc 13). Every app property held | app REAL, input SIMULATED |
+| Lively throws through the real drag path | 10 of 10 thrown | app REAL, input SIMULATED |
+
+## Real-Windows checks on the final code (REAL unless noted)
+
+| Check | Result |
+|---|---|
+| Packaged smoke (`scripts/smoke-packaged.mjs`, `release/1.3.0/win-unpacked`) | pass: first instance stays up, second exits 0 quickly, 0 error lines, 0 login-item writes; the owner's running cat holds the shortcut (warning, as before) |
+| Lively edge and covered (own windows) | **pass.** Covered support (`c8402a9`): cover up at 148 ms, guard at 253 ms, **0 wrong clicks**; on the floor afterwards the overlay takes the mouse (positive control, 28 of 30 checks). Screen edge: two runs on the loaded machine (the desk in use) made 0 click-through checks, because the cat climbed down from the cursor within about a second, before the test's slower loop could check. With the check's diagnostics (`4d00e38`), 3 of 3 runs passed: 26, 17 and 17 checks over the clinging cat, **0 wrong**, the overlay never behind the own window, no overlay re-created |
+
+## Not verified in v1.3.0 (UNVERIFIED)
+
+- **Installing 1.3.0 over 1.2.0, and the upgrade's data preservation, on a real install.** Not done here (the owner's install). What decides an upgrade is unchanged since 1.2.0: the installer script `build/installer.nsh` is identical, the builder configuration was restructured with a byte-identical Windows payload (144 of 144 files, REAL), and the appId, data folder and executable name are frozen and pinned by `identity.test.ts`. `.github/workflows/installer-check.yml` runs the real install, upgrade and uninstall on a disposable runner once the repository is public.
+- **More than two hours of the real app, and a real hand.** The soak input is CDP events and an injected cursor. `GetAsyncKeyState` under real input and an elevated window in front (diagnosis trigger (a)) were not exercised. That the owner's failure was H1 needs the owner's own long session; the info-level log lines make it visible.
+- **Known limit:** when Win32 never sees a press, moving the mouse during a renderer stall of 400 ms or more ends that press.
+- Windows 10, multi-monitor, mixed DPI, other scales; macOS and Linux desktops (see the capability matrix).
+
 # v1.2.0 (2026-11-05): a lively cat
 
 Code: branch `feat/v1.2-lively`, application code at `d96c4ab` (later commits change a bench script and docs only; nothing that ships). Installer `release/Desktop-Cat-Setup-1.2.0.exe`, 121,515,413 bytes, SHA-256 `02C05826675D7F946BDDAB7A1C28DE59F644E1651915EEEC70507EC17B1657B3`, unsigned; `release/win-unpacked` is its payload from the same `npm run package`. Same machine: Windows 11 Home 10.0.26200, one 1920×1200 display at 125 %, auto-hide bottom taskbar, Edge 156.0.4314.50, Chrome 155.0.8059.79, Windows Terminal 1.24.12741.0. The owner was at the desk during several runs, usually with a maximized window in front. Design: ADR 0003. Why the cat was passive and left tab strips early: [docs/research/v1.2/diagnosis.md](research/v1.2/diagnosis.md).
