@@ -1,0 +1,75 @@
+name: installer-check
+
+# Real install, uninstall and upgrade checks on a disposable GitHub-hosted Windows runner,
+# the only safe place for them: scripts/install-test.ps1 and scripts/upgrade-test.ps1 touch the
+# per-user install folder, the uninstall entry and the HKCU Run/StartupApproved values, and refuse
+# to run where Desktop Cat is already installed. Manual only; nothing is published or signed.
+#
+#   old_ref: the commit or tag whose installer is upgraded FROM (default: v1.2.0, 58b4cd6).
+
+on:
+  workflow_dispatch:
+    inputs:
+      old_ref:
+        description: 'Commit or tag to build the OLD installer from'
+        type: string
+        default: '58b4cd612c81ae5417099113660312fb13885509'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-check-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    name: install, upgrade, uninstall (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build the OLD installer (${{ inputs.old_ref }})
+        shell: pwsh
+        run: |
+          git worktree add ../old "${{ inputs.old_ref }}"
+          Push-Location ../old
+          npm ci --ignore-scripts
+          node node_modules/electron/install.js
+          npm run package
+          Get-ChildItem release -Filter 'Desktop-Cat-Setup-*.exe' | Format-Table Name, Length
+          Pop-Location
+      - name: Build the NEW installer (this commit)
+        shell: pwsh
+        run: |
+          npm ci --ignore-scripts
+          node node_modules/electron/install.js
+          npm run package
+          Get-ChildItem release -Filter 'Desktop-Cat-Setup-*.exe' | ForEach-Object { $_.Name; (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
+      - name: Packaged smoke (unpacked payload)
+        run: node scripts/smoke-packaged.mjs
+      - name: Fresh install, startup registration, uninstall
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1
+      - name: Upgrade old -> new keeps settings and the startup entry
+        shell: pwsh
+        run: |
+          $old = Get-ChildItem ../old/release -Filter 'Desktop-Cat-Setup-*.exe' | Select-Object -First 1
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/upgrade-test.ps1 -OldInstaller $old.FullName
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-check-logs
+          path: |
+            out/qa/**
+            out/install-test/**
+            out/upgrade-test/**
+          if-no-files-found: ignore
+          retention-days: 14

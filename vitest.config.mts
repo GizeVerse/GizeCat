@@ -14,7 +14,8 @@ export default defineConfig({
     // several-fold when every core runs one. Half the cores keeps them responsive; the timeout
     // is only a hang guard, never an assertion.
     maxWorkers: '50%',
-    testTimeout: 60000,
+    // CI runners (fewer, slower cores) may raise it: VITEST_TEST_TIMEOUT_MS (still only a hang guard).
+    testTimeout: Number(process.env.VITEST_TEST_TIMEOUT_MS) || 60000,
     restoreMocks: true,
   },
 });

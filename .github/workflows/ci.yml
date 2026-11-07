@@ -46,8 +46,11 @@ jobs:
   check:
     name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     continue-on-error: ${{ matrix.experimental }}
+    env:
+      # Hosted runners have fewer, slower cores: the long behaviour simulations need more than the local 60 s hang guard.
+      VITEST_TEST_TIMEOUT_MS: 300000
     strategy:
       fail-fast: false
       matrix:
