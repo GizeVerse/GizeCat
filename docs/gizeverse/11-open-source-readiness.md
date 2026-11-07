@@ -44,12 +44,20 @@ The project must not invent any of these:
 
 ## Hygiene checks done here (REAL)
 
-- **No secrets or personal data in the tracked tree.** `git grep` was run over the tracked tree, excluding package-lock.json, the Code of Conduct and the notices, for e-mail patterns and for API-key and private-key patterns (Anthropic, OpenAI, AWS, PEM). It found only test fixtures:
-  - a fake `sk-ant-…` key in the redaction test;
-  - sample addresses in the privacy and AI-output tests;
-  - `selftest@example.invalid` in the verify kit's selftest.
+- **No secrets in the tree or the history.** A full scan of all 110 commits (2026-11-07) covered key patterns (Anthropic, OpenAI, GitHub, AWS, Slack, PEM, `.env`), personal paths, captured data and committed binaries. Every key-shaped string is a test fake:
+  - `sk-ant-test…` and `sk-ant-e2e-NOT-A-REAL-KEY…`;
+  - the redaction test's `ghp_abc…`;
+  - a base64 sample.
 
-  The Code of Conduct and the notices contain only the verbatim upstream addresses.
+  No `.env`, `.pem` or `.pfx` file, large binary or real-desktop screenshot ever existed in history.
+- **Personal data: corrected.** An earlier version of this report said the tree had none; that scan only covered e-mails and keys. The full scan found:
+  - eight lines in research docs with the developer's local scratch paths (Windows user folder, a local job folder id);
+  - the names of apps open during one diagnosis;
+  - machine-specific notes in CLAUDE.md.
+
+  All are reworded in HEAD (`d44b182`). The **history is published unrewritten**, so older commits still contain those paths and names. They are low-sensitivity (the user name is visible in the public author e-mail anyway), and rewriting would change every commit hash that these reports cite as evidence.
+- **Commit metadata.** Author and committer are `enesiltas <enes1iltas2@gmail.com>`, the address already public on that GitHub profile. The commits carry `Co-Authored-By` and `Claude-Session` trailers.
+- **Contact addresses.** The Code of Conduct and the notices contain only the verbatim upstream addresses.
 - **Sample settings files** contain no keys (docs/settings.example.json is the template).
 - **Reproducible steps.** CONTRIBUTING and the README give the commands; `verify.mjs` is part of the repository.
 
