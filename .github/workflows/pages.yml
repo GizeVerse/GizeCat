@@ -1,0 +1,58 @@
+name: web-pages
+
+# UNEXECUTED when written (2026-11-08). GitHub Actions has never run this workflow, and nothing
+# below has been observed to pass or fail on a hosted runner. It publishes the GizeCat web app
+# (the installable tablet PWA, out/web) to GitHub Pages: a PUBLIC website.
+#
+# OWNER APPROVAL REQUIRED. Manual only (workflow_dispatch); no agent may trigger it. Before the
+# first run the owner must decide that the web app may be public at all, then enable Pages for the
+# repository (Settings > Pages > Build and deployment > Source: GitHub Actions) and start the
+# workflow by hand. The address follows GitHub's project-site pattern and does not exist until
+# Pages is enabled. A project site shares its origin with every other Pages site of the same
+# account or organization (shared localStorage and caches); an owner-provided custom domain
+# avoids that. The build uses no secrets and signs nothing.
+#
+# A deployment that succeeds is not evidence that the app works on an iPad or an Android tablet.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the web app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: Production web build (manifest, icons, service worker, production checks)
+        run: node scripts/build.mjs --web-only
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: out/web
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

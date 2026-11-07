@@ -114,7 +114,7 @@ describe('web storage: the cat', () => {
 });
 
 describe('web storage: settings', () => {
-  it('stores only the cat name, appearance and sound, and reads them back over the defaults', () => {
+  it('stores only the cat name, appearance, personality and sound, and reads them back over the defaults', () => {
     const s = defaultSettings();
     s.general.catName = 'Pamuk';
     s.appearance.size = 1.5;
@@ -122,9 +122,13 @@ describe('web storage: settings', () => {
     s.sound.enabled = true;
     s.sound.volume = 0.7;
     s.behavior.autonomy = 0.1;
+    s.behavior.movementSpeed = 1.7;
     const stored = storedSettings(s);
-    expect(Object.keys(stored).sort()).toEqual(['appearance', 'general', 'schemaVersion', 'sound']);
+    // 1.4.0: the preset-governed values travel with the preset name (migrateSettings re-derives it from them).
+    expect(Object.keys(stored).sort()).toEqual(['appearance', 'behavior', 'general', 'interaction', 'schemaVersion', 'sound']);
     expect(stored.general).toEqual({ catName: 'Pamuk' });
+    expect(Object.keys(stored.behavior as object).sort()).toEqual(['activityPreset', 'autonomy', 'cursorPlay', 'exploration', 'heights', 'mischief', 'stayLength', 'workDisruption']);
+    expect(Object.keys(stored.interaction as object)).toEqual(['reactionIntensity']);
     const mem = memoryStorage();
     const store = openWebStorage(() => mem, memoryLogger());
     expect(store.saveSettings(s)).toBe(true);
@@ -132,8 +136,11 @@ describe('web storage: settings', () => {
     expect(back.general.catName).toBe('Pamuk');
     expect(back.appearance.size).toBe(1.5);
     expect(back.sound).toEqual({ enabled: true, volume: 0.7 });
-    // Not stored: the default stands.
+    // A custom mix is not offered on the web: it reads back as Playful (the default values).
+    expect(back.behavior.activityPreset).toBe('playful');
     expect(back.behavior.autonomy).toBe(defaultSettings().behavior.autonomy);
+    // Not stored at all: the default stands.
+    expect(back.behavior.movementSpeed).toBe(defaultSettings().behavior.movementSpeed);
   });
 
   it('forces screen analysis and AI off whatever is stored', () => {

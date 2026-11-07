@@ -2,10 +2,17 @@
 // logical world (world px = CSS px, scaleFactor 1). The renderer sizes its canvas from
 // devicePixelRatio, so the cat stays sharp on high-DPI screens. Resizes are debounced and reported
 // once the viewport settles; a size that did not change is not reported.
+//
+// 1.4.0 (tablets): the work area is the viewport minus the bottom safe-area inset (the home
+// indicator or gesture bar), so the cat's floor sits above it. Only the height shrinks: the work
+// area's origin stays at the viewport's (0, 0), because displayMath puts the overlay's CSS origin at
+// the work area's origin. Left, right and top insets are not modelled for the cat (the toolbar and
+// the sheet pad themselves in CSS). A change of the insets alone is reported like a resize.
 import { displayAtPoint, localDipToPx, pxToLocalDip } from '../core/display/displayMath';
 import type { Point, Rect } from '../shared/geometry';
 import type { DisplayGeometry, WorldGeometry } from '../shared/world';
 import type { DisplayService, Logger, Unsubscribe } from '../main/contracts';
+import { NO_INSETS, type Insets } from './safeArea';
 
 export const WEB_DISPLAY_ID = 'web';
 export const RESIZE_DEBOUNCE_MS = 150;
@@ -23,8 +30,10 @@ export interface WebDisplayTimers {
 }
 
 export interface WebDisplayOptions {
-  /** The viewport size in CSS px (window.innerWidth / innerHeight). */
+  /** The viewport size in CSS px (the layout viewport: documentElement.clientWidth / clientHeight). */
   viewport: () => Viewport;
+  /** Safe-area insets in CSS px (safeArea.ts); absent = none. Only the bottom one shapes the work area. */
+  insets?: () => Insets;
   /** Calls `cb` whenever the viewport may have changed (window resize); returns the unsubscribe. */
   listen: (cb: () => void) => Unsubscribe;
   timers: WebDisplayTimers;
@@ -34,10 +43,15 @@ export interface WebDisplayOptions {
 
 const side = (v: number): number => (Number.isFinite(v) ? Math.min(MAX_SIDE_PX, Math.max(1, Math.round(v))) : 1);
 
-/** The viewport as the world's only display (bounds = work area; nothing is reserved). */
-export function viewportDisplay(v: Viewport): DisplayGeometry {
+/**
+ * The viewport as the world's only display: bounds = the viewport; the work area = the viewport
+ * minus the bottom safe-area inset (without insets, the same as the bounds). At least 1 px stays.
+ */
+export function viewportDisplay(v: Viewport, insets: Insets = NO_INSETS): DisplayGeometry {
   const r: Rect = { x: 0, y: 0, width: side(v.width), height: side(v.height) };
-  return { id: WEB_DISPLAY_ID, primary: true, scaleFactor: 1, boundsDip: { ...r }, workAreaDip: { ...r }, boundsPx: { ...r }, workAreaPx: { ...r } };
+  const bottom = Number.isFinite(insets.bottom) ? Math.min(r.height - 1, Math.max(0, Math.round(insets.bottom))) : 0;
+  const work: Rect = { x: 0, y: 0, width: r.width, height: r.height - bottom };
+  return { id: WEB_DISPLAY_ID, primary: true, scaleFactor: 1, boundsDip: { ...r }, workAreaDip: { ...work }, boundsPx: { ...r }, workAreaPx: { ...work } };
 }
 
 const sameRect = (a: Rect, b: Rect): boolean => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
@@ -47,6 +61,7 @@ export function createWebDisplayService(opts: WebDisplayOptions): DisplayService
   const debounceMs = opts.debounceMs ?? RESIZE_DEBOUNCE_MS;
   const listeners = new Set<(world: WorldGeometry) => void>();
   let last: Viewport = { width: 1, height: 1 };
+  let lastInsets: Insets = { ...NO_INSETS };
   let version = 1;
   let timer: unknown = null;
   let disposed = false;
@@ -58,22 +73,33 @@ export function createWebDisplayService(opts: WebDisplayOptions): DisplayService
     } catch (err) {
       log?.warn('reading the viewport failed', { error: err });
     }
+    if (opts.insets) {
+      try {
+        const i = opts.insets();
+        lastInsets = { top: i.top, right: i.right, bottom: i.bottom, left: i.left };
+      } catch (err) {
+        log?.warn('reading the safe-area insets failed', { error: err });
+      }
+    }
     return last;
   }
 
-  let world: WorldGeometry = { version, displays: [viewportDisplay(read())] };
+  let world: WorldGeometry = { version, displays: [viewportDisplay(read(), lastInsets)] };
 
   function current(): DisplayGeometry {
-    return world.displays[0] ?? viewportDisplay(last);
+    return world.displays[0] ?? viewportDisplay(last, lastInsets);
   }
 
   function refresh(): boolean {
     if (disposed) return false;
-    const next = viewportDisplay(read());
-    if (sameRect(current().boundsPx, next.boundsPx)) return false;
+    const v = read();
+    const next = viewportDisplay(v, lastInsets);
+    const cur = current();
+    // The insets alone can change (rotation, a keyboard dock): the work area is compared too.
+    if (sameRect(cur.boundsPx, next.boundsPx) && sameRect(cur.workAreaPx, next.workAreaPx)) return false;
     version++;
     world = { version, displays: [next] };
-    log?.info('viewport changed', { width: next.boundsPx.width, height: next.boundsPx.height, version });
+    log?.info('viewport changed', { width: next.boundsPx.width, height: next.boundsPx.height, workAreaHeight: next.workAreaPx.height, version });
     for (const cb of [...listeners]) {
       try {
         cb(world);

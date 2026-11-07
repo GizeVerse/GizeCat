@@ -3,20 +3,24 @@
 // 127.0.0.1 only, serves one directory (default out/web-test), GET and HEAD only, with correct MIME
 // types and the page's Content-Security-Policy sent as a header as well. No directory listings, no
 // paths outside the directory, nothing cached.
+// 1.4.0: sw.js gets its own policy (a worker's CSP comes from its own response; the page's
+// connect-src 'none' would stop the worker from caching the app's files), and the manifest its
+// registered type.
 // Usage: node scripts/serve-web.mjs [--dir out/web-test] [--port 41731]
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SW_CSP, SW_FILE, WEB_CSP } from './web-csp.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-/** The same policy as the meta tag in src/web/index.html. */
-export const WEB_CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'";
+/** The same policy as the meta tag in src/web/index.html (defined once, in scripts/web-csp.mjs). */
+export { WEB_CSP };
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -84,8 +88,10 @@ const server = http.createServer((req, res) => {
       send(res, 404, 'not found');
       return;
     }
+    const isWorker = path.relative(dir, file) === SW_FILE;
     res.writeHead(200, {
       ...baseHeaders,
+      ...(isWorker ? { 'Content-Security-Policy': SW_CSP } : {}),
       'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
       'Content-Length': st.size,
     });

@@ -2,7 +2,10 @@ import { defineConfig, devices } from '@playwright/test';
 
 // GizeCat web host E2E (ADR 0004 §8): the real page in the installed Chrome and Edge (channel; the
 // bundled Chromium is not installed here), served by scripts/serve-web.mjs on 127.0.0.1 from
-// out/web-test. Mobile is Chrome's device emulation (SIMULATED). Headless: no window on the desktop.
+// out/web-test. Mobile and tablets are Chrome's device emulation (SIMULATED): the iPad project is the
+// iPad Pro 11 viewport and user agent in Chrome, not WebKit and not iPadOS Safari (a WebKit project
+// would need `npx playwright install webkit`, a download the owner decides on). Headless: no window
+// on the desktop.
 // Build first: node scripts/build.mjs --web-only --web-test (npm run test:web does both).
 // The Electron E2E suite has its own config (playwright.config.mts).
 const PORT = Number(process.env.GIZECAT_WEB_PORT ?? 41731);
@@ -34,5 +37,8 @@ export default defineConfig({
     { name: 'chrome', use: { ...devices['Desktop Chrome'], channel: 'chrome' } },
     { name: 'msedge', use: { ...devices['Desktop Edge'], channel: 'msedge' } },
     { name: 'mobile-emulated', use: { ...devices['Pixel 7'], channel: 'chrome' } },
+    // 1.4.0 tablets (SIMULATED). The iPad descriptor defaults to WebKit: Chrome is forced here.
+    { name: 'tablet-ipad-emulated', use: { ...devices['iPad Pro 11'], browserName: 'chromium', channel: 'chrome' } },
+    { name: 'tablet-android-emulated', use: { ...devices['Galaxy Tab S9'], channel: 'chrome' } },
   ],
 });

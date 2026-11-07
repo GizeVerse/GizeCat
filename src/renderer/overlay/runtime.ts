@@ -10,8 +10,21 @@ import { HIT_REFRESH_MS, HitRegionReporter } from './hitRegion';
 import { attachPointerInput } from './input';
 import { SnapshotInterpolator, type InterpSample } from './interpolation';
 import { CatScene, type DeviceRect, type Layer, type LayerProvider } from './scene';
-import { createSoundPlayer, type SoundPlayer } from './sound';
+import { createSoundPlayer, type AudioContextLike, type SoundPlayer } from './sound';
 import { isOverlayConfig, isRenderState } from './validate';
+
+/**
+ * 1.4.0: optional host hooks for the web host (src/web/main.ts). The desktop overlay passes none
+ * and behaves exactly as before: the browser's AudioContext and window.innerWidth/innerHeight.
+ */
+export interface OverlayRuntimeOptions {
+  /** Makes the sound player's AudioContext (the web host shares one gesture-unlocked context). */
+  audio?: () => AudioContextLike;
+  /** The canvas's CSS size (the web host measures the layout viewport, as its display service does). */
+  viewport?: () => { width: number; height: number };
+}
+
+const windowViewport = (): { width: number; height: number } => ({ width: window.innerWidth, height: window.innerHeight });
 
 const MAX_FRAME_DT_MS = 250;
 const MAX_CONSECUTIVE_ERRORS = 30;
@@ -73,17 +86,41 @@ export class OverlayRuntime {
   /** Drawing failed for good: stay silent so main recreates this overlay. */
   private gaveUp = false;
   private readonly disposers: (() => void)[] = [];
+  /** The canvas's CSS size source (window.innerWidth/innerHeight unless the host gives one). */
+  private readonly viewportSize: () => { width: number; height: number };
+  private readonly windowSize = { width: 0, height: 0 };
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly api: OverlayApi,
+    options: OverlayRuntimeOptions = {},
   ) {
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) throw new Error('overlay: 2D canvas context unavailable');
     this.ctx = ctx;
     this.hits = new HitRegionReporter((r) => api.sendHitRegion(r));
-    this.sound = createSoundPlayer({ now: () => performance.now() });
+    this.sound = createSoundPlayer({ now: () => performance.now(), audio: options.audio });
+    this.viewportSize = options.viewport ?? windowViewport;
     this.sample = { x: 0, y: 0, state: INITIAL_STATE, simTime: 0, snapped: false };
+  }
+
+  /**
+   * The canvas's CSS size, read every frame: without a host source, window.innerWidth/innerHeight
+   * into one reused object (no allocation per frame, as before 1.4.0); a host source that throws or
+   * returns a broken size falls back to the window's.
+   */
+  private viewport(): { width: number; height: number } {
+    if (this.viewportSize !== windowViewport) {
+      try {
+        const v = this.viewportSize();
+        if (Number.isFinite(v.width) && Number.isFinite(v.height)) return v;
+      } catch {
+        // Fall back below.
+      }
+    }
+    this.windowSize.width = window.innerWidth;
+    this.windowSize.height = window.innerHeight;
+    return this.windowSize;
   }
 
   start(): void {
@@ -154,8 +191,9 @@ export class OverlayRuntime {
   private resize(): void {
     const ratio = window.devicePixelRatio;
     const dpr = Number.isFinite(ratio) && ratio > 0 ? ratio : this.config.scaleFactor > 0 ? this.config.scaleFactor : 1;
-    const w = Math.max(1, window.innerWidth);
-    const h = Math.max(1, window.innerHeight);
+    const v = this.viewport();
+    const w = Math.max(1, v.width);
+    const h = Math.max(1, v.height);
     if (dpr === this.dpr && w === this.cssW && h === this.cssH && this.canvas.width > 1) return;
     this.dpr = dpr;
     this.cssW = w;
@@ -228,7 +266,8 @@ export class OverlayRuntime {
   };
 
   private step(now: number): void {
-    if (window.devicePixelRatio !== this.dpr || window.innerWidth !== this.cssW || window.innerHeight !== this.cssH) this.resize();
+    const v = this.viewport();
+    if (window.devicePixelRatio !== this.dpr || v.width !== this.cssW || v.height !== this.cssH) this.resize();
     if (!this.interp.sample(now, this.sample)) {
       this.stopLoop();
       return;

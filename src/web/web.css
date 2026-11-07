@@ -1,5 +1,8 @@
-/* GizeCat web host. The document itself never scrolls (the viewport is the cat's world and its
-   canvas covers it exactly); the page content scrolls inside .scroller when it does not fit. */
+/* GizeCat web host (1.4.0: the installable tablet app). The document never scrolls: the viewport is
+   the cat's room, its canvas covers it exactly, and the floor is the bottom of the screen (above the
+   home indicator or gesture bar: src/web/safeArea.ts). A fixed toolbar sits on top; settings,
+   privacy and About live in a sheet (a native <dialog>): a bottom sheet on narrow windows, a side
+   sheet from 700 CSS px, so the cat stays visible as a live preview. */
 :root {
   color-scheme: light dark;
   --bg: #f6f1e7;
@@ -9,7 +12,11 @@
   --accent-fg: #ffffff;
   --button-bg: #fffaf1;
   --button-border: #b9a68e;
+  --sheet-bg: #fffaf1;
+  --sheet-line: #e2d6c3;
+  --danger: #a3271c;
   --focus: #1d5fd1;
+  --backdrop: rgb(35 29 22 / 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -21,8 +28,20 @@
     --accent-fg: #1b1814;
     --button-bg: #2a251f;
     --button-border: #6f6253;
+    --sheet-bg: #24201b;
+    --sheet-line: #463d33;
+    --danger: #ff8a7a;
     --focus: #8ab4ff;
+    --backdrop: rgb(0 0 0 / 0.35);
   }
+}
+
+html {
+  /* No double-tap zoom (pinch zoom stays, for accessibility); no bounce or pull-to-refresh. */
+  touch-action: manipulation;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 html,
@@ -33,48 +52,54 @@ body {
   overflow: hidden;
 }
 
+@supports (height: 100dvh) {
+  html,
+  body {
+    height: 100dvh;
+  }
+}
+
 body {
   background: var(--bg);
   color: var(--fg);
-  font: 1rem/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font: 1rem/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.scroller {
+/* `hidden` wins over the display rules below (the sheet hides rows and notes with it). */
+[hidden] {
+  display: none !important;
+}
+
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* ---- toolbar: above the canvas; only the buttons take the pointer (the rest of the strip is the cat's room) */
+.bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
   box-sizing: border-box;
-  height: 100%;
-  overflow: auto;
-  /* Room at the bottom so the cat never sits on the last line of text. */
-  padding: 2.5rem 1.25rem 11rem;
-}
-
-.page {
-  max-width: 40rem;
-  margin: 0 auto;
-}
-
-h1 {
-  margin: 0 0 0.25rem;
-  font-size: 2.25rem;
-  line-height: 1.15;
-  letter-spacing: 0.01em;
-}
-
-h2 {
-  margin: 1.75rem 0 0.5rem;
-  font-size: 1.15rem;
-}
-
-.tagline {
-  margin: 0;
-  color: var(--muted);
-  font-size: 1.1rem;
+  padding: max(0.5rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.5rem max(0.75rem, env(safe-area-inset-left));
+  pointer-events: none;
 }
 
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
-  margin-top: 1.75rem;
+  gap: 0.5rem;
+  width: fit-content;
+  max-width: 100%;
+  pointer-events: auto;
 }
 
 button {
@@ -82,14 +107,18 @@ button {
   color: var(--fg);
   background: var(--button-bg);
   border: 1px solid var(--button-border);
-  border-radius: 0.5rem;
-  padding: 0.5rem 1rem;
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.95rem;
   min-height: 2.75rem;
+  min-width: 2.75rem;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
-button:hover {
-  border-color: var(--accent);
+@media (hover: hover) {
+  button:hover {
+    border-color: var(--accent);
+  }
 }
 
 button:active {
@@ -97,9 +126,16 @@ button:active {
   color: var(--accent-fg);
 }
 
-button:focus-visible {
+button:focus-visible,
+input:focus-visible,
+.card:focus-within {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .visually-hidden {
@@ -113,6 +149,309 @@ button:focus-visible {
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+.noscript {
+  position: fixed;
+  top: 40%;
+  left: 0;
+  right: 0;
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* ---- the settings sheet */
+dialog.sheet {
+  position: fixed;
+  inset: auto 0 0 0;
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: 85vh;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 1rem 1rem 0 0;
+  padding: 0 max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: var(--sheet-bg);
+  color: var(--fg);
+  box-shadow: 0 -0.5rem 2rem rgb(0 0 0 / 0.18);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+@supports (height: 100dvh) {
+  dialog.sheet {
+    max-height: 85dvh;
+  }
+}
+
+@media (min-width: 700px) {
+  dialog.sheet {
+    inset: 0 0 0 auto;
+    width: min(26rem, 92vw);
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top);
+    box-shadow: -0.5rem 0 2rem rgb(0 0 0 / 0.18);
+  }
+
+  @supports (height: 100dvh) {
+    dialog.sheet {
+      max-height: none;
+      height: 100dvh;
+    }
+  }
+}
+
+/* Browsers without <dialog> support would show the element always. */
+dialog.sheet:not([open]) {
+  display: none;
+}
+
+dialog.sheet::backdrop {
+  background: var(--backdrop);
+}
+
+.sheet-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0 0.5rem;
+  background: var(--sheet-bg);
+  border-bottom: 1px solid var(--sheet-line);
+}
+
+.sheet-head h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.sheet section {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--sheet-line);
+}
+
+.sheet section:last-child {
+  border-bottom: 0;
+}
+
+.sheet h3 {
+  margin: 0.25rem 0 0.6rem;
+  font-size: 1.05rem;
+}
+
+.sheet p {
+  margin: 0.4rem 0;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.note.warn {
+  color: var(--fg);
+  border-left: 3px solid var(--accent);
+  padding-left: 0.6rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.6rem 0;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.6rem 0;
+  min-height: 2.75rem;
+}
+
+.field label,
+.field-row label,
+.legend {
+  font-weight: 600;
+}
+
+.field .error {
+  color: var(--danger);
+  font-size: 0.95rem;
+  min-height: 1.2em;
+  margin: 0;
+}
+
+/* iOS zooms into inputs under 16 px on focus: never smaller. */
+input[type='text'] {
+  font: inherit;
+  font-size: max(1rem, 16px);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--button-border);
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+input[type='range'] {
+  width: 100%;
+  min-height: 2.75rem;
+  accent-color: var(--accent);
+  font-size: max(1rem, 16px);
+}
+
+/* A checkbox drawn as a switch (role=switch). */
+input.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  position: relative;
+  width: 3.1rem;
+  height: 1.8rem;
+  margin: 0;
+  border-radius: 1rem;
+  background: var(--button-border);
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: max(1rem, 16px);
+}
+
+input.switch::after {
+  content: '';
+  position: absolute;
+  top: 0.2rem;
+  left: 0.2rem;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.15s;
+}
+
+input.switch:checked {
+  background: var(--accent);
+}
+
+input.switch:checked::after {
+  transform: translateX(1.3rem);
+}
+
+/* Radio cards (coat, style, personality): the radio is visually hidden, the card shows the choice. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.2rem, 1fr));
+  gap: 0.5rem;
+  margin: 0.4rem 0 0.8rem;
+  padding: 0;
+  border: 0;
+}
+
+.cards.wide {
+  grid-template-columns: 1fr;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  min-height: 2.75rem;
+  border: 1px solid var(--button-border);
+  border-radius: 0.6rem;
+  background: var(--button-bg);
+  cursor: pointer;
+  text-align: center;
+}
+
+.cards.wide .card {
+  align-items: flex-start;
+  text-align: left;
+}
+
+.card input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+
+.card:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.card.checked {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.card svg {
+  width: 3.2rem;
+  height: 3.2rem;
+}
+
+.card .title {
+  font-weight: 600;
+}
+
+.card .desc {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.coat-outline {
+  stroke: rgb(0 0 0 / 0.35);
+  stroke-width: 1;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+button.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+/* The profile export/import slot (wired up later from src/shared/profileTransfer.ts). */
+.transfer-slot:empty {
+  display: none;
+}
+
+/* Measures env(safe-area-inset-*) as padding (src/web/safeArea.ts). Never visible, never in the way. */
+#safe-area-probe {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
 }
 
 /* The cat's canvas covers the viewport and never takes the pointer: the pointer router decides

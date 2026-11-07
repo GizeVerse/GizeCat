@@ -20,6 +20,8 @@ export interface WebTestSources {
   catSource: CatSource;
   catId: () => string;
   suspended: () => boolean;
+  /** 1.4.0: the settings sheet is open (the cat takes no pointer then). */
+  sheetOpen?: () => boolean;
 }
 
 export interface WebTestState {
@@ -35,6 +37,7 @@ export interface WebTestState {
   hidden: boolean;
   paused: boolean;
   suspended: boolean;
+  sheetOpen: boolean;
   ticks: number;
   timeScale: number;
   reaction: { kind: string; at: number } | null;
@@ -82,6 +85,7 @@ export function installTestHook(target: object, src: WebTestSources): WebTestRec
         hidden: src.host.hidden,
         paused: src.host.paused,
         suspended: src.suspended(),
+        sheetOpen: src.sheetOpen?.() ?? false,
         ticks: src.host.debug().ticks,
         timeScale: src.host.timeScale,
         reaction: out?.reaction ? { kind: out.reaction.kind, at: out.reaction.at } : null,
