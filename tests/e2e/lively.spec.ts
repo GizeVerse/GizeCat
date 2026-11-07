@@ -854,7 +854,7 @@ async function overlayPage(app: ElectronApplication): Promise<Page> {
  * then sends the page carries the button up, which ends the drag as a release (seen in
  * tests/e2e/soak.spec.ts; see docs/gizeverse/13-interaction-reliability.md).
  */
-async function throwOnce(app: ElectronApplication, page: Page, ov: { boundsPx: Rect }, scale: number, stepPx: Point): Promise<{ gestureMs: number }> {
+async function throwOnce(app: ElectronApplication, page: Page, ov: { boundsPx: Rect }, scale: number, stepPx: Point): Promise<{ gestureMs: number; flickMs: number }> {
   const o = (await observe(app)).out!;
   const c = center(o.boundsPx);
   const b = ov.boundsPx;
@@ -874,13 +874,20 @@ async function throwOnce(app: ElectronApplication, page: Page, ov: { boundsPx: R
       await sleep(70);
     }
     // The flick to where the throw used to end: the release speed comes from the last ~100 ms of samples.
+    // CDP moves back to back, with no test-hook round trip in between: on a loaded machine each hook call
+    // takes 100+ ms, which stretched the flick to about a second and turned throws into drops (a hand's
+    // flick is not slowed by IPC). The injected cursor follows once, at the end.
     const to = { x: c.x + stepPx.x * 5, y: c.y + stepPx.y * 5 };
+    const tFlick = Date.now();
+    let last = from;
     for (let i = 1; i <= 5; i++) {
-      const p = inside({ x: from.x + ((to.x - from.x) * i) / 5, y: from.y + ((to.y - from.y) * i) / 5 });
-      await Promise.all([hook(app, 'injectCursor', p), page.mouse.move(local(p).x, local(p).y)]);
+      last = inside({ x: from.x + ((to.x - from.x) * i) / 5, y: from.y + ((to.y - from.y) * i) / 5 });
+      await page.mouse.move(local(last).x, local(last).y);
     }
     await page.mouse.up();
-    return { gestureMs: Date.now() - t0 };
+    const flickMs = Date.now() - tFlick;
+    await hook(app, 'injectCursor', last);
+    return { gestureMs: Date.now() - t0, flickMs };
   } finally {
     await hook(app, 'forceInteractive', null);
   }
@@ -914,13 +921,13 @@ test.describe('v1.2 lively: throws through the real drag path (app REAL, input S
         const before = (await observe(app)).profile;
         const side = tr.last!.out!.x < ov.boundsPx.x + ov.boundsPx.width / 2 ? 1 : -1; // towards the middle of the screen
         const speed = 90 + (i % 3) * 35; // px per step: from a fair throw to a hard one
-        const { gestureMs } = await throwOnce(app, page, ov, scale, { x: side * speed, y: -speed * 0.7 });
+        const { gestureMs, flickMs } = await throwOnce(app, page, ov, scale, { x: side * speed, y: -speed * 0.7 });
         await hook(app, 'injectCursor', far);
         const t0 = Date.now();
         const reacted = await tr.until((o) => reactionTotal(o.profile) > reactionTotal(before) || (profileDelta(before, o.profile, 'thrown') > 0 && o.out?.support.kind === 'floor' && Date.now() - t0 > 2500), 8_000, 8_000);
         const after = tr.last!.profile;
         const kinds = Object.keys(after.reactions).filter((k) => ((after.reactions as Record<string, number>)[k] ?? 0) > ((before.reactions as Record<string, number>)[k] ?? 0));
-        results.push({ i, stepPx: speed, gestureMs, reacted, thrown: profileDelta(before, after, 'thrown'), dropped: profileDelta(before, after, 'dropped'), kinds, state: tr.last?.out?.state });
+        results.push({ i, stepPx: speed, gestureMs, flickMs, reacted, thrown: profileDelta(before, after, 'thrown'), dropped: profileDelta(before, after, 'dropped'), kinds, state: tr.last?.out?.state });
       }
       const p = tr.last!.profile;
       record(info, 'throws', { results, reactions: p.reactions, falls: p.falls, states: [...tr.states] });
