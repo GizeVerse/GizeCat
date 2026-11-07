@@ -6,6 +6,12 @@ name: installer-check
 # to run where Desktop Cat is already installed. Manual only; nothing is published or signed.
 #
 #   old_ref: the commit or tag whose installer is upgraded FROM (default: v1.2.0, 58b4cd6).
+#
+# 1.4.0 (edited, UNEXECUTED: Actions has not started a job for this repository since 2026-10-02):
+# the NEW build makes both installers (x64 and ARM64). The x64 runner installs, upgrades and
+# uninstalls the x64 one (-Arch x64), checks both unpacked payloads statically, and checks that the
+# ARM64 installer refuses to install on x64 Windows. The ARM64 install itself needs a Windows on
+# Arm runner: see the commented-out installer-arm64 job at the end.
 
 on:
   workflow_dispatch:
@@ -26,7 +32,7 @@ jobs:
   installer:
     name: install, upgrade, uninstall (windows-latest)
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -46,23 +52,60 @@ jobs:
           npm run package
           Get-ChildItem release -Filter 'Desktop-Cat-Setup-*.exe' | Format-Table Name, Length
           Pop-Location
-      - name: Build the NEW installer (this commit)
+      # package:win stages the ARM64 koffi binary (scripts/stage-koffi-arch.mjs, integrity-checked
+      # against package-lock.json) and builds Desktop-Cat-Setup-<version>-x64.exe and -arm64.exe.
+      - name: Build the NEW installers (this commit, x64 and ARM64)
         shell: pwsh
         run: |
           npm ci --ignore-scripts
           node node_modules/electron/install.js
-          npm run package
+          npm run package:win
           Get-ChildItem release -Filter 'Desktop-Cat-Setup-*.exe' | ForEach-Object { $_.Name; (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
-      - name: Packaged smoke (unpacked payload)
+      # One step per check: a pwsh step only fails on the exit code of its last command.
+      - name: Static payload check, x64 (no binary is executed)
+        run: node scripts/check-win-payload.mjs --arch x64 --dir release/win-unpacked
+      - name: Static payload check, ARM64 (no binary is executed)
+        run: node scripts/check-win-payload.mjs --arch arm64 --dir release/win-arm64-unpacked
+      - name: Packaged smoke (unpacked x64 payload)
         run: node scripts/smoke-packaged.mjs
-      - name: Fresh install, startup registration, uninstall
+      - name: Fresh install, startup registration, uninstall (x64 installer)
         shell: pwsh
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1
-      - name: Upgrade old -> new keeps settings and the startup entry
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1 -Arch x64
+      - name: Upgrade old -> new keeps settings and the startup entry (x64 installer)
         shell: pwsh
         run: |
           $old = Get-ChildItem ../old/release -Filter 'Desktop-Cat-Setup-*.exe' | Select-Object -First 1
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/upgrade-test.ps1 -OldInstaller $old.FullName
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/upgrade-test.ps1 -OldInstaller $old.FullName -Arch x64
+      # build/installer.nsh customInit: the ARM64 installer stops in .onInit on a PC that is not
+      # Windows on Arm (silent: no message, non-zero exit code) and writes nothing. Runs after the
+      # install and upgrade checks, so a failing guard cannot disturb them.
+      - name: The ARM64 installer refuses x64 Windows
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $setup = Get-Item "release/Desktop-Cat-Setup-$version-arm64.exe"
+          $target = Join-Path $env:RUNNER_TEMP 'dcat arm64 guard'
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList @('/S', "/D=$target") -Wait -PassThru
+          $entry = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Where-Object { (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'Desktop Cat' })
+          $installed = Test-Path -LiteralPath (Join-Path $target 'DesktopCat.exe')
+          [ordered]@{ installer = $setup.Name; exitCode = $p.ExitCode; installedExe = $installed; uninstallEntries = $entry.Count } | ConvertTo-Json
+          if ($p.ExitCode -eq 0) { throw 'the ARM64 installer exited with 0 on x64 Windows' }
+          if ($installed) { throw 'the ARM64 installer wrote DesktopCat.exe on x64 Windows' }
+          if ($entry.Count -gt 0) { throw 'an uninstall entry exists after the ARM64 installer ran on x64 Windows' }
+      # Uncomment together with the installer-arm64 job below: it installs these installers on a
+      # Windows on Arm runner (copied into the workspace, since ../old lies outside it).
+      # - name: Collect the installers for the ARM64 job
+      #   shell: pwsh
+      #   run: |
+      #     New-Item -ItemType Directory -Force out/installers/old, out/installers/new | Out-Null
+      #     Copy-Item (Get-ChildItem ../old/release -Filter 'Desktop-Cat-Setup-*.exe' | Select-Object -First 1).FullName out/installers/old/
+      #     Copy-Item release/Desktop-Cat-Setup-*.exe out/installers/new/
+      # - uses: actions/upload-artifact@v4
+      #   with:
+      #     name: installers
+      #     path: out/installers/**
+      #     if-no-files-found: error
+      #     retention-days: 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -73,3 +116,42 @@ jobs:
             out/upgrade-test/**
           if-no-files-found: ignore
           retention-days: 14
+
+  # installer-arm64: UNEXECUTED, and the runner is UNVERIFIED for this repository. GitHub's hosted
+  # Windows on Arm runner (label windows-11-arm) has never run a job here; whether this private
+  # repository may use it, and at what cost, must be checked (Actions billing is blocked since
+  # 2026-10-02). Uncomment it together with the two collect/upload steps above. It installs the
+  # ARM64 installer natively, the x64 installer under Windows 11's x64 emulation, and upgrades the
+  # OLD x64 installer to the NEW ARM64 one (cross-architecture, same appId). No build runs here.
+  #
+  # installer-arm64:
+  #   name: install, upgrade, uninstall (windows-11-arm)
+  #   needs: installer
+  #   runs-on: windows-11-arm
+  #   timeout-minutes: 45
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 24
+  #         architecture: arm64
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: installers
+  #         path: out/installers
+  #     - name: Fresh install, startup registration, uninstall (ARM64 installer)
+  #       shell: pwsh
+  #       run: |
+  #         $setup = Get-ChildItem out/installers/new -Filter 'Desktop-Cat-Setup-*-arm64.exe' | Select-Object -First 1
+  #         powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1 -Arch arm64 -Installer $setup.FullName
+  #     - name: Fresh install of the x64 installer under x64 emulation
+  #       shell: pwsh
+  #       run: |
+  #         $setup = Get-ChildItem out/installers/new -Filter 'Desktop-Cat-Setup-*-x64.exe' | Select-Object -First 1
+  #         powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1 -Arch x64 -Installer $setup.FullName
+  #     - name: Upgrade OLD x64 -> NEW ARM64 keeps settings and the startup entry
+  #       shell: pwsh
+  #       run: |
+  #         $old = Get-ChildItem out/installers/old -Filter 'Desktop-Cat-Setup-*.exe' | Select-Object -First 1
+  #         $new = Get-ChildItem out/installers/new -Filter 'Desktop-Cat-Setup-*-arm64.exe' | Select-Object -First 1
+  #         powershell -NoProfile -ExecutionPolicy Bypass -File scripts/upgrade-test.ps1 -OldInstaller $old.FullName -Arch arm64 -Installer $new.FullName

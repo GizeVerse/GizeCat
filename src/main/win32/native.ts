@@ -102,6 +102,8 @@ function bind(): Win32Native {
   const POINT = koffi.struct({ x: 'int32_t', y: 'int32_t' });
   const MONITORINFO = koffi.struct({ cbSize: 'uint32_t', rcMonitor: RECT, rcWork: RECT, dwFlags: 'uint32_t' });
   const LASTINPUTINFO = koffi.struct({ cbSize: 'uint32_t', dwTime: 'uint32_t' });
+  // '__stdcall' only matters on 32-bit x86; koffi ignores it on x64 and ARM64, which have one
+  // calling convention each (koffi doc/load.md, "Calling conventions").
   const WINEVENTPROC = koffi.proto('__stdcall', null, 'void', ['void *', 'uint32_t', 'void *', 'int32_t', 'int32_t', 'uint32_t', 'uint32_t']);
   const WNDENUMPROC = koffi.proto('__stdcall', null, 'int', ['void *', 'intptr_t']);
 
@@ -326,7 +328,8 @@ function bindShell(
   readRect: (r: Partial<RawRect>) => RawRect | null,
 ): { shell: ShellNative; APPBARDATA: TypeObject } {
   const s = <A extends unknown[], R>(lib: LibraryHandle, def: string): Fn<A, R> => lib.func(def);
-  // sizeof == 48 on x64: hWnd 8, uCallbackMessage 16, uEdge 20, rc 24, lParam 40 (unit-tested).
+  // sizeof == 48 on 64-bit Windows (x64 and ARM64, both LLP64): hWnd 8, uCallbackMessage 16, uEdge 20,
+  // rc 24, lParam 40 (unit-tested).
   const APPBARDATA = koffi.struct({ cbSize: 'uint32_t', hWnd: 'void *', uCallbackMessage: 'uint32_t', uEdge: 'uint32_t', rc: RECT, lParam: 'intptr_t' });
   const SHAppBarMessage: Fn<[number, AppBarData], number | bigint> = shell32.func('__stdcall', 'SHAppBarMessage', 'uintptr_t', [
     'uint32_t',

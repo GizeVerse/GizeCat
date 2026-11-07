@@ -1,4 +1,6 @@
 ; Desktop Cat — NSIS customisations (included by electron-builder).
+; 1.4.0: the ARM64 installer also stops on PCs that are not Windows on Arm (customInit, at the end).
+;
 ; On a real uninstall (not an upgrade: electron-builder runs the old uninstaller with
 ; --updated), remove the launch-at-sign-in entry the app writes through Electron's
 ; setLoginItemSettings (value name = LOGIN_ITEM_NAME in src/main/lifecycle/loginItem.ts).
@@ -93,3 +95,23 @@
     Pop $R3
   ${endIf}
 !macroend
+
+; Windows on Arm guard (1.4.0). electron-builder builds one installer per architecture
+; (buildUniversalInstaller: false). The ARM64 one (APP_ARM64 defined, APP_64 not) has no
+; architecture check of its own: on x64 or 32-bit Windows its templates would find no package
+; for the PC (extractAppPackage.nsh identify_package) and extract nothing. It stops here instead,
+; in .onInit before anything is written. Silent runs (/S) skip the message and exit with code 1.
+; The x64 installer defines APP_64, so this macro does not exist there and its behaviour is the
+; same as before. ${IsNativeARM64} comes from NSIS x64.nsh (IsWow64Process2 native machine), which
+; electron-builder's common.nsh includes before .onInit expands this macro.
+!ifdef APP_ARM64
+  !ifndef APP_64
+    !macro customInit
+      ${IfNot} ${IsNativeARM64}
+        MessageBox MB_OK|MB_ICONSTOP "This Desktop Cat installer is for Windows on Arm (ARM64) PCs. On this PC, use the x64 installer instead: Desktop-Cat-Setup-${VERSION}-x64.exe" /SD IDOK
+        SetErrorLevel 1
+        Quit
+      ${EndIf}
+    !macroend
+  !endif
+!endif

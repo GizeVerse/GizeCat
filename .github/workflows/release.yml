@@ -28,10 +28,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 1.4.0, UNEXECUTED like the rest of this file: one NSIS installer per architecture,
+  # Desktop-Cat-Setup-<version>-x64.exe and Desktop-Cat-Setup-<version>-arm64.exe, built on the x64
+  # runner. The ARM64 one is only checked statically here (PE machine, koffi payload, asar header,
+  # fuses); an x64 runner cannot run ARM64 binaries.
   windows:
-    name: Windows NSIS installer
+    name: Windows NSIS installers (x64, ARM64)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,12 +44,23 @@ jobs:
           cache: npm
       - name: Install (no install scripts)
         run: npm ci --ignore-scripts
+      # npm ci installs only the runner's own koffi binary; this adds the ARM64 one at the locked
+      # version, refused unless its sha512 equals package-lock.json (package.json and the lockfile
+      # stay unchanged).
+      - name: Stage the ARM64 koffi binary
+        run: node scripts/stage-koffi-arch.mjs --arch arm64
       - name: Build
         run: node scripts/build.mjs
-      - name: Package NSIS installer (unsigned, not published)
-        run: npx electron-builder --win nsis --publish never
+      # The arch flags are required: without them electron-builder builds only the runner's arch.
+      - name: Package NSIS installers, x64 and ARM64 (unsigned, not published)
+        run: npx electron-builder --win nsis --x64 --arm64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # One step per check: a pwsh step only fails on the exit code of its last command.
+      - name: Static payload check, x64 (no binary is executed)
+        run: node scripts/check-win-payload.mjs --arch x64 --dir release/win-unpacked
+      - name: Static payload check, ARM64 (no binary is executed)
+        run: node scripts/check-win-payload.mjs --arch arm64 --dir release/win-arm64-unpacked
       - uses: actions/upload-artifact@v4
         with:
           name: windows-nsis-installer

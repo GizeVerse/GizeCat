@@ -13,7 +13,7 @@ type Koffi = typeof koffiModule;
 export const RUN_KEY = 'Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 export const STARTUP_APPROVED_RUN_KEY = 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run';
 
-/** HKEY_CURRENT_USER = (HKEY)(ULONG_PTR)(LONG)0x80000001, sign-extended on x64. */
+/** HKEY_CURRENT_USER = (HKEY)(ULONG_PTR)(LONG)0x80000001, sign-extended on 64-bit Windows (x64, ARM64). */
 const HKEY_CURRENT_USER = -2147483647;
 const RRF_RT_ANY = 0x0000ffff;
 /** Return REG_EXPAND_SZ data as stored (no %VAR% expansion). */

@@ -12,11 +12,51 @@
 # may create to a file before the first launch, and removes both values in finally. finally also
 # uninstalls when the run stopped before its own uninstall step (an error, Ctrl+C), and removes
 # the Uninstall entry, electron-builder's key and the shortcuts this run's install left behind.
-#   node scripts/with-lock.mjs install-test -- powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1
+#   node scripts/with-lock.mjs install-test -- powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1 [-Arch x64|arm64] [-Installer <path>]
+#
+# 1.4.0: one installer per architecture. -Arch defaults to the PC's native architecture; the
+# installer is exactly Desktop-Cat-Setup-<package.json version>-<arch>.exe in release\ or
+# release\<version>\ (none or several copies is an error; -Installer names one by path). An x64
+# installer may be tested on Windows 11 on Arm (x64 emulation); the arm64 installer refuses to
+# run anywhere but Windows on Arm, so -Arch arm64 on an x64 PC is refused here.
+param(
+  [ValidateSet('x64', 'arm64')][string]$Arch,
+  [string]$Installer
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$setup = Get-ChildItem (Join-Path $root 'release') -Filter 'Desktop-Cat-Setup-*.exe' | Select-Object -First 1
-if (-not $setup) { throw 'installer not found; run npm run package' }
+
+# Native architecture of Windows: PROCESSOR_ARCHITECTURE in Session Manager\Environment stays the
+# native value (ARM64) even inside an emulated x64 PowerShell, unlike $env:PROCESSOR_ARCHITECTURE.
+function Get-NativeArch {
+  $v = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PROCESSOR_ARCHITECTURE).PROCESSOR_ARCHITECTURE
+  switch ($v) {
+    'AMD64' { return 'x64' }
+    'ARM64' { return 'arm64' }
+    default { throw "unsupported Windows architecture: $v" }
+  }
+}
+# The one installer under test (same function in upgrade-test.ps1).
+function Resolve-Installer([string]$repoRoot, [string]$version, [string]$arch, [string]$explicit) {
+  if ($explicit) {
+    if (-not (Test-Path -LiteralPath $explicit -PathType Leaf)) { throw "installer not found: $explicit" }
+    $item = Get-Item -LiteralPath $explicit
+    if (($item.Name -match '-(x64|arm64)\.exe$') -and ($Matches[1] -ne $arch)) { throw "$($item.Name) is not the $arch installer" }
+    return $item
+  }
+  $name = "Desktop-Cat-Setup-$version-$arch.exe"
+  $release = Join-Path $repoRoot 'release'
+  $found = @(@($release, (Join-Path $release $version)) | ForEach-Object { Join-Path $_ $name } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+  if ($found.Count -eq 0) { throw "$name not found in release\ or release\$version\; package it first (docs/RELEASE_CHECKLIST.md) or pass -Installer <path>" }
+  if ($found.Count -gt 1) { throw "several copies of $name ($($found -join ', ')); pass -Installer <path>" }
+  return Get-Item -LiteralPath $found[0]
+}
+
+$nativeArch = Get-NativeArch
+if (-not $Arch) { $Arch = $nativeArch }
+if (($Arch -eq 'arm64') -and ($nativeArch -ne 'arm64')) { throw 'the arm64 installer runs only on Windows on Arm (it stops on this PC by design); use -Arch x64' }
+$version = (Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+$setup = Resolve-Installer $root $version $Arch $Installer
 
 $valueName = 'io.github.enesiltas.desktopcat'
 $runKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
@@ -113,7 +153,7 @@ function Stop-App($p) {
 function Wait-Reconciled([int]$count) { Wait-Until { (Get-ReconcileLines).Count -ge $count } 30 }
 
 $before = @(Find-UninstallKey).Count
-$result = [ordered]@{ installer = $setup.Name; sizeMB = [math]::Round($setup.Length / 1MB, 1); preexistingInstall = $before; target = $target }
+$result = [ordered]@{ installer = $setup.Name; arch = $Arch; nativeArch = $nativeArch; sizeMB = [math]::Round($setup.Length / 1MB, 1); preexistingInstall = $before; target = $target }
 if ($before -gt 0) { throw 'Desktop Cat is already installed for this user; refusing to touch an existing install' }
 if ($null -ne (Get-RunText)) { throw "HKCU\$runKey\$valueName already exists; refusing to touch a real startup entry" }
 if ($null -ne (Get-LoginValue $approvedKey)) { throw "HKCU\$approvedKey\$valueName already exists; refusing to touch a real Startup apps record" }
