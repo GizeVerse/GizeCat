@@ -1,33 +1,73 @@
 # GizeCat
 
-**GizeCat** (formerly Desktop Cat) is the first character of **GizeVerse**, a small platform for digital characters that live alongside you.
+**A small cat that lives on your desktop, and never gets in the way of your clicks.**
 
-A living desktop companion for Windows: **one** animated, persistent cat that lives on top of your desktop, wanders along the bottom of your screen, climbs the sides of windows and walks along their tops and along browser tab strips, rides an auto-hiding taskbar as it slides in, naps when you're away, watches you work, reacts to windows opening and closing, and can be petted, picked up and thrown — without ever getting in the way of your clicks. It starts with Windows (you can turn that off).
+GizeCat (formerly Desktop Cat) is one animated, persistent cat. It:
+- wanders along the bottom of your screen and naps when you're away;
+- climbs the sides of windows and walks along their tops and browser tab strips;
+- rides an auto-hiding taskbar and hunts your cursor;
+- can be petted, picked up and thrown.
+
+Everything except the cat's own body stays clickable.
+
+GizeCat is the first character of **GizeVerse**, a small, open-source home for playful digital characters that share your screen. It is free, MIT-licensed, and honest about where it has actually been tested.
 
 ![The cat's coats and poses, rendered by the app's own renderer](docs/images/skins.png)
 
-- **Original procedural art** — a vector rig drawn in code (36 animation clips, 7 coats, optional pixel style), no third-party assets.
-- **Click-through by design** — only the cat's body catches the mouse; everything else goes to the windows underneath. No global mouse or keyboard hooks.
-- **Works offline, no AI required.** Optional, opt-in screen perception (local statistics, or an AI vision model you configure) with privacy enforced in code.
+## Features
 
-> Status: v1.2.0, built and validated on Windows 11 (see [Tested environments](#tested-environments)). The installer is **not code-signed**. v1.2 makes the cat livelier: it explores on its own, stays on windows and tab strips for minutes, hunts the cursor, and reacts to throws in varied ways ([design](docs/adr/0003-lively-cat.md), [why it was passive](docs/research/v1.2/diagnosis.md)).
->
-> **Windows 10/11 is the only supported platform.** The GizeVerse foundation adds macOS and Linux profiles and a web host. What each platform can do, and how much of it has actually run, is stated capability by capability in the **[capability matrix](docs/gizeverse/capability-matrix.md)** (generated from code). Nothing outside Windows is a supported release.
+- **A living cat.** A 24-state behaviour simulation with needs, moods, a personality and a small memory. It explores on its own, stays on windows for minutes, hunts the pointer and reacts to throws in varied ways.
+- **Original procedural art.** A vector rig drawn in code: 36 animation clips, 7 coats, an optional pixel style, and no third-party assets.
+- **Click-through by design.** Only the cat's body catches the pointer. There are no global mouse or keyboard hooks.
+- **Works offline; no AI required.** Screen perception is optional and **off by default**; see [Privacy and AI vision](#privacy-and-ai-vision).
+- **Lightweight.** About 1–1.5 % of one CPU core while awake and under 1 % asleep on the Windows 11 test machine ([benchmark](docs/gizeverse/10-performance-dependencies.md)).
+- **Settings** for appearance, behaviour, personality, privacy, AI and diagnostics, in light and dark themes, keyboard accessible.
+
+## Download and install (Windows 10/11)
+
+Download the latest `Desktop-Cat-Setup-<version>.exe` from **[Releases](https://github.com/GizeVerse/GizeCat/releases)**, check its SHA-256 against the release notes, and run it.
+- **No admin needed.** It is a per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`.
+- **SmartScreen.** The installer is **not code-signed**, so Windows may warn: choose **More info → Run anyway**.
+- **First start.** The cat appears at the bottom of your screen, and a Welcome page explains the controls.
+- **Startup.** GizeCat starts when you sign in to Windows (a one-time notification tells you). Turn it off in Settings → General, or in Task Manager → Startup apps; an opt-out is never overridden.
+- **Upgrading.** Your cat and settings are kept: they live in `%APPDATA%\Desktop Cat`, which every version uses. Quit the running cat from its tray menu first.
+- **Uninstall** from Windows Settings → Apps. This removes the startup entry too.
+
+The installer, shortcuts and Apps entry are still named **Desktop Cat**. They are renamed only after an upgrade test on a disposable machine shows that existing installs carry over ([why](docs/gizeverse/12-branding.md)).
+
+You can also build it yourself; see [Build, run, test](#build-run-test).
 
 ## Platforms
 
-| Platform | What exists | Evidence |
+**Windows 10/11 is the only supported platform.** Other platforms have code for them, but nothing outside Windows is a supported release until it has run on real hardware. Each capability's status is in the **[capability matrix](docs/gizeverse/capability-matrix.md)** (generated from code).
+
+| Platform | What exists | How far it has been verified |
 |---|---|---|
-| Windows 10/11 | The full app | Windows 11, REAL ([Tested environments](#tested-environments)) |
-| Web browser | The real character in a page: the same sim, host and renderer, mouse and touch | Chrome 156 and Edge 156 on Windows, REAL; phone layout only under device emulation ([report](docs/gizeverse/07-web-host.md)) |
-| Linux, X11 session with a compositing window manager | The overlay on the floor of the screen; no window surfaces | Builds, passes 3755 unit tests and packages in a Debian 12 container (REAL); the app itself ran only under a virtual X server, with the sandbox on (SIMULATED desktop); one known one-pixel click-through gap ([report](docs/gizeverse/05-linux.md)) |
-| Linux, Wayland session (native or XWayland) | No overlay by design: it could block clicks. Tray and Settings only | BLOCKED_BY_PLATFORM_OR_PERMISSION |
-| macOS | A platform profile (overlay panel, menus, logical coordinates) | Never run on a Mac: IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED ([report](docs/gizeverse/04-macos.md)) |
-| Android, iOS/iPadOS | The web host in the browser; no native app or overlay | Android: device emulation only; iOS: never run ([why](docs/gizeverse/08-mobile-boundaries.md)) |
+| Windows 10/11 | The full app | Validated on Windows 11 hardware ([tested environments](#tested-environments)) |
+| Web browser | The real cat in a page, with mouse and touch | Automated tests in Chrome 156 and Edge 156 on Windows; phone layouts only under desktop-browser emulation ([report](docs/gizeverse/07-web-host.md)) |
+| Linux, X11 session with a compositing window manager | The overlay on the screen floor (no window climbing) | Builds and passes its tests on Linux; the app has run only in a container under a virtual X server, never on a real Linux desktop. One known one-pixel click-through gap ([report](docs/gizeverse/05-linux.md)). |
+| Linux, Wayland session | No overlay, on purpose: Wayland gives apps no way to stay on top and pass clicks through safely. Tray and Settings only. | Blocked by the platform |
+| macOS | A platform profile (overlay panel, menus, coordinates) | Implemented, **never run on a Mac** ([report](docs/gizeverse/04-macos.md)) |
+| Android, iOS/iPadOS | The web version in the browser; no native app | Android: desktop-browser emulation only. iOS: not run. Native overlays are not possible or not a fit ([why](docs/gizeverse/08-mobile-boundaries.md)). |
 
-## Install
+## Privacy and AI vision
 
-Build the installer with `npm run package` (see [Build, run, test](#build-run-test)) — no release is published yet — then run `release/Desktop-Cat-Setup-1.2.0.exe` (per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`, no admin). The installer, its shortcuts and the Apps/Startup-apps entries are still named **Desktop Cat**: they are renamed only after an upgrade test on a disposable machine shows that existing installs, settings and startup entries carry over ([ADR 0004 §9](docs/adr/0004-gizeverse-platform.md)). SmartScreen may warn because the build is unsigned: **More info → Run anyway**. The cat appears at the bottom of your screen; a Welcome page explains the controls. From then on Desktop Cat starts when you sign in to Windows (one-time notification; turn it off in Settings → General or Task Manager → Startup apps — an opt-out is never overridden). Upgrading from an earlier version keeps your cat and settings (quit the running cat from its tray menu first). Uninstall from Windows Settings → Apps (removes the startup entry too).
+- **Off by default.** GizeCat works without looking at your screen. It knows where windows are, so it can climb them, and when you are idle, so it can nap. It never reads keystrokes, typed text or the clipboard. There is no telemetry.
+- **Opt-in screen perception.** Two levels:
+  - **Local statistics.** A short burst of tiny, masked, in-memory frames gives brightness, motion and similar coarse labels. Nothing is stored or sent.
+  - **AI vision.** You configure it. It can use a local model (Ollama, OpenAI-compatible servers) or, behind a separate cloud switch, Anthropic. The cat can only pick from a fixed list of reactions.
+- **Safeguards.**
+  - Password managers, banking, sign-in and private-browsing windows are excluded.
+  - A privacy pause and "preview what the cat sees" are in Settings › Privacy & Vision.
+  - API keys are stored encrypted.
+
+Details: [docs/PRIVACY.md](docs/PRIVACY.md), [docs/AI_SETUP.md](docs/AI_SETUP.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+
+## Contributing, roadmap, security
+
+- **Contributing.** Issues, platform reports (especially from macOS and Linux desktops we cannot test) and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md).
+- **Roadmap:** [ROADMAP.md](ROADMAP.md).
+- **Security issues:** please follow [SECURITY.md](SECURITY.md). Do not open a public issue.
 
 ## Controls
 
