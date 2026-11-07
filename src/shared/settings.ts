@@ -180,6 +180,11 @@ const GeneralSchema = z.object({
   startupState: field(z.enum(['visible', 'hidden', 'paused', 'remember']), 'visible'),
   /** Last visible/hidden/paused state, maintained by main for startupState 'remember'. */
   rememberedState: field(z.enum(['visible', 'hidden', 'paused']), 'visible'),
+  /**
+   * 1.4.0, macOS only: show GizeCat's icon in the Dock (on by default). Off makes the app an
+   * accessory (menu-bar only). Ignored on other platforms; the schema default keeps older files valid.
+   */
+  showDockIcon: field(z.boolean(), true),
 });
 
 /**

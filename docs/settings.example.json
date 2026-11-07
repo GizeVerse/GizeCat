@@ -6,7 +6,8 @@
     "toggleShortcut": "Control+Alt+Shift+C",
     "firstRunCompleted": false,
     "startupState": "visible",
-    "rememberedState": "visible"
+    "rememberedState": "visible",
+    "showDockIcon": true
   },
   "loginItem": {
     "preference": "unset",
