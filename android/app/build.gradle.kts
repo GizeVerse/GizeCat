@@ -18,16 +18,47 @@ val (appMajor, appMinor, appPatch) = versionParts
 require(appMinor < 100 && appPatch < 100) { "versionCode needs MINOR and PATCH below 100, got $appVersion" }
 val appVersionCode: Int = appMajor * 10000 + appMinor * 100 + appPatch
 
-// Release signing: only from android/keystore.properties (gitignored; see keystore.properties.example).
-// Without it, release outputs are unsigned. A present but incomplete file is an error, never a
-// silent unsigned build.
+// Release signing (owner procedure: docs/platforms/android-signing.md). The first source that holds
+// anything wins:
+//   1. The environment, for CI: the four variables below. A blank value counts as unset, because a
+//      GitHub secret that does not exist reaches the job as an empty string.
+//   2. android/keystore.properties (gitignored; see keystore.properties.example), for local builds.
+//   3. Nothing: the release APK and AAB are unsigned.
+// A partial source stops the build, never a silent unsigned one. Messages name what is missing and
+// never print a value. APK and AAB come from the one release build type, so they share this key.
+val signingEnvNames: Map<String, String> = mapOf(
+    "storeFile" to "ANDROID_KEYSTORE_FILE",
+    "storePassword" to "ANDROID_KEYSTORE_PASSWORD",
+    "keyAlias" to "ANDROID_KEY_ALIAS",
+    "keyPassword" to "ANDROID_KEY_PASSWORD",
+)
+val signingEnv: Map<String, String> = signingEnvNames
+    .mapValues { (_, name) -> providers.environmentVariable(name).orNull.orEmpty() }
+    .filterValues { it.isNotBlank() }
 val keystoreFile: File = rootProject.file("keystore.properties")
-val keystoreProps = Properties()
-if (keystoreFile.isFile) keystoreFile.inputStream().use { keystoreProps.load(it) }
-val signingKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
-if (keystoreFile.isFile) {
-    val missing = signingKeys.filter { keystoreProps.getProperty(it).isNullOrBlank() }
-    require(missing.isEmpty()) { "android/keystore.properties is missing values for: ${missing.joinToString()}" }
+
+/** storeFile, storePassword, keyAlias and keyPassword of the release key, or null when none is configured. */
+val releaseKey: Map<String, String>? = when {
+    signingEnv.isNotEmpty() -> {
+        val missing = signingEnvNames.filterKeys { it !in signingEnv }.values
+        require(missing.isEmpty()) {
+            "Release signing from the environment is incomplete. Missing: ${missing.joinToString()}. " +
+                "Set all of ${signingEnvNames.values.joinToString()}, or none of them."
+        }
+        signingEnv
+    }
+    keystoreFile.isFile -> {
+        val props = Properties().apply { keystoreFile.inputStream().use { load(it) } }
+        val missing = signingEnvNames.keys.filter { props.getProperty(it).isNullOrBlank() }
+        require(missing.isEmpty()) { "android/keystore.properties is missing values for: ${missing.joinToString()}" }
+        signingEnvNames.keys.associateWith { props.getProperty(it) }
+    }
+    else -> null
+}
+releaseKey?.let { key ->
+    require(file(key.getValue("storeFile")).isFile) {
+        "Release signing: the keystore file does not exist (check ANDROID_KEYSTORE_FILE, or storeFile in android/keystore.properties)."
+    }
 }
 
 android {
@@ -44,12 +75,12 @@ android {
     }
 
     signingConfigs {
-        if (keystoreFile.isFile) {
+        releaseKey?.let { key ->
             create("release") {
-                storeFile = file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
+                storeFile = file(key.getValue("storeFile"))
+                storePassword = key.getValue("storePassword")
+                keyAlias = key.getValue("keyAlias")
+                keyPassword = key.getValue("keyPassword")
             }
         }
     }
@@ -60,6 +91,9 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
+            // No META-INF/version-control-info.textproto (the git state of the build machine), so
+            // the same sources give the same outputs. The trial build inherits this through initWith.
+            vcsInfo { include = false }
         }
         // Sideload trials only, never for distribution: release code signed with the SDK debug
         // keystore, its own applicationId (and so its own cat), labelled "GizeCat (trial)".

@@ -35,9 +35,16 @@
             android:name="android.webkit.WebView.MetricsOptOut"
             android:value="true" />
 
+        <!--
+          configChanges: rotation, split screen, free-form resizing, display size, keyboards and moves
+          to another display do not recreate the Activity, so the WebView and the cat stay live and the
+          page just gets a resize. Deliberately not listed: uiMode (night mode, docks), locale,
+          layoutDirection and fontScale. Those recreate the Activity so the theme, system bars and
+          text are applied from scratch; the cat is saved in onPause and reloaded from localStorage.
+        -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|touchscreen|colorMode"
             android:exported="true"
             android:launchMode="singleTask"
             android:resizeableActivity="true">

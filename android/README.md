@@ -35,8 +35,13 @@ against this project by `tests/unit/android/androidProject.test.ts`.
   transfer copies the WebView storage (`app_webview/`), so a new device keeps the cat.
   `hasFragileUserData="true"`, so uninstalling offers to keep the cat's data.
 - **Tablet-first:** no forced orientation, `resizeableActivity="true"` (split screen, freeform
-  windows), `singleTask` (one cat per device). Resizes, rotation and keyboard changes keep the live
-  page. Edge to edge, with the page padded to the safe area. The system bars use the page colours.
+  windows), `singleTask` (one cat per device). Rotation, split screen, resizing, display-size
+  (density) changes, keyboards and moves to another display are handled in `android:configChanges`,
+  so they keep the live page. A night-mode, dock, language or font-scale change recreates the
+  Activity on purpose, and the cat comes back from localStorage. Edge to edge, with the page padded
+  to the safe area. The system bars use the page colours.
+- **No background work:** no service, foreground service, alarm, job, wake lock or
+  battery-optimisation request. Out of sight the WebView is paused and its timers stop.
 - **Lifecycle:** backgrounding pauses the WebView, so the page sees `visibilitychange: hidden`,
   saves the cat and naps. A lost renderer is replaced, at once while the app is in front and
   otherwise when it comes back, so a backgrounded app never starts a renderer the system would
@@ -97,12 +102,16 @@ built-in Kotlin from Google Maven and Maven Central.
 the environment's values when they are valid; otherwise Android Studio's JBR and the default SDK
 folder. It runs `scripts/build-web-app.mjs` first, which rebuilds `out/web` and copies it into
 `app/src/main/assets/` (generated and gitignored). After the build it copies the outputs to
-`release/<version>/android/` and writes `SHA256SUMS-android.txt`.
+`release/<version>/android/` and writes `SHA256SUMS-android.txt`. Each file's name reports what it
+is: `GizeCat-<version>-android.apk/.aab` is signed with the release key,
+`GizeCat-<version>-android-unsigned.apk/.aab` is unsigned, and
+`GizeCat-<version>-android-trial-debugsigned.apk` is the trial.
 
 | Output | Command | Gradle output |
 | --- | --- | --- |
-| Release APK (unsigned without a keystore) | `npm run android:apk` | `app/build/outputs/apk/release/app-release-unsigned.apk` (`app-release.apk` when signed) |
-| Release AAB for Google Play (unsigned without a keystore) | `npm run android:aab` | `app/build/outputs/bundle/release/app-release.aab` |
+| Release APK and AAB together | `npm run android:release` | both rows below |
+| Release APK (unsigned without a key) | `npm run android:apk` | `app/build/outputs/apk/release/app-release-unsigned.apk` (`app-release.apk` when signed) |
+| Release AAB for Google Play (unsigned without a key) | `npm run android:aab` | `app/build/outputs/bundle/release/app-release.aab` |
 | Trial APK (sideload trials only) | `npm run android:trial` | `app/build/outputs/apk/trial/app-trial.apk` |
 | Web bundle into the app only | `npm run android:web` | `app/src/main/assets/` |
 
@@ -116,13 +125,15 @@ last for that process only):
 ```
 
 Version: `versionName` comes from `package.json`. `versionCode` = MAJOR×10000 + MINOR×100 + PATCH,
-so 1.4.0 gives 10400. The build fails if MINOR or PATCH reaches 100.
+so 1.4.0 gives 10400. The build fails if MINOR or PATCH reaches 100. The outputs carry no version
+control information (`vcsInfo { include = false }`), so the build machine's git state is not in them.
 
 ### Build types
 
-- `release`: R8 minify and resource shrinking. It is signed only when `android/keystore.properties`
-  exists; otherwise the APK and AAB are unsigned. An unsigned APK cannot be installed and an unsigned
-  AAB cannot be uploaded.
+- `release`: R8 minify and resource shrinking. APK and AAB use the same applicationId and the same
+  signing configuration: the four `ANDROID_KEY*` environment variables if any is set, otherwise
+  `android/keystore.properties`; otherwise the outputs are unsigned. An unsigned APK cannot be
+  installed and an unsigned AAB cannot be uploaded.
 - `trial`: the release code signed with the Android SDK **debug** keystore (`~/.android/debug.keystore`,
   which Gradle creates if it is missing). It has applicationId `io.github.gizeverse.gizecat.trial`,
   versionName `1.4.0-trial` and the label "GizeCat (trial)". It is not debuggable, and it installs
@@ -132,18 +143,21 @@ so 1.4.0 gives 10400. The build fails if MINOR or PATCH reaches 100.
 
 ## Signing (owner only)
 
-Agents never create or handle the release keystore.
+Agents never create or handle the release keystore. The full procedure is in
+[docs/platforms/android-signing.md](../docs/platforms/android-signing.md): generating the upload key,
+storing and backing it up, `keystore.properties`, GitHub secrets, Play App Signing and the exact
+build commands.
 
-1. Create an upload keystore outside the repository with your own name, organisation and password
-   (keytool asks for them), e.g.
-   `"C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe" -genkeypair -v -storetype PKCS12 -keystore "%USERPROFILE%\.gizecat-keys\gizecat-upload.jks" -alias gizecat-upload -keyalg RSA -keysize 4096 -validity 10000`.
-2. Copy `keystore.properties.example` to `keystore.properties` (gitignored) and fill it in. Write
-   `storeFile` with forward slashes. For PKCS12, `keyPassword` = `storePassword`.
-3. Back up the keystore and the passwords offline. With Play App Signing a lost upload key can be
-   reset through Play support. For APKs distributed outside Play, a lost key means users must
-   uninstall, losing their cat, before they can update.
+The release build takes its key from, in this order:
 
-You can also leave `keystore.properties` out and sign the unsigned outputs afterwards:
+1. The environment: `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and
+   `ANDROID_KEY_PASSWORD`. Setting only some of them stops the Gradle configuration with a message
+   naming the missing ones. It never prints a value.
+2. `android/keystore.properties` (gitignored; copy `keystore.properties.example`). An incomplete file
+   also stops the build.
+3. Nothing: the outputs are unsigned.
+
+You can also build unsigned and sign afterwards:
 `apksigner sign --ks <keystore> --out GizeCat.apk app-release-unsigned.apk` (build-tools) for the
 APK, and `jarsigner -keystore <keystore> app-release.aab <alias>` (JDK) for the AAB.
 
@@ -157,9 +171,10 @@ for sideloaded apps apply on certified devices; ADB installs are exempt.
 ## Status
 
 The project compiles and packages with Gradle on Windows (`:app:assembleTrial`, 1.4.0, with AGP's
-lint-vital check reporting no issues). The app has never run on a device or emulator, so every
-runtime behaviour described above is THEORETICALLY_COMPATIBLE_NOT_EXECUTED until it runs on a real
-tablet.
+lint-vital check reporting no issues; `:app:assembleRelease`, unsigned, after the signing changes).
+No release key exists, so the signed paths and the partial-key errors have never run. The app has
+never run on a device or emulator, so every runtime behaviour described above is
+THEORETICALLY_COMPATIBLE_NOT_EXECUTED until it runs on a real tablet.
 
 The merged manifest also contains two components from AndroidX libraries: the
 `androidx.startup.InitializationProvider` (not exported) and the

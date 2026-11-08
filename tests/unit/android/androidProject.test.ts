@@ -60,6 +60,23 @@ describe('Android manifest', () => {
     expect(manifest).toMatch(/android:name="android\.hardware\.touchscreen"\s+android:required="false"/);
   });
 
+  it('keeps the live WebView through rotation, split screen, resizing, density and display moves', () => {
+    const changes = (/android:configChanges="([^"]+)"/.exec(manifest)?.[1] ?? '').split('|');
+    for (const c of ['orientation', 'screenSize', 'smallestScreenSize', 'screenLayout', 'density', 'keyboard', 'keyboardHidden', 'navigation', 'touchscreen', 'colorMode']) {
+      expect(changes).toContain(c);
+    }
+    // These recreate the Activity on purpose: the theme, system bars and text are applied from scratch.
+    for (const c of ['uiMode', 'locale', 'layoutDirection', 'fontScale']) expect(changes).not.toContain(c);
+  });
+
+  it('does no background work: no service, alarm, job, wake lock or battery-optimisation request', () => {
+    expect(manifest).not.toContain('IGNORE_BATTERY_OPTIMIZATIONS');
+    expect(manifest).not.toContain('WAKE_LOCK');
+    for (const banned of ['AlarmManager', 'JobScheduler', 'WorkManager', 'startService', 'startForegroundService', 'bindService', 'PowerManager', 'WakeLock', 'ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS']) {
+      expect(kotlin).not.toContain(banned);
+    }
+  });
+
   it('opts out of WebView metrics and declares no other exported component', () => {
     expect(manifest).toMatch(/android:name="android\.webkit\.WebView\.MetricsOptOut"\s+android:value="true"/);
     expect(manifest).not.toMatch(/<(provider|service|receiver)\b/);
@@ -236,7 +253,36 @@ describe('Android Gradle build', () => {
     expect(major * 10000 + minor * 100 + patch).toBeLessThan(2_100_000_000);
   });
 
-  it('signs release builds only from keystore.properties and trial builds with the debug key', () => {
+  it('signs release builds from the environment, then keystore.properties, and refuses a partial key', () => {
+    for (const [key, env] of [
+      ['storeFile', 'ANDROID_KEYSTORE_FILE'],
+      ['storePassword', 'ANDROID_KEYSTORE_PASSWORD'],
+      ['keyAlias', 'ANDROID_KEY_ALIAS'],
+      ['keyPassword', 'ANDROID_KEY_PASSWORD'],
+    ]) {
+      expect(gradle).toContain(`"${key}" to "${env}"`);
+    }
+    expect(gradle).toContain('providers.environmentVariable(name)');
+    // A secret that does not exist reaches a GitHub job as an empty string: blank counts as unset.
+    expect(gradle).toContain('.filterValues { it.isNotBlank() }');
+    // The environment wins over the file.
+    expect(gradle.indexOf('signingEnv.isNotEmpty() ->')).toBeGreaterThan(-1);
+    expect(gradle.indexOf('signingEnv.isNotEmpty() ->')).toBeLessThan(gradle.indexOf('keystoreFile.isFile ->'));
+    // A partial environment or file stops the configuration, naming only what is missing.
+    expect(gradle).toContain('Missing: ${missing.joinToString()}');
+    expect(gradle).toContain('android/keystore.properties is missing values for: ${missing.joinToString()}');
+    expect(gradle).toContain('the keystore file does not exist');
+    // The build script never logs signing material and never creates a key.
+    expect(gradle).not.toMatch(/\bprintln\b|\blogger\./);
+    expect(gradle).not.toMatch(/keytool|genkey/i);
+  });
+
+  it('builds APK and AAB from one release type and keeps the build machine out of the outputs', () => {
+    expect(gradle.match(/applicationId = "/g)).toHaveLength(1);
+    expect(gradle).toMatch(/getByName\("release"\) \{[\s\S]*?vcsInfo \{ include = false \}[\s\S]*?\n {8}\}/);
+  });
+
+  it('signs trial builds with the debug key', () => {
     expect(gradle).toContain('rootProject.file("keystore.properties")');
     expect(gradle).toContain('signingConfig = signingConfigs.findByName("release")');
     expect(gradle).toMatch(/create\("trial"\) \{[\s\S]*initWith\(getByName\("release"\)\)[\s\S]*applicationIdSuffix = "\.trial"[\s\S]*signingConfig = signingConfigs\.getByName\("debug"\)/);
@@ -271,6 +317,31 @@ describe('Android repository hygiene', () => {
     const ignore = read('.gitignore').split(/\r?\n/);
     for (const entry of ['android/keystore.properties', 'android/local.properties', 'android/app/src/main/assets/', 'android/app/build/', '*.jks', '*.keystore', '*.apk', '*.aab']) {
       expect(ignore).toContain(entry);
+    }
+  });
+
+  it('names outputs by what they are, and offers one command for signed APK and AAB', () => {
+    const script = read('scripts', 'android-gradle.mjs');
+    expect(script).toContain('GizeCat-${version}-android-unsigned.apk');
+    expect(script).toContain('GizeCat-${version}-android.apk');
+    expect(script).toContain("GizeCat-${version}-android${aabSigned ? '' : '-unsigned'}.aab");
+    expect(script).toContain('GizeCat-${version}-android-trial-debugsigned.apk');
+    // An AAB's name comes from its own signature block, not from which configuration exists.
+    expect(script).toContain('hasJarSignature(aab)');
+    expect(script).not.toContain('keystore.properties');
+    expect(script).not.toMatch(/ANDROID_KEY(STORE)?_(FILE|PASSWORD|ALIAS)/);
+    const scripts = (JSON.parse(read('package.json')) as { scripts: Record<string, string> }).scripts;
+    expect(scripts['android:release']).toBe('node scripts/with-lock.mjs android -- node scripts/android-gradle.mjs :app:assembleRelease :app:bundleRelease');
+  });
+
+  it('documents the signing procedure and the store material with no filled-in value', () => {
+    const signing = read('docs', 'platforms', 'android-signing.md');
+    for (const name of ['ANDROID_KEYSTORE_FILE', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD', 'ANDROID_KEYSTORE_BASE64']) {
+      expect(signing).toContain(name);
+    }
+    expect(signing).not.toMatch(/-(storepass|keypass)\b/);
+    for (const doc of ['listing.md', 'data-safety.md', 'permissions.md', 'assets.md', 'release-readiness.md']) {
+      expect(fs.existsSync(file('docs', 'store', 'google-play', doc)), doc).toBe(true);
     }
   });
 

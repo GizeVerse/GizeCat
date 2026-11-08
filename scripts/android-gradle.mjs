@@ -11,6 +11,12 @@
 // Examples: node scripts/android-gradle.mjs :app:assembleRelease
 //           node scripts/android-gradle.mjs :app:bundleRelease :app:assembleTrial
 //
+// Signing is Gradle's (android/app/build.gradle.kts, docs/platforms/android-signing.md). This script
+// never reads or prints a signing value; it only names what came out, by looking at the outputs:
+//   GizeCat-<version>-android.apk/.aab            signed with the configured release key
+//   GizeCat-<version>-android-unsigned.apk/.aab   no release key was configured
+//   GizeCat-<version>-android-trial-debugsigned.apk   the trial build, signed with the SDK debug key
+//
 // JAVA_HOME: the environment's, if it holds a JDK 17+; otherwise Android Studio's bundled JBR.
 // ANDROID_HOME: the environment's ANDROID_HOME or ANDROID_SDK_ROOT; otherwise the Android Studio
 // default SDK folder. The SDK needs platforms/android-36.
@@ -106,23 +112,53 @@ child.on('close', (code, signal) => {
   if (!noCollect) collect();
 });
 
-/** Build outputs this run produced (newer than its start), with the release/<version>/android name for each. */
+/**
+ * Whether a zip holds a JAR signature block (META-INF/<name>.RSA, .DSA or .EC), which is how an AAB
+ * is signed. Reads the central directory only; anything it cannot read counts as unsigned.
+ */
+function hasJarSignature(file) {
+  const zip = fs.readFileSync(file);
+  // The end-of-central-directory record is searched from the end: a zip comment may follow it.
+  let eocd = -1;
+  for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 0xffff); i -= 1) {
+    if (zip.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return false;
+  let entry = zip.readUInt32LE(eocd + 16);
+  for (let n = zip.readUInt16LE(eocd + 10); n > 0; n -= 1) {
+    if (entry + 46 > zip.length || zip.readUInt32LE(entry) !== 0x02014b50) return false;
+    const nameLength = zip.readUInt16LE(entry + 28);
+    if (/^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(zip.toString('utf8', entry + 46, entry + 46 + nameLength))) return true;
+    entry += 46 + nameLength + zip.readUInt16LE(entry + 30) + zip.readUInt16LE(entry + 32);
+  }
+  return false;
+}
+
+/**
+ * Build outputs this run produced (newer than its start), with the release/<version>/android name
+ * for each. The name reports the output, not the configuration: Gradle calls an unsigned APK
+ * app-release-unsigned.apk, while an AAB is app-release.aab either way, so its signature is read.
+ */
 function freshOutputs() {
   const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
   const out = path.join(androidDir, 'app', 'build', 'outputs');
-  const releaseSigned = fs.existsSync(path.join(androidDir, 'keystore.properties'));
+  const aab = path.join(out, 'bundle', 'release', 'app-release.aab');
+  const aabSigned = fs.existsSync(aab) && hasJarSignature(aab);
   const known = [
     [path.join(out, 'apk', 'release', 'app-release-unsigned.apk'), `GizeCat-${version}-android-unsigned.apk`],
     [path.join(out, 'apk', 'release', 'app-release.apk'), `GizeCat-${version}-android.apk`],
-    [path.join(out, 'bundle', 'release', 'app-release.aab'), `GizeCat-${version}-android${releaseSigned ? '' : '-unsigned'}.aab`],
+    [aab, `GizeCat-${version}-android${aabSigned ? '' : '-unsigned'}.aab`],
     [path.join(out, 'apk', 'trial', 'app-trial.apk'), `GizeCat-${version}-android-trial-debugsigned.apk`],
   ];
   return { version, files: known.filter(([f]) => fs.existsSync(f) && fs.statSync(f).mtimeMs >= startedAt - 1000) };
 }
 
 function report() {
-  for (const [file] of freshOutputs().files) {
-    console.log(`android-gradle: built ${path.relative(root, file)} (${fs.statSync(file).size} bytes)`);
+  for (const [file, name] of freshOutputs().files) {
+    console.log(`android-gradle: built ${path.relative(root, file)} (${fs.statSync(file).size} bytes): ${name}`);
   }
 }
 
