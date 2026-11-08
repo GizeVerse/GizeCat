@@ -11,7 +11,7 @@ import { livePoll, pagePoll, type LivePoll } from '../livePoll';
 import { pauseModel } from '../privacyView';
 import { niceCeil, sparkline } from '../sparkline';
 import { errorText, type Timers } from '../store';
-import { S } from '../strings';
+import { platformWording, S } from '../strings';
 import { catEntries, coordinateEntries, countRows, errorItems, seenEntries, tabStripEntries } from '../surfacesView';
 
 const D = S.diagnostics;
@@ -102,6 +102,15 @@ export function loginItemLabel(s: LoginItemStatus): string {
 export function loginItemRowLabel(platform: AppStatus['platform']): string {
   if (!platform || platform.id === 'win32') return D.launchAtLogin;
   return platform.id === 'darwin' ? D.launchAtLoginMac : D.launchAtLoginElsewhere;
+}
+
+/**
+ * The OS row's name under Versions (1.4.0): "Windows" on Windows (and without a platform report, as
+ * before), "Operating system" elsewhere, where the value is os.type() and os.release() (on a Mac the
+ * Darwin version, so "macOS" would misname it).
+ */
+export function osVersionLabel(platform: AppStatus['platform']): string {
+  return platformWording(platform) === 'windows' ? D.versions.os : D.versionsOsElsewhere;
 }
 
 export function statusEntries(view: SettingsViewState, now: number): Array<readonly [string, string]> {
@@ -418,7 +427,7 @@ export function diagnosticsPage(ctx: PageContext): PageView {
         [D.versions.electron, v.electron],
         [D.versions.chrome, v.chrome],
         [D.versions.node, v.node],
-        [D.versions.os, v.os],
+        [osVersionLabel(view.status.platform), v.os],
         [D.dataFolder, view.paths.userData],
       ]),
     );

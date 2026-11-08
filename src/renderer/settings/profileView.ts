@@ -176,7 +176,8 @@ export function previewModel(preview: ProfilePreview): PreviewModel {
   const notes: string[] = [];
   if (preview.format.newerMinor) notes.push(R.newerMinor);
   if (preview.skipped.length > 0) notes.push(R.skipped(preview.skipped.length));
-  if (preview.keptOff.length > 0) notes.push(R.keptOff);
+  const keptOff = R.keptOff(preview.keptOff);
+  if (keptOff !== null) notes.push(keptOff);
   if (preview.memoryNeedsCat) notes.push(R.memoryNeedsCat);
   notes.push(R.notChanged);
   const parts = PROFILE_PART_ORDER.map((part): PartView => {

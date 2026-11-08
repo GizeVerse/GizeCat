@@ -39,12 +39,14 @@ describe('settings window: product names', () => {
     expect(`${S.app.brand}${S.about.identity}`).toBe('GizeCat — a GizeVerse character (formerly Desktop Cat)');
   });
 
-  it('names Desktop Cat only where Windows shows that name, or as the former name', () => {
+  it('names Desktop Cat only where Windows (or macOS Finder) shows that name, or as the former name', () => {
     // Task Manager › Startup apps and Settings › Apps list the installed name (BRAND.installedName).
     expect(text('general.launchStatus.windowsDisabled')).toContain('open Task Manager › Startup apps and enable the Desktop Cat entry');
     expect(text('about.uninstall')).toContain('Settings › Apps › Installed apps, find Desktop Cat and choose Uninstall');
     const old = ALL.filter(([, s]) => s.includes('Desktop Cat')).map(([at]) => at);
-    expect(old.sort()).toEqual(['about.identity', 'about.uninstall', 'general.launchStatus.windowsDisabled']);
+    // 1.4.0: macOS Finder shows the app under the same installed name (Applications › Desktop Cat).
+    expect(text('about.uninstallMac')).toContain('drag Desktop Cat from Applications to the Trash');
+    expect(old.sort()).toEqual(['about.identity', 'about.uninstall', 'about.uninstallMac', 'general.launchStatus.windowsDisabled']);
   });
 
   it('the walk reaches the strings it checks', () => {

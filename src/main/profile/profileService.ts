@@ -8,6 +8,8 @@
 //   file content or a path. The parsed profile waits in one pending slot behind a 128-bit token,
 //   bound to the asking webContents, for PROFILE_TOKEN_TTL_MS; apply needs that token.
 // - The file's size is checked before it is read, and the read itself stops past the cap.
+// - Export only replaces a file the save dialog confirmed: when main adds the .json extension, that
+//   path is only created, never overwritten; if it exists, the exact path the user chose is written.
 // - Nothing changes before the user confirmed the preview: apply computes everything in memory
 //   first (applyProfile), re-checks the settings patch with the renderer-patch guards, commits the
 //   settings, then adopts the cat; a failed adopt puts the settings back.
@@ -48,7 +50,11 @@ export interface ProfileDialogs {
 export type CappedRead = { ok: true; text: string } | { ok: false; reason: 'too-large' };
 
 export interface ProfileFs {
-  writeText(filePath: string, text: string): Promise<void>;
+  /**
+   * Writes the file. With `createOnly` it never replaces an existing file: it rejects with an
+   * error whose `code` is 'EEXIST' (node:fs flag 'wx').
+   */
+  writeText(filePath: string, text: string, opts?: { createOnly?: boolean }): Promise<void>;
   stat(filePath: string): Promise<{ isFile: boolean; size: number }>;
   /** Reads at most `maxBytes` (UTF-8); a longer file is reported as too large, never read whole. */
   readTextCapped(filePath: string, maxBytes: number): Promise<CappedRead>;
@@ -98,7 +104,11 @@ function errorCode(err: unknown): string {
   return err instanceof Error ? err.name.slice(0, 32) : 'Error';
 }
 
-/** The chosen path with the profile extension when it has none (Linux dialogs do not add it). */
+/**
+ * The chosen path with the profile extension when it has none (Linux dialogs do not add it). The
+ * dialog's overwrite confirmation covered `filePath` only, so a changed path is created, never
+ * replaced (exportToFile).
+ */
 export function withProfileExtension(filePath: string, basename: (p: string) => string): string {
   return basename(filePath).includes('.') ? filePath : `${filePath}.${PROFILE_FILE_EXTENSION}`;
 }
@@ -134,6 +144,29 @@ export function createProfileTransferService(deps: ProfileTransferDeps): Profile
   let dialogOpen = false;
   let pending: Pending | null = null;
 
+  /**
+   * Writes the export without replacing a file the user did not confirm. The path the dialog returned
+   * is written as is (the dialog asked before an overwrite). A path main changed by adding the
+   * extension is only created; when that file already exists, the exact path the user chose is
+   * written instead. Returns the path written.
+   */
+  async function writeConfirmed(chosen: string, text: string): Promise<string> {
+    const target = withProfileExtension(chosen, deps.basename);
+    if (target === chosen) {
+      await deps.fs.writeText(chosen, text);
+      return chosen;
+    }
+    try {
+      await deps.fs.writeText(target, text, { createOnly: true });
+      return target;
+    } catch (err) {
+      if (errorCode(err) !== 'EEXIST') throw err;
+      log.info('profile export kept an existing file: wrote the name as chosen, without the added extension');
+      await deps.fs.writeText(chosen, text);
+      return chosen;
+    }
+  }
+
   async function exportToFile(req: { includeMemory: boolean }): Promise<ProfileExportResponse> {
     if (dialogOpen) return { status: 'busy' };
     dialogOpen = true;
@@ -150,9 +183,9 @@ export function createProfileTransferService(deps: ProfileTransferDeps): Profile
       }
       const chosen = await deps.dialogs.chooseSavePath(prepared.fileName);
       if (chosen === null) return { status: 'cancelled' };
-      const target = withProfileExtension(chosen, deps.basename);
+      let target: string;
       try {
-        await deps.fs.writeText(target, prepared.text);
+        target = await writeConfirmed(chosen, prepared.text);
       } catch (err) {
         log.warn('profile export failed', { code: errorCode(err) });
         return { status: 'failed' };

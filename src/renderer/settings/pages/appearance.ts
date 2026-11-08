@@ -1,4 +1,5 @@
 import { RENDER_STYLES, SKINS, type SkinId } from '../../../shared/cat';
+import type { AppStatus } from '../../../shared/ipc';
 import type { PageContext, PageView } from '../context';
 import { group, page, radioGroup, row, segmentedRow, setNote, sliderRow, toggleRow, type RadioItem } from '../controls';
 import { h, icon } from '../dom';
@@ -6,12 +7,23 @@ import { NUMERIC_FIELDS, type FieldId } from '../fields';
 import { fieldId } from '../patch';
 import { coatArt } from '../skins';
 import type { FieldBinding } from '../store';
-import { S } from '../strings';
+import { platformWording, S } from '../strings';
 
 const A = S.appearance;
 
 /** v1.2 (ADR 0003 §10): the settings the Sound group has controls for. */
 export const SOUND_FIELD_IDS: readonly FieldId[] = [fieldId('sound', 'enabled'), fieldId('sound', 'volume')];
+
+/**
+ * The Sound group's descriptions (1.4.0): Windows (and no platform report) keeps the pre-1.4.0 text
+ * naming the Windows volume; macOS names the macOS volume; elsewhere the system volume.
+ */
+export function soundDescriptions(platform: AppStatus['platform']): { sound: string; volume: string } {
+  const wording = platformWording(platform);
+  if (wording === 'mac') return { sound: A.soundDescMac, volume: A.volumeDescMac };
+  if (wording === 'elsewhere') return { sound: A.soundDescElsewhere, volume: A.volumeDescElsewhere };
+  return { sound: A.soundDesc, volume: A.volumeDesc };
+}
 
 function skinPicker(ctx: PageContext): HTMLElement {
   const parts = row({ title: A.skinTitle, desc: A.skinDesc, icon: 'color', stacked: true });
@@ -53,8 +65,11 @@ export function appearancePage(ctx: PageContext): PageView {
   const shadow = toggleRow(ctx, 'appearance', 'shadow', { title: A.shadowTitle, desc: A.shadowDesc, icon: 'layers' });
   const emotes = toggleRow(ctx, 'appearance', 'emotes', { title: A.emotesTitle, desc: A.emotesDesc, icon: 'heart' });
   const capture = toggleRow(ctx, 'appearance', 'hideFromScreenCapture', { title: A.captureTitle, desc: A.captureDesc, icon: 'hide' });
-  const sound = toggleRow(ctx, 'sound', 'enabled', { title: A.soundTitle, desc: A.soundDesc, icon: 'volume' });
-  const volume = sliderRow(ctx, NUMERIC_FIELDS.soundVolume, { title: A.volumeTitle, desc: A.volumeDesc, icon: 'volume' });
+  let soundText = soundDescriptions(ctx.store.view.status.platform);
+  const sound = toggleRow(ctx, 'sound', 'enabled', { title: A.soundTitle, desc: soundText.sound, icon: 'volume' });
+  const volume = sliderRow(ctx, NUMERIC_FIELDS.soundVolume, { title: A.volumeTitle, desc: soundText.volume, icon: 'volume' });
+  const soundDescEl = sound.parts.row.querySelector<HTMLElement>('.row-desc');
+  const volumeDescEl = volume.parts.row.querySelector<HTMLElement>('.row-desc');
 
   const element = page(A.title, [
     group(A.groupLook, [skinPicker(ctx), style.parts.row, size.parts.row, opacity.parts.row, speed.parts.row]),
@@ -62,7 +77,13 @@ export function appearancePage(ctx: PageContext): PageView {
     group(A.groupSound, [sound.parts.row, volume.parts.row]),
   ]);
 
-  ctx.store.subscribe(() => {
+  ctx.store.subscribe((view) => {
+    const next = soundDescriptions(view.status.platform);
+    if (next.sound !== soundText.sound || next.volume !== soundText.volume) {
+      soundText = next;
+      if (soundDescEl) soundDescEl.textContent = next.sound;
+      if (volumeDescEl) volumeDescEl.textContent = next.volume;
+    }
     const on = ctx.store.intended('sound', 'enabled');
     volume.setDisabled(!on);
     setNote(volume.parts.note, on ? null : A.volumeNeedsSound, 'info');

@@ -4,7 +4,7 @@
 // spec. Written in the 1.4.0 mission, NOT executed there.
 import { describe, expect, it } from 'vitest';
 import { mulberry32, newPersistedCat } from '../../../src/core/behavior';
-import { buildProfile, previewImport } from '../../../src/shared/profileTransfer';
+import { buildProfile, IMPORT_NEVER_ENABLES, previewImport } from '../../../src/shared/profileTransfer';
 import { defaultSettings } from '../../../src/shared/settings';
 import type { HostMode } from '../../../src/web/hostMode';
 import { changeLine, memoryAllowed, profileHostId, saveText, WEB_PROFILE_PARTS, webPreviewModel } from '../../../src/web/profileUi';
@@ -59,6 +59,22 @@ describe('web profile UI helpers', () => {
     expect(m.notes).toContain(T.memoryNeedsCat);
     expect(m.changes).toContain(`${WS.cat.coatLabel}: ${WS.skins.ginger} → ${WS.skins.tuxedo}`);
     expect(m.changes.some((l) => l.includes(theirs.catId))).toBe(false);
+  });
+
+  it('the kept-off note names only the opt-outs the import really kept off (SEC-2)', () => {
+    const here = defaultSettings();
+    here.behavior.disabledBehaviors = [];
+    here.behavior.disabledExtras = ['terminalTabs'];
+    const local = newPersistedCat(mulberry32(1), WALL - 86_400_000);
+    const p = previewImport(buildProfile(defaultSettings(), local, { includeMemory: false, app: { version: '1.4.0', host: 'win32' }, now: WALL }), here, local);
+    expect(p.keptOff).toEqual(['terminalTabs']);
+    const notes = webPreviewModel(p).notes;
+    expect(notes).toContain('Walking on terminal tabs stays off, because it is off here.');
+    expect(notes.some((n) => n.includes('browser') || n.includes('File Explorer'))).toBe(false);
+    expect(T.keptOff(['tabStrips', 'explorerTabs', 'terminalTabs'])).toBe('Walking on browser, File Explorer and terminal tabs stays off, because it is off here.');
+    expect(T.keptOff(['tabStrips'])).toBe('Walking on browser tabs stays off, because it is off here.');
+    expect(T.keptOff([])).toBeNull();
+    for (const id of [...IMPORT_NEVER_ENABLES.disabledBehaviors, ...IMPORT_NEVER_ENABLES.disabledExtras]) expect(T.keptOff([id])).not.toBeNull();
   });
 
   it('change lines: booleans On/Off, traits as percent, lists counted, the name as written', () => {

@@ -7,12 +7,15 @@ import { describe, expect, it } from 'vitest';
 import { mulberry32, newPersistedCat } from '../../../../src/core/behavior';
 import type { AppStatus } from '../../../../src/shared/ipc';
 import { CAPABILITY_MATRIX, type PlatformReport, type RuntimeCapabilities } from '../../../../src/shared/platform';
-import { buildProfile, previewImport, type ProfilePreview } from '../../../../src/shared/profileTransfer';
+import { buildProfile, IMPORT_NEVER_ENABLES, previewImport, type ProfilePreview } from '../../../../src/shared/profileTransfer';
 import { defaultSettings } from '../../../../src/shared/settings';
+import { aboutPlatformText } from '../../../../src/renderer/settings/pages/about';
+import { apiKeyDesc } from '../../../../src/renderer/settings/pages/ai';
+import { soundDescriptions } from '../../../../src/renderer/settings/pages/appearance';
 import { fullscreenRowNote } from '../../../../src/renderer/settings/pages/behavior';
-import { loginItemRowLabel } from '../../../../src/renderer/settings/pages/diagnostics';
+import { loginItemRowLabel, osVersionLabel } from '../../../../src/renderer/settings/pages/diagnostics';
 import { applyNote, changeLabel, changeValue, exportNote, memoryAllowed, openNote, previewModel, PROFILE_PART_ORDER } from '../../../../src/renderer/settings/profileView';
-import { S } from '../../../../src/renderer/settings/strings';
+import { platformWording, S } from '../../../../src/renderer/settings/strings';
 
 const R = S.profile;
 const WALL = 1_800_000_000_000;
@@ -93,6 +96,27 @@ describe('preview model', () => {
     expect(previewModel(p).notes).toContain(R.memoryNeedsCat);
   });
 
+  it('the kept-off note names only the opt-outs the import really kept off (SEC-2)', () => {
+    // Browser tab strips on here, only Windows Terminal tabs off; the file has both lists empty.
+    const here = defaultSettings();
+    here.behavior.disabledBehaviors = [];
+    here.behavior.disabledExtras = ['terminalTabs'];
+    const local = newPersistedCat(mulberry32(1), WALL - 86_400_000);
+    const p = previewImport(buildProfile(defaultSettings(), local, { includeMemory: false, app: { version: '1.4.0', host: 'win32' }, now: WALL }), here, local);
+    expect(p.keptOff).toEqual(['terminalTabs']);
+    const note = R.keptOff(p.keptOff);
+    expect(note).toBe('Walking on terminal tabs stays off, because it is off on this device.');
+    expect(previewModel(p).notes).toContain(note);
+    expect(previewModel(p).notes.some((n) => n.includes('browser') || n.includes('File Explorer'))).toBe(false);
+    // All three, two, none.
+    expect(R.keptOff(['tabStrips', 'explorerTabs', 'terminalTabs'])).toBe('Walking on browser, File Explorer and terminal tabs stays off, because it is off on this device.');
+    expect(R.keptOff(['explorerTabs', 'terminalTabs'])).toBe('Walking on File Explorer and terminal tabs stays off, because it is off on this device.');
+    expect(R.keptOff([])).toBeNull();
+    expect(previewModel(preview()).notes.some((n) => n.startsWith('Walking on'))).toBe(false);
+    // Every id the import floor can keep off has a name.
+    for (const id of [...IMPORT_NEVER_ENABLES.disabledBehaviors, ...IMPORT_NEVER_ENABLES.disabledExtras]) expect(R.keptOff([id])).not.toBeNull();
+  });
+
   it('labels and values: traits as percent, counters as counts, booleans On/Off, lists counted', () => {
     expect(changeLabel({ target: 'cat', field: 'traits.curiosity' })).toBe(S.personality.traits.curiosity);
     expect(changeLabel({ target: 'cat', field: 'memory.counters.pets' })).toBe(S.personality.counters.pets);
@@ -127,5 +151,55 @@ describe('macOS wording (1.4.0)', () => {
     expect(S.behavior.fullscreenNoteMac).toContain('full screen');
     expect(fullscreenRowNote(report('linux-x11', { fullscreenAware: { available: false, reason: 'Not on X11.' } }))).toBe('Not on X11.');
     expect(fullscreenRowNote(report('darwin', { fullscreenAware: { available: true, reason: null } }))).toBeNull();
+  });
+
+  it('picks one wording per platform: Windows also without a platform report', () => {
+    expect(platformWording(undefined)).toBe('windows');
+    expect(platformWording(report('win32').platform)).toBe('windows');
+    expect(platformWording(report('darwin').platform)).toBe('mac');
+    expect(platformWording(report('linux-wayland').platform)).toBe('elsewhere');
+  });
+
+  it('API-key rows say who encrypts the key: Windows text unchanged, the Keychain on macOS, secure storage elsewhere', () => {
+    expect(apiKeyDesc('anthropic', undefined)).toBe('Stored encrypted by Windows on this PC. It is never shown again.');
+    expect(apiKeyDesc('openai-compatible', report('win32').platform)).toBe('Only if your server requires one. Stored encrypted by Windows on this PC.');
+    for (const provider of ['anthropic', 'openai-compatible'] as const) {
+      const mac = apiKeyDesc(provider, report('darwin').platform);
+      expect(mac).toContain('macOS Keychain');
+      const linux = apiKeyDesc(provider, report('linux-x11').platform);
+      expect(linux).toContain('secure storage');
+      for (const text of [mac, linux]) expect(text).not.toMatch(/Windows|this PC/);
+    }
+  });
+
+  it('sound and volume name the Windows volume only on Windows', () => {
+    expect(soundDescriptions(undefined)).toEqual({ sound: S.appearance.soundDesc, volume: S.appearance.volumeDesc });
+    expect(soundDescriptions(report('win32').platform).volume).toBe('How loud the cat is, on top of the Windows volume. 0: silent.');
+    for (const id of ['darwin', 'linux-x11'] as const) {
+      const t = soundDescriptions(report(id).platform);
+      for (const text of [t.sound, t.volume]) expect(text).not.toMatch(/Windows|this PC/);
+      expect(t.volume).toMatch(/0: silent/);
+    }
+    expect(soundDescriptions(report('darwin').platform).volume).toContain('macOS volume');
+  });
+
+  it('Diagnostics calls the OS row "Windows" only on Windows', () => {
+    expect(osVersionLabel(undefined)).toBe('Windows');
+    expect(osVersionLabel(report('win32').platform)).toBe(S.diagnostics.versions.os);
+    expect(osVersionLabel(report('darwin').platform)).toBe('Operating system');
+    expect(osVersionLabel(report('linux-x11').platform)).toBe('Operating system');
+  });
+
+  it('About: the API-key promise and the uninstall steps per platform; Windows unchanged', () => {
+    expect(aboutPlatformText(undefined)).toEqual({ promise: S.about.promise, uninstall: S.about.uninstall });
+    expect(aboutPlatformText(report('win32').platform).promise.at(-1)).toBe('API keys are encrypted by Windows and never shown or logged.');
+    const mac = aboutPlatformText(report('darwin').platform);
+    expect(mac.promise).toHaveLength(S.about.promise.length);
+    expect(mac.promise.slice(0, -1)).toEqual(S.about.promise.slice(0, -1));
+    expect(mac.promise.at(-1)).toContain('macOS Keychain');
+    expect(mac.uninstall).toContain('Applications to the Trash');
+    const linux = aboutPlatformText(report('linux-x11').platform);
+    expect(linux.promise.at(-1)).toContain('secure storage');
+    for (const t of [mac, linux]) expect([...t.promise, t.uninstall].join(' ')).not.toContain('Windows');
   });
 });

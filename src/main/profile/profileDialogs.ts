@@ -52,8 +52,9 @@ export function createElectronProfileDialogs(opts: ProfileDialogOptions): Profil
 
 /** node:fs behind ProfileFs. readTextCapped never reads more than maxBytes + 1 bytes. */
 export const nodeProfileFs: ProfileFs = {
-  async writeText(filePath, text) {
-    await fs.promises.writeFile(filePath, text, { encoding: 'utf8' });
+  async writeText(filePath, text, opts) {
+    // 'wx' fails with EEXIST instead of replacing a file the save dialog never confirmed.
+    await fs.promises.writeFile(filePath, text, { encoding: 'utf8', flag: opts?.createOnly === true ? 'wx' : 'w' });
   },
   async stat(filePath) {
     const s = await fs.promises.stat(filePath);

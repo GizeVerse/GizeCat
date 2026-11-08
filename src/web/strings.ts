@@ -9,6 +9,7 @@
 import { BRAND } from '../shared/brand';
 import type { RenderStyle, SkinId } from '../shared/cat';
 import type { ProfilePart, ProfileRejectReason } from '../shared/profileTransfer';
+import type { BehaviorId } from '../shared/settings';
 import type { ActivityPresetId } from '../shared/settingsPresets';
 import type { InstallHint } from './hostMode';
 import type { PersistenceState } from './storage';
@@ -18,6 +19,15 @@ const P = BRAND.product;
 export type Place = 'browser' | 'app';
 
 const here = (place: Place): string => (place === 'app' ? 'this app' : 'this browser');
+
+/** "A", "A and B", "A, B and C". */
+const listText = (items: readonly string[]): string => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.slice(-1).join('')}`);
+/** The tab-strip opt-outs an import keeps off (IMPORT_NEVER_ENABLES in shared/profileTransfer.ts), in sentence order. */
+const KEPT_OFF_TABS: ReadonlyArray<readonly [BehaviorId, string]> = [
+  ['tabStrips', 'browser'],
+  ['explorerTabs', 'File Explorer'],
+  ['terminalTabs', 'terminal'],
+];
 
 export const WS = {
   toolbar: {
@@ -123,7 +133,11 @@ export const WS = {
     noChanges: 'Nothing in this file differs from what is here now.',
     memoryNeedsCat: 'What it has learned can only be loaded together with the cat itself.',
     skipped: (n: number) => `${n} ${n === 1 ? 'value was' : 'values were'} not recognised and stay as they are here.`,
-    keptOff: 'Walking on browser, File Explorer and terminal tabs stays off, because it is off here.',
+    /** Names only the opt-outs the import really kept off (the preview's keptOff); null when none is one of them. */
+    keptOff: (ids: readonly BehaviorId[]): string | null => {
+      const names = KEPT_OFF_TABS.filter(([id]) => ids.includes(id)).map(([, name]) => name);
+      return names.length === 0 ? null : `Walking on ${listText(names)} tabs stays off, because it is off here.`;
+    },
     notChanged: 'Never changed by a file: screen analysis and AI (off on this device), startup, shortcuts and other choices that belong to one device.',
     confirm: 'Load',
     cancel: 'Keep things as they are',

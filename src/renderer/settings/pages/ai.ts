@@ -1,3 +1,4 @@
+import type { AppStatus } from '../../../shared/ipc';
 import type { AiProviderId } from '../../../shared/settings';
 import { MAX_MODEL_LENGTH, MAX_URL_LENGTH, PROVIDER_IDS } from '../catalog';
 import type { PageContext, PageView } from '../context';
@@ -26,7 +27,7 @@ import { providerTarget } from '../privacyView';
 import { fieldId } from '../patch';
 import type { FieldBinding } from '../store';
 import { errorText } from '../store';
-import { S } from '../strings';
+import { platformWording, S } from '../strings';
 import { validateApiKey, validateBaseUrl, validateModel } from '../validate';
 
 const A = S.ai;
@@ -151,8 +152,21 @@ function modelRow(ctx: PageContext, key: 'ollamaModel' | 'openaiModel' | 'anthro
   return r.parts;
 }
 
-function apiKeyRow(ctx: PageContext, provider: 'anthropic' | 'openai-compatible', desc: string): RowParts {
+/**
+ * The API-key row's description (1.4.0): who encrypts the key on this platform. Windows (and no
+ * platform report) keeps the pre-1.4.0 text; macOS names its Keychain; elsewhere the system's secure
+ * storage, as src/main/store/secretStore.ts says it.
+ */
+export function apiKeyDesc(provider: 'anthropic' | 'openai-compatible', platform: AppStatus['platform']): string {
+  const wording = platformWording(platform);
+  if (provider === 'anthropic') return wording === 'mac' ? A.keyDescAnthropicMac : wording === 'elsewhere' ? A.keyDescAnthropicElsewhere : A.keyDescAnthropic;
+  return wording === 'mac' ? A.keyDescOpenaiMac : wording === 'elsewhere' ? A.keyDescOpenaiElsewhere : A.keyDescOpenai;
+}
+
+function apiKeyRow(ctx: PageContext, provider: 'anthropic' | 'openai-compatible'): RowParts {
+  let desc = apiKeyDesc(provider, ctx.store.view.status.platform);
   const parts = row({ title: A.keyTitle, desc, icon: 'lock' });
+  const descEl = parts.row.querySelector<HTMLElement>('.row-desc');
   const state = h('span', { class: 'key-state' });
   const replace = button(A.keyReplace);
   const clear = button(A.keyClear, { variant: 'subtle' });
@@ -235,7 +249,12 @@ function apiKeyRow(ctx: PageContext, provider: 'anthropic' | 'openai-compatible'
       });
     })();
   });
-  ctx.store.subscribe(() => {
+  ctx.store.subscribe((view) => {
+    const nextDesc = apiKeyDesc(provider, view.status.platform);
+    if (descEl && nextDesc !== desc) {
+      desc = nextDesc;
+      descEl.textContent = nextDesc;
+    }
     const has = stored();
     state.textContent = has ? A.keyStored : A.keyNotSet;
     state.classList.toggle('is-set', has);
@@ -264,9 +283,9 @@ export function aiPage(ctx: PageContext): PageView {
     'openai-compatible': [
       openaiUrl.parts.row,
       modelRow(ctx, 'openaiModel', A.openaiModelDesc, MAX_MODEL_LENGTH.openai, true).row,
-      apiKeyRow(ctx, 'openai-compatible', A.keyDescOpenai).row,
+      apiKeyRow(ctx, 'openai-compatible').row,
     ],
-    anthropic: [modelRow(ctx, 'anthropicModel', A.anthropicModelDesc, MAX_MODEL_LENGTH.anthropic, false).row, apiKeyRow(ctx, 'anthropic', A.keyDescAnthropic).row],
+    anthropic: [modelRow(ctx, 'anthropicModel', A.anthropicModelDesc, MAX_MODEL_LENGTH.anthropic, false).row, apiKeyRow(ctx, 'anthropic').row],
   } as const;
   const noConnection = h('div', { class: 'row row-empty' }, [h('p', { class: 'muted', text: A.noConnection })]);
   const connectionGroup = group(A.groupConnection, [noConnection, ...connection.ollama, ...connection['openai-compatible'], ...connection.anthropic]);

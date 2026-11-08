@@ -120,7 +120,8 @@ export function webPreviewModel(preview: ProfilePreview): WebPreviewModel {
   const notes: string[] = [];
   if (preview.format.newerMinor) notes.push(T.newerMinor);
   if (preview.skipped.length > 0) notes.push(T.skipped(preview.skipped.length));
-  if (preview.keptOff.length > 0) notes.push(T.keptOff);
+  const keptOff = T.keptOff(preview.keptOff);
+  if (keptOff !== null) notes.push(keptOff);
   if (preview.memoryNeedsCat) notes.push(T.memoryNeedsCat);
   notes.push(T.notChanged);
   const parts = WEB_PROFILE_PARTS.map((part): WebPartView => {

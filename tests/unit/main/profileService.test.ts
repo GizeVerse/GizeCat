@@ -15,11 +15,11 @@ const WALL = 1_800_000_000_000;
 const TOKEN = 'a'.repeat(32);
 const PATH = 'C:\\Users\\someone\\Documents\\SECRET-FOLDER\\gizecat-miso.json';
 
-function rig(opts: { fileText?: string; fileSize?: number; isFile?: boolean; savePath?: string | null; openPath?: string | null; adoptThrows?: boolean; patchFails?: boolean } = {}) {
+function rig(opts: { fileText?: string; fileSize?: number; isFile?: boolean; savePath?: string | null; openPath?: string | null; adoptThrows?: boolean; patchFails?: boolean; existing?: string[]; createError?: string } = {}) {
   let settings: Settings = defaultSettings();
   settings.general.catName = 'Pamuk';
   let cat: PersistedCat = newPersistedCat(mulberry32(1), WALL - 86_400_000);
-  const written: Array<{ path: string; text: string }> = [];
+  const written: Array<{ path: string; text: string; createOnly: boolean }> = [];
   const reads: string[] = [];
   const patches: SettingsPatch[] = [];
   const adopted: PersistedCat[] = [];
@@ -48,8 +48,12 @@ function rig(opts: { fileText?: string; fileSize?: number; isFile?: boolean; sav
       chooseOpenPath: () => Promise.resolve(opts.openPath === undefined ? PATH : opts.openPath),
     },
     fs: {
-      writeText: (p, text) => {
-        written.push({ path: p, text });
+      writeText: (p, text, o) => {
+        const createOnly = o?.createOnly === true;
+        // node:fs flag 'wx': an existing file is never replaced.
+        if (createOnly && opts.createError !== undefined) return Promise.reject(Object.assign(new Error(`${opts.createError}: open '${p}'`), { code: opts.createError }));
+        if (createOnly && (opts.existing ?? []).includes(p)) return Promise.reject(Object.assign(new Error(`EEXIST: file already exists, open '${p}'`), { code: 'EEXIST' }));
+        written.push({ path: p, text, createOnly });
         return Promise.resolve();
       },
       stat: () => Promise.resolve({ isFile: opts.isFile ?? true, size: opts.fileSize ?? (opts.fileText ?? '').length }),
@@ -157,6 +161,34 @@ describe('profile export', () => {
     expect(await svc.exportToFile({ includeMemory: false })).toEqual({ status: 'failed' });
     expect(JSON.stringify(log.entries)).toContain('EACCES');
     expect(JSON.stringify(log.entries)).not.toContain('SECRET-FOLDER');
+  });
+
+  it('the path the dialog returned is written as is (its overwrite prompt covered it)', async () => {
+    const r = rig();
+    await r.service.exportToFile({ includeMemory: false });
+    expect(r.written.map((w) => [w.path, w.createOnly])).toEqual([[PATH, false]]);
+  });
+
+  it('a name without extension gets .json, but only as a new file (SEC-3)', async () => {
+    const r = rig({ savePath: '/home/u/mycat' });
+    expect(await r.service.exportToFile({ includeMemory: false })).toEqual({ status: 'saved', fileName: 'mycat.json' });
+    expect(r.written.map((w) => [w.path, w.createOnly])).toEqual([['/home/u/mycat.json', true]]);
+  });
+
+  it('never replaces an existing <name>.json the user did not confirm: the exact chosen path is written (SEC-3)', async () => {
+    const r = rig({ savePath: '/home/u/mycat', existing: ['/home/u/mycat.json'] });
+    expect(await r.service.exportToFile({ includeMemory: false })).toEqual({ status: 'saved', fileName: 'mycat' });
+    expect(r.written.map((w) => w.path)).toEqual(['/home/u/mycat']);
+    expect(r.written.some((w) => w.path === '/home/u/mycat.json')).toBe(false);
+    expect(parseProfile(r.written[0]!.text).ok).toBe(true);
+    expect(JSON.stringify(r.log.entries)).not.toContain('/home/u');
+  });
+
+  it('any other failure creating <name>.json writes nothing else and reports failed', async () => {
+    const r = rig({ savePath: '/home/u/mycat', createError: 'EACCES' });
+    expect(await r.service.exportToFile({ includeMemory: false })).toEqual({ status: 'failed' });
+    expect(r.written).toHaveLength(0);
+    expect(JSON.stringify(r.log.entries)).not.toContain('/home/u');
   });
 
   it('adds the .json extension when the chosen name has none (Linux dialogs do not)', () => {

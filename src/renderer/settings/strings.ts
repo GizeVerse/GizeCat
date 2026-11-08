@@ -11,15 +11,34 @@ import type { AppStatus, ProfileApplyFailureReason } from '../../shared/ipc';
 import type { PerceptionMode, VisualEventKind } from '../../shared/perception';
 import { CAPABILITY_LABELS } from '../../shared/platform';
 import type { ProfilePart, ProfileRejectReason } from '../../shared/profileTransfer';
-import type { AiProviderId, LivelyBehavior, Settings, ToggleableBehavior } from '../../shared/settings';
+import type { AiProviderId, BehaviorId, LivelyBehavior, Settings, ToggleableBehavior } from '../../shared/settings';
 import type { ActivityPresetId } from '../../shared/settingsPresets';
 import type { DecisionDiagnostics, DecisionTarget, NavRejectReason, ProviderDiagnostics, ProviderSkipReason, TargetAvailability } from '../../shared/surfaceDiagnostics';
 import type { SupportSurfaceKind, SurfaceKind } from '../../shared/surfaces';
 import type { PageId } from './catalog';
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+/** "A", "A and B", "A, B and C". */
+const listText = (items: readonly string[]): string => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.slice(-1).join('')}`);
+/** The tab-strip opt-outs an import keeps off (IMPORT_NEVER_ENABLES in shared/profileTransfer.ts), in sentence order. */
+const KEPT_OFF_TABS: ReadonlyArray<readonly [BehaviorId, string]> = [
+  ['tabStrips', 'browser'],
+  ['explorerTabs', 'File Explorer'],
+  ['terminalTabs', 'terminal'],
+];
 const PRODUCT = BRAND.product;
 const INSTALLED = BRAND.installedName;
+
+/**
+ * Which wording a platform-specific string uses (1.4.0): 'windows' on Windows and without a platform
+ * report (the pre-1.4.0 text, unchanged), 'mac' on macOS, 'elsewhere' on any other platform. The keys
+ * follow the same split: `x` (Windows), `xMac`, `xElsewhere`.
+ */
+export type PlatformWording = 'windows' | 'mac' | 'elsewhere';
+export function platformWording(platform: Pick<NonNullable<AppStatus['platform']>, 'id'> | undefined | null): PlatformWording {
+  if (!platform || platform.id === 'win32') return 'windows';
+  return platform.id === 'darwin' ? 'mac' : 'elsewhere';
+}
 
 export const S = {
   app: {
@@ -242,6 +261,13 @@ export const S = {
       'Soft, synthesized meows, chirps, purrs and the odd hiss, made on this PC (no recordings, never the microphone). At most one every 1.5 seconds, none while an app is full screen or the cat is hidden or asleep (a purr excepted). Windows’ volume and mute apply.',
     volumeTitle: 'Volume',
     volumeDesc: 'How loud the cat is, on top of the Windows volume. 0: silent.',
+    /** 1.4.0: the two descriptions above on macOS and elsewhere (platformWording). */
+    soundDescMac:
+      'Soft, synthesized meows, chirps, purrs and the odd hiss, made on this Mac (no recordings, never the microphone). At most one every 1.5 seconds, none while an app is full screen or the cat is hidden or asleep (a purr excepted). The macOS volume and mute apply.',
+    soundDescElsewhere:
+      'Soft, synthesized meows, chirps, purrs and the odd hiss, made on this computer (no recordings, never the microphone). At most one every 1.5 seconds, none while an app is full screen or the cat is hidden or asleep (a purr excepted). The system volume and mute apply.',
+    volumeDescMac: 'How loud the cat is, on top of the macOS volume. 0: silent.',
+    volumeDescElsewhere: 'How loud the cat is, on top of the system volume. 0: silent.',
     volumeNeedsSound: 'Turn on Cat sounds to hear it.',
     skins: {
       ginger: 'Ginger',
@@ -529,6 +555,11 @@ export const S = {
     keyTitle: 'API key',
     keyDescAnthropic: 'Stored encrypted by Windows on this PC. It is never shown again.',
     keyDescOpenai: 'Only if your server requires one. Stored encrypted by Windows on this PC.',
+    /** 1.4.0: the same on macOS and elsewhere, in the terms of src/main/store/secretStore.ts (secureStorageName). */
+    keyDescAnthropicMac: 'Stored encrypted with the macOS Keychain on this Mac. It is never shown again.',
+    keyDescOpenaiMac: 'Only if your server requires one. Stored encrypted with the macOS Keychain on this Mac.',
+    keyDescAnthropicElsewhere: 'Stored encrypted with the system’s secure storage on this computer. It is never shown again.',
+    keyDescOpenaiElsewhere: 'Only if your server requires one. Stored encrypted with the system’s secure storage on this computer.',
     keyStored: 'Key stored ✓',
     keyNotSet: 'Not set',
     keyReplace: 'Replace',
@@ -716,7 +747,11 @@ export const S = {
     partMissing: 'Not in this file',
     memoryNeedsCat: 'What it has learned can only be loaded together with the cat itself.',
     skipped: (n: number) => `${plural(n, 'value was', 'values were')} not recognised and stay as they are here.`,
-    keptOff: 'Walking on browser, File Explorer and terminal tabs stays off, because it is off on this device.',
+    /** Names only the opt-outs the import really kept off (the preview's keptOff); null when none is one of them. */
+    keptOff: (ids: readonly BehaviorId[]): string | null => {
+      const names = KEPT_OFF_TABS.filter(([id]) => ids.includes(id)).map(([, name]) => name);
+      return names.length === 0 ? null : `Walking on ${listText(names)} tabs stays off, because it is off on this device.`;
+    },
     notChanged: 'Never changed by a file: screen analysis and AI, API keys, startup, shortcuts, click-through, hiding from screenshots, multiple monitors and diagnostics.',
     detailsTitle: 'What changes',
     noChanges: 'Nothing in this file differs from what is here now.',
@@ -829,6 +864,8 @@ export const S = {
     dataFolder: 'Data folder',
     groupVersions: 'Versions',
     versions: { app: PRODUCT, electron: 'Electron', chrome: 'Chromium', node: 'Node.js', os: 'Windows' },
+    /** 1.4.0: the OS row's name off Windows (its value is os.type() and os.release(), e.g. the Darwin version on a Mac). */
+    versionsOsElsewhere: 'Operating system',
     // GizeVerse (ADR 0004 §2.2): this platform and what is unavailable here, as main detected it.
     platform: {
       group: 'Platform',
@@ -1063,6 +1100,9 @@ export const S = {
       'Images are never saved, and are only ever sent to the AI server or provider you set up for AI vision.',
       'API keys are encrypted by Windows and never shown or logged.',
     ],
+    /** 1.4.0: the last promise (API keys) on macOS and elsewhere, in secretStore.ts's terms. */
+    promiseKeysMac: 'API keys are encrypted with the macOS Keychain and never shown or logged.',
+    promiseKeysElsewhere: 'API keys are encrypted with the system’s secure storage and never shown or logged.',
     groupThirdParty: 'Third-party software',
     thirdParty:
       `${PRODUCT} is built with Electron (Chromium and Node.js), koffi and zod. Their licence texts are installed next to the app in the installation folder.`,
@@ -1070,6 +1110,11 @@ export const S = {
     // Names the app as Windows lists it (BRAND.installedName), which is what the user looks for there.
     uninstall:
       `Open Windows Settings › Apps › Installed apps, find ${INSTALLED} and choose Uninstall. Your cat’s memories and settings stay in the data folder below; delete it if you want them gone too.`,
+    /** 1.4.0: on macOS Finder shows the app under the installed name too (docs/platforms/macos.md, Uninstall). */
+    uninstallMac:
+      `Quit ${PRODUCT}, then drag ${INSTALLED} from Applications to the Trash. Your cat’s memories and settings stay in the data folder below; delete it if you want them gone too.`,
+    uninstallElsewhere:
+      `Quit ${PRODUCT}, then remove the app the way you installed it. Your cat’s memories and settings stay in the data folder below; delete it if you want them gone too.`,
   },
 } as const;
 
