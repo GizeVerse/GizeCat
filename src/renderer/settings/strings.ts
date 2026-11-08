@@ -40,6 +40,18 @@ export function platformWording(platform: Pick<NonNullable<AppStatus['platform']
   return platform.id === 'darwin' ? 'mac' : 'elsewhere';
 }
 
+const DEVICE_NOUN = { mac: 'Mac', elsewhere: 'computer' } as const;
+
+/**
+ * A sentence written for Windows, in this platform's words (1.4.0). "this PC", "the PC" and "your PC"
+ * are the only difference in the privacy and AI sentences, so they are swapped here instead of tripled.
+ * Also covers what main sends (AI labels and block reasons from src/core/perception). On Windows the
+ * sentence comes back unchanged.
+ */
+export function deviceWords(text: string, wording: PlatformWording): string {
+  return wording === 'windows' ? text : text.replace(/\b(this|the|your) PC\b/g, `$1 ${DEVICE_NOUN[wording]}`);
+}
+
 export const S = {
   app: {
     title: `${PRODUCT} Settings`,
@@ -48,6 +60,8 @@ export const S = {
     navLabel: 'Settings sections',
     loading: 'Loading settings…',
     bridgeMissing: `The settings window could not connect to ${PRODUCT}. Close it and open Settings again from the tray icon.`,
+    /** 1.4.0: main's platform report is not there yet, so main.ts decides by the user agent. */
+    bridgeMissingMac: `The settings window could not connect to ${PRODUCT}. Close it and open Settings again from the menu-bar icon.`,
     loadFailed: (detail: string) => `Settings could not be loaded: ${detail}`,
     retry: 'Try again',
   },
@@ -97,7 +111,16 @@ export const S = {
     shortcutDuplicateModifier: (mod: string) => `${mod} appears twice.`,
     shortcutNeedsModifier: 'Add Control, Alt or Super so the shortcut does not block normal typing.',
     shortcutReserved: 'Windows reserves this combination. Choose another one.',
+    /** 1.4.0: macOS names the keys Option and Command (stored as Alt and Super); elsewhere the Windows hint still fits. */
+    shortcutHintMac: 'Combine Control, Option, Shift or Command with one key, for example Control+Option+Shift+C.',
+    shortcutEmptyMac: 'Enter a shortcut, for example Control+Option+Shift+C.',
+    shortcutNeedsModifierMac: 'Add Control, Option or Command so the shortcut does not block normal typing.',
+    /** 1.4.0: off Windows; main refuses the same combinations on every platform (src/shared/shortcut.ts). */
+    shortcutUnknownPartElsewhere: (part: string) => `"${part}" is not a key that shortcuts can use.`,
+    shortcutReservedElsewhere: 'This combination is reserved. Choose another one.',
     processHint: 'Program file name, for example keepass.exe. ".exe" is added if missing.',
+    /** 1.4.0: where main reports screen analysis unavailable; the list holds Windows program names. */
+    processHintUnavailable: 'Screen analysis is not available on this platform, so this list has no effect here.',
     processInvalid: 'Use only the file name (no folders or special characters such as \\ / : * ? " < > |).',
     patternHint: 'Any window whose title contains this text (not case-sensitive) is never analysed.',
     patternTooShort: 'Use at least 2 characters so the pattern does not match everything.',
@@ -145,6 +168,9 @@ export const S = {
     titleBack: 'Welcome back',
     intro: (name: string) =>
       `${name} lives on your desktop. It walks along the taskbar, naps on top of windows, chases your pointer when it feels playful and remembers how you treat it. It never gets in the way: everywhere except the cat itself, your clicks go straight through to your apps.`,
+    /** 1.4.0: macOS and the other platforms keep to the floor (no window or taskbar surfaces there). */
+    introFloorOnly: (name: string) =>
+      `${name} lives on your desktop. It walks along the bottom of your screen, naps, chases your pointer when it feels playful and remembers how you treat it. It never gets in the way: everywhere except the cat itself, your clicks go straight through to your apps.`,
     controlsTitle: 'How to play',
     controls: [
       { title: 'Carry', text: 'Press and hold on the cat, then move the mouse. Let go to put it down, or flick to toss it (if throwing is on).' },
@@ -153,6 +179,9 @@ export const S = {
       { title: 'Right-click menu', text: 'Right-click the cat for quick actions such as Pause, Hide and Settings.' },
       { title: 'Tray icon', text: `The ${PRODUCT} icon in the notification area shows whether screen analysis is on and opens this window.` },
     ],
+    /** 1.4.0: the last "How to play" entry off Windows (its menu: src/main/lifecycle/menuModel.ts). */
+    controlTrayMac: { title: 'Menu-bar icon', text: `The ${PRODUCT} icon in the menu bar opens a menu with Hide, Pause and Settings.` },
+    controlTrayElsewhere: { title: 'Tray icon', text: `The ${PRODUCT} icon in the system tray opens a menu with Hide, Pause and Settings.` },
     shortcutTitle: 'Hide or show',
     shortcutText: (shortcut: string) => `Press ${shortcut} at any time to hide or show the cat.`,
     shortcutDisabled: 'The hide/show keyboard shortcut is turned off. You can turn it on under General.',
@@ -218,6 +247,8 @@ export const S = {
     launchNoticeDismiss: 'Got it',
     startupStateTitle: `When ${PRODUCT} starts`,
     startupStateDesc: 'How the cat appears each time the app starts, also when it starts with Windows.',
+    startupStateDescMac: 'How the cat appears each time the app starts, also when it opens at login.',
+    startupStateDescElsewhere: 'How the cat appears each time the app starts, also when it starts at sign-in.',
     startupStates: { visible: 'Visible', hidden: 'Hidden', paused: 'Paused', remember: 'As I left it' } satisfies Record<
       Settings['general']['startupState'],
       string
@@ -227,6 +258,7 @@ export const S = {
     shortcutTitle: 'Hide/show shortcut',
     shortcutDesc: 'Hides or shows the cat from anywhere.',
     shortcutPlaceholder: 'Control+Alt+Shift+C',
+    shortcutPlaceholderMac: 'Control+Option+Shift+C',
     shortcutRegistered: 'Registered and ready.',
     shortcutNotRegistered: 'Could not register this shortcut. Another app may already use it. Try a different combination.',
     shortcutOff: 'Shortcuts are turned off.',
@@ -254,6 +286,8 @@ export const S = {
     emotesDesc: 'Little hearts, Zzz and other bubbles above its head.',
     captureTitle: 'Hide from screenshots and screen sharing',
     captureDesc: 'Keeps the cat out of screenshots, recordings and shared screens.',
+    /** 1.4.0: macOS (NSWindowSharingNone); newer capture tools may ignore it (docs/platforms/macos.md). */
+    captureDescMac: 'Asks macOS to keep the cat out of screenshots, recordings and shared screens. Some newer capture tools may still show it.',
     // v1.2 (ADR 0003 §10)
     groupSound: 'Sound',
     soundTitle: 'Cat sounds',
@@ -308,6 +342,8 @@ export const S = {
     heightsDesc: 'How high it climbs and how far it dares to jump down. 0: keeps low and climbs down carefully.',
     mischiefTitle: 'Mischief',
     mischiefDesc: 'How cheeky it is: an ambush, a swat at a passing pointer, a dash along the taskbar. Never while you type or click. 0: never cheeky.',
+    /** 1.4.0: the same off Windows, where there is no taskbar to dash along. */
+    mischiefDescFloorOnly: 'How cheeky it is: an ambush, a swat at a passing pointer, a dash across the screen. Never while you type or click. 0: never cheeky.',
     staysTitle: 'Stays on windows and tabs',
     staysDesc: 'How long it stays up on a window top or tab strip before it comes down. 0: short visits.',
     reactionsTitle: 'Reactions to rough handling',
@@ -422,6 +458,7 @@ export const S = {
     revoked: 'Screen analysis is off and your consent was withdrawn.',
     pauseTitle: 'Pause screen analysis',
     pauseDesc: 'Stops all capture immediately. Also available from the tray icon.',
+    pauseDescMac: 'Stops all capture immediately. Also available from the menu-bar icon.',
     groupHow: 'What happens when it is on',
     how: [
       { title: 'What is captured', text: 'Three small, downscaled images of the area you choose below, about 0.15 s apart (to tell movement from stillness). Private windows are blacked out in memory before anything else happens. Never sound, never your keystrokes, never the clipboard.' },
@@ -448,6 +485,7 @@ export const S = {
     processesTitle: 'Apps',
     processesDesc: 'Password managers and sign-in windows are listed by default.',
     processesPlaceholder: 'app.exe',
+    processesPlaceholderUnavailable: 'program name',
     patternsTitle: 'Window titles containing',
     patternsDesc: 'Banking, payment, sign-in and private browsing are listed by default.',
     patternsPlaceholder: 'text in the title',

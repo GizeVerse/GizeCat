@@ -1,4 +1,4 @@
-import type { SettingsAction, SettingsViewState } from '../../../shared/ipc';
+import type { AppStatus, SettingsAction, SettingsViewState } from '../../../shared/ipc';
 import type { PerceptionMode, VisualFeatures } from '../../../shared/perception';
 import type { Settings } from '../../../shared/settings';
 import { MAX_EXCLUDED_PROCESSES, MAX_EXCLUDED_TITLE_PATTERNS } from '../catalog';
@@ -20,12 +20,12 @@ import {
   type RadioItem,
 } from '../controls';
 import { openDialog } from '../dialog';
-import { GLYPH, h, icon, type GlyphName } from '../dom';
+import { glyphText, h, icon, type GlyphName } from '../dom';
 import { NUMERIC_FIELDS, intervalStops } from '../fields';
 import { formatPercent, formatRelativeTime } from '../format';
 import { bannerModel, consentModel, pauseModel } from '../privacyView';
 import { errorText } from '../store';
-import { S } from '../strings';
+import { deviceWords, platformWording, S, type PlatformWording } from '../strings';
 import { validateProcessName, validateTitlePattern } from '../validate';
 
 const P = S.privacy;
@@ -33,6 +33,18 @@ type VisualMode = Settings['perception']['visualMode'];
 
 const BANNER_ICON: Record<PerceptionMode, GlyphName> = { off: 'shield', 'local-stats': 'lock', 'ai-local': 'robot', 'ai-cloud': 'cloud' };
 const HOW_ICONS: readonly GlyphName[] = ['view', 'history', 'monitor', 'delete', 'hide'];
+
+/**
+ * The "Apps" row's hint and placeholder (1.4.0). The list holds Windows program names, so where main
+ * reports screen analysis unavailable it says that the list does nothing. Windows (and no platform
+ * report) keeps its text, also when analysis is unavailable there.
+ */
+export function processRowText(status: Pick<AppStatus, 'platform'>): { hint: string; placeholder: string } {
+  const platform = status.platform;
+  const cap = platform?.capabilities.perception;
+  if (!platform || platform.id === 'win32' || !cap || cap.available) return { hint: S.validation.processHint, placeholder: P.processesPlaceholder };
+  return { hint: S.validation.processHintUnavailable, placeholder: P.processesPlaceholderUnavailable };
+}
 
 function banner(ctx: PageContext): HTMLElement {
   const glyph = icon('shield', 'banner-icon');
@@ -43,7 +55,7 @@ function banner(ctx: PageContext): HTMLElement {
   ctx.store.subscribe((view) => {
     const m = bannerModel(view, ctx.now());
     el.className = `banner mode-${m.mode}${m.paused ? ' is-paused' : ''}`;
-    glyph.textContent = GLYPH[m.paused ? 'pause' : BANNER_ICON[m.mode]];
+    glyph.textContent = glyphText(m.paused ? 'pause' : BANNER_ICON[m.mode]);
     title.textContent = m.title;
     text.textContent = m.text;
     details.replaceChildren(...m.details.map((d) => h('li', { text: d })));
@@ -51,7 +63,7 @@ function banner(ctx: PageContext): HTMLElement {
   return el;
 }
 
-function modeChooser(ctx: PageContext): HTMLElement[] {
+function modeChooser(ctx: PageContext, wording: PlatformWording): HTMLElement[] {
   const parts = row({ title: P.modeLabel, stacked: true, hideTitle: true });
   const container = h('div', { class: 'option-cards', 'aria-labelledby': parts.titleId });
   const modes: readonly VisualMode[] = ['off', 'local-stats', 'ai'];
@@ -59,7 +71,7 @@ function modeChooser(ctx: PageContext): HTMLElement[] {
     value: mode,
     el: h('button', { type: 'button', class: `option-card option-${mode}` }, [
       h('span', { class: 'radio-dot', 'aria-hidden': 'true' }),
-      h('span', { class: 'option-text' }, [h('span', { class: 'option-title', text: P.modes[mode].title }), h('span', { class: 'option-desc', text: P.modes[mode].desc })]),
+      h('span', { class: 'option-text' }, [h('span', { class: 'option-title', text: P.modes[mode].title }), h('span', { class: 'option-desc', text: deviceWords(P.modes[mode].desc, wording) })]),
     ]),
   }));
   container.append(...items.map((i) => i.el));
@@ -104,7 +116,7 @@ function modeChooser(ctx: PageContext): HTMLElement[] {
       await act('revokeConsent', P.revoked);
       return;
     }
-    const model = consentModel(mode, settings);
+    const model = consentModel(mode, settings, wording);
     const body = [
       h('p', { text: model.intro }),
       h('ul', { class: 'bullets' }, model.points.map((p) => h('li', { text: p }))),
@@ -129,7 +141,7 @@ function modeChooser(ctx: PageContext): HTMLElement[] {
   });
 
   // Privacy pause goes through actions so main can update the tray at the same time.
-  const pause = row({ title: P.pauseTitle, desc: P.pauseDesc, icon: 'pause' });
+  const pause = row({ title: P.pauseTitle, desc: wording === 'mac' ? P.pauseDescMac : P.pauseDesc, icon: 'pause' });
   const sw = toggleSwitch(pause.titleId, pause.describedBy);
   pause.control.append(sw.root);
   let pauseBusy = false;
@@ -156,7 +168,7 @@ function modeChooser(ctx: PageContext): HTMLElement[] {
   const syncPause = (view: SettingsViewState): void => {
     // The switch is the user's privacy pause only; a hidden cat or a locked PC is reported beside it.
     const m = pauseModel(view);
-    setNote(pause.note, m.suspended ? P.suspended[m.suspended] : null, 'info');
+    setNote(pause.note, m.suspended ? deviceWords(P.suspended[m.suspended], wording) : null, 'info');
     if (pauseBusy) return;
     sw.input.checked = m.userPaused;
     sw.refresh();
@@ -185,7 +197,7 @@ function featureRows(f: VisualFeatures): Array<readonly [string, string]> {
   ];
 }
 
-function previewRow(ctx: PageContext): HTMLElement {
+function previewRow(ctx: PageContext, wording: PlatformWording): HTMLElement {
   const parts = row({ title: P.previewTitle, desc: P.previewDesc, icon: 'view' });
   const btn = button(P.previewButton, { variant: 'accent' });
   parts.control.append(btn);
@@ -205,7 +217,7 @@ function previewRow(ctx: PageContext): HTMLElement {
         if (!res.ok) {
           result.hidden = true;
           result.replaceChildren();
-          setNote(parts.error, res.blockedReason ? P.previewBlocked(res.blockedReason) : P.previewFailed, 'warn');
+          setNote(parts.error, res.blockedReason ? deviceWords(P.previewBlocked(res.blockedReason), wording) : P.previewFailed, 'warn');
           return;
         }
         const img =
@@ -237,11 +249,12 @@ function previewRow(ctx: PageContext): HTMLElement {
 }
 
 export function privacyPage(ctx: PageContext): PageView {
+  const wording = platformWording(ctx.store.view.status.platform);
   const how = h(
     'ul',
     { class: 'tips tips-compact' },
     P.how.map((item, i) =>
-      h('li', { class: 'tip' }, [icon(HOW_ICONS[i] ?? 'info', 'tip-icon'), h('div', {}, [h('div', { class: 'tip-title', text: item.title }), h('div', { class: 'tip-text', text: item.text })])]),
+      h('li', { class: 'tip' }, [icon(HOW_ICONS[i] ?? 'info', 'tip-icon'), h('div', {}, [h('div', { class: 'tip-title', text: item.title }), h('div', { class: 'tip-text', text: deviceWords(item.text, wording) })])]),
     ),
   );
   const region = segmentedRow(
@@ -253,12 +266,13 @@ export function privacyPage(ctx: PageContext): PageView {
   );
   const field = NUMERIC_FIELDS.perceptionInterval;
   const interval = stopsSliderRow(ctx, field, intervalStops(field.min, field.max), { title: P.intervalTitle, desc: P.intervalDesc, icon: 'history' });
+  const processText = processRowText(ctx.store.view.status);
   const processes = listEditorRow(ctx, 'perception', 'excludedProcesses', {
     title: P.processesTitle,
     desc: P.processesDesc,
     icon: 'lock',
-    placeholder: P.processesPlaceholder,
-    hint: S.validation.processHint,
+    placeholder: processText.placeholder,
+    hint: processText.hint,
     validate: (text, existing) => validateProcessName(text, existing, MAX_EXCLUDED_PROCESSES),
     countLabel: P.entries,
   });
@@ -274,11 +288,11 @@ export function privacyPage(ctx: PageContext): PageView {
 
   const element = page(P.title, [
     banner(ctx),
-    group(P.groupMode, modeChooser(ctx), P.groupModeDesc),
+    group(P.groupMode, modeChooser(ctx, wording), P.groupModeDesc),
     group(P.groupHow, [how]),
     group(P.groupCapture, [region.parts.row, interval.parts.row]),
     group(P.groupExclusions, [processes.parts.row, patterns.parts.row], P.groupExclusionsDesc),
-    group(P.groupPreview, [previewRow(ctx)]),
+    group(P.groupPreview, [previewRow(ctx, wording)]),
   ]);
   return { id: 'privacy', title: P.title, element };
 }

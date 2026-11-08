@@ -4,8 +4,9 @@ import { MAX_CAT_NAME_LENGTH, MAX_SHORTCUT_LENGTH, STARTUP_STATES } from '../cat
 import type { PageContext, PageView } from '../context';
 import { button, group, page, row, runAction, segmentedRow, setButtonLabel, setNote, textRow, toggleRow, toggleSwitch, type NoteTone } from '../controls';
 import { h, icon } from '../dom';
+import { displayAccelerator } from '../format';
 import { errorText } from '../store';
-import { S } from '../strings';
+import { platformWording, S, type PlatformWording } from '../strings';
 import { validateCatName, validateShortcut } from '../validate';
 
 const G = S.general;
@@ -63,6 +64,19 @@ export function dockRowVisible(status: Pick<AppStatus, 'platform'>): boolean {
   return status.platform?.id === 'darwin';
 }
 
+/** The description of "When GizeCat starts" (1.4.0): Windows keeps its text; macOS says "at login". */
+export function startupStateDesc(wording: PlatformWording): string {
+  if (wording === 'mac') return G.startupStateDescMac;
+  return wording === 'elsewhere' ? G.startupStateDescElsewhere : G.startupStateDesc;
+}
+
+/** The shortcut row's hint and placeholder (1.4.0): macOS names Option and Command. */
+export function shortcutFieldText(wording: PlatformWording): { hint: string; placeholder: string } {
+  return wording === 'mac'
+    ? { hint: S.validation.shortcutHintMac, placeholder: G.shortcutPlaceholderMac }
+    : { hint: S.validation.shortcutHint, placeholder: G.shortcutPlaceholder };
+}
+
 /**
  * The simulation ignores a call while the cat is paused (main still reports success),
  * so the button is off then, as in the tray and the cat's menu, and says why. It is
@@ -75,6 +89,7 @@ export function callButtonState(status: Pick<AppStatus, 'visible' | 'paused'>): 
 }
 
 export function generalPage(ctx: PageContext): PageView {
+  const wording = platformWording(ctx.store.view.status.platform);
   const name = textRow(ctx, 'general', 'catName', {
     title: G.nameTitle,
     desc: G.nameDesc,
@@ -191,18 +206,19 @@ export function generalPage(ctx: PageContext): PageView {
     'general',
     'startupState',
     STARTUP_STATES.map((v) => ({ value: v, label: G.startupStates[v] })),
-    { title: G.startupStateTitle, desc: G.startupStateDesc, icon: 'play' },
+    { title: G.startupStateTitle, desc: startupStateDesc(wording), icon: 'play' },
   );
   const shortcuts = toggleRow(ctx, 'general', 'shortcutsEnabled', { title: G.shortcutsTitle, desc: G.shortcutsDesc, icon: 'keyboard' });
   const shortcut = textRow(ctx, 'general', 'toggleShortcut', {
     title: G.shortcutTitle,
     desc: G.shortcutDesc,
     icon: 'hide',
-    hint: S.validation.shortcutHint,
-    validate: validateShortcut,
+    hint: shortcutFieldText(wording).hint,
+    validate: (text) => validateShortcut(text, wording),
     toValue: (v) => v,
+    display: (stored) => displayAccelerator(stored, wording),
     maxLength: MAX_SHORTCUT_LENGTH,
-    placeholder: G.shortcutPlaceholder,
+    placeholder: shortcutFieldText(wording).placeholder,
   });
   const registration = h('div', { class: 'row-note', 'aria-live': 'polite', hidden: true });
   shortcut.parts.row.insertBefore(registration, shortcut.parts.note);

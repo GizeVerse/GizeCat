@@ -26,6 +26,8 @@ export type SurfaceVerdictCode = (typeof SURFACE_VERDICT_CODES)[number];
 export interface SurfaceVerdictInput {
   /** The window-surface observer (SurfaceStatus.windowSurfaces): without it only the floor and taskbars are known. */
   observers: SurfaceStatus['windowSurfaces'];
+  /** 1.4.0: this platform has no window tracking at all (every platform but Windows), so the cat keeps to the floor. */
+  floorOnly?: boolean;
   provider: Pick<ProviderDiagnostics, 'windowsConsidered' | 'skipped' | 'listed' | 'frontMaximized'>;
   nav: Pick<NavDiagnostics, 'accepted' | 'rejected' | 'reachable'>;
   decision: Pick<DecisionDiagnostics, 'support' | 'targets' | 'exploreUrge'>;
@@ -38,6 +40,8 @@ export interface SurfaceVerdict {
 
 /** The kinds that take the cat off the floor (taskbars sit on it). */
 const ELEVATED_KINDS = ['windowTop', 'windowSide', 'tabStrip'] as const satisfies readonly SurfaceKind[];
+
+export const FLOOR_ONLY_TEXT = 'The cat keeps to the floor here: this platform does not track other windows.';
 
 export const FRONT_MAXIMIZED_TEXT =
   'The window in front is maximized, so there is no window edge to climb. Restore it to a normal window and the cat can explore it.';
@@ -115,7 +119,7 @@ const REJECT_ORDER = Object.keys(REJECT_TEXT) as NavRejectReason[];
 
 export function surfaceVerdict(d: SurfaceVerdictInput): SurfaceVerdict {
   if (d.observers === 'unavailable') {
-    return { code: 'observersUnavailable', text: 'Window tracking is unavailable on this PC, so the cat only knows the floor and the taskbar.' };
+    return { code: 'observersUnavailable', text: d.floorOnly === true ? FLOOR_ONLY_TEXT : 'Window tracking is unavailable on this PC, so the cat only knows the floor and the taskbar.' };
   }
   const support = d.decision.support;
   if (support === 'windowTop' || support === 'windowSide' || support === 'tabStrip') {

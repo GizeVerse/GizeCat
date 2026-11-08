@@ -2,7 +2,7 @@
 // backends are refused on every Linux id, XWayland included; other platforms use safeStorage as is.
 import { describe, expect, it } from 'vitest';
 import { createPlatformServices, SECRET_BACKEND_REFUSED_REASON } from '../../../src/main/platform';
-import { guardedCipher, isLinuxPlatform, type SafeStorageLike } from '../../../src/main/platform/secrets';
+import { guardedCipher, isLinuxPlatform, keychainCheckDeferred, type SafeStorageLike } from '../../../src/main/platform/secrets';
 import type { PlatformProbe } from '../../../src/shared/platform';
 import { memoryLogger } from './helpers';
 
@@ -23,6 +23,20 @@ function storage(backend: string | null): SafeStorageLike & { encrypted: string[
 const screen = { getAllDisplays: () => [], getPrimaryDisplay: () => ({}) as never, getCursorScreenPoint: () => ({ x: 0, y: 0 }) };
 const services = (probe: Partial<PlatformProbe>) =>
   createPlatformServices({ os: 'linux', waylandDisplay: false, x11Display: true, ozonePlatform: null, ...probe }, screen);
+
+describe('keychainCheckDeferred (1.4.0, macOS: no Keychain access for a status report without a stored key)', () => {
+  it('defers only on macOS and only while no key is stored', () => {
+    expect(keychainCheckDeferred('darwin', false)).toBe(true);
+    expect(keychainCheckDeferred('darwin', true)).toBe(false);
+  });
+
+  it('never defers elsewhere, so Windows keeps asking as before', () => {
+    for (const id of ['win32', 'linux-x11', 'linux-xwayland', 'linux-wayland'] as const) {
+      expect(keychainCheckDeferred(id, false)).toBe(false);
+      expect(keychainCheckDeferred(id, true)).toBe(false);
+    }
+  });
+});
 
 describe('guardedCipher', () => {
   it('refuses basic_text on linux-x11, linux-xwayland and linux-wayland alike', () => {

@@ -395,6 +395,8 @@ export interface TextRowOptions<T> extends RowOptions {
   placeholder?: string;
   maxLength: number;
   hint?: string;
+  /** How a stored value is shown in the field (1.4.0: macOS key names); it must validate back to the same value. */
+  display?: (stored: string) => string;
   /** Called with every committed or synced value (for derived notes). */
   onValue?: (value: string) => void;
   spellcheck?: boolean;
@@ -419,9 +421,10 @@ export function textRow<Sec extends SectionKey, T>(ctx: PageContext, section: Se
   let invalid = false;
   const dirty = (): boolean => input.value !== synced;
   const binding = makeBinding(fieldId(section, key), parts, input, () => invalid || (document.activeElement === input && dirty()), (v) => {
-    synced = typeof v === 'string' ? v : '';
+    const stored = typeof v === 'string' ? v : '';
+    synced = opts.display ? opts.display(stored) : stored;
     input.value = synced;
-    opts.onValue?.(synced);
+    opts.onValue?.(stored);
   });
   const commit = (): void => {
     if (!dirty()) {
@@ -437,7 +440,7 @@ export function textRow<Sec extends SectionKey, T>(ctx: PageContext, section: Se
     }
     invalid = false;
     const value = opts.toValue(res.value);
-    input.value = value;
+    input.value = opts.display ? opts.display(value) : value;
     opts.onValue?.(value);
     ctx.store.set(section, key, value as Settings[Sec][StrKey<Sec>], { origin: binding });
   };

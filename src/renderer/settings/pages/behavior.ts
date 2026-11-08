@@ -1,6 +1,6 @@
 import type { AppStatus } from '../../../shared/ipc';
-import type { RuntimeCapability } from '../../../shared/platform';
-import type { ToggleableBehavior } from '../../../shared/settings';
+import type { CapabilityId, RuntimeCapability } from '../../../shared/platform';
+import type { LivelyBehavior, ToggleableBehavior } from '../../../shared/settings';
 import { BEHAVIOR_IDS, LIVELY_IDS, LIVELY_PARENT } from '../catalog';
 import type { PageContext, PageView } from '../context';
 import { group, page, radioGroup, row, segmentedRow, setNote, sliderRow, toggleRow, toggleSwitch, type RadioItem, type SliderHandle } from '../controls';
@@ -9,7 +9,7 @@ import { NUMERIC_FIELDS, type FieldId, type FieldKey, type NumericField, type Se
 import { companionsFor, fieldId, presetLeaves, setBehaviorEnabled, setExtraEnabled } from '../patch';
 import { intendedPresetValues, PRESET_CHOICES, presetSelection } from '../presetView';
 import type { FieldBinding } from '../store';
-import { S } from '../strings';
+import { platformWording, S } from '../strings';
 
 const B = S.behavior;
 const F = NUMERIC_FIELDS;
@@ -24,14 +24,20 @@ export interface SliderSpec {
   build(ctx: PageContext): SliderHandle;
 }
 
-function sliderSpec<Sec extends SectionKey>(field: NumericField<Sec>, title: string, desc: string, glyph: GlyphName): SliderSpec {
+function sliderSpec<Sec extends SectionKey>(field: NumericField<Sec>, title: string, desc: string, glyph: GlyphName, descFloorOnly?: string): SliderSpec {
   const key = field.key as FieldKey<Sec>;
   return {
     id: fieldId(field.section, key),
     title,
     desc,
     // A preset-governed value carries activityPreset 'custom'; main re-derives the real choice.
-    build: (ctx) => sliderRow(ctx, field, { title, desc, icon: glyph, with: companionsFor(field.section, key) }),
+    build: (ctx) =>
+      sliderRow(ctx, field, {
+        title,
+        desc: descFloorOnly !== undefined && platformWording(ctx.store.view.status.platform) !== 'windows' ? descFloorOnly : desc,
+        icon: glyph,
+        with: companionsFor(field.section, key),
+      }),
   };
 }
 
@@ -46,7 +52,7 @@ export const PERSONALITY_SLIDERS: readonly SliderSpec[] = [
 export const FINE_TUNE_SLIDERS: readonly SliderSpec[] = [
   sliderSpec(F.exploration, B.exploringTitle, B.exploringDesc, 'mapPin'),
   sliderSpec(F.heights, B.heightsTitle, B.heightsDesc, 'up'),
-  sliderSpec(F.mischief, B.mischiefTitle, B.mischiefDesc, 'sparkle'),
+  sliderSpec(F.mischief, B.mischiefTitle, B.mischiefDesc, 'sparkle', B.mischiefDescFloorOnly),
   sliderSpec(F.stayLength, B.staysTitle, B.staysDesc, 'clock'),
   sliderSpec(F.reactionIntensity, B.reactionsTitle, B.reactionsDesc, 'touch'),
 ];
@@ -58,6 +64,29 @@ export const PERSONALITY_FIELD_IDS: readonly FieldId[] = [
   ...FINE_TUNE_SLIDERS.map((s) => s.id),
   fieldId('behavior', 'disabledExtras'),
 ];
+
+/** Rows that name something only the Windows shell has (File Explorer, Windows Terminal, the taskbar, its browser tab strips). */
+const ROW_NEEDS: Readonly<Partial<Record<ToggleableBehavior | LivelyBehavior, CapabilityId>>> = {
+  taskbarPlay: 'taskbarSurfaces',
+  surfaceHops: 'windowSurfaces',
+  tabStrips: 'tabStrips',
+  tabReactions: 'tabStrips',
+  explorerTabs: 'tabStrips',
+  terminalTabs: 'tabStrips',
+};
+
+/**
+ * Whether a behaviour row is offered (1.4.0). Off Windows, a row that depends on something main
+ * reports unavailable is left out: it would have no effect and names things that platform does not
+ * have. On Windows (and without a platform report) every row stays, as before.
+ */
+export function behaviorRowOffered(id: ToggleableBehavior | LivelyBehavior, status: Pick<AppStatus, 'platform'>): boolean {
+  const platform = status.platform;
+  const needs = ROW_NEEDS[id];
+  if (!platform || platform.id === 'win32' || needs === undefined) return true;
+  const cap = platform.capabilities[needs] as RuntimeCapability | undefined;
+  return !cap || cap.available;
+}
 
 /** The v2 switch that must be on for a v1.2 behaviour to be offered, if any. */
 export function extraParentOff(extra: LivelyId, disabledBehaviors: readonly ToggleableBehavior[]): ToggleableBehavior | null {
@@ -167,7 +196,11 @@ function fineTune(ctx: PageContext): HTMLElement {
   const extras = h('div', { class: 'fine-tune-extras' }, [h('h3', { class: 'fine-tune-heading', text: B.groupExtras }), h('p', { class: 'group-desc', text: B.groupExtrasDesc })]);
   return h('details', { class: 'fine-tune' }, [
     summary,
-    h('div', { class: 'group-rows fine-tune-rows' }, [...FINE_TUNE_SLIDERS.map((s) => s.build(ctx).parts.row), extras, ...LIVELY_IDS.map((id) => extraToggle(ctx, id))]),
+    h('div', { class: 'group-rows fine-tune-rows' }, [
+      ...FINE_TUNE_SLIDERS.map((s) => s.build(ctx).parts.row),
+      extras,
+      ...LIVELY_IDS.filter((id) => behaviorRowOffered(id, ctx.store.view.status)).map((id) => extraToggle(ctx, id)),
+    ]),
   ]);
 }
 
@@ -219,7 +252,7 @@ export function behaviorPage(ctx: PageContext): PageView {
     group(B.groupPersonality, personality, B.groupPersonalityDesc),
     group(B.groupActivity, habits.map((s) => s.parts.row)),
     group(B.groupAwareness, awareness),
-    group(B.groupBehaviors, BEHAVIOR_IDS.map((b) => behaviorToggle(ctx, b)), B.groupBehaviorsDesc),
+    group(B.groupBehaviors, BEHAVIOR_IDS.filter((b) => behaviorRowOffered(b, ctx.store.view.status)).map((b) => behaviorToggle(ctx, b)), B.groupBehaviorsDesc),
     // Right under the window-climbing and tab-strip toggles, which end the list.
     h('p', { class: 'page-note' }, [icon('info'), h('span', { text: B.maximizedNote })]),
     h('p', { class: 'page-note' }, [icon('info'), h('span', { text: B.extrasPointer })]),

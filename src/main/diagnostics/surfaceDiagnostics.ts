@@ -50,6 +50,8 @@ export interface SurfaceDiagnosticsInputs {
   /** The cat's last sim output (anchor in px), null before the first tick. */
   output: Pick<SimOutput, 'x' | 'y' | 'displayId'> | null;
   observers: SurfaceStatus['windowSurfaces'];
+  /** 1.4.0: no window tracking exists on this platform (the verdict says so instead of naming the taskbar). */
+  floorOnly?: boolean;
   provider: () => ProviderDiagnostics;
   sim: () => { nav: NavDiagnostics; decision: DecisionDiagnostics };
 }
@@ -220,7 +222,7 @@ export function assembleSurfaceDiagnostics(i: SurfaceDiagnosticsInputs): Assembl
   const out = i.output;
   const displayId = out && typeof out.displayId === 'string' ? out.displayId.slice(0, MAX_CODE_LENGTH) : null;
   const observers = i.observers === 'tracked' ? 'tracked' : 'unavailable';
-  const verdict = surfaceVerdict({ observers, provider, nav: sim.nav, decision: sim.decision });
+  const verdict = surfaceVerdict({ observers, floorOnly: i.floorOnly === true, provider, nav: sim.nav, decision: sim.decision });
   const diagnostics: SurfaceDiagnostics = {
     at: num(i.at),
     coordinates: {

@@ -14,7 +14,9 @@ declare global {
 }
 
 function message(root: HTMLElement, text: string, retry?: () => void): void {
-  const children: HTMLElement[] = [icon(retry ? 'error' : 'info', 'boot-icon'), h('p', { class: 'boot-text', text })];
+  // 1.4.0: the Segoe icon fonts exist on Windows only, and main's platform report has not arrived yet.
+  const glyphs = navigator.userAgent.includes('Windows') ? [icon(retry ? 'error' : 'info', 'boot-icon')] : [];
+  const children: HTMLElement[] = [...glyphs, h('p', { class: 'boot-text', text })];
   if (retry) {
     const btn = button(S.app.retry, { variant: 'accent' });
     btn.addEventListener('click', retry);
@@ -27,7 +29,7 @@ async function boot(root: HTMLElement): Promise<void> {
   document.title = S.app.title;
   const api = window.desktopCatSettings;
   if (!api) {
-    message(root, S.app.bridgeMissing);
+    message(root, navigator.userAgent.includes('Macintosh') ? S.app.bridgeMissingMac : S.app.bridgeMissing);
     return;
   }
   root.setAttribute('aria-busy', 'true');

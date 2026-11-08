@@ -1,5 +1,5 @@
 // Pure value formatting for labels, tables and status lines.
-import { S } from './strings';
+import { S, type PlatformWording } from './strings';
 
 const F = S.format;
 
@@ -125,9 +125,29 @@ export function formatAge(bornAt: number, now: number): string {
   return days < 1 ? F.ageLessThanDay : F.days(days);
 }
 
-/** "Control+Alt+Shift+C" -> "Control + Alt + Shift + C" for reading. */
-export function formatShortcut(accelerator: string): string {
+const MAC_MODIFIER_NAMES: ReadonlyMap<string, string> = new Map([
+  ['Alt', 'Option'],
+  ['Super', 'Command'],
+  ['CommandOrControl', 'Command'],
+]);
+
+/** 1.4.0: what macOS calls a stored modifier (Alt is Option, Super is the Command key); other names unchanged. */
+export function macModifierName(modifier: string): string {
+  return MAC_MODIFIER_NAMES.get(modifier) ?? modifier;
+}
+
+/** 1.4.0: a stored accelerator as this platform names its keys; off macOS the stored text itself. */
+export function displayAccelerator(accelerator: string, wording: PlatformWording): string {
+  if (wording !== 'mac') return accelerator;
   return accelerator
+    .split('+')
+    .map((p) => macModifierName(p.trim()))
+    .join('+');
+}
+
+/** "Control+Alt+Shift+C" -> "Control + Alt + Shift + C" for reading ("Control + Option + Shift + C" on macOS). */
+export function formatShortcut(accelerator: string, wording: PlatformWording = 'windows'): string {
+  return displayAccelerator(accelerator, wording)
     .split('+')
     .map((p) => p.trim())
     .filter((p) => p.length > 0)

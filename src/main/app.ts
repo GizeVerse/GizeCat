@@ -40,7 +40,7 @@ import { createShortcutManager } from './lifecycle/shortcuts';
 import { createOverlayManager } from './overlay/overlayManager';
 import { WAYLAND_NO_OVERLAY_REASON } from './overlay/overlayProfile';
 import { createPlatformServices, probeFromProcess } from './platform';
-import { guardedCipher } from './platform/secrets';
+import { guardedCipher, keychainCheckDeferred } from './platform/secrets';
 import { darwinApplicationMenu } from './platform/appMenu';
 import { explicitOzone } from './platform/boot';
 import { applyDockPolicy } from './platform/dock';
@@ -142,6 +142,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     cipher: guardedCipher(platform, safeStorage, log),
     logger: logger.child('secrets'),
   });
+  const anyApiKeyStored = (): boolean => secrets.has('anthropic') || secrets.has('openai-compatible');
 
   // Platform services. The DPI awareness line win32 logs at boot also feeds the surface
   // diagnostics (dpiAwareness.ts): the facade does not expose the value itself.
@@ -214,6 +215,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       assembleSurfaceDiagnostics({
         at,
         dpiAwareness,
+        floorOnly: platform.id !== 'win32',
         world: display.world,
         output: host?.lastOutput ?? null,
         observers: surfaces.status.windowSurfaces,
@@ -403,7 +405,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
         surfaces: surfaces.debugInfo(),
         loginItem: loginItem.debugInfo(),
         win32Available: win32.available,
-        encryptionAvailable: secrets.encryptionAvailable,
+        encryptionAvailable: keychainCheckDeferred(platform.id, anyApiKeyStored()) ? null : secrets.encryptionAvailable,
         startup: { settings: boot.settingsLoadStatus, cat: { recovered: catLoad.recovered, source: catLoad.source } },
         logProblems: logger.problemCount,
       },
@@ -563,7 +565,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       windowAwareness: tracker.mode,
       taskbarsAvailable: s.taskbar === 'tracked',
       tabStripsAvailable: s.tabStrips !== 'unavailable',
-      secretStorageReason: secrets.unavailableReason,
+      secretStorageReason: keychainCheckDeferred(platform.id, anyApiKeyStored()) ? null : secrets.unavailableReason,
       trayCreated: tray !== null,
       shortcutRegistered: shortcuts.registered,
       loginItemWritable: platform.loginItemSupported && loginItem.status().writable,

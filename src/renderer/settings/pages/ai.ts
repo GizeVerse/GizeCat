@@ -27,12 +27,12 @@ import { providerTarget } from '../privacyView';
 import { fieldId } from '../patch';
 import type { FieldBinding } from '../store';
 import { errorText } from '../store';
-import { platformWording, S } from '../strings';
+import { deviceWords, platformWording, S, type PlatformWording } from '../strings';
 import { validateApiKey, validateBaseUrl, validateModel } from '../validate';
 
 const A = S.ai;
 
-function providerChooser(ctx: PageContext): HTMLElement {
+function providerChooser(ctx: PageContext, wording: PlatformWording): HTMLElement {
   const parts = row({ title: A.providerLabel, stacked: true, hideTitle: true });
   const container = h('div', { class: 'option-cards option-cards-2', 'aria-labelledby': parts.titleId });
   const items: Array<RadioItem<AiProviderId>> = PROVIDER_IDS.map((id) => {
@@ -43,7 +43,7 @@ function providerChooser(ctx: PageContext): HTMLElement {
         h('span', { class: 'radio-dot', 'aria-hidden': 'true' }),
         h('span', { class: 'option-text' }, [
           h('span', { class: 'option-title' }, [p.title, p.badge ? h('span', { class: `badge badge-${id}`, text: p.badge }) : null]),
-          h('span', { class: 'option-desc', text: p.desc }),
+          h('span', { class: 'option-desc', text: deviceWords(p.desc, wording) }),
         ]),
       ]),
     };
@@ -69,13 +69,13 @@ function providerChooser(ctx: PageContext): HTMLElement {
   return parts.row;
 }
 
-function urlRow(ctx: PageContext, key: 'ollamaBaseUrl' | 'openaiBaseUrl', desc: string): { parts: RowParts; refresh(): void } {
+function urlRow(ctx: PageContext, key: 'ollamaBaseUrl' | 'openaiBaseUrl', desc: string, wording: PlatformWording): { parts: RowParts; refresh(): void } {
   let loopback = true;
   let note: HTMLElement | null = null;
   const refresh = (): void => {
     if (!note) return;
     if (loopback) setNote(note, null);
-    else setNote(note, S.validation.urlRemote, ctx.store.intended('ai', 'allowCloud') ? 'info' : 'warn');
+    else setNote(note, deviceWords(S.validation.urlRemote, wording), ctx.store.intended('ai', 'allowCloud') ? 'info' : 'warn');
   };
   const r = textRow(ctx, 'ai', key, {
     title: A.baseUrlTitle,
@@ -97,7 +97,7 @@ function urlRow(ctx: PageContext, key: 'ollamaBaseUrl' | 'openaiBaseUrl', desc: 
   return { parts: r.parts, refresh };
 }
 
-function modelRow(ctx: PageContext, key: 'ollamaModel' | 'openaiModel' | 'anthropicModel', desc: string, max: number, listable: boolean): RowParts {
+function modelRow(ctx: PageContext, key: 'ollamaModel' | 'openaiModel' | 'anthropicModel', desc: string, max: number, listable: boolean, wording: PlatformWording): RowParts {
   const r = textRow(ctx, 'ai', key, {
     title: A.modelTitle,
     desc,
@@ -119,7 +119,7 @@ function modelRow(ctx: PageContext, key: 'ollamaModel' | 'openaiModel' | 'anthro
         await ctx.store.flush();
         const res = await ctx.api.listModels();
         if (!res.ok) {
-          setNote(r.parts.error, A.modelsFailed(res.error ?? S.errors.unexpected), 'error');
+          setNote(r.parts.error, deviceWords(A.modelsFailed(res.error ?? S.errors.unexpected), wording), 'error');
           return;
         }
         setNote(r.parts.error, null);
@@ -266,6 +266,7 @@ function apiKeyRow(ctx: PageContext, provider: 'anthropic' | 'openai-compatible'
 }
 
 export function aiPage(ctx: PageContext): PageView {
+  const wording = platformWording(ctx.store.view.status.platform);
   const visionStatus = h('span');
   const toPrivacy = button(A.openPrivacy, { variant: 'subtle', icon: 'chevronRight' });
   toPrivacy.addEventListener('click', () => ctx.navigate('privacy'));
@@ -274,23 +275,23 @@ export function aiPage(ctx: PageContext): PageView {
     h('div', {}, [h('p', { class: 'callout-text', text: A.optionalNote }), h('p', { class: 'callout-text callout-status' }, [visionStatus, toPrivacy])]),
   ]);
 
-  const providerRow = providerChooser(ctx);
+  const providerRow = providerChooser(ctx, wording);
   const providerNote = providerRow.querySelector<HTMLElement>('.row-note') ?? h('div', { class: 'row-note' });
-  const ollamaUrl = urlRow(ctx, 'ollamaBaseUrl', A.ollamaUrlDesc);
-  const openaiUrl = urlRow(ctx, 'openaiBaseUrl', A.openaiUrlDesc);
+  const ollamaUrl = urlRow(ctx, 'ollamaBaseUrl', A.ollamaUrlDesc, wording);
+  const openaiUrl = urlRow(ctx, 'openaiBaseUrl', A.openaiUrlDesc, wording);
   const connection = {
-    ollama: [ollamaUrl.parts.row, modelRow(ctx, 'ollamaModel', A.ollamaModelDesc, MAX_MODEL_LENGTH.ollama, true).row],
+    ollama: [ollamaUrl.parts.row, modelRow(ctx, 'ollamaModel', deviceWords(A.ollamaModelDesc, wording), MAX_MODEL_LENGTH.ollama, true, wording).row],
     'openai-compatible': [
       openaiUrl.parts.row,
-      modelRow(ctx, 'openaiModel', A.openaiModelDesc, MAX_MODEL_LENGTH.openai, true).row,
+      modelRow(ctx, 'openaiModel', A.openaiModelDesc, MAX_MODEL_LENGTH.openai, true, wording).row,
       apiKeyRow(ctx, 'openai-compatible').row,
     ],
-    anthropic: [modelRow(ctx, 'anthropicModel', A.anthropicModelDesc, MAX_MODEL_LENGTH.anthropic, false).row, apiKeyRow(ctx, 'anthropic').row],
+    anthropic: [modelRow(ctx, 'anthropicModel', A.anthropicModelDesc, MAX_MODEL_LENGTH.anthropic, false, wording).row, apiKeyRow(ctx, 'anthropic').row],
   } as const;
   const noConnection = h('div', { class: 'row row-empty' }, [h('p', { class: 'muted', text: A.noConnection })]);
   const connectionGroup = group(A.groupConnection, [noConnection, ...connection.ollama, ...connection['openai-compatible'], ...connection.anthropic]);
 
-  const allowCloud = toggleRow(ctx, 'ai', 'allowCloud', { title: A.allowCloudTitle, desc: A.allowCloudDesc, icon: 'cloud' });
+  const allowCloud = toggleRow(ctx, 'ai', 'allowCloud', { title: A.allowCloudTitle, desc: deviceWords(A.allowCloudDesc, wording), icon: 'cloud' });
 
   const F = NUMERIC_FIELDS;
   const limits = [
@@ -312,7 +313,7 @@ export function aiPage(ctx: PageContext): PageView {
       try {
         await ctx.store.flush();
         const res = await ctx.api.testAi();
-        setNote(testResult, [res.ok ? A.testOk : A.testFailed, res.message].filter((l) => l.length > 0).join(' '), res.ok ? 'ok' : 'error');
+        setNote(testResult, deviceWords([res.ok ? A.testOk : A.testFailed, res.message].filter((l) => l.length > 0).join(' '), wording), res.ok ? 'ok' : 'error');
         const entries: Array<readonly [string, string]> = [];
         if (res.latencyMs !== undefined) entries.push([A.testLatencyLabel, formatLatency(res.latencyMs)]);
         if (res.report) {
@@ -344,10 +345,10 @@ export function aiPage(ctx: PageContext): PageView {
     const cloud = ctx.store.intended('ai', 'allowCloud');
     const target = providerTarget({ ...view.settings, ai: { ...view.settings.ai, provider } });
     if (target.leavesDevice) {
-      setNote(providerNote, cloud ? A.sendsOffDevice(target.label) : A.needsAllowCloud(target.label), cloud ? 'warn' : 'info');
+      setNote(providerNote, deviceWords(cloud ? A.sendsOffDevice(target.label) : A.needsAllowCloud(target.label), wording), cloud ? 'warn' : 'info');
     } else if (target.destination === 'local') {
       // A server on this PC can still forward to cloud models main cannot recognise.
-      setNote(providerNote, A.localServer(target.host), 'info');
+      setNote(providerNote, deviceWords(A.localServer(target.host), wording), 'info');
     } else {
       setNote(providerNote, null);
     }

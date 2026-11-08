@@ -64,7 +64,7 @@ export function appearancePage(ctx: PageContext): PageView {
   const speed = sliderRow(ctx, NUMERIC_FIELDS.animationSpeed, { title: A.animTitle, desc: A.animDesc, icon: 'stopwatch' });
   const shadow = toggleRow(ctx, 'appearance', 'shadow', { title: A.shadowTitle, desc: A.shadowDesc, icon: 'layers' });
   const emotes = toggleRow(ctx, 'appearance', 'emotes', { title: A.emotesTitle, desc: A.emotesDesc, icon: 'heart' });
-  const capture = toggleRow(ctx, 'appearance', 'hideFromScreenCapture', { title: A.captureTitle, desc: A.captureDesc, icon: 'hide' });
+  const capture = toggleRow(ctx, 'appearance', 'hideFromScreenCapture', { title: A.captureTitle, desc: platformWording(ctx.store.view.status.platform) === 'mac' ? A.captureDescMac : A.captureDesc, icon: 'hide' });
   let soundText = soundDescriptions(ctx.store.view.status.platform);
   const sound = toggleRow(ctx, 'sound', 'enabled', { title: A.soundTitle, desc: soundText.sound, icon: 'volume' });
   const volume = sliderRow(ctx, NUMERIC_FIELDS.soundVolume, { title: A.volumeTitle, desc: soundText.volume, icon: 'volume' });

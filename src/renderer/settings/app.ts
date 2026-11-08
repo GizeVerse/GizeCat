@@ -3,7 +3,7 @@
 import type { SettingsApi, SettingsViewState } from '../../shared/ipc';
 import { isPageId, PAGE_IDS, type PageId } from './catalog';
 import type { PageContext, PageView } from './context';
-import { h, icon, type GlyphName } from './dom';
+import { h, icon, setTextGlyphs, type GlyphName } from './dom';
 import { aboutPage } from './pages/about';
 import { aiPage } from './pages/ai';
 import { appearancePage } from './pages/appearance';
@@ -16,7 +16,7 @@ import { privacyPage } from './pages/privacy';
 import { welcomePage } from './pages/welcome';
 import { brandMark } from './skins';
 import { SettingsStore, type Timers } from './store';
-import { S } from './strings';
+import { platformWording, S } from './strings';
 
 const NAV_ICONS: Record<PageId, GlyphName> = {
   welcome: 'home',
@@ -50,6 +50,7 @@ const browserTimers: Timers = {
 };
 
 export function mountApp(root: HTMLElement, api: SettingsApi, initial: SettingsViewState): () => void {
+  setTextGlyphs(platformWording(initial.status.platform) !== 'windows');
   const store = new SettingsStore(api, initial, browserTimers);
   let current: PageId | null = null;
   const pages = new Map<PageId, PageView>();

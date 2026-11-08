@@ -2,7 +2,8 @@
 // patch; these checks exist to give immediate, specific feedback.
 import { isLoopbackUrl } from '../../core/perception/endpoint';
 import { API_KEY_LENGTH, MAX_CAT_NAME_LENGTH, MAX_LIST_ENTRY_LENGTH, MAX_SHORTCUT_LENGTH, MAX_URL_LENGTH } from './catalog';
-import { S } from './strings';
+import { macModifierName } from './format';
+import { S, type PlatformWording } from './strings';
 
 const V = S.validation;
 
@@ -45,6 +46,15 @@ const MODIFIER_ALIASES: Readonly<Record<string, Modifier>> = {
   win: 'Super',
   windows: 'Super',
 };
+
+/**
+ * macOS only (1.4.0): the Command key under its own name. Stored as Super, which Electron maps to the
+ * Command key on macOS (shell/common/keyboard_util.cc) and which main's shortcut rules accept.
+ */
+const MAC_MODIFIER_ALIASES: ReadonlyMap<string, Modifier> = new Map<string, Modifier>([
+  ['command', 'Super'],
+  ['cmd', 'Super'],
+]);
 
 /** Modifiers that make a combination safe to grab globally (Shift alone is not). */
 const STRONG_MODIFIERS: ReadonlySet<Modifier> = new Set<Modifier>(['Control', 'CommandOrControl', 'Alt', 'AltGr', 'Super']);
@@ -92,35 +102,40 @@ function canonicalKey(part: string): string | null {
 
 const isHighFunctionKey = (key: string): boolean => /^F(1[3-9]|2[0-4])$/.test(key);
 
-/** Validates and normalises a shortcut such as "ctrl + alt + shift + c" -> "Control+Alt+Shift+C". */
-export function validateShortcut(text: string): Validation {
+/**
+ * Validates and normalises a shortcut such as "ctrl + alt + shift + c" -> "Control+Alt+Shift+C".
+ * `wording` changes only the messages and, on macOS, also accepts Command and Cmd.
+ */
+export function validateShortcut(text: string, wording: PlatformWording = 'windows'): Validation {
+  const mac = wording === 'mac';
+  const unknownPart = wording === 'windows' ? V.shortcutUnknownPart : V.shortcutUnknownPartElsewhere;
   const raw = stripControl(text).trim();
-  if (raw.length === 0) return fail(V.shortcutEmpty);
+  if (raw.length === 0) return fail(mac ? V.shortcutEmptyMac : V.shortcutEmpty);
   if (raw.length > MAX_SHORTCUT_LENGTH) return fail(V.tooLong(MAX_SHORTCUT_LENGTH));
   const parts = raw.split('+').map((p) => p.trim());
   if (parts.length > 0 && parts[parts.length - 1] === '') return fail(V.shortcutNoKey);
   const modifiers: Modifier[] = [];
   let key: string | null = null;
   for (const part of parts) {
-    if (part === '') return fail(V.shortcutUnknownPart('+'));
-    const mod = MODIFIER_ALIASES[part.toLowerCase()];
+    if (part === '') return fail(unknownPart('+'));
+    const mod = MODIFIER_ALIASES[part.toLowerCase()] ?? (mac ? MAC_MODIFIER_ALIASES.get(part.toLowerCase()) : undefined);
     if (mod) {
       const family = (m: Modifier): Modifier => (m === 'CommandOrControl' ? 'Control' : m);
-      if (modifiers.some((m) => family(m) === family(mod))) return fail(V.shortcutDuplicateModifier(mod));
+      if (modifiers.some((m) => family(m) === family(mod))) return fail(V.shortcutDuplicateModifier(mac ? macModifierName(mod) : mod));
       modifiers.push(mod);
       continue;
     }
     const k = canonicalKey(part);
-    if (k === null) return fail(V.shortcutUnknownPart(part));
+    if (k === null) return fail(unknownPart(part));
     if (key !== null) return fail(V.shortcutTwoKeys);
     key = k;
   }
   if (key === null) return fail(V.shortcutNoKey);
-  if (!modifiers.some((m) => STRONG_MODIFIERS.has(m)) && !isHighFunctionKey(key)) return fail(V.shortcutNeedsModifier);
+  if (!modifiers.some((m) => STRONG_MODIFIERS.has(m)) && !isHighFunctionKey(key)) return fail(mac ? V.shortcutNeedsModifierMac : V.shortcutNeedsModifier);
   const ordered = MODIFIER_ORDER.filter((m) => modifiers.includes(m));
   const keyForSignature = key === 'Esc' ? 'Escape' : key === 'Return' ? 'Enter' : key;
   const sigParts = [...ordered.map((m) => (m === 'CommandOrControl' ? 'Control' : m)), keyForSignature];
-  if (RESERVED.has(signature(sigParts))) return fail(V.shortcutReserved);
+  if (RESERVED.has(signature(sigParts))) return fail(wording === 'windows' ? V.shortcutReserved : V.shortcutReservedElsewhere);
   return ok([...ordered, key].join('+'));
 }
 

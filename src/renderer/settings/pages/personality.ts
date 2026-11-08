@@ -8,7 +8,7 @@ import { behaviorStateLabel, formatAge, formatCount, formatDecimal, formatPercen
 import { pagePoll } from '../livePoll';
 import { transferRows } from '../profileView';
 import { coatArt } from '../skins';
-import { S } from '../strings';
+import { deviceWords, platformWording, S } from '../strings';
 
 const P = S.personality;
 
@@ -94,7 +94,7 @@ export function personalityPage(ctx: PageContext): PageView {
 
   const element = page(P.title, [
     profile,
-    h('p', { class: 'page-note' }, [icon('info'), h('span', { text: P.simulationNote })]),
+    h('p', { class: 'page-note' }, [icon('info'), h('span', { text: deviceWords(P.simulationNote, platformWording(ctx.store.view.status.platform)) })]),
     group(P.groupTraits, [traits]),
     group(P.groupStats, [stats]),
     group(P.groupLearned, [prefs]),

@@ -14,6 +14,16 @@ export function isLinuxPlatform(id: PlatformServices['id']): boolean {
   return id === 'linux-x11' || id === 'linux-xwayland' || id === 'linux-wayland';
 }
 
+/**
+ * macOS (1.4.0): asking safeStorage whether encryption is available fetches the app's Keychain key
+ * (OSCrypt's GetEncryptionKey), and the sync API can block on a Keychain prompt, for example on
+ * any new ad-hoc signature. With no API key stored there is nothing to decrypt, so status reports
+ * do not ask; saving a key (ipc/handlers.ts) and reading a stored one still do. Elsewhere: always ask.
+ */
+export function keychainCheckDeferred(id: PlatformServices['id'], keyStored: boolean): boolean {
+  return id === 'darwin' && !keyStored;
+}
+
 export function guardedCipher(platform: Pick<PlatformServices, 'id' | 'secretBackendAllowed'>, storage: SafeStorageLike, log: Logger): SecretCipher {
   if (!isLinuxPlatform(platform.id)) return storage;
   let refused: boolean | null = null;

@@ -11,7 +11,7 @@ import { livePoll, pagePoll, type LivePoll } from '../livePoll';
 import { pauseModel } from '../privacyView';
 import { niceCeil, sparkline } from '../sparkline';
 import { errorText, type Timers } from '../store';
-import { platformWording, S } from '../strings';
+import { deviceWords, platformWording, S } from '../strings';
 import { catEntries, coordinateEntries, countRows, errorItems, seenEntries, tabStripEntries } from '../surfacesView';
 
 const D = S.diagnostics;
@@ -117,6 +117,7 @@ export function statusEntries(view: SettingsViewState, now: number): Array<reado
   const { status, settings } = view;
   const p = status.perception;
   const pause = pauseModel(view);
+  const wording = platformWording(status.platform);
   let perception: string = D.modes[p.mode];
   if (pause.suspended) {
     // Main's blocked reason is the generic "paused" text here; the suspension reason replaces it.
@@ -129,11 +130,11 @@ export function statusEntries(view: SettingsViewState, now: number): Array<reado
     [D.catState, behaviorStateLabel(status.catState)],
     [D.windowAwareness, D.awareness[status.windowAwareness]],
     [D.displays, formatCount(status.displayCount)],
-    [D.perception, perception],
+    [D.perception, deviceWords(perception, wording)],
     [D.capturesThisHour, formatCount(p.capturesThisHour)],
     [D.lastCapture, p.lastCaptureAt === null ? S.common.never : formatRelativeTime(p.lastCaptureAt, now)],
   ];
-  if (p.lastError) entries.push([D.lastError, p.lastError]);
+  if (p.lastError) entries.push([D.lastError, deviceWords(p.lastError, wording)]);
   entries.push(
     [D.shortcut, !settings.general.shortcutsEnabled ? D.shortcutsOff : status.shortcutRegistered ? D.registered : D.notRegistered],
     [loginItemRowLabel(status.platform), loginItemLabel(status.loginItem)],

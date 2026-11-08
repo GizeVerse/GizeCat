@@ -1,7 +1,7 @@
 // The one-sentence surface verdict (v1.1.1): every branch, in priority order. SIMULATED
 // diagnostics (counts and reasons only).
 import { describe, expect, it } from 'vitest';
-import { describeCounts, FRONT_MAXIMIZED_TEXT, SURFACE_VERDICT_CODES, surfaceVerdict, type SurfaceVerdictInput } from '../../../src/main/diagnostics/surfaceVerdict';
+import { describeCounts, FLOOR_ONLY_TEXT, FRONT_MAXIMIZED_TEXT, SURFACE_VERDICT_CODES, surfaceVerdict, type SurfaceVerdictInput } from '../../../src/main/diagnostics/surfaceVerdict';
 import { emptySurfaceCounts } from '../../../src/shared/surfaceDiagnostics';
 import { decisionDiagnostics, navDiagnostics, providerDiagnostics } from './diagnosticsSurfaceFixture';
 
@@ -22,6 +22,14 @@ describe('surface verdict', () => {
     const v = surfaceVerdict(input({ observers: 'unavailable', provider: providerDiagnostics({ frontMaximized: true }) }));
     expect(v.code).toBe('observersUnavailable');
     expect(v.text).toMatch(/Window tracking is unavailable/);
+  });
+
+  it('1.4.0: says the cat keeps to the floor where no window tracking exists, without naming a PC or taskbar', () => {
+    const v = surfaceVerdict({ ...input({ observers: 'unavailable' }), floorOnly: true });
+    expect(v.code).toBe('observersUnavailable');
+    expect(v.text).toBe(FLOOR_ONLY_TEXT);
+    expect(v.text).not.toMatch(/\bPC\b|taskbar/);
+    expect(surfaceVerdict({ ...input({ observers: 'unavailable' }), floorOnly: false }).text).toMatch(/on this PC/);
   });
 
   it('says where the cat is while it is up on a window, a side or a tab strip', () => {

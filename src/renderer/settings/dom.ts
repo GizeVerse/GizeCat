@@ -106,8 +106,81 @@ export const GLYPH = {
 } as const;
 export type GlyphName = keyof typeof GLYPH;
 
+/**
+ * 1.4.0: where the Segoe icon fonts do not exist (macOS, Linux) these plain symbols stand in, so no
+ * icon is drawn as a missing-glyph box. U+FE0E keeps the ones that have an emoji form in text style.
+ */
+export const GLYPH_TEXT: Readonly<Record<GlyphName, string>> = {
+  home: '⌂',
+  settings: '⚙︎',
+  color: '◐',
+  behavior: '❖',
+  touch: '☝︎',
+  shield: '◈',
+  robot: '◉',
+  heart: '♥︎',
+  diagnostic: '∿',
+  info: 'ⓘ',
+  check: '✓',
+  completed: '✓',
+  warning: '⚠︎',
+  error: '⊘',
+  close: '✕',
+  add: '+',
+  chevronDown: '▾',
+  chevronRight: '›',
+  play: '▶︎',
+  pause: '‖',
+  view: '◉',
+  hide: '◌',
+  folder: '▤',
+  download: '↓',
+  upload: '↑',
+  power: '⊗',
+  lock: '▣',
+  globe: '◍',
+  refresh: '↻',
+  keyboard: '⌨︎',
+  monitor: '▭',
+  people: '☺︎',
+  delete: '⌫',
+  history: '◷',
+  lightbulb: '✦',
+  sparkle: '✧',
+  mouse: '◎',
+  rename: '✎',
+  startup: '▲',
+  cloud: '☁︎',
+  pin: '⊙',
+  zoom: '⊕',
+  brightness: '☀︎',
+  stopwatch: '◴',
+  layers: '❏',
+  message: '✉︎',
+  moon: '☾',
+  window: '▢',
+  fullscreen: '↔︎',
+  clock: '◶',
+  more: '⋯',
+  volume: '♪',
+  mapPin: '⊚',
+  up: '↑',
+  equalizer: '≡',
+};
+
+let activeGlyphs: Readonly<Record<GlyphName, string>> = GLYPH;
+
+/** Chooses the icon set before any page is built (app.ts); Windows keeps the Segoe glyphs. */
+export function setTextGlyphs(on: boolean): void {
+  activeGlyphs = on ? GLYPH_TEXT : GLYPH;
+}
+
+export function glyphText(name: GlyphName): string {
+  return activeGlyphs[name];
+}
+
 export function icon(name: GlyphName, extraClass = ''): HTMLSpanElement {
-  return h('span', { class: `icon ${extraClass}`.trim(), 'aria-hidden': 'true', text: GLYPH[name] });
+  return h('span', { class: `icon ${extraClass}`.trim(), 'aria-hidden': 'true', text: glyphText(name) });
 }
 
 /** Clears an element and appends new children. */

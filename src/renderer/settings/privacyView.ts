@@ -5,7 +5,7 @@ import type { SettingsViewState } from '../../shared/ipc';
 import type { PerceptionMode } from '../../shared/perception';
 import type { Settings } from '../../shared/settings';
 import { formatDuration, formatRelativeTime } from './format';
-import { S } from './strings';
+import { deviceWords, platformWording, S, type PlatformWording } from './strings';
 
 const P = S.privacy;
 
@@ -56,7 +56,9 @@ export function bannerModel(view: PrivacyViewInput, now: number): BannerModel {
     );
   }
   if (status.lastError) details.push(P.bannerError(status.lastError));
-  return { mode: status.mode, title: base.title, text: base.text, details, paused };
+  // Also the labels and reasons main sends, which come from src/core/perception.
+  const wording = platformWording(view.status.platform);
+  return { mode: status.mode, title: deviceWords(base.title, wording), text: deviceWords(base.text, wording), details: details.map((d) => deviceWords(d, wording)), paused };
 }
 
 /**
@@ -128,14 +130,14 @@ export interface ConsentModel {
   tone: 'default' | 'caution';
 }
 
-export function consentModel(kind: 'local-stats' | 'ai', settings: Settings): ConsentModel {
+export function consentModel(kind: 'local-stats' | 'ai', settings: Settings, wording: PlatformWording = 'windows'): ConsentModel {
   const region = P.regions[settings.perception.region];
   const interval = formatDuration(settings.perception.minIntervalSec);
   if (kind === 'local-stats') {
     return {
       title: P.consent.localTitle,
       intro: P.consent.intro,
-      points: [...P.consent.localPoints(region, interval)],
+      points: P.consent.localPoints(region, interval).map((p) => deviceWords(p, wording)),
       destinationTitle: null,
       destination: null,
       warning: null,
@@ -148,9 +150,9 @@ export function consentModel(kind: 'local-stats' | 'ai', settings: Settings): Co
   return {
     title: P.consent.aiTitle,
     intro: P.consent.intro,
-    points: [...P.consent.aiPoints(region, aiInterval, settings.ai.maxPerHour)],
+    points: P.consent.aiPoints(region, aiInterval, settings.ai.maxPerHour).map((p) => deviceWords(p, wording)),
     destinationTitle: P.consent.destination,
-    destination: destinationText(target),
+    destination: deviceWords(destinationText(target), wording),
     warning: target.leavesDevice && !settings.ai.allowCloud ? P.consent.cloudNotAllowed : null,
     confirmLabel: P.consent.confirm,
     tone: target.leavesDevice ? 'caution' : 'default',
