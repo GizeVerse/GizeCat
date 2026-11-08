@@ -1,24 +1,51 @@
 name: release-artifacts
 
-# UNEXECUTED when written (2026-11-07). The repository had no remote before its publication,
-# so GitHub Actions had never run this workflow, and nothing below had been observed to pass or
-# fail on a hosted runner. A person must check the first real run, and inspect every file it produces, before
-# any of them is shared.
+# NEVER STARTED (updated 2026-11-08 for GizeCat 1.4.0). GitHub Actions has never run this workflow,
+# and nothing below has been observed to pass or fail on a hosted runner. A person must check its
+# first real run step by step, and inspect every file it produces, before any of them is shared.
 #
-# Manual only (workflow_dispatch). It builds unsigned packages and uploads them as workflow
-# artifacts with actions/upload-artifact, nothing else:
-# - it never creates a GitHub release and never publishes (`--publish never`);
-# - it never signs (no certificate; CSC_IDENTITY_AUTO_DISCOVERY=false);
-# - it uses no secrets.
+# GitHub rule: a workflow_dispatch workflow can only be started once its file is on the repository's
+# default branch. main (v1.3.0) does not have this file yet, and the owner decides when the
+# candidate reaches main. Until then nobody can start this workflow.
 #
-# The Linux job depends on the `linux:` section and the per-OS packaging changes planned in
-# ADR 0004 section 11 (docs/adr/0004-gizeverse-platform.md); electron-builder.yml has neither
-# yet. Until they land, expect that job to fail or to produce a package that is not fit to
-# ship. A Linux package that builds is not evidence that the app runs on Linux
-# (CONTRIBUTING.md, platform statuses).
+# Manual only (workflow_dispatch): no push, pull_request, schedule, release or workflow_run trigger,
+# and agents never start it. It builds packages and uploads them as workflow artifacts. It contains
+# no test step: the Windows checks below read the built files and never run them. It never creates
+# a GitHub release and never publishes (`--publish never`). Guide with every secret and the owner's
+# steps: docs/platforms/release-automation.md.
+#
+# Windows has two paths (input `windows_signing`):
+# - unsigned (default, no secrets): CSC_IDENTITY_AUTO_DISCOVERY=false, unsigned NSIS installers.
+# - authenticode: signed NSIS installers. The job runs in the GitHub Environment `windows-signing`.
+#   Before the first run the owner creates that environment with a required reviewer and these
+#   secrets (a job that names a missing environment makes GitHub create it WITHOUT protection
+#   rules, so set it up first; the guard step below fails closed when one is missing):
+#     WIN_CSC_LINK          base64 of the code-signing certificate exported as .pfx
+#     WIN_CSC_KEY_PASSWORD  its export password
+#   electron-builder 26 reads both names directly (app-builder-lib/out/codeSign/windowsSignToolManager.js
+#   and winPackager.js). A certificate whose private key lives only on a hardware token or in a
+#   cloud HSM cannot be exported as .pfx, so it cannot use this path.
+#
+# Optional input draft_release_tag: job attach-to-draft adds the Windows files to an existing DRAFT
+# release (gh release upload). It refuses a release that is not a draft and never replaces an asset.
+#
+# The Linux job only builds and uploads. A Linux package that builds is not evidence that the app
+# runs on Linux (CONTRIBUTING.md, platform statuses).
 
 on:
   workflow_dispatch:
+    inputs:
+      windows_signing:
+        description: 'unsigned: no secrets. authenticode: signed installers (windows-signing environment).'
+        type: choice
+        options:
+          - unsigned
+          - authenticode
+        default: unsigned
+      draft_release_tag:
+        description: 'Optional: attach the Windows files to the existing DRAFT release with this tag (for example v1.4.0). Empty: workflow artifacts only. A release that is not a draft is refused.'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -28,12 +55,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 1.4.0, UNEXECUTED like the rest of this file: one NSIS installer per architecture,
-  # Desktop-Cat-Setup-<version>-x64.exe and Desktop-Cat-Setup-<version>-arm64.exe, built on the x64
-  # runner. The ARM64 one is only checked statically here (PE machine, koffi payload, asar header,
-  # fuses); an x64 runner cannot run ARM64 binaries.
+  # One NSIS installer per architecture, Desktop-Cat-Setup-<version>-x64.exe and
+  # Desktop-Cat-Setup-<version>-arm64.exe, built on the x64 runner. The ARM64 one is only checked
+  # statically here (PE machine, koffi payload, asar header, fuses); an x64 runner cannot run
+  # ARM64 binaries.
   windows:
-    name: Windows NSIS installers (x64, ARM64)
+    name: Windows NSIS installers (x64, ARM64), unsigned
+    if: inputs.windows_signing == 'unsigned'
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -61,10 +89,89 @@ jobs:
         run: node scripts/check-win-payload.mjs --arch x64 --dir release/win-unpacked
       - name: Static payload check, ARM64 (no binary is executed)
         run: node scripts/check-win-payload.mjs --arch arm64 --dir release/win-arm64-unpacked
+      - name: SHA-256 checksums
+        run: |
+          $files = @(Get-ChildItem release/Desktop-Cat-Setup-*.exe | Sort-Object Name)
+          if ($files.Count -ne 2) { throw "expected 2 installers, found $($files.Count)" }
+          $lines = $files | ForEach-Object { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Name }
+          $text = ($lines -join "`n") + "`n"
+          [IO.File]::WriteAllText("$PWD/release/SHA256SUMS-windows.txt", $text)
+          $text
       - uses: actions/upload-artifact@v4
         with:
           name: windows-nsis-installer
-          path: release/*.exe
+          path: |
+            release/Desktop-Cat-Setup-*.exe
+            release/SHA256SUMS-windows.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-signed:
+    name: Windows NSIS installers (x64, ARM64), Authenticode signed
+    if: inputs.windows_signing == 'authenticode'
+    runs-on: windows-latest
+    # Protected by the owner: a required reviewer approves every run before any secret is exposed.
+    environment: windows-signing
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Check that the signing secrets are complete (fails closed)
+        shell: bash
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for name in WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::secret $name is not set in the windows-signing environment"; failed=1; fi
+          done
+          exit "$failed"
+      - name: Install (no install scripts)
+        run: npm ci --ignore-scripts
+      # Same staging as the unsigned job (see there).
+      - name: Stage the ARM64 koffi binary
+        run: node scripts/stage-koffi-arch.mjs --arch arm64
+      - name: Build
+        run: node scripts/build.mjs
+      # The arch flags are required: without them electron-builder builds only the runner's arch.
+      - name: Package NSIS installers, x64 and ARM64 (signed, not published)
+        run: npx electron-builder --win nsis --x64 --arm64 --publish never
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      # One step per check: a pwsh step only fails on the exit code of its last command.
+      - name: Static payload check, x64 (no binary is executed)
+        run: node scripts/check-win-payload.mjs --arch x64 --dir release/win-unpacked
+      - name: Static payload check, ARM64 (no binary is executed)
+        run: node scripts/check-win-payload.mjs --arch arm64 --dir release/win-arm64-unpacked
+      - name: Check the Authenticode signatures (reads the files, runs nothing)
+        run: |
+          $files = @(Get-ChildItem release/Desktop-Cat-Setup-*.exe) + @(Get-Item release/win-unpacked/DesktopCat.exe, release/win-arm64-unpacked/DesktopCat.exe)
+          if ($files.Count -ne 4) { throw "expected 2 installers and 2 app executables, found $($files.Count)" }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            "$($file.Name): $($signature.Status), $($signature.SignerCertificate.Subject)"
+            if ($signature.Status -ne 'Valid') { throw "$($file.Name) has no valid signature: $($signature.Status)" }
+          }
+      - name: SHA-256 checksums
+        run: |
+          $files = @(Get-ChildItem release/Desktop-Cat-Setup-*.exe | Sort-Object Name)
+          if ($files.Count -ne 2) { throw "expected 2 installers, found $($files.Count)" }
+          $lines = $files | ForEach-Object { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Name }
+          $text = ($lines -join "`n") + "`n"
+          [IO.File]::WriteAllText("$PWD/release/SHA256SUMS-windows.txt", $text)
+          $text
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-nsis-installer-signed
+          path: |
+            release/Desktop-Cat-Setup-*.exe
+            release/SHA256SUMS-windows.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -94,3 +201,41 @@ jobs:
             release/*.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+  attach-to-draft:
+    name: Attach the Windows files to the draft release (optional)
+    needs: [windows, windows-signed]
+    if: ${{ !cancelled() && inputs.draft_release_tag != '' && (needs.windows.result == 'success' || needs.windows-signed.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only this job can write to the repository. It holds no signing secret.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: windows-nsis-installer*
+          path: to-attach
+          merge-multiple: true
+      - name: Attach the files, only if the release is a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.draft_release_tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._/+-]*$ ]]; then
+            echo "::error::draft_release_tag is not a valid tag name"
+            exit 1
+          fi
+          is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)" || {
+            echo "::error::no release with the tag $TAG, or this token cannot see it"
+            exit 1
+          }
+          if [ "$is_draft" != "true" ]; then
+            echo "::error::refused: the release $TAG is not a draft, and this workflow never changes a published release"
+            exit 1
+          fi
+          ls -la to-attach
+          # Without --clobber: an asset that already has this name makes the upload fail.
+          gh release upload "$TAG" to-attach/*

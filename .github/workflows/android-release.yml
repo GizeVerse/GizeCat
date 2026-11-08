@@ -1,0 +1,236 @@
+name: android-release
+
+# NEVER STARTED (written 2026-11-08 for GizeCat 1.4.0). GitHub Actions has never run this workflow,
+# and nothing below has been observed to pass or fail on a hosted runner. A person must check its
+# first real run step by step, and inspect every file it produces, before any of them is shared.
+#
+# GitHub rule: a workflow_dispatch workflow can only be started once its file is on the repository's
+# default branch. main (v1.3.0) does not have this file yet, and the owner decides when the
+# candidate reaches main. Until then nobody can start this workflow.
+#
+# Manual only (workflow_dispatch): no push, pull_request, schedule, release or workflow_run trigger,
+# and agents never start it. It builds the production web bundle and runs the same Gradle tasks as
+# `npm run android:release` (:app:assembleRelease :app:bundleRelease), then uploads the APK, the AAB
+# and SHA256SUMS-android.txt as workflow artifacts. It contains no test step and never publishes to
+# a store. Guide with every secret and the owner's steps: docs/platforms/release-automation.md
+# (the key itself: docs/platforms/android-signing.md).
+#
+# Two paths (input `signing`):
+# - unsigned (default, no secrets): GizeCat-<version>-android-unsigned.apk and .aab. An unsigned APK
+#   cannot be installed and an unsigned AAB cannot be uploaded to Google Play.
+# - release-signed: GizeCat-<version>-android.apk and .aab, signed with the owner's upload key. The
+#   job runs in the GitHub Environment `android-signing`. Before the first run the owner creates
+#   that environment with a required reviewer and these secrets (a job that names a missing
+#   environment makes GitHub create it WITHOUT protection rules, so set it up first; the guard step
+#   below fails closed when one is missing):
+#     ANDROID_KEYSTORE_BASE64    base64 of the upload keystore file
+#     ANDROID_KEYSTORE_PASSWORD  its store password
+#     ANDROID_KEY_ALIAS          the key's alias in that keystore
+#     ANDROID_KEY_PASSWORD       the key's password (for PKCS12 the same as the store password)
+#   The keystore is decoded to a file under $RUNNER_TEMP and removed at the end of the job. Gradle
+#   reads ANDROID_KEYSTORE_FILE (the path of that file) and the three other values from the
+#   environment (android/app/build.gradle.kts); it stops on a partial set and never prints a value.
+#
+# Optional input draft_release_tag: job attach-to-draft adds the files to an existing DRAFT release
+# (gh release upload). It refuses a release that is not a draft and never replaces an asset.
+#
+# A package that builds and signs is not evidence that the app runs on a device. The app has never
+# run on an Android device or emulator.
+
+on:
+  workflow_dispatch:
+    inputs:
+      signing:
+        description: 'unsigned: no secrets. release-signed: signed with the upload key (android-signing environment).'
+        type: choice
+        options:
+          - unsigned
+          - release-signed
+        default: unsigned
+      draft_release_tag:
+        description: 'Optional: attach the files to the existing DRAFT release with this tag (for example v1.4.0). Empty: workflow artifacts only. A release that is not a draft is refused.'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  unsigned:
+    name: Android APK and AAB, unsigned
+    if: inputs.signing == 'unsigned'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: Read the version
+        id: meta
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      # The two SDK packages the app compiles against (android/README.md), not left to the image.
+      - name: Android SDK packages
+        run: |
+          set -eu
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes 2>/dev/null | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install 'platforms;android-36' 'build-tools;36.0.0'
+      # scripts/android-gradle.mjs first builds the production web bundle into the app.
+      - name: Build the web bundle, the APK and the AAB
+        run: node scripts/android-gradle.mjs :app:assembleRelease :app:bundleRelease
+      - name: Check the expected files
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          dir="release/$VERSION/android"
+          ls -la "$dir"
+          for name in "GizeCat-$VERSION-android-unsigned.apk" "GizeCat-$VERSION-android-unsigned.aab" SHA256SUMS-android.txt; do
+            [ -s "$dir/$name" ] || { echo "::error::missing $dir/$name"; exit 1; }
+          done
+          cat "$dir/SHA256SUMS-android.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GizeCat-${{ steps.meta.outputs.version }}-android-unsigned
+          path: |
+            release/${{ steps.meta.outputs.version }}/android/GizeCat-*-android-unsigned.apk
+            release/${{ steps.meta.outputs.version }}/android/GizeCat-*-android-unsigned.aab
+            release/${{ steps.meta.outputs.version }}/android/SHA256SUMS-android.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  release-signed:
+    name: Android APK and AAB, signed with the upload key
+    if: inputs.signing == 'release-signed'
+    runs-on: ubuntu-latest
+    # Protected by the owner: a required reviewer approves every run before any secret is exposed.
+    environment: android-signing
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Check that the signing secrets are complete (fails closed)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::secret $name is not set in the android-signing environment"; failed=1; fi
+          done
+          exit "$failed"
+      - name: Install (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: Read the version
+        id: meta
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      # The two SDK packages the app compiles against (android/README.md), not left to the image.
+      - name: Android SDK packages
+        run: |
+          set -eu
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes 2>/dev/null | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Decode the keystore into the runner's temp folder
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/gizecat-upload.keystore"
+          [ -s "$RUNNER_TEMP/gizecat-upload.keystore" ] || { echo "::error::ANDROID_KEYSTORE_BASE64 decoded to an empty file"; exit 1; }
+      # scripts/android-gradle.mjs first builds the production web bundle into the app.
+      - name: Build the web bundle and the signed APK and AAB
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/gizecat-upload.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: node scripts/android-gradle.mjs :app:assembleRelease :app:bundleRelease
+      - name: Remove the keystore file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/gizecat-upload.keystore"
+      - name: Check the expected files and their signatures (reads the files, runs nothing)
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          dir="release/$VERSION/android"
+          ls -la "$dir"
+          for name in "GizeCat-$VERSION-android.apk" "GizeCat-$VERSION-android.aab" SHA256SUMS-android.txt; do
+            [ -s "$dir/$name" ] || { echo "::error::missing $dir/$name"; exit 1; }
+          done
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$dir/GizeCat-$VERSION-android.apk"
+          report="$(jarsigner -verify "$dir/GizeCat-$VERSION-android.aab")"
+          echo "$report"
+          if grep -q 'jar is unsigned' <<<"$report"; then echo "::error::the AAB is unsigned"; exit 1; fi
+          cat "$dir/SHA256SUMS-android.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GizeCat-${{ steps.meta.outputs.version }}-android-signed
+          path: |
+            release/${{ steps.meta.outputs.version }}/android/GizeCat-*-android.apk
+            release/${{ steps.meta.outputs.version }}/android/GizeCat-*-android.aab
+            release/${{ steps.meta.outputs.version }}/android/SHA256SUMS-android.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  attach-to-draft:
+    name: Attach to the draft release (optional)
+    needs: [unsigned, release-signed]
+    if: ${{ !cancelled() && inputs.draft_release_tag != '' && (needs.unsigned.result == 'success' || needs.release-signed.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only this job can write to the repository. It holds no signing secret.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: GizeCat-*-android-*
+          path: to-attach
+          merge-multiple: true
+      - name: Attach the files, only if the release is a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.draft_release_tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._/+-]*$ ]]; then
+            echo "::error::draft_release_tag is not a valid tag name"
+            exit 1
+          fi
+          is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)" || {
+            echo "::error::no release with the tag $TAG, or this token cannot see it"
+            exit 1
+          }
+          if [ "$is_draft" != "true" ]; then
+            echo "::error::refused: the release $TAG is not a draft, and this workflow never changes a published release"
+            exit 1
+          fi
+          ls -la to-attach
+          # Without --clobber: an asset that already has this name makes the upload fail.
+          gh release upload "$TAG" to-attach/*

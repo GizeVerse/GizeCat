@@ -1,26 +1,33 @@
 name: web-pages
 
-# UNEXECUTED when written (2026-11-08). GitHub Actions has never run this workflow, and nothing
-# below has been observed to pass or fail on a hosted runner. It publishes the GizeCat web app
-# (the installable tablet PWA, out/web) to GitHub Pages: a PUBLIC website.
+# NEVER STARTED (updated 2026-11-08 for GizeCat 1.4.0). GitHub Actions has never run this workflow,
+# and nothing below has been observed to pass or fail on a hosted runner. A person must check its
+# first real run and open the deployed site before anyone is told about it.
 #
-# OWNER APPROVAL REQUIRED. Manual only (workflow_dispatch); no agent may trigger it. Before the
-# first run the owner must decide that the web app may be public at all, then enable Pages for the
-# repository (Settings > Pages > Build and deployment > Source: GitHub Actions) and start the
-# workflow by hand. The address follows GitHub's project-site pattern and does not exist until
-# Pages is enabled. A project site shares its origin with every other Pages site of the same
-# account or organization (shared localStorage and caches); an owner-provided custom domain
-# avoids that. The build uses no secrets and signs nothing.
+# GitHub rule: a workflow_dispatch workflow can only be started once its file is on the repository's
+# default branch. main (v1.3.0) does not have this file yet, and the owner decides when the
+# candidate reaches main. Until then nobody can start this workflow.
+#
+# It publishes the GizeCat web app (the installable tablet PWA, out/web) to the repository's GitHub
+# Pages project site, a PUBLIC website under the /GizeCat/ subpath. The bundle uses relative URLs
+# only (src/web: index.html, manifest start_url and scope "./", service worker "sw.js" with scope
+# "./"), so it needs no base-path setting. The real address is the one the deploy job prints.
+#
+# OWNER APPROVAL REQUIRED. Manual only (workflow_dispatch): no push, pull_request, schedule, release
+# or workflow_run trigger, and agents never start it. It contains no test step. One-time setting
+# before the first run: Settings > Pages > Build and deployment > Source: GitHub Actions. The owner
+# first decides that the web app may be public at all. A project site shares its origin with every
+# other Pages site of the same account or organization (shared localStorage and caches); an
+# owner-provided custom domain avoids that. The build uses no secrets and signs nothing.
 #
 # A deployment that succeeds is not evidence that the app works on an iPad or an Android tablet.
+# Guide: docs/platforms/release-automation.md.
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -50,6 +57,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Only this job can deploy.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
