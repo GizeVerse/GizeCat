@@ -70,9 +70,11 @@ The per-feature [capability matrix](../gizeverse/capability-matrix.md) uses an o
 
 Two Windows details: the x64 build on Windows 11 on Arm runs under emulation (THEORETICALLY_COMPATIBLE_NOT_EXECUTED), and the x64 build cannot run on Windows 10 on Arm, which has no x64 emulation (BLOCKED_BY_PLATFORM).
 
+**macOS packages for this candidate: none were produced.** electron-builder cannot build Mac packages on Windows. The Linux-container route (`npm run package:mac:adhoc-docker`) is implemented but could not run on the candidate's build PC, whose Docker engine stopped responding. Mac packages therefore come from a Mac, from the owner-run `macos-packages.yml` workflow, or from the container route on a PC where Docker works.
+
 ## Status per artifact
 
-An artifact is COMPILED_OR_PACKAGED only if the GitHub release lists it with its SHA-256 in `SHA256SUMS.txt`. If a file below is not on the release page, it was not produced for this candidate.
+An artifact is COMPILED_OR_PACKAGED only if the GitHub release lists it with its SHA-256 in `SHA256SUMS.txt`. If a file below is not on the release page, it was not produced for this candidate. The candidate build's files, sizes and checksums, and the owner's steps before publishing, are in [the 1.4.0 candidate notes](../releases/1.4.0-release-candidate.md).
 
 | Artifact | For | Built by | Status |
 |---|---|---|---|

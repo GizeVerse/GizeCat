@@ -16,6 +16,8 @@ macOS apps cannot be built on Windows with electron-builder, and the builds that
 | `GizeCat-1.4.0-mac-arm64-adhoc.zip`, `GizeCat-1.4.0-mac-x64-adhoc.zip` | Test builds made in a Linux container and signed **ad hoc** (no Apple identity). **Not notarized.** | COMPILED_OR_PACKAGED only if the release lists them |
 | `GizeCat-1.4.0-mac-<arm64, x64, universal>.dmg` and `.zip` | Builds signed with a Developer ID and notarized by Apple, made by a manual workflow on a Mac runner | REQUIRES_OWNER_CREDENTIALS. Not available until the owner provides Apple credentials. |
 
+**For the 1.4.0 candidate, neither kind exists yet.** The container route could not run on the build PC (its Docker engine stopped responding), and the signed builds wait for the owner's Apple credentials. Until one of them is produced, there is no macOS download; this page describes how the builds work and how to install one once it exists.
+
 An ad-hoc build is **not equivalent to a notarized app or an App Store app.** Apple has not checked it, and macOS blocks it until you allow it by hand. Install one only if you trust its source and its SHA-256 matches.
 
 Every download contains an app named **Desktop Cat.app**. The bundle name and its identifier `io.github.enesiltas.desktopcat` are frozen, because the Keychain and login items are keyed by them ([why](../gizeverse/12-branding.md)).
