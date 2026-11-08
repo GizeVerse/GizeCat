@@ -106,10 +106,62 @@ describe('Android WebView host', () => {
   });
 
   it('exposes no JavaScript interface object, script injection, download listener or external intent', () => {
-    for (const banned of ['addJavascriptInterface', 'addDocumentStartJavaScript', 'evaluateJavascript', 'setDownloadListener', 'DownloadListener', 'ACTION_VIEW', 'ACTION_SEND']) {
+    for (const banned of ['addJavascriptInterface', 'addDocumentStartJavaScript', 'setDownloadListener', 'DownloadListener', 'ACTION_VIEW', 'ACTION_SEND']) {
       expect(kotlin).not.toContain(banned);
     }
     expect(kotlin).not.toMatch(/\bstartActivity\(/);
+  });
+
+  it('runs exactly one script, a fixed constant that closes the open dialog for Back', () => {
+    // The only evaluateJavascript call, with the constant: never a string built from page or native data.
+    expect(kotlin.match(/evaluateJavascript\(/g)).toHaveLength(1);
+    expect(activity).toContain('wv.evaluateJavascript(CLOSE_TOP_DIALOG_JS) { result ->');
+    expect(bridge).not.toContain('evaluateJavascript');
+    const decl = /const val CLOSE_TOP_DIALOG_JS =\s*((?:"[^"\n]*"\s*\+?\s*)+)/.exec(activity)?.[1];
+    expect(decl, 'CLOSE_TOP_DIALOG_JS must be string literals only').toBeDefined();
+    const script = [...(decl ?? '').matchAll(/"([^"\n]*)"/g)].map((m) => m[1] ?? '').join('');
+    expect(script).not.toContain('$');
+    expect(script).toContain("document.querySelectorAll('dialog[open]')");
+    expect(script).toContain('d.close()');
+    // Without HTMLDialogElement the sheet still hears `close` (settingsPanel.ts resets its state there).
+    expect(script).toContain("d.dispatchEvent(new Event('close'))");
+    expect(script).toMatch(/return false;[\s\S]*return true;/);
+  });
+});
+
+describe('Android back and lifecycle', () => {
+  it('asks the page to close its dialog on Back before moving the app to the background', () => {
+    // targetSdk 36 with the predictive-back opt-in: Android 13+ only calls OnBackInvokedCallback.
+    expect(manifest).toContain('android:enableOnBackInvokedCallback="true"');
+    expect(activity).toMatch(/if \(Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.TIRAMISU\) \{[\s\S]*?onBackInvokedDispatcher\.registerOnBackInvokedCallback\(OnBackInvokedDispatcher\.PRIORITY_DEFAULT\) \{ onBack\(\) \}/);
+    // Android 10-12: the WebView never passes the back key to the page.
+    expect(activity).toMatch(/override fun onBackPressed\(\) \{\s*onBack\(\)\s*\}/);
+    // Only when no dialog was open (or the page cannot answer) does the cat go to the background.
+    expect(activity).toContain('if (result != "true") moveTaskToBack(true)');
+    expect(activity).not.toMatch(/override fun onBackPressed\(\) \{\s*moveTaskToBack/);
+    expect(activity).not.toMatch(/\bfinish\(\)/);
+  });
+
+  it('counts only renderer crashes, recreates the WebView only in front, and retries when reopened', () => {
+    const gone = /override fun onRenderProcessGone\([^)]*\): Boolean \{([\s\S]*?)\n {8}\}/.exec(activity)?.[1] ?? '';
+    expect(gone).toContain('if (detail?.didCrash() == true) {');
+    // The only place a loss is recorded is inside the didCrash() branch.
+    expect(activity.match(/renderCrashes\.addLast\(/g)).toHaveLength(1);
+    expect(gone).toMatch(/if \(detail\?\.didCrash\(\) == true\) \{\s*val now = SystemClock\.elapsedRealtime\(\)\s*renderCrashes\.addLast\(now\)/);
+    expect(gone).toContain('showMessage(R.string.renderer_failed)');
+    // A lost renderer is replaced at once only while resumed, else on the next onResume.
+    expect(gone).toContain('reattachPending = true');
+    expect(gone).toContain('if (resumed) root.post { reattachIfPending() }');
+    expect(gone).not.toContain('attachWebView()');
+    expect(activity).toMatch(/fun reattachIfPending\(\) \{\s*if \(!reattachPending \|\| !resumed \|\| isDestroyed \|\| webView != null\) return/);
+    expect(activity).toMatch(/override fun onResume\(\) \{\s*super\.onResume\(\)\s*resumed = true\s*reattachIfPending\(\)/);
+    expect(activity).toMatch(/override fun onPause\(\) \{\s*resumed = false/);
+    // Reopening (launcher, Recents, returning from another app) clears the crashes and retries.
+    expect(activity).toMatch(/fun onReopened\(\) \{\s*renderCrashes\.clear\(\)\s*if \(webView == null\) reattachPending = true/);
+    expect(activity).toMatch(/override fun onStart\(\) \{\s*super\.onStart\(\)\s*onReopened\(\)/);
+    expect(activity).toMatch(/override fun onNewIntent\(intent: Intent\) \{\s*super\.onNewIntent\(intent\)\s*onReopened\(\)/);
+    // A new WebView replaces a static message and never inherits onStop's process-wide pauseTimers().
+    expect(activity).toMatch(/wv\.resumeTimers\(\)[\s\S]*?root\.removeAllViews\(\)\s*root\.addView\(wv,/);
   });
 });
 

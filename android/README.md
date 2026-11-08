@@ -38,8 +38,18 @@ against this project by `tests/unit/android/androidProject.test.ts`.
   windows), `singleTask` (one cat per device). Resizes, rotation and keyboard changes keep the live
   page. Edge to edge, with the page padded to the safe area. The system bars use the page colours.
 - **Lifecycle:** backgrounding pauses the WebView, so the page sees `visibilitychange: hidden`,
-  saves the cat and naps. A crashed renderer is replaced; after 3 losses within 60 s a static message
-  is shown instead. Back moves the app to the background instead of closing it.
+  saves the cat and naps. A lost renderer is replaced, at once while the app is in front and
+  otherwise when it comes back, so a backgrounded app never starts a renderer the system would
+  reclaim again. Only crashes count, not renderers the system killed for memory: after 3 crashes
+  within 60 s a static message is shown instead, and reopening the app (the launcher icon,
+  Recents, or switching back) clears the count and tries again.
+- **Back:** the app first asks the page to close its open dialog (the settings sheet, which also
+  holds the profile-import preview; nothing is applied), by running one fixed script with
+  `evaluateJavascript` that never carries page or native data. The sheet updates exactly as for
+  Escape. With no dialog open, Back moves the app to the background instead of closing it, as
+  Android 12+ does for launcher apps. Android 13+ receives Back through an `OnBackInvokedCallback`
+  (the manifest opts in to predictive back), so the system's back-to-home preview animation is not
+  shown; Android 10-12 through `onBackPressed`.
 - **Lowest version:** Android 10 (API 29), with an updated Android System WebView.
 
 ## Native file bridge (profile export and import)
