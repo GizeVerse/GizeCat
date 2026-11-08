@@ -31,12 +31,12 @@ On macOS, 1.4.0 never asks for Accessibility, Screen Recording, Input Monitoring
 |---|---|---|
 | Windows | `%APPDATA%\Desktop Cat` | Settings, the cat's state, logs; an encrypted API key only if you enter one ([details](../PRIVACY.md#what-is-stored-on-disk)) |
 | macOS | `~/Library/Application Support/Desktop Cat`; Keychain item "Desktop Cat Safe Storage" | The same files as on Windows; API keys, if any, are protected by the macOS Keychain |
-| Web app | The browser's storage for the hosting site: `gizecat.web.cat.v1` and `gizecat.web.settings.v1` (localStorage); a service-worker cache `gizecat-shell-<version>-<hash>` | The cat and its settings; the cache holds only the app's own files |
+| Web app | The browser's storage for the hosting site: `gizecat.web.cat.v1` and `gizecat.web.settings.v1` (localStorage); a service-worker cache `gizecat-shell-<scope hash>-<version>-<hash>` | The cat and its settings; the cache holds only the app's own files |
 | Android app | The app's private WebView storage on the tablet | The same two localStorage keys. No cloud backup; Android 12+ device-to-device transfer may copy them; uninstalling offers to keep them |
 
 Nothing syncs between devices. There is no server.
 
-**Shared web origin.** If the web app is hosted as a GitHub project site (`<owner>.github.io/<repository>/`), it shares its browser storage and caches with every other GitHub Pages site of the same owner. GizeCat only deletes its own `gizecat-shell-*` caches. A custom domain avoids the sharing; that is an owner decision.
+**Shared web origin.** If the web app is hosted as a GitHub project site (`<owner>.github.io/<repository>/`), it shares its browser storage and caches with every other GitHub Pages site of the same owner. GizeCat only deletes older caches of its own copy (`gizecat-shell-<scope hash>-*`). A custom domain avoids the sharing; that is an owner decision.
 
 ## What every version never does
 

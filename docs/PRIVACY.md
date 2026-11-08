@@ -92,9 +92,9 @@ The ARM64 installer is the same app with the ARM64 build of its native library. 
 
 - **Permissions:** none. No camera, microphone, location or notifications. The installed web app asks the browser to keep its storage (`navigator.storage.persist()`); the browser decides by itself.
 - **Network:** the page itself cannot make requests (CSP `connect-src 'none'`). The only traffic is the browser loading the app's own files from the site that hosts it: on first load, once per version when the service worker keeps an offline copy, and the browser's own update checks of `sw.js` and the manifest. No page data is ever sent. The host's server may log those file requests, like any website; GizeCat has no control over that.
-- **Storage keys:** localStorage `gizecat.web.cat.v1` (the cat) and `gizecat.web.settings.v1` (its settings, including personality). The service-worker cache `gizecat-shell-<version>-<hash>` holds only the app's own files.
+- **Storage keys:** localStorage `gizecat.web.cat.v1` (the cat) and `gizecat.web.settings.v1` (its settings, including personality). The service-worker cache `gizecat-shell-<scope hash>-<version>-<hash>` holds only the app's own files.
 - **Deleting:** Settings → Start again → **Start over with a new cat** (the cat and its settings), removing the Home Screen app or uninstalling the installed app, or clearing the site's data in the browser. Safari may delete a Safari tab's data after 7 days without a visit; a Home Screen app keeps its own storage.
-- **Shared origin:** on a GitHub project site, the web app shares its browser storage and caches with every other GitHub Pages site of the same owner. GizeCat deletes only its own `gizecat-shell-*` caches. A custom domain avoids the sharing.
+- **Shared origin:** on a GitHub project site, the web app shares its browser storage and caches with every other GitHub Pages site of the same owner. GizeCat deletes only older caches of its own copy (`gizecat-shell-<scope hash>-*`). A custom domain avoids the sharing.
 - **No keyboard listening.** The build fails if the web files contain key-listener code. The name field reads its value when you finish editing it, like any form field; Escape closing the sheet is the browser's own dialog behaviour.
 
 ### The Android app
