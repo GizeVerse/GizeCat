@@ -13,10 +13,13 @@
 // AudioContext (audioUnlock.ts); "Start over" and persistence requests (storage.ts).
 // First: configures zod before any schema is built (see zodConfig.ts).
 import './zodConfig';
-import { createCatSim } from '../core/behavior';
+import { adoptCatInto, createCatSim } from '../core/behavior';
 import { simWorld } from '../core/display/simWorld';
 import { createGestureRecognizer } from '../core/interaction/gestures';
+import type { PersistedCat } from '../shared/catState';
 import type { Point } from '../shared/geometry';
+import { PROFILE_MIME } from '../shared/profileTransfer';
+import type { Settings } from '../shared/settings';
 import type { SimEvent } from '../shared/sim';
 import { createCatHost, type CatHost } from '../main/catHost';
 import { createActivityMonitor } from '../main/win32/activityMonitor';
@@ -28,6 +31,8 @@ import { createWebDisplayService } from './display';
 import { detectHostMode, installHint, readHostEnv, shouldRegisterServiceWorker, shouldRequestPersistence } from './hostMode';
 import { createWebLogger } from './logger';
 import { createPointerRouter, type RouterTarget } from './pointerRouter';
+import { createBrowserSaver, selectProfileSaver } from './profileFiles';
+import { createProfileUi } from './profileUi';
 import { readSafeAreaInsets } from './safeArea';
 import { applyWebPatch, patchFor, resetWebSettings, type WebPatchResult } from './settingsModel';
 import { createSettingsPanel, type SettingsPanel } from './settingsPanel';
@@ -298,6 +303,74 @@ function boot(): void {
     log.error('the #settings sheet is missing');
   }
   const settingsPanel = panel;
+
+  // ---- take your cat to another device (profileUi.ts): a local file only, never a network request
+  /**
+   * Keeps a loaded profile: the cat, then the settings, in storage; then the page restarts the cat
+   * the way "Start over" does (a frozen store, so no pagehide save writes the old cat back, then a
+   * reload). Without storage nothing could survive a reload: the cat changes live instead, and is
+   * forgotten on close like any cat here. False, with nothing changed, when storage refused.
+   */
+  function adoptProfile(next: Settings, nextCat: PersistedCat): boolean {
+    if (!storage.available) {
+      const before = settings;
+      settings = next;
+      catHost.updateSettings(settings);
+      try {
+        if (!adoptCatInto(sim, nextCat)) throw new Error('this simulation cannot adopt a cat');
+      } catch (err) {
+        log.warn('the loaded cat could not be adopted', { error: err instanceof Error ? err.message : String(err) });
+        settings = before;
+        catHost.updateSettings(settings);
+        return false;
+      }
+      refreshUi();
+      settingsPanel?.refresh();
+      return true;
+    }
+    const previous = sim.serialize();
+    if (!storage.saveCat(nextCat)) return false;
+    if (!storage.saveSettings(next)) {
+      // Put the cat back: nothing changes unless both are kept.
+      storage.saveCat(previous);
+      return false;
+    }
+    catStore.freeze();
+    window.location.reload();
+    return true;
+  }
+
+  if (settingsPanel) {
+    const timers = { setTimeout: (fn: () => void, ms: number) => window.setTimeout(fn, ms), clearTimeout: (handle: unknown) => window.clearTimeout(handle as number) };
+    const saver = selectProfileSaver(
+      mode,
+      globalThis,
+      () =>
+        createBrowserSaver({
+          doc: document,
+          url: URL,
+          makeBlob: (text) => new Blob([text], { type: PROFILE_MIME }),
+          makeFile: typeof File === 'function' ? (text, fileName) => new File([text], fileName, { type: PROFILE_MIME }) : undefined,
+          share: navigator,
+          timers,
+          // The installed web app on an iPad or iPhone: the share sheet ("Save to Files") first.
+          preferShare: mode.apple && mode.standalone,
+        }),
+      timers,
+    );
+    if (!saver) log.warn('saving a profile is unavailable: the native file bridge is missing');
+    createProfileUi({
+      slot: settingsPanel.transferSlot,
+      mode,
+      getSettings: () => settings,
+      getCat: () => sim.serialize(),
+      saver,
+      appVersion: __APP_VERSION__,
+      now: () => Date.now(),
+      commit: adoptProfile,
+    });
+    settingsPanel.setTransferVisible(true);
+  }
 
   btnCall?.addEventListener('click', () => {
     // To the button (keyboard activation has no pointer): the cat walks over to it.

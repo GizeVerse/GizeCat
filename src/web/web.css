@@ -438,9 +438,74 @@ button.primary {
   border-color: var(--accent);
 }
 
-/* The profile export/import slot (wired up later from src/shared/profileTransfer.ts). */
+/* The profile export/import slot (profileUi.ts, src/shared/profileTransfer.ts). */
 .transfer-slot:empty {
   display: none;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0.5rem 0;
+  min-height: 2.75rem;
+}
+
+/* Large enough to hit with a finger (44 CSS px row; the box itself 1.25rem). */
+.check-row input[type='checkbox'] {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0.1rem 0 0;
+  accent-color: var(--accent);
+}
+
+.check-row input[type='checkbox']:disabled + span {
+  opacity: 0.55;
+}
+
+.check-label {
+  display: block;
+}
+
+.check-hint {
+  display: block;
+  margin: 0.1rem 0 0;
+}
+
+.check-list {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.transfer-preview {
+  margin: 0.75rem 0 0.25rem;
+  padding: 0.75rem;
+  border: 1px solid var(--sheet-line);
+  border-radius: 0.6rem;
+}
+
+.transfer-preview h4 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+
+.transfer-preview h4:focus {
+  outline: none;
+}
+
+/* Padding, not flex: a flex summary loses its disclosure triangle in Safari and Chrome. */
+.transfer-changes summary {
+  cursor: pointer;
+  padding: 0.7rem 0;
+}
+
+.transfer-changes ul {
+  margin: 0.25rem 0;
+  padding-left: 1.2rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  color: var(--muted);
+  font-size: 0.95rem;
 }
 
 /* Measures env(safe-area-inset-*) as padding (src/web/safeArea.ts). Never visible, never in the way. */

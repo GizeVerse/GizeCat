@@ -211,10 +211,9 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   const storageSection = h('section', {}, [h('h3', { text: WS.storage.title }), storageNote, updateNote]);
 
   // ---- take your cat to another device
-  // TODO(1.4.0 profile transfer): a later change fills `transferSlot` with the export/import
-  // controls built on src/shared/profileTransfer.ts (a local file only, never a network upload) and
-  // calls setTransferVisible(true). Until then the section stays hidden and empty. Do not implement
-  // export/import here.
+  // profileUi.ts fills `transferSlot` with the export/import controls built on
+  // src/shared/profileTransfer.ts (a local file only, never a network upload) and main.ts then calls
+  // setTransferVisible(true). The section stays hidden while it is empty.
   const transferSlot = h('div', { class: 'transfer-slot', id: 'transfer-slot' });
   const transferSection = h('section', { id: 'transfer-section', 'aria-labelledby': 'transfer-title' }, [h('h3', { id: 'transfer-title', text: WS.transfer.title }), transferSlot]);
   transferSection.hidden = true;

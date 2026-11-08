@@ -1,4 +1,4 @@
-// API keys encrypted with Electron safeStorage (DPAPI on Windows). The file holds
+// API keys encrypted with Electron safeStorage (DPAPI on Windows, the Keychain on macOS). The file holds
 // base64 ciphertext only; plaintext exists in memory only for the duration of a
 // get() call. The cipher is injected so this module stays Electron-free.
 // No backup or quarantined copy of the file is kept or ever read (see
@@ -28,8 +28,29 @@ const FileSchema = z.object({
 });
 type SecretFile = z.infer<typeof FileSchema>;
 
-export const ENCRYPTION_UNAVAILABLE_MESSAGE =
-  'Secure storage (Windows DPAPI) is not available, so API keys cannot be saved. Local AI providers still work without a key.';
+/**
+ * What safeStorage encrypts with on `os` (process.platform), in the user's words. 1.4.0: the
+ * Windows wording is unchanged, macOS names its Keychain, anything else gets a neutral term.
+ */
+export function secureStorageName(os: string): string {
+  if (os === 'win32') return 'Windows DPAPI';
+  if (os === 'darwin') return 'the macOS Keychain';
+  return 'the system’s secure storage';
+}
+
+/** Why set() refuses on `os` when encryption is unavailable (on Windows the pre-1.4.0 text). */
+export function encryptionUnavailableMessage(os: string): string {
+  const where = os === 'win32' || os === 'darwin' ? `Secure storage (${secureStorageName(os)})` : 'Secure storage';
+  return `${where} is not available, so API keys cannot be saved. Local AI providers still work without a key.`;
+}
+
+/** The "API key saved" confirmation on `os`. */
+export function apiKeySavedMessage(os: string): string {
+  return `API key saved (encrypted with ${secureStorageName(os)}).`;
+}
+
+/** This process's refusal text. */
+export const ENCRYPTION_UNAVAILABLE_MESSAGE = encryptionUnavailableMessage(process.platform);
 
 /** The JSON file behind the secret store: no .bak, never restored from a copy. */
 export function createSecretFile(filePath: string, logger?: Logger): JsonStore {

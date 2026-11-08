@@ -1,5 +1,5 @@
 import type { BehaviorProfileSnapshot } from '../../../shared/behaviorProfile';
-import type { LoginItemStatus, ResourceSample, SettingsAction, SettingsApi, SettingsViewState } from '../../../shared/ipc';
+import type { AppStatus, LoginItemStatus, ResourceSample, SettingsAction, SettingsApi, SettingsViewState } from '../../../shared/ipc';
 import { CAPABILITY_IDS, type PlatformReport, type RuntimeCapability } from '../../../shared/platform';
 import type { SurfaceDiagnostics } from '../../../shared/surfaceDiagnostics';
 import { huntEntries, moodEntries, physicsEntries, reactionSummary, stayEntries, summaryEntries, timeRows } from '../behaviorView';
@@ -94,6 +94,16 @@ export function loginItemLabel(s: LoginItemStatus): string {
   return s.enabled ? D.inactive : D.loginOff;
 }
 
+/**
+ * The login row's name in the status list (1.4.0): "Start with Windows" on Windows (and without a
+ * platform report, as before), "Open at login" on macOS, "Start when you sign in" elsewhere; the
+ * same terms as the General page's launch row.
+ */
+export function loginItemRowLabel(platform: AppStatus['platform']): string {
+  if (!platform || platform.id === 'win32') return D.launchAtLogin;
+  return platform.id === 'darwin' ? D.launchAtLoginMac : D.launchAtLoginElsewhere;
+}
+
 export function statusEntries(view: SettingsViewState, now: number): Array<readonly [string, string]> {
   const { status, settings } = view;
   const p = status.perception;
@@ -117,7 +127,7 @@ export function statusEntries(view: SettingsViewState, now: number): Array<reado
   if (p.lastError) entries.push([D.lastError, p.lastError]);
   entries.push(
     [D.shortcut, !settings.general.shortcutsEnabled ? D.shortcutsOff : status.shortcutRegistered ? D.registered : D.notRegistered],
-    [D.launchAtLogin, loginItemLabel(status.loginItem)],
+    [loginItemRowLabel(status.platform), loginItemLabel(status.loginItem)],
     [D.uptime, formatElapsed(status.startedAt, now)],
   );
   return entries;

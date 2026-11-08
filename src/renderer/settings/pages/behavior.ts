@@ -1,3 +1,5 @@
+import type { AppStatus } from '../../../shared/ipc';
+import type { RuntimeCapability } from '../../../shared/platform';
 import type { ToggleableBehavior } from '../../../shared/settings';
 import { BEHAVIOR_IDS, LIVELY_IDS, LIVELY_PARENT } from '../catalog';
 import type { PageContext, PageView } from '../context';
@@ -169,6 +171,20 @@ function fineTune(ctx: PageContext): HTMLElement {
   ]);
 }
 
+/**
+ * The note under "When an app is full screen" (1.4.0): null on Windows (and without a platform
+ * report), and wherever main reports full-screen detection available. On macOS a fixed sentence
+ * (no detection, and the panel overlays also show over full-screen apps); elsewhere main's reason.
+ */
+export function fullscreenRowNote(status: Pick<AppStatus, 'platform'>): string | null {
+  const platform = status.platform;
+  if (!platform || platform.id === 'win32') return null;
+  const cap = platform.capabilities.fullscreenAware as RuntimeCapability | undefined;
+  if (!cap || cap.available) return null;
+  if (platform.id === 'darwin') return B.fullscreenNoteMac;
+  return cap.reason ?? B.fullscreenNoteElsewhere;
+}
+
 export function behaviorPage(ctx: PageContext): PageView {
   const personality = [presetSelector(ctx), ...PERSONALITY_SLIDERS.map((s) => s.build(ctx).parts.row), fineTune(ctx)];
   const habits = [
@@ -178,17 +194,26 @@ export function behaviorPage(ctx: PageContext): PageView {
     sliderRow(ctx, F.activitySensitivity, { title: B.sensitivityTitle, desc: B.sensitivityDesc, icon: 'window' }),
     sliderRow(ctx, F.sleepAfterIdleMinutes, { title: B.sleepTitle, desc: B.sleepDesc, icon: 'moon' }),
   ];
+  const fullscreen = segmentedRow(
+    ctx,
+    'behavior',
+    'fullscreenBehavior',
+    (['hide', 'quiet', 'ignore'] as const).map((v) => ({ value: v, label: B.fullscreen[v] })),
+    { title: B.fullscreenTitle, desc: B.fullscreenDesc, icon: 'fullscreen' },
+  ).parts;
+  let fullscreenNote: string | null | undefined;
+  const syncFullscreenNote = (): void => {
+    const note = fullscreenRowNote(ctx.store.view.status);
+    if (note === fullscreenNote) return;
+    fullscreenNote = note;
+    setNote(fullscreen.note, note, 'info');
+  };
+  ctx.store.subscribe(syncFullscreenNote);
   const awareness = [
     toggleRow(ctx, 'behavior', 'allowMultiMonitor', { title: B.multiMonitorTitle, desc: B.multiMonitorDesc, icon: 'monitor' }).parts.row,
     toggleRow(ctx, 'behavior', 'reactToTyping', { title: B.typingTitle, desc: B.typingDesc, icon: 'keyboard' }).parts.row,
     toggleRow(ctx, 'behavior', 'reactToWindows', { title: B.windowsTitle, desc: B.windowsDesc, icon: 'window' }).parts.row,
-    segmentedRow(
-      ctx,
-      'behavior',
-      'fullscreenBehavior',
-      (['hide', 'quiet', 'ignore'] as const).map((v) => ({ value: v, label: B.fullscreen[v] })),
-      { title: B.fullscreenTitle, desc: B.fullscreenDesc, icon: 'fullscreen' },
-    ).parts.row,
+    fullscreen.row,
   ];
   const element = page(B.title, [
     group(B.groupPersonality, personality, B.groupPersonalityDesc),
@@ -199,5 +224,5 @@ export function behaviorPage(ctx: PageContext): PageView {
     h('p', { class: 'page-note' }, [icon('info'), h('span', { text: B.maximizedNote })]),
     h('p', { class: 'page-note' }, [icon('info'), h('span', { text: B.extrasPointer })]),
   ]);
-  return { id: 'behavior', title: B.title, element };
+  return { id: 'behavior', title: B.title, element, onShow: syncFullscreenNote };
 }

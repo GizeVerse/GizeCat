@@ -1,9 +1,21 @@
 // Public entry point of the cat's behaviour simulation.
-import type { CreateCatSim } from '../../shared/sim';
+import type { PersistedCat } from '../../shared/catState';
+import type { CatSim, CreateCatSim } from '../../shared/sim';
 import { CatSimImpl } from './sim';
 
 /** Creates the cat simulation (see src/shared/sim.ts for the contract). */
 export const createCatSim: CreateCatSim = (opts) => new CatSimImpl(opts);
+
+/**
+ * 1.4.0 (profile import): hands an imported cat to this core's simulation (CatSimImpl.adoptCat:
+ * validated, traits clamped, lastPosition kept). False, changing nothing, when `sim` is another
+ * CatSim implementation (a test fake); throws when `next` is not a valid persisted cat.
+ */
+export function adoptCatInto(sim: CatSim, next: PersistedCat): boolean {
+  if (!(sim instanceof CatSimImpl)) return false;
+  sim.adoptCat(next);
+  return true;
+}
 
 export { migrateCatState } from './migrate';
 export type { MigrationResult } from './migrate';

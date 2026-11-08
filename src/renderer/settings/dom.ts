@@ -70,6 +70,8 @@ export const GLYPH = {
   hide: '\uED1A',
   folder: '\uE8B7',
   download: '\uE896',
+  /** 1.4.0: "Load a cat from a file" (Segoe MDL2 Upload). */
+  upload: '\uE898',
   power: '\uE7E8',
   lock: '\uE72E',
   globe: '\uE774',

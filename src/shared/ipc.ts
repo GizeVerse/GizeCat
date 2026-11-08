@@ -8,10 +8,11 @@ import type { BehaviorState, CatRenderState, HitRegion } from './cat';
 import type { CatSummary } from './catState';
 import { IDENTITY } from './identity';
 import type { PerceptionStatus, SceneReport, VisualEventKind, VisualFeatures } from './perception';
+import type { ProfilePart, ProfileParts, ProfilePreview, ProfileRejectReason } from './profileTransfer';
 import type { SurfaceDiagnostics } from './surfaceDiagnostics';
 import type { SurfaceLinesPayload } from './surfaceDiagnosticsSchema';
 import type { SurfaceStatus } from './surfaces';
-import type { PatchResult, Settings, SettingsPatch } from './settings';
+import type { BehaviorId, PatchResult, Settings, SettingsPatch } from './settings';
 
 /** Custom privileged scheme serving bundled renderer files (never file://). Frozen (identity.ts). */
 export const APP_SCHEME = IDENTITY.scheme;
@@ -40,6 +41,14 @@ export const IPC = {
   settingsGetSurfaceDiagnostics: 'settings:get-surface-diagnostics',
   /** v1.2 behaviour profile for Diagnostics -> Behaviour (validated in main; kinds, counts and durations only). */
   settingsGetBehaviorProfile: 'settings:get-behavior-profile',
+  /**
+   * 1.4.0 profile transfer ("Take your cat to another device"). Main builds, parses, previews and
+   * applies the profile; files come only from main's own save/open dialogs, and the renderer never
+   * sends file content or a path (only the export option, a token and the chosen parts).
+   */
+  settingsExportProfile: 'settings:export-profile',
+  settingsOpenProfile: 'settings:open-profile',
+  settingsApplyProfile: 'settings:apply-profile',
   // main -> settings
   settingsStateChanged: 'settings:state-changed',
 } as const;
@@ -123,6 +132,46 @@ export const SetApiKeySchema = z
     key: z.string().trim().min(8).max(400).nullable(),
   })
   .strict();
+
+// ---- 1.4.0 profile transfer (src/shared/profileTransfer.ts holds the file format)
+
+/** A pending import's token: 128 random bits in hex, issued by main for a file picked in its own dialog. */
+export const PROFILE_TOKEN_PATTERN = /^[0-9a-f]{32}$/;
+
+export const ExportProfileRequestSchema = z.object({ includeMemory: z.boolean() }).strict();
+
+export const ProfilePartsSchema = z
+  .object({ cat: z.boolean(), appearance: z.boolean(), preferences: z.boolean(), memory: z.boolean() })
+  .strict();
+// Compile-time pin: the schema's keys are exactly the profile parts.
+const _profilePartsSchemaMatches: [keyof z.infer<typeof ProfilePartsSchema>] extends [ProfilePart]
+  ? [ProfilePart] extends [keyof z.infer<typeof ProfilePartsSchema>]
+    ? true
+    : false
+  : false = true;
+
+export const ApplyProfileRequestSchema = z.object({ token: z.string().regex(PROFILE_TOKEN_PATTERN), parts: ProfilePartsSchema }).strict();
+
+/** Export outcome. Reason codes only; the renderer words them (strings.ts S.profile). */
+export type ProfileExportResponse =
+  | { status: 'saved'; fileName: string }
+  | { status: 'cancelled' }
+  | { status: 'busy' }
+  | { status: 'failed' }
+  | { status: 'unavailable' };
+
+/** Open outcome: a preview (plain data) and the token that applies it, or why not. */
+export type ProfileOpenResponse =
+  | { status: 'ready'; token: string; preview: ProfilePreview }
+  | { status: 'rejected'; reason: ProfileRejectReason | 'unreadable'; formatMajor?: number }
+  | { status: 'cancelled' }
+  | { status: 'busy' }
+  | { status: 'unavailable' };
+
+export type ProfileApplyFailureReason = 'expired' | 'nothing-selected' | 'invalid-request' | 'unavailable' | 'failed';
+export type ProfileApplyResponse =
+  | { ok: true; name: string; catReplaced: boolean; keptOff: BehaviorId[] }
+  | { ok: false; reason: ProfileApplyFailureReason };
 
 export const SettingsPatchSchema = z.record(z.string().max(32), z.record(z.string().max(64), z.unknown()));
 
@@ -231,5 +280,11 @@ export interface SettingsApi {
   getSurfaceDiagnostics(): Promise<SurfaceDiagnostics>;
   /** v1.2: what the cat did this session (validated in main against BehaviorProfileSchema; no ids, titles or positions). */
   getBehaviorProfile(): Promise<BehaviorProfileSnapshot>;
+  /** 1.4.0: saves this cat to a file the user picks in main's save dialog. */
+  exportProfile(opts: { includeMemory: boolean }): Promise<ProfileExportResponse>;
+  /** 1.4.0: main's open dialog; returns a preview and a token, never the file's content or path. */
+  openProfile(): Promise<ProfileOpenResponse>;
+  /** 1.4.0: applies the chosen parts of the file behind `token` (after the user confirmed the preview). */
+  applyProfile(token: string, parts: ProfileParts): Promise<ProfileApplyResponse>;
   onStateChanged(cb: (state: SettingsViewState) => void): () => void;
 }

@@ -5,17 +5,23 @@
 // the page keeps working; it simply is not remembered.
 //
 // The web settings are the defaults with screen analysis and AI forced off; only the cat's name,
-// its appearance, its personality (one of the named presets: the values it governs are stored, as
-// migrateSettings re-derives the preset from them) and the sound switch and volume are stored.
+// its appearance, the behaviour and interaction values a profile carries (PROFILE_SETTINGS_FIELDS
+// in src/shared/profileTransfer.ts: the personality the sheet offers as named presets, whose
+// values migrateSettings re-derives the preset from, plus the other carried preferences) and the
+// sound switch and volume are stored.
 //
 // 1.4.0: "Start over" removes both keys (clearAll) after freezing the cat store, so the pagehide
 // save cannot write the old cat back before the reload; requestPersistence asks the browser to keep
 // the data (navigator.storage.persist, for the installed app). The keys and the format stay v1:
-// the additions are read through migrateSettings like everything else.
+// the additions are read through migrateSettings like everything else. A profile loaded from a file
+// ("Take your cat to another device", profileUi.ts) is saved here too, so its preferences survive a
+// reload and the next export carries them intact; a custom personality mix from another device is
+// kept (the sheet then shows no preset selected).
 import { migrateCatState } from '../core/behavior/migrate';
 import type { PersistedCat } from '../shared/catState';
+import { PROFILE_SETTINGS_FIELDS } from '../shared/profileTransfer';
 import { applySettingsPatch, defaultSettings, migrateSettings, SETTINGS_SCHEMA_VERSION, type Settings } from '../shared/settings';
-import { matchingPreset, PRESET_BEHAVIOR_KEYS, PRESET_INTERACTION_KEYS, presetPatch } from '../shared/settingsPresets';
+import { PRESET_BEHAVIOR_KEYS, PRESET_INTERACTION_KEYS } from '../shared/settingsPresets';
 import type { Logger } from '../main/contracts';
 
 export const CAT_STORAGE_KEY = 'gizecat.web.cat.v1';
@@ -73,10 +79,27 @@ export function forceWebPrivacy(s: Settings): Settings {
   return s;
 }
 
+/** The listed keys of `section`, arrays copied (the carried behaviour and interaction values). */
+function pickKeys(section: Readonly<Record<string, unknown>>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (!Object.hasOwn(section, k)) continue;
+    const v = section[k];
+    out[k] = Array.isArray(v) ? [...(v as unknown[])] : v;
+  }
+  return out;
+}
+
+/** Behaviour keys stored on the web: the preset-governed ones and every carried one. */
+const STORED_BEHAVIOR_KEYS: readonly string[] = [...new Set<string>([...PRESET_BEHAVIOR_KEYS, ...PROFILE_SETTINGS_FIELDS.behavior])];
+const STORED_INTERACTION_KEYS: readonly string[] = [...new Set<string>([...PRESET_INTERACTION_KEYS, ...PROFILE_SETTINGS_FIELDS.interaction])];
+
 /**
- * The web settings: defaults, plus the stored cat name, appearance, personality and sound from
- * `raw` when it is usable. The web offers only the named personalities: stored values that match
- * one select it; anything else (nothing stored, a custom mix) is Playful, the default.
+ * The web settings: defaults, plus the stored cat name, appearance, carried behaviour and
+ * interaction values and sound from `raw` when it is usable. migrateSettings defaults anything
+ * missing or invalid, so data without a personality reads as Playful (the defaults are its values);
+ * stored values that match a preset select it, and a custom mix (only a loaded profile makes one on
+ * the web) is kept, with activityPreset re-derived by applySettingsPatch.
  */
 export function webSettings(raw: unknown): Settings {
   let s = defaultSettings();
@@ -87,8 +110,8 @@ export function webSettings(raw: unknown): Settings {
       s.appearance = { ...stored.appearance };
       s.sound.enabled = stored.sound.enabled;
       s.sound.volume = stored.sound.volume;
-      const preset = matchingPreset(stored) ?? 'playful';
-      const r = applySettingsPatch(s, presetPatch(preset));
+      const r = applySettingsPatch(s, { behavior: pickKeys(stored.behavior, STORED_BEHAVIOR_KEYS), interaction: pickKeys(stored.interaction, STORED_INTERACTION_KEYS) });
+      // Refused (never expected: migrated values are valid): the defaults, Playful, stand.
       if (r.ok) s = r.settings;
     } catch {
       // Unusable: the defaults stand.
@@ -100,10 +123,8 @@ export function webSettings(raw: unknown): Settings {
 
 /** What is stored of the settings (a partial settings object migrateSettings reads back). */
 export function storedSettings(s: Settings): Record<string, unknown> {
-  const behavior: Record<string, unknown> = { activityPreset: s.behavior.activityPreset };
-  for (const k of PRESET_BEHAVIOR_KEYS) behavior[k] = s.behavior[k];
-  const interaction: Record<string, unknown> = {};
-  for (const k of PRESET_INTERACTION_KEYS) interaction[k] = s.interaction[k];
+  const behavior: Record<string, unknown> = { activityPreset: s.behavior.activityPreset, ...pickKeys(s.behavior, STORED_BEHAVIOR_KEYS) };
+  const interaction = pickKeys(s.interaction, STORED_INTERACTION_KEYS);
   return {
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     general: { catName: s.general.catName },

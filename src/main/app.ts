@@ -1,9 +1,10 @@
 // Composition root and lifecycle. Runs after app 'ready' with the logger and
 // settings that index.ts prepared before ready.
+import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { app, BaseWindow, BrowserWindow, globalShortcut, ipcMain, Menu, powerMonitor, safeStorage, screen, session, shell } from 'electron';
-import { createCatSim, migrateCatState, summarizeCat } from '../core/behavior';
+import { adoptCatInto, createCatSim, migrateCatState, summarizeCat } from '../core/behavior';
 import { simWorld } from '../core/display/simWorld';
 import { createGestureRecognizer } from '../core/interaction/gestures';
 import { BRAND } from '../shared/brand';
@@ -47,6 +48,8 @@ import { runtimeCapabilities } from './platform/runtime';
 import { createX11CompositorProbe, NO_COMPOSITOR_REASON } from './linux/x11Compositor';
 import { createSurfaceOutlines } from './overlay/surfaceLines';
 import { createPerceptionService } from './perception';
+import { createElectronProfileDialogs, nodeProfileFs } from './profile/profileDialogs';
+import { createProfileTransferService } from './profile/profileService';
 import { installAppProtocol } from './protocol';
 import { createWindowRegistry, installSecurity } from './security';
 import { createSettingsWindowController } from './settingsWindow';
@@ -659,6 +662,32 @@ export function startApp(boot: AppBootstrap): RunningApp {
     refreshUi();
   });
 
+  // 1.4.0 "Take your cat to another device": main-side export/import (profileService.ts). Files come
+  // only from these dialogs; the settings renderer gets previews and reason codes, never paths.
+  const profiles = createProfileTransferService({
+    settings,
+    getCat: () => sim.serialize(),
+    adoptCat: (cat) => {
+      if (!adoptCatInto(sim, cat)) throw new Error('this simulation cannot adopt a cat');
+      void catStore.save();
+      refreshUi();
+    },
+    dialogs: createElectronProfileDialogs({
+      parent: () => {
+        const wc = settingsWindow.webContents;
+        return wc ? BrowserWindow.fromWebContents(wc) : null;
+      },
+      documentsDir: () => app.getPath('documents'),
+    }),
+    fs: nodeProfileFs,
+    app: { version, host: platform.id },
+    newToken: () => randomBytes(16).toString('hex'),
+    wallClock: Date.now,
+    clock: () => performance.now(),
+    basename: (p) => path.basename(p),
+    logger: logger.child('profile'),
+  });
+
   const ipc = registerIpcHandlers({
     ipcMain,
     registry,
@@ -676,6 +705,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     },
     getSurfaceDiagnostics: () => surfaceDiagnostics.get().diagnostics,
     getBehaviorProfile: () => sim.behaviorProfile(),
+    profiles,
     clock: () => performance.now(),
   });
 

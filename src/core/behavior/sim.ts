@@ -4,7 +4,7 @@
 // -> simActivities); this file adds the CatSim API and the per-tick output.
 import type { AnimClip, BehaviorState } from '../../shared/cat';
 import type { BehaviorProfileSnapshot } from '../../shared/behaviorProfile';
-import type { PersistedCat } from '../../shared/catState';
+import type { PersistedCat, Traits } from '../../shared/catState';
 import { PersistedCatSchema } from '../../shared/catState';
 import type { Point, Rect } from '../../shared/geometry';
 import { clamp } from '../../shared/geometry';
@@ -16,7 +16,7 @@ import type { WorldGeometry } from '../../shared/world';
 import { clipFor } from './clips';
 import { huntBaseline } from './hunt';
 import { clearMemory } from './memory';
-import { newPersistedCat } from './personality';
+import { newPersistedCat, TRAIT_MAX, TRAIT_MIN } from './personality';
 import { ACTIVE_STATES, ASLEEP_STATES, CALM_STATES, PHYSICAL_STATES, STATE_CHANGE_WINDOW_MS, STATE_SPECS } from './states';
 import { baseContentment, stepStats } from './stats';
 import { SimActivities } from './simActivities';
@@ -159,6 +159,31 @@ export class CatSimImpl extends SimActivities implements CatSim {
     this.rough.clear();
     this.cat.drives.huntDrive = huntBaseline(clamp(this.settings.behavior.cursorPlay, 0, 1));
     // Route preferences follow the new personality.
+    if (this.mover.setConfig(this.moverConfig())) this.snapNext = true;
+    this.markDirty(true);
+  }
+
+  /**
+   * 1.4.0 (profile import): replaces the live cat with `next`, already computed and validated by
+   * the host (applyProfile in src/shared/profileTransfer.ts). Traits are clamped to the generator
+   * band; lastPosition stays this device's. Another catId is another cat: the session's habits and
+   * rough-handling memory start over and the hunt drive starts from its baseline, as after
+   * resetPersonality. Throws (changing nothing) when `next` is not a valid persisted cat.
+   */
+  adoptCat(next: PersistedCat): void {
+    const cat = PersistedCatSchema.parse(next);
+    for (const k of Object.keys(cat.traits) as Array<keyof Traits>) cat.traits[k] = clamp(cat.traits[k], TRAIT_MIN, TRAIT_MAX);
+    cat.lastPosition = this.cat.lastPosition;
+    const other = cat.catId !== this.cat.catId;
+    this.cat = cat;
+    if (other) {
+      this.habit.clear();
+      this.surfaceHabit.clear();
+      this.rough.clear();
+      this.restAccumMs = 0;
+      this.cat.drives.huntDrive = huntBaseline(clamp(this.settings.behavior.cursorPlay, 0, 1));
+    }
+    // Route preferences follow the (possibly) new personality.
     if (this.mover.setConfig(this.moverConfig())) this.snapNext = true;
     this.markDirty(true);
   }

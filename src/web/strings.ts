@@ -8,6 +8,7 @@
 // Android app. Wording never promises what was not observed on a device.
 import { BRAND } from '../shared/brand';
 import type { RenderStyle, SkinId } from '../shared/cat';
+import type { ProfilePart, ProfileRejectReason } from '../shared/profileTransfer';
 import type { ActivityPresetId } from '../shared/settingsPresets';
 import type { InstallHint } from './hostMode';
 import type { PersistenceState } from './storage';
@@ -86,9 +87,59 @@ export const WS = {
     },
     updateReady: `A new version of ${P} is ready. It starts the next time you open ${P}.`,
   },
-  // Wired up later (profile export/import, src/shared/profileTransfer.ts).
+  // Profile export/import (profileUi.ts, src/shared/profileTransfer.ts). Button names avoid the
+  // words the web spec finds the toolbar buttons by (Pause, Resume, Call the cat, Sleep, Wake, Turn sound).
   transfer: {
     title: 'Take your cat to another device',
+    desc: `Save ${P} to a file and load it on another computer, an iPad or an Android tablet. Nothing is uploaded and there is no account: the file goes only where you put it. It is a copy, not a sync.`,
+    includeMemory: 'Include what it has learned (counters, learned habits and bond)',
+    saveButton: 'Save my cat to a file',
+    loadButton: 'Load a cat from a file',
+    saved: 'Saved. Find the file in your downloads.',
+    savedApp: 'Saved.',
+    shared: 'Handed over to the share sheet.',
+    cancelled: 'Nothing was saved.',
+    busy: 'A save window is already open.',
+    saveFailed: 'The file could not be saved.',
+    exportFailed: 'Your cat could not be written to a file.',
+    confirmTitle: (name: string) => `Load ${name}?`,
+    replace: (incoming: string, current: string) =>
+      `${incoming} is a different cat. Loading it replaces ${current} on this device: ${current}’s mood, memories and what it has learned here are cleared. This cannot be undone.`,
+    same: (name: string) => `This is ${name}, saved on another device. The values you choose replace the ones here.`,
+    savedWith: (version: string | null, host: string | null, date: string | null) =>
+      `Saved with ${P}${version ? ` ${version}` : ''}${host ? ` on ${host}` : ''}${date ? `, ${date}` : ''}.`,
+    newerMinor: `It was saved by a newer ${P}; a few details may not load.`,
+    choose: 'What to load',
+    parts: {
+      cat: 'Name, age and personality',
+      appearance: 'Look (coat, style, size and effects)',
+      preferences: 'Behaviour, handling and sound preferences',
+      memory: 'What it has learned (counters, learned habits and bond)',
+    } satisfies Record<ProfilePart, string>,
+    partChanges: (n: number) => `${n} ${n === 1 ? 'change' : 'changes'}`,
+    partUnchanged: 'Same as now',
+    partMissing: 'Not in this file',
+    detailsTitle: (n: number) => `What changes (${n})`,
+    noChanges: 'Nothing in this file differs from what is here now.',
+    memoryNeedsCat: 'What it has learned can only be loaded together with the cat itself.',
+    skipped: (n: number) => `${n} ${n === 1 ? 'value was' : 'values were'} not recognised and stay as they are here.`,
+    keptOff: 'Walking on browser, File Explorer and terminal tabs stays off, because it is off here.',
+    notChanged: 'Never changed by a file: screen analysis and AI (off on this device), startup, shortcuts and other choices that belong to one device.',
+    confirm: 'Load',
+    cancel: 'Keep things as they are',
+    applyFailed: 'Nothing was changed: the profile could not be applied.',
+    storageFailed: 'Nothing was changed: this device refused to store the cat.',
+    nothingSelected: 'Choose at least one thing to load.',
+    rejected: {
+      'too-large': `This file is too large to be a ${P} profile.`,
+      'not-json': `This file is not a ${P} profile.`,
+      'not-a-profile': `This file is not a ${P} profile.`,
+      'newer-format': `This profile was saved by a newer ${P}. Update ${P} on this device, then try again.`,
+      'unsupported-format': 'This profile format is not supported.',
+      'other-character': `This file holds a different ${BRAND.platform} character, which this version cannot load.`,
+      invalid: 'This profile is damaged or was edited by hand, so it cannot be loaded.',
+      unreadable: 'The file could not be read.',
+    } satisfies Record<ProfileRejectReason | 'unreadable', string>,
   },
   privacy: {
     title: 'Privacy',

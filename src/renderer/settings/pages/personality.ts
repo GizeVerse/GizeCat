@@ -6,6 +6,7 @@ import { confirmDanger } from '../dialog';
 import { h, icon } from '../dom';
 import { behaviorStateLabel, formatAge, formatCount, formatDecimal, formatPercent, formatRelativeTime, memoryDetailLabel, memoryKindLabel } from '../format';
 import { pagePoll } from '../livePoll';
+import { transferRows } from '../profileView';
 import { coatArt } from '../skins';
 import { S } from '../strings';
 
@@ -88,6 +89,8 @@ export function personalityPage(ctx: PageContext): PageView {
   const recent = card([]);
   const reset = dangerRow(ctx, P.resetTitle, P.resetDesc, P.resetButton, P.resetConfirmTitle, P.resetConfirmText, 'resetPersonality', P.resetDone);
   const clear = dangerRow(ctx, P.clearTitle, P.clearDesc, P.clearButton, P.clearConfirmTitle, P.clearConfirmText, 'clearHistory', P.clearDone);
+  // 1.4.0: "Take your cat to another device", right before "Start over".
+  const transfer = transferRows(ctx);
 
   const element = page(P.title, [
     profile,
@@ -97,6 +100,7 @@ export function personalityPage(ctx: PageContext): PageView {
     group(P.groupLearned, [prefs]),
     group(P.groupCounters, [counters]),
     group(P.groupMemories, [recent]),
+    group(S.profile.groupTitle, [transfer.exportRow.row, transfer.importRow.row], S.profile.groupDesc),
     group(P.groupReset, [reset.row, clear.row]),
   ]);
 

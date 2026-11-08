@@ -1952,3 +1952,76 @@ p.row-desc {
 .test-details .kv {
   gap: 4px 20px;
 }
+
+/* ---------- 1.4.0 take your cat to another device (profileView.ts) ---------- */
+
+.transfer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.check-row input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.check-row.is-disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.check-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.check-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+.check-list-title {
+  font-weight: 600;
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.modal-body .profile-note {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.profile-changes {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.profile-changes summary {
+  cursor: pointer;
+  color: var(--accent-text);
+}
+
+.profile-changes .bullets {
+  max-height: 180px;
+  overflow-y: auto;
+}

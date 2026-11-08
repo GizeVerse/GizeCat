@@ -7,9 +7,10 @@ import { BRAND } from '../../shared/brand';
 import type { ActivityClass, FallCause, HuntOutcome, LeaveKind, MoodExposure, ProfileContext, StayEndReason, StaySurfaceKind, ThrowReactionKind } from '../../shared/behaviorProfile';
 import type { BehaviorState, LandingImpact, RenderStyle, SkinId } from '../../shared/cat';
 import type { Counters, Preferences, Stats, Traits } from '../../shared/catState';
-import type { AppStatus } from '../../shared/ipc';
+import type { AppStatus, ProfileApplyFailureReason } from '../../shared/ipc';
 import type { PerceptionMode, VisualEventKind } from '../../shared/perception';
 import { CAPABILITY_LABELS } from '../../shared/platform';
+import type { ProfilePart, ProfileRejectReason } from '../../shared/profileTransfer';
 import type { AiProviderId, LivelyBehavior, Settings, ToggleableBehavior } from '../../shared/settings';
 import type { ActivityPresetId } from '../../shared/settingsPresets';
 import type { DecisionDiagnostics, DecisionTarget, NavRejectReason, ProviderDiagnostics, ProviderSkipReason, TargetAvailability } from '../../shared/surfaceDiagnostics';
@@ -323,6 +324,9 @@ export const S = {
     fullscreenTitle: 'When an app is full screen',
     fullscreenDesc: 'Games, videos and presentations on the cat’s monitor.',
     fullscreen: { hide: 'Hide', quiet: 'Stay quiet', ignore: 'Carry on' } satisfies Record<Settings['behavior']['fullscreenBehavior'], string>,
+    /** 1.4.0: under the row where full-screen apps are not detected (main's fullscreenAware capability is unavailable). */
+    fullscreenNoteMac: `On macOS, ${PRODUCT} cannot tell when an app is full screen, and the cat can also appear over full-screen apps, so this setting has no effect here.`,
+    fullscreenNoteElsewhere: 'Full-screen apps are not detected on this platform, so this setting has no effect here.',
     behaviors: {
       chaseCursor: { title: 'Chase the pointer', desc: 'Runs after your mouse pointer when it moves quickly nearby.' },
       pawAtCursor: { title: 'Paw at the pointer', desc: 'Bats at the pointer when it hovers close.' },
@@ -679,6 +683,70 @@ export const S = {
       edge: 'on the screen edge',
     } satisfies Record<MemoryDetail, string>,
   },
+  /** 1.4.0 "Take your cat to another device" (Personality page; profileView.ts). Main sends reason codes, worded here. */
+  profile: {
+    groupTitle: 'Take your cat to another device',
+    groupDesc: `Save ${PRODUCT} to a file and load it on another computer, an iPad or an Android tablet. The file stays where you save it: nothing is uploaded and there is no account. It is a copy, not a sync.`,
+    exportTitle: 'Save your cat to a file',
+    exportDesc: 'Its name, age, look, personality and your behaviour, handling and sound preferences. API keys, screen-analysis and AI settings, window titles and folder paths are never included.',
+    includeMemory: 'Include what it has learned (counters, learned habits and bond)',
+    exportButton: 'Save to file…',
+    exportDone: (fileName: string) => `Saved as ${fileName}.`,
+    exportCancelled: 'Nothing was saved.',
+    exportFailed: 'The file could not be saved. Nothing was written.',
+    importTitle: 'Load a cat from a file',
+    importDesc: `Choose a ${PRODUCT} profile file. You see what it would change and choose what to load before anything changes.`,
+    importButton: 'Load from file…',
+    confirmTitle: (name: string) => `Load ${name}?`,
+    confirmReplace: (incoming: string, current: string) =>
+      `${incoming} is a different cat. Loading it replaces ${current} on this device: ${current}’s mood, memories and what it has learned here are cleared. This cannot be undone.`,
+    confirmSame: (name: string) => `This is ${name}, saved on another device. The values you choose replace the ones here.`,
+    savedWith: (version: string | null, host: string | null, date: string | null) =>
+      `Saved with ${PRODUCT}${version ? ` ${version}` : ''}${host ? ` on ${host}` : ''}${date ? `, ${date}` : ''}.`,
+    newerMinor: `It was saved by a newer ${PRODUCT}; a few details may not load.`,
+    choose: 'What to load',
+    parts: {
+      cat: 'Name, age and personality',
+      appearance: 'Look (coat, style, size and effects)',
+      preferences: 'Behaviour, handling and sound preferences',
+      memory: 'What it has learned (counters, learned habits and bond)',
+    } satisfies Record<ProfilePart, string>,
+    partChanges: (n: number) => plural(n, 'change', 'changes'),
+    partUnchanged: 'Same as now',
+    partMissing: 'Not in this file',
+    memoryNeedsCat: 'What it has learned can only be loaded together with the cat itself.',
+    skipped: (n: number) => `${plural(n, 'value was', 'values were')} not recognised and stay as they are here.`,
+    keptOff: 'Walking on browser, File Explorer and terminal tabs stays off, because it is off on this device.',
+    notChanged: 'Never changed by a file: screen analysis and AI, API keys, startup, shortcuts, click-through, hiding from screenshots, multiple monitors and diagnostics.',
+    detailsTitle: 'What changes',
+    noChanges: 'Nothing in this file differs from what is here now.',
+    changeLine: (label: string, from: string, to: string) => `${label}: ${from} → ${to}`,
+    fieldBornAt: 'Born',
+    listValue: (n: number) => plural(n, 'entry', 'entries'),
+    emptyValue: '—',
+    confirmButton: 'Load',
+    importDone: (name: string) => `${name} is here.`,
+    importDoneUpdated: (name: string) => `${name} is up to date with the file.`,
+    busy: 'A file window is already open.',
+    unavailable: 'Saving and loading a cat is not available right now.',
+    rejected: {
+      'too-large': `This file is too large to be a ${PRODUCT} profile.`,
+      'not-json': `This file is not a ${PRODUCT} profile.`,
+      'not-a-profile': `This file is not a ${PRODUCT} profile.`,
+      'newer-format': `This profile was saved by a newer ${PRODUCT}. Update ${PRODUCT} on this device, then try again.`,
+      'unsupported-format': 'This profile format is not supported.',
+      'other-character': `This file holds a different ${BRAND.platform} character, which this version cannot load.`,
+      invalid: 'This profile is damaged or was edited by hand, so it cannot be loaded.',
+      unreadable: 'The file could not be read.',
+    } satisfies Record<ProfileRejectReason | 'unreadable', string>,
+    applyFailed: {
+      expired: 'That file was opened too long ago. Choose it again.',
+      'nothing-selected': 'Choose at least one thing to load.',
+      'invalid-request': 'That did not work. Try again.',
+      unavailable: 'Loading a cat is not available right now.',
+      failed: 'Nothing was changed: the profile could not be applied.',
+    } satisfies Record<ProfileApplyFailureReason, string>,
+  },
   states: {
     sleeping: 'Sleeping',
     wakingUp: 'Waking up',
@@ -727,6 +795,9 @@ export const S = {
     notRegistered: 'Not registered',
     shortcutsOff: 'Turned off',
     launchAtLogin: 'Start with Windows',
+    /** 1.4.0: the same status row on macOS and on other platforms (the General page uses the same terms). */
+    launchAtLoginMac: 'Open at login',
+    launchAtLoginElsewhere: 'Start when you sign in',
     active: 'Active',
     inactive: 'Inactive',
     loginOff: 'Off',
