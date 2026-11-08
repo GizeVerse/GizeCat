@@ -44,6 +44,7 @@ tar -xf "$STAGE/src.tar" -C "$WORK"
 cd "$WORK"
 VERSION="$(node -p "require('./package.json').version")"
 COMMIT="${GIZECAT_COMMIT:-unknown}"
+BUILD_ENV="${GIZECAT_BUILD_ENV:-a Linux container (node:24-bookworm-slim)}"
 log "version $VERSION, commit $COMMIT, node $(node --version)"
 
 log "npm ci"
@@ -90,7 +91,7 @@ done
 cat > "$OUT/README-adhoc.txt" <<EOF
 GizeCat $VERSION for macOS: UNSIGNED AD-HOC TEST BUILDS, NOT NOTARIZED.
 
-Built from commit $COMMIT in a Linux container (node:24-bookworm-slim) with
+Built from commit $COMMIT in $BUILD_ENV with
 electron-builder --mac dir, then re-signed ad hoc with rcodesign $RCODESIGN_VERSION.
 No Developer ID signature, no hardened runtime, no notarization. Never run here:
 a build is not a test.
