@@ -12,16 +12,26 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="GizeCat" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>GizeCat</title>
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
-    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png" />
     <link rel="stylesheet" href="web.css" />
     <script type="module" src="main.js"></script>
   </head>
   <body>
     <h1 class="visually-hidden">GizeCat</h1>
+    <!-- The first screen, CSS only (web.css; the page allows no inline script): main.js removes it when
+         the cat starts. If that never happens (the script could not load, or the browser is too old to
+         run it) the stylesheet replaces the waiting message with the failure message by itself. -->
+    <div id="boot" class="boot" role="status">
+      <div class="boot-wait">
+        <span class="boot-spinner" aria-hidden="true"></span>
+        <p>GizeCat is waking up.</p>
+      </div>
+      <p class="boot-failed">GizeCat has not started. If it stays like this, check your connection and open it again. GizeCat needs an up-to-date browser.</p>
+    </div>
     <header class="bar">
       <div class="controls" role="group" aria-label="Cat controls">
         <button type="button" id="btn-call">Call the cat</button>

@@ -5,9 +5,10 @@
 //   --web-only  build only the web host; out/web (and out/web-test) are replaced, the rest of out/ is kept
 //   --web-test  also build out/web-test: the web host with the read-only window.__gizecatWebTest hook
 //               for tests/web (never in out/web)
-// 1.4.0 (installable web app): the web host also gets its manifest, icons (scripts/web-icons.mjs)
-// and, in production builds, a versioned service worker (sw.js, from src/web/sw.ts) whose precache
-// list is every other file of the build. out/web is then checked by scripts/web-csp.mjs. The web
+// 1.4.0 (installable web app): the web host also gets its manifest, icons (scripts/web-icons.mjs),
+// a static third-party notices page (licenses.html, scripts/web-licenses.mjs) and, in production
+// builds, a versioned service worker (sw.js, from src/web/sw.ts) whose precache list is every other
+// file of the build. out/web is then checked by scripts/web-csp.mjs. The web
 // path needs no Windows tooling (--web-only skips the native helper).
 import { build, context } from 'esbuild';
 import crypto from 'node:crypto';
@@ -17,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { buildUiaHelper } from './build-uia-helper.mjs';
 import { checkWebBuild, listFiles, SW_FILE } from './web-csp.mjs';
 import { writeWebIcons } from './web-icons.mjs';
+import { writeWebLicenses } from './web-licenses.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dev = process.argv.includes('--dev');
@@ -113,7 +115,7 @@ function copyStatic() {
 
 const webDirs = () => [webDir, ...(webTest ? [webTestDir] : [])];
 
-/** The web host's page, stylesheet and manifest next to its bundle, and the icons (scripts/web-icons.mjs). */
+/** The web host's page, stylesheet and manifest next to its bundle, the icons (scripts/web-icons.mjs) and the notices page (scripts/web-licenses.mjs). */
 function copyWebStatic() {
   const srcDir = path.join(root, 'src', 'web');
   for (const dstDir of webDirs()) {
@@ -122,6 +124,7 @@ function copyWebStatic() {
       if (f.endsWith('.html') || f.endsWith('.css') || f.endsWith('.webmanifest')) fs.copyFileSync(path.join(srcDir, f), path.join(dstDir, f));
     }
     writeWebIcons(dstDir);
+    writeWebLicenses(dstDir);
   }
 }
 

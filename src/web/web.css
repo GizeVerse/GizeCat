@@ -2,9 +2,12 @@
    the cat's room, its canvas covers it exactly, and the floor is the bottom of the screen (above the
    home indicator or gesture bar: src/web/safeArea.ts). A fixed toolbar sits on top; settings,
    privacy and About live in a sheet (a native <dialog>): a bottom sheet on narrow windows, a side
-   sheet from 700 CSS px, so the cat stays visible as a live preview. */
+   sheet from 700 CSS px, so the cat stays visible as a live preview. Sized for any tablet window:
+   full screen, portrait or landscape, Split View, Slide Over and Stage Manager. */
 :root {
   color-scheme: light dark;
+  /* Behind the status bar of the Home Screen app, whose text is always white (black-translucent). */
+  --status-scrim: rgb(35 29 22 / 0.62);
   --bg: #f6f1e7;
   --fg: #231d16;
   --muted: #5d5246;
@@ -21,6 +24,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
+    --status-scrim: transparent;
     --bg: #1b1814;
     --fg: #f1e9dc;
     --muted: #c2b5a2;
@@ -60,6 +64,9 @@ body {
 }
 
 body {
+  /* Fixed to the viewport: nothing for iPadOS to rubber-band, even where overscroll-behavior is ignored. */
+  position: fixed;
+  inset: 0;
   background: var(--bg);
   color: var(--fg);
   font: 1rem/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -81,6 +88,121 @@ textarea {
   -webkit-touch-callout: default;
 }
 
+/* ---- the first screen, before main.js runs (index.html; CSS only, the page allows no inline script).
+   main.js removes it when the cat starts. If it is still here after the wait below, the script could
+   not load or the browser is too old to run it (no script of ours is running to say so), and the
+   waiting message gives way to the failure message on its own. */
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem max(1.5rem, env(safe-area-inset-right)) 1.5rem max(1.5rem, env(safe-area-inset-left));
+  text-align: center;
+  color: var(--muted);
+}
+
+.boot > * {
+  grid-area: 1 / 1;
+  margin: 0;
+  max-width: 28rem;
+}
+
+.boot-wait {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  animation: boot-hide 0s linear 15s forwards;
+}
+
+.boot-wait p {
+  margin: 0;
+}
+
+.boot-spinner {
+  display: block;
+  box-sizing: border-box;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 3px solid var(--sheet-line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: boot-spin 0.9s linear infinite;
+}
+
+.boot-failed {
+  color: var(--fg);
+  visibility: hidden;
+  animation: boot-show 0s linear 15s forwards;
+}
+
+/* main.js reached the cat and the cat could not start: the message at once. */
+.boot.failed .boot-wait {
+  visibility: hidden;
+  animation: none;
+}
+
+.boot.failed .boot-failed {
+  visibility: visible;
+  animation: none;
+}
+
+/* The toolbar does nothing until main.js runs. With a failure the page still works without the cat. */
+#boot:not(.failed) ~ .bar {
+  visibility: hidden;
+}
+
+@keyframes boot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes boot-hide {
+  to {
+    visibility: hidden;
+  }
+}
+
+@keyframes boot-show {
+  to {
+    visibility: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-spinner {
+    animation: none;
+  }
+}
+
+/* With JavaScript off the <noscript> line says it all. */
+@media (scripting: none) {
+  .boot {
+    display: none;
+  }
+}
+
+/* ---- the Home Screen app's status bar (apple-mobile-web-app-status-bar-style: black-translucent):
+   the page runs under it, full screen, and its text is always white. The cream page would hide
+   white text, so a strip as tall as the status bar sits behind it in light mode. Its height is
+   env(safe-area-inset-top), zero everywhere there is no such bar (Safari tabs, Android, desktop). */
+@media (display-mode: standalone) {
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-top, 0px);
+    background: var(--status-scrim);
+    pointer-events: none;
+    z-index: 30;
+  }
+}
+
 /* ---- toolbar: above the canvas; only the buttons take the pointer (the rest of the strip is the cat's room) */
 .bar {
   position: fixed;
@@ -89,7 +211,7 @@ textarea {
   right: 0;
   z-index: 20;
   box-sizing: border-box;
-  padding: max(0.5rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.5rem max(0.75rem, env(safe-area-inset-left));
+  padding: calc(env(safe-area-inset-top, 0px) + 0.5rem) max(0.75rem, env(safe-area-inset-right)) 0.5rem max(0.75rem, env(safe-area-inset-left));
   pointer-events: none;
 }
 
@@ -126,8 +248,21 @@ button:active {
   color: var(--accent-fg);
 }
 
+/* A narrow window (Slide Over, a small Stage Manager window): the five buttons take less of the room. */
+@media (max-width: 480px) {
+  .controls {
+    gap: 0.35rem;
+  }
+
+  .controls button {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.92rem;
+  }
+}
+
 button:focus-visible,
 input:focus-visible,
+a:focus-visible,
 .card:focus-within {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
@@ -195,8 +330,13 @@ dialog.sheet {
     height: 100%;
     max-height: none;
     border-radius: 0;
-    padding-top: env(safe-area-inset-top);
     box-shadow: -0.5rem 0 2rem rgb(0 0 0 / 0.18);
+  }
+
+  /* The side sheet reaches the top of the screen. The inset is the head's padding, not the sheet's:
+     the sticky head then covers the status bar's area and nothing scrolls under it. */
+  dialog.sheet .sheet-head {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem);
   }
 
   @supports (height: 100dvh) {
@@ -250,6 +390,22 @@ dialog.sheet::backdrop {
 
 .sheet p {
   margin: 0.4rem 0;
+}
+
+.sheet a {
+  display: inline-block;
+  box-sizing: border-box;
+  min-height: 2.75rem;
+  padding: 0.55rem 0;
+  color: var(--accent);
+}
+
+/* The side sheet under the Home Screen app's status bar: the same strip, on the sheet and its head. */
+@media (display-mode: standalone) and (min-width: 700px) {
+  dialog.sheet,
+  dialog.sheet .sheet-head {
+    background: linear-gradient(var(--status-scrim), var(--status-scrim)) top / 100% env(safe-area-inset-top, 0px) no-repeat var(--sheet-bg);
+  }
 }
 
 .note {
@@ -543,4 +699,88 @@ html.gizecat-hold * {
   cursor: grabbing !important;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* ---- licenses.html (scripts/web-licenses.mjs): a plain document that scrolls and can be selected */
+html.doc {
+  touch-action: auto;
+  overscroll-behavior: auto;
+}
+
+html.doc,
+html.doc body {
+  position: static;
+  height: auto;
+  overflow: visible;
+}
+
+html.doc body {
+  box-sizing: border-box;
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: calc(env(safe-area-inset-top, 0px) + 0.75rem) max(1rem, env(safe-area-inset-right)) max(1.25rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+.doc h1 {
+  font-size: 1.6rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.doc h2 {
+  font-size: 1.25rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.doc h3 {
+  font-size: 1.05rem;
+  margin: 1.25rem 0 0.4rem;
+}
+
+.doc a {
+  color: var(--accent);
+}
+
+.doc-back a {
+  display: inline-block;
+  box-sizing: border-box;
+  min-height: 2.75rem;
+  padding: 0.55rem 0;
+}
+
+.doc-table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0.6rem 0;
+}
+
+.doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.doc th,
+.doc td {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--sheet-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.doc pre {
+  margin: 0.6rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--sheet-line);
+  border-radius: 0.5rem;
+  background: var(--sheet-bg);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.doc code {
+  overflow-wrap: anywhere;
 }

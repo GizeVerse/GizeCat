@@ -27,6 +27,7 @@ import { createUnavailableWin32Api } from '../main/win32/win32Api';
 import { createWindowTracker } from '../main/win32/windowTracker';
 import { OverlayRuntime } from '../renderer/overlay/runtime';
 import { browserAudioMaker, createSharedAudio } from './audioUnlock';
+import { settleBootScreen } from './bootScreen';
 import { createWebDisplayService } from './display';
 import { detectHostMode, installHint, readHostEnv, shouldRegisterServiceWorker, shouldRequestPersistence } from './hostMode';
 import { createWebLogger } from './logger';
@@ -39,7 +40,7 @@ import { createSettingsPanel, type SettingsPanel } from './settingsPanel';
 import { describeCat, isAsleep } from './status';
 import { createWebCatStore, openWebStorage, requestPersistence, type PersistenceState } from './storage';
 import { WS } from './strings';
-import { registerServiceWorker } from './swRegister';
+import { registerServiceWorker, type OfflineState } from './swRegister';
 import { installTestHook, type WebTestRecorder } from './testHook';
 import { createWebOverlays } from './webOverlays';
 
@@ -251,6 +252,8 @@ function boot(): void {
 
   let persistence: PersistenceState | null = null;
   let installPrompt: BeforeInstallPromptLike | null = null;
+  /** The offline copy (null in the Android app, whose files are inside the app); registerServiceWorker moves it on. */
+  let offline: OfflineState | null = mode.kind === 'android-app' ? null : 'unavailable';
   const storageText = (): string => {
     if (!storage.available) return WS.storage.unavailable(mode.place);
     if (mode.kind === 'android-app') return WS.storage.androidApp;
@@ -292,6 +295,7 @@ function boot(): void {
           .finally(() => panel?.refresh());
       },
       storageText,
+      offlineState: () => offline,
       version: __APP_VERSION__,
       onOpenChange: (open) => {
         // An open sheet owns the screen: the cat's press ends and it takes no pointer (blocked).
@@ -427,7 +431,10 @@ function boot(): void {
         else window.addEventListener('load', () => cb(), { once: true });
       },
       warn: (msg, data) => log.warn(msg, data),
-      onUpdateReady: () => settingsPanel?.showUpdateReady(),
+      onState: (state) => {
+        offline = state;
+        settingsPanel?.refresh();
+      },
     });
   }
 
@@ -488,6 +495,14 @@ function boot(): void {
   if (catLoad.source === 'recovered') catStore.markDirty();
   if (document.visibilityState === 'hidden') onVisibility();
   refreshUi();
+  // The first screen (index.html) ends here: the cat is up, or it could not be drawn at all.
+  settleBootScreen(document.getElementById('boot'), runtime !== null);
 }
 
-boot();
+try {
+  boot();
+} catch (err) {
+  // Whatever stopped the page before the cat ran: the failure message now, not after the stylesheet's wait.
+  settleBootScreen(document.getElementById('boot'), false);
+  throw err;
+}

@@ -13,6 +13,7 @@ import type { BehaviorId } from '../shared/settings';
 import type { ActivityPresetId } from '../shared/settingsPresets';
 import type { InstallHint } from './hostMode';
 import type { PersistenceState } from './storage';
+import type { OfflineState } from './swRegister';
 
 const P = BRAND.product;
 
@@ -95,8 +96,16 @@ export const WS = {
       if (persistence === 'best-effort') return `${base} ${place === 'app' ? 'The system' : 'The browser'} may clear them if space runs low.`;
       return base;
     },
-    updateReady: `A new version of ${P} is ready. It starts the next time you open ${P}.`,
   },
+  // The sheet's line about the offline copy, one per service worker state (swRegister.ts). Not
+  // shown in the Android app, whose files are inside the app itself.
+  offline: {
+    unavailable: `${P} cannot keep an offline copy here, so it needs a connection to start.`,
+    preparing: `Getting ${P} ready to work offline.`,
+    ready: `Ready to work offline: ${P} can start without a connection.`,
+    'update-ready': `A new version of ${P} is ready. Close ${P} and open it again to start it.`,
+    failed: `${P} could not save an offline copy. It keeps working while it is open, but it needs a connection to start again.`,
+  } satisfies Record<OfflineState, string>,
   // Profile export/import (profileUi.ts, src/shared/profileTransfer.ts). Button names avoid the
   // words the web spec finds the toolbar buttons by (Pause, Resume, Call the cat, Sleep, Wake, Turn sound).
   transfer: {
@@ -181,6 +190,7 @@ export const WS = {
     title: 'About',
     text: `${P} is the first ${BRAND.platform} character.`,
     version: (v: string) => `Version ${v}`,
+    licenses: 'Third-party notices',
   },
   status: {
     noScript: 'The cat needs JavaScript to live here.',

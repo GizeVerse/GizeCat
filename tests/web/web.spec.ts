@@ -28,6 +28,7 @@ const SHELL_FILES = [
   'icons/maskable-192.png',
   'icons/maskable-512.png',
   'index.html',
+  'licenses.html',
   'main.js',
   'manifest.webmanifest',
   'sw.js',
@@ -500,7 +501,7 @@ test('the manifest is served and parses; its icons exist at the declared sizes; 
   const m = (await res.json()) as { name: string; start_url: string; scope: string; display: string; id?: string; icons: Array<{ src: string; sizes: string; purpose: string }> };
   expect(m.name).toBe('GizeCat');
   expect([m.start_url, m.scope, m.display]).toEqual(['./', './', 'standalone']);
-  expect(m.id).toBeUndefined();
+  expect(m.id).toBe('gizecat');
   expect(m.icons.map((i) => `${i.purpose} ${i.sizes}`).sort()).toEqual(['any 192x192', 'any 512x512', 'maskable 192x192', 'maskable 512x512']);
   for (const icon of m.icons) {
     const r = await request.get(`/${icon.src}`);
@@ -570,6 +571,36 @@ test('an open settings sheet takes the screen: the cat takes no pointer until it
   await expect.poll(async () => (await state(page)).sheetOpen).toBe(false);
   await catPoint(page);
   expect(errors).toEqual([]);
+});
+
+test('the first screen is gone once the cat runs, and the toolbar is there', async ({ page }) => {
+  await openPage(page);
+  await expect(page.locator('#boot')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible();
+});
+
+test('the sheet says the app is ready offline, and its About section opens the static notices page', async ({ page }, info) => {
+  await openPage(page);
+  await page.waitForFunction(() => Boolean((globalThis as unknown as PageGlobals).navigator.serviceWorker?.controller), undefined, { timeout: 30_000 });
+  const sheet = await openSheet(page, info);
+  await expect(sheet.getByText('Ready to work offline')).toBeVisible();
+  const link = sheet.getByRole('link', { name: 'Third-party notices' });
+  await expect(link).toHaveAttribute('href', 'licenses.html');
+  await Promise.all([page.waitForEvent('load'), press(link, info)]);
+  expect(new URL(page.url()).pathname).toBe('/licenses.html');
+  await expect(page.getByRole('heading', { name: 'Third-party notices', level: 1 })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Back to GizeCat' }).first()).toHaveAttribute('href', 'index.html');
+  expect(await page.locator('script').count()).toBe(0);
+  // SIMULATED offline: Chrome's network emulation (the worker serves the page and the way back).
+  await page.context().setOffline(true);
+  try {
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Third-party notices', level: 1 })).toBeVisible();
+    await Promise.all([page.waitForEvent('load'), press(page.getByRole('link', { name: 'Back to GizeCat' }).first(), info)]);
+    await waitReady(page);
+  } finally {
+    await page.context().setOffline(false);
+  }
 });
 
 test('Start over deletes the cat: after the reload a new cat arrives', async ({ page }, info) => {

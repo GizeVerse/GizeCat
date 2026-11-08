@@ -12,6 +12,13 @@ describe('web strings', () => {
     expect(WS.presets).toEqual(S.behavior.presets);
   });
 
+  it('has a line for every offline state, and links the notices from About', () => {
+    for (const state of ['unavailable', 'preparing', 'ready', 'update-ready', 'failed'] as const) expect(WS.offline[state]).toMatch(/\S/);
+    expect(WS.offline.ready).toContain('Ready to work offline');
+    expect(WS.offline['update-ready']).toContain('new version');
+    expect(WS.about.licenses).toMatch(/\S/);
+  });
+
   it('has a text for every install hint except none', () => {
     expect(installText('none')).toBeNull();
     for (const hint of ['installed', 'prompt', 'apple', 'menu'] as const) expect(installText(hint)).toMatch(/\S/);

@@ -17,6 +17,16 @@ describe('service worker routing', () => {
     expect(routeRequest(get(`${SCOPE}index%2Ehtml`, 'navigate'), SCOPE, FILES)).toEqual({ kind: 'navigate' });
   });
 
+  it('answers a load of the licenses page from the shell, only when the build has it', () => {
+    const withPage = [...FILES, 'licenses.html'];
+    expect(routeRequest(get(`${SCOPE}licenses.html`, 'navigate'), SCOPE, withPage)).toEqual({ kind: 'shell', key: 'licenses.html' });
+    expect(routeRequest(get(`${SCOPE}licenses.html?x=1`, 'navigate'), SCOPE, withPage)).toEqual({ kind: 'shell', key: 'licenses.html' });
+    expect(routeRequest(get(`${SCOPE}licenses.html`, 'navigate'), SCOPE, FILES)).toEqual(pass);
+    // Under a project-site subpath, the same: a nested path or another project is not this page.
+    expect(routeRequest(get(`${SCOPE}next/licenses.html`, 'navigate'), SCOPE, withPage)).toEqual(pass);
+    expect(routeRequest(get('https://example.test/other-app/licenses.html', 'navigate'), SCOPE, withPage)).toEqual(pass);
+  });
+
   it('passes every other page load in the scope to the network: other sites, nested copies, missing pages', () => {
     // GizeCat at the root of a shared origin (scope '/'): another project site and the host's 404 page stay theirs.
     const root = 'https://owner.example.test/';

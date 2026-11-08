@@ -15,6 +15,7 @@ import { coatArt } from '../renderer/settings/skins';
 import { showEvictionNote, type HostMode, type InstallHint } from './hostMode';
 import { CAT_NAME_MAX, patchFor, selectedPreset, SIZE_RANGE, VOLUME_RANGE, type WebField, type WebPatchResult } from './settingsModel';
 import { installText, WS } from './strings';
+import type { OfflineState } from './swRegister';
 
 export interface SettingsPanelDeps {
   dialog: HTMLDialogElement;
@@ -34,6 +35,8 @@ export interface SettingsPanelDeps {
   /** The browser's install prompt (only offered when installHint() is 'prompt'). */
   onInstall: () => void;
   storageText: () => string;
+  /** The offline copy's state (swRegister.ts); null shows no line (the Android app). */
+  offlineState: () => OfflineState | null;
   version: string;
   onOpenChange?: (open: boolean) => void;
 }
@@ -44,8 +47,6 @@ export interface SettingsPanel {
   readonly isOpen: boolean;
   /** Puts the current settings and status into the controls (after a change made elsewhere). */
   refresh(): void;
-  /** Shows "a new version is ready" (the service worker took over; nothing reloads). */
-  showUpdateReady(): void;
   /**
    * "Take your cat to another device": an empty container for the profile export/import, inside a
    * section that stays hidden until something is put in it (setTransferVisible).
@@ -204,11 +205,11 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   const evictionNote = h('p', { class: 'note warn', text: WS.install.evictionNote });
   const installSection = h('section', {}, [h('h3', { text: WS.install.title }), installNote, h('div', { class: 'actions' }, [installBtn]), appleStorageNote, evictionNote]);
 
-  // ---- storage on this device
+  // ---- storage on this device, and the offline copy (a polite live region: it changes while the sheet is open)
   const storageNote = h('p', {});
-  const updateNote = h('p', { class: 'note warn', text: WS.storage.updateReady });
-  updateNote.hidden = true;
-  const storageSection = h('section', {}, [h('h3', { text: WS.storage.title }), storageNote, updateNote]);
+  const offlineNote = h('p', { class: 'note', 'aria-live': 'polite' });
+  offlineNote.hidden = true;
+  const storageSection = h('section', {}, [h('h3', { text: WS.storage.title }), storageNote, offlineNote]);
 
   // ---- take your cat to another device
   // profileUi.ts fills `transferSlot` with the export/import controls built on
@@ -266,7 +267,15 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   ]);
 
   // ---- about
-  const aboutSection = h('section', {}, [h('h3', { text: WS.about.title }), h('p', { text: WS.about.text }), h('p', { class: 'note', text: WS.about.version(deps.version) })]);
+  // A plain link in the same window: it stays inside an installed app, opens offline, and the page's
+  // own link comes back here. A new window would leave the Home Screen app for Safari.
+  const licensesLink = h('a', { href: 'licenses.html', text: WS.about.licenses });
+  const aboutSection = h('section', {}, [
+    h('h3', { text: WS.about.title }),
+    h('p', { text: WS.about.text }),
+    h('p', { class: 'note', text: WS.about.version(deps.version) }),
+    h('p', {}, [licensesLink]),
+  ]);
 
   dialog.replaceChildren(
     head,
@@ -305,6 +314,10 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
     appleStorageNote.hidden = hint !== 'apple';
     evictionNote.hidden = !showEvictionNote(deps.host);
     storageNote.textContent = deps.storageText();
+    const offline = deps.offlineState();
+    offlineNote.hidden = offline === null;
+    offlineNote.textContent = offline === null ? '' : WS.offline[offline];
+    offlineNote.classList.toggle('warn', offline === 'update-ready' || offline === 'failed');
   }
 
   function setOpen(open: boolean): void {
@@ -354,9 +367,6 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
       return isOpen;
     },
     refresh,
-    showUpdateReady() {
-      updateNote.hidden = false;
-    },
     transferSlot,
     setTransferVisible(visible: boolean) {
       transferSection.hidden = !visible;

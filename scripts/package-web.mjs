@@ -104,6 +104,8 @@ Hosting
 - Opening index.html from disk (file://) does not work: browsers do not run the app's module
   script from a file.
 - Serve manifest.webmanifest as application/manifest+json and .js files as text/javascript.
+- A GitHub project site works as it is (https://<owner>.github.io/<repository>/): the manifest's
+  start_url and scope are relative, and the service worker only ever answers inside that path.
 
 Optional response headers (if the host allows them; the page already carries its policy as a meta tag)
 - Every file: Content-Security-Policy: ${WEB_CSP}; frame-ancestors 'none'
@@ -115,7 +117,7 @@ Optional response headers (if the host allows them; the page already carries its
 Installing (after it is hosted)
 - iPad (Safari): Share, then Add to Home Screen.
 - Android tablet (Chrome): Install app (or Add to Home screen) from the menu, or the sheet's Install button.
-Not executed on an iPad or an Android tablet by the project: device behaviour is unverified.
+Nothing here has been executed on an iPad or an Android tablet by the project.
 
 Privacy
 - No account, no ads, no analytics, no telemetry. The page cannot make network requests itself
@@ -126,7 +128,11 @@ Privacy
 
 Updating
 - Replace all the files together. The service worker's cache is named after a hash of the files,
-  so a new version is picked up the next time the app opens; old caches of this app are deleted.
+  so a new version is fetched in the background; the settings sheet then says it is ready and it
+  starts when the app is closed and opened again. Old caches of this app are deleted.
+
+Licences
+- licenses.html is the third-party notices page, linked from the sheet's About section.
 
 Integrity
 - SHA256SUMS.txt lists the sha256 of the zip, this README and every file.
