@@ -37,13 +37,14 @@ A release run into a versioned folder, step by step:
 3. `node scripts/build.mjs`.
 4. `node scripts/with-lock.mjs package-win -- npx electron-builder --win nsis --x64 --arm64 --publish never -c.directories.output=release/<version>/windows`. The arch flags are required: without them only the host's arch is built.
 5. Static payload checks (they read files and never run a binary):
-   - `node scripts/check-win-payload.mjs --arch x64 --dir release/<version>/win-unpacked --out <evidence>.json`
-   - `node scripts/check-win-payload.mjs --arch arm64 --dir release/<version>/win-arm64-unpacked --out <evidence>.json`
+   - `node scripts/check-win-payload.mjs --arch x64 --dir release/<version>/windows/win-unpacked --out <evidence>.json`
+   - `node scripts/check-win-payload.mjs --arch arm64 --dir release/<version>/windows/win-arm64-unpacked --out <evidence>.json`
 
-   They check the executable's machine type, the koffi binary for that arch, the app archive's header and integrity, and the Electron fuses.
-6. A SHA-256 for each installer.
+   They check the executable's machine type, the koffi binary for that arch, the app archive's header and integrity, and the Electron fuses. They also fail when `app.asar` holds any file outside the app's own allow-list (`out/main`, `out/preload`, `out/renderer`, `assets`, `node_modules`, `package.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`), so sources, docs, local state or old installers can never ship inside it, and when `app.asar` is larger than 32 MB. They warn when the archive's `package.json` version differs from the repository's.
+6. The packaged smoke test takes the exe explicitly: `node scripts/with-lock.mjs smoke -- node scripts/smoke-packaged.mjs release/<version>/windows/win-unpacked/DesktopCat.exe`. With no argument it uses `release/win-unpacked/DesktopCat.exe` (the `npm run package` output). It refuses, before launching anything, a build whose `app.asar` version differs from the repository's.
+7. Once every platform's packages are in `release/<version>/`, run `npm run release:sums` (see [Release checksums](#release-checksums)).
 
-`scripts/install-test.ps1` and `scripts/upgrade-test.ps1` take `-Arch x64|arm64` (default: the PC's own arch) and `-Installer <path>`. They install the app and touch the startup entry: **run them only on a disposable Windows user or VM, never on a PC where GizeCat is really used.** The ARM64 installer can only be install-tested on a Windows on Arm PC or VM.
+`scripts/install-test.ps1` and `scripts/upgrade-test.ps1` take `-Arch x64|arm64` (default: the PC's own arch) and `-Installer <path>`. Without `-Installer` they look for exactly `Desktop-Cat-Setup-<version>-<arch>.exe` in `release\`, `release\<version>\` and `release\<version>\windows\`, and refuse when there is none or more than one copy. They install the app and touch the startup entry: **run them only on a disposable Windows user or VM, never on a PC where GizeCat is really used.** The ARM64 installer can only be install-tested on a Windows on Arm PC or VM.
 
 Code signing needs the owner's certificate (`CSC_LINK` / `CSC_KEY_PASSWORD`, or Azure Trusted Signing): REQUIRES_OWNER_CREDENTIALS.
 
@@ -71,7 +72,7 @@ npm run package:mac:adhoc-docker
 - **Commit first.** The script archives `HEAD` (`git archive`) and refuses uncommitted changes to tracked files.
 - It runs one container (`node:24-bookworm-slim`, `linux/amd64`) that installs dependencies, builds, packages `Desktop Cat.app` for x64 and arm64, signs it ad hoc with rcodesign 0.29.0 (sha256-checked), and zips it.
 - It downloads Debian packages, the npm dependencies, two Electron macOS builds and rcodesign, so expect more than 10 minutes. On a shared machine, start it as a detached process.
-- Output in `release/<version>/mac/`: `GizeCat-<version>-mac-x64-adhoc.zip`, `GizeCat-<version>-mac-arm64-adhoc.zip`, `README-adhoc.txt` and `SHA256SUMS.txt`. The script checks each zip against `SHA256SUMS.txt`.
+- Output in `release/<version>/mac/`: `GizeCat-<version>-mac-x64-adhoc.zip`, `GizeCat-<version>-mac-arm64-adhoc.zip`, `README-adhoc.txt` and `SHA256SUMS.txt`. The script checks each zip against that `SHA256SUMS.txt`, a build by-product that is not attached to the release ([Release checksums](#release-checksums)).
 - It never lists, prunes or removes other containers or images. On failure it keeps its staging folder and prints the path.
 
 **3. On a GitHub macOS runner**, with `.github/workflows/macos-packages.yml` (manual `workflow_dispatch` only; it has never run):
@@ -85,7 +86,7 @@ npm run package:mac:adhoc-docker
 | Command | Output |
 |---|---|
 | `npm run build:web` | `out/web/`: `index.html`, `main.js`, `web.css`, `manifest.webmanifest`, `sw.js` and six icons |
-| `npm run package:web` | `release/<version>/web/`: the folder `GizeCat-web-<version>/`, the zip `GizeCat-web-<version>.zip`, `README-web.txt` and `SHA256SUMS.txt` |
+| `npm run package:web` | `release/<version>/web/`: the folder `GizeCat-web-<version>/`, the zip `GizeCat-web-<version>.zip`, `README-web.txt` and `SHA256SUMS.txt` (a by-product for the web files, not attached to the release) |
 
 The production build checks itself: the exact file set, no test hook or key-listener code in any file, the page's CSP equal to the pinned policy, and the service worker's precache list equal to the files on disk. The zip is deterministic (sorted entries, fixed timestamps).
 
@@ -107,10 +108,10 @@ The production build checks itself: the exact file set, no test hook or key-list
 | `npm run android:trial` | `android/app/build/outputs/apk/trial/app-trial.apk` | `GizeCat-<version>-android-trial-debugsigned.apk` |
 | `npm run android:web` | `android/app/src/main/assets/` only | — |
 
-The copy step also writes `release/<version>/android/SHA256SUMS-android.txt`. Direct form: `node scripts/android-gradle.mjs :app:assembleRelease [--no-web] [--no-collect]`. Do not use `--no-web` for a release: it would package whatever web bundle is already in the assets folder.
+The copy step also writes `release/<version>/android/SHA256SUMS-android.txt`, a build by-product that is not attached to the release. Direct form: `node scripts/android-gradle.mjs :app:assembleRelease [--no-web] [--no-collect]`. Do not use `--no-web` for a release: it would package whatever web bundle is already in the assets folder.
 
 - `versionName` comes from `package.json`; `versionCode` = MAJOR×10000 + MINOR×100 + PATCH (1.4.0 → 10400).
-- The APK records the git commit it was built from, so build release artifacts from the final commit.
+- Build release artifacts from the final commit, and write that commit down yourself: the APK does not record it. Neither `android/app/build.gradle.kts` nor `scripts/android-gradle.mjs` embeds a commit. The Android Gradle Plugin writes `META-INF/version-control-info.textproto` into release builds by default, but in the 1.4.0 APKs, built from a git worktree, that file holds only `generate_error_reason: NO_SUPPORTED_VCS_FOUND`.
 - Build types: `release` (R8, signed only with `android/keystore.properties`), `trial` (the release code signed with the SDK debug key, id suffix `.trial`, label "GizeCat (trial)"), `debug` (developers only; WebView DevTools on).
 - **Signing (owner only).** Create an upload keystore outside the repository with your own details, copy `android/keystore.properties.example` to `android/keystore.properties` (gitignored) and fill it in, and back up the keystore and passwords offline. The commands are in [android/README.md](../../android/README.md#signing-owner-only). REQUIRES_OWNER_CREDENTIALS.
 
@@ -127,5 +128,12 @@ The copy step also writes `release/<version>/android/SHA256SUMS-android.txt`. Di
 | macOS DMG and zip (Mac, workflow) | `release/` on the build machine; workflow artifacts on GitHub |
 | Web app | `release/<version>/web/` |
 | Android | `release/<version>/android/` |
+| The release's one checksum file | `release/<version>/SHA256SUMS.txt` (`npm run release:sums`) |
 
 `release/` is git-ignored. Publishing a release (uploading files to GitHub Releases) is an owner action; see [docs/RELEASE_CHECKLIST.md](../RELEASE_CHECKLIST.md).
+
+## Release checksums
+
+`npm run release:sums` (`scripts/release-sums.mjs`) writes `release/<version>/SHA256SUMS.txt`. It hashes every `*.exe`, `*.dmg`, `*.zip`, `*.apk` and `*.aab` in `release/<version>/windows`, `mac`, `web` and `android` (never blockmaps, unpacked folders or other checksum files), one `<sha256>  <file name>` line each, sorted by name. It refuses two files with the same name, because release assets are attached side by side. This is the one `SHA256SUMS.txt` that is attached to the release and that the install guides tell users to check. Run it last, after every package that will be attached is in place; Windows installers count only from `release/<version>/windows`, so package them with `-c.directories.output=release/<version>/windows`.
+
+The per-folder files (`web/SHA256SUMS.txt`, `mac/SHA256SUMS.txt`, `android/SHA256SUMS-android.txt`) are build by-products that the packaging scripts use to check their own output. They are not attached: two of them share the name `SHA256SUMS.txt`, and none covers the Windows installers.

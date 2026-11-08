@@ -76,7 +76,7 @@ An artifact is COMPILED_OR_PACKAGED only if the GitHub release lists it with its
 
 | Artifact | For | Built by | Status |
 |---|---|---|---|
-| `Desktop-Cat-Setup-1.4.0-x64.exe` | Windows 10/11 on x64 PCs | `npm run package:win` on an x64 Windows PC | COMPILED_OR_PACKAGED. Unsigned. Not installed or run for 1.4.0. |
+| `Desktop-Cat-Setup-1.4.0-x64.exe` | Windows 10/11 on x64 PCs | The Windows release run into `release/1.4.0/windows` on an x64 Windows PC ([steps](building-and-packaging.md#windows-x64-and-arm64)) | COMPILED_OR_PACKAGED. Unsigned. Not installed or run for 1.4.0. |
 | `Desktop-Cat-Setup-1.4.0-arm64.exe` | Windows 11 on Arm PCs | The same run (cross-built), then a static payload check | COMPILED_OR_PACKAGED. Unsigned. Runtime THEORETICALLY_COMPATIBLE_NOT_EXECUTED. |
 | `GizeCat-1.4.0-mac-x64-adhoc.zip` | Intel Macs, testing | Linux container (`npm run package:mac:adhoc-docker`), ad-hoc signed | COMPILED_OR_PACKAGED only if listed. Not notarized. |
 | `GizeCat-1.4.0-mac-arm64-adhoc.zip` | Apple Silicon Macs, testing | The same container run | COMPILED_OR_PACKAGED only if listed. Not notarized. |
@@ -87,7 +87,7 @@ An artifact is COMPILED_OR_PACKAGED only if the GitHub release lists it with its
 | `GizeCat-1.4.0-android-unsigned.aab` | Google Play | `npm run android:aab` | COMPILED_OR_PACKAGED. Uploading needs a signed AAB: REQUIRES_OWNER_CREDENTIALS. |
 | `GizeCat-1.4.0-android.apk` (signed) | Android tablets | The owner's release key | REQUIRES_OWNER_CREDENTIALS |
 | `GizeCat-1.4.0-android-trial-debugsigned.apk` | Sideload trials only | `npm run android:trial` | COMPILED_OR_PACKAGED. Signed with a debug key; not a release. |
-| `SHA256SUMS.txt` | Checking downloads | The release packaging run | Lists every attached file |
+| `SHA256SUMS.txt` | Checking downloads | `npm run release:sums` (`scripts/release-sums.mjs`), run by the owner after the last package and attached to the release ([how](building-and-packaging.md#release-checksums)) | One line per installer, zip, DMG, APK and AAB in `release/1.4.0/{windows,mac,web,android}`. The per-folder checksum files the packaging scripts write are build by-products and are not attached. |
 
 ## Feedback
 

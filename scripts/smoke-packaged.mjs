@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 // Smoke test for the packaged app (fuses on, so Playwright cannot drive it).
-// Launches release/win-unpacked/DesktopCat.exe with a temporary userData directory,
+// Launches the given exe (default release/win-unpacked/DesktopCat.exe, what `npm run package`
+// writes; a versioned build is release/<version>/windows/win-unpacked) with a temporary userData directory,
 // waits, reads its log, checks single-instance behaviour, then stops the process
 // it started (only that PID tree). DESKTOP_CAT_LOGIN_ITEM=off keeps it from ever writing
 // the HKCU Run entry, on top of the write gate's uninstaller check (install-test.ps1 runs
 // this script against an installed copy, which has an uninstaller).
+//
+// It refuses (exit 2) before launching anything when the build's resources/app.asar package.json
+// version differs from the repository's, so a stale build left in a folder can never be recorded
+// as a smoke pass for this version (1.4.0 review WINREG-2).
 //
 //   node scripts/with-lock.mjs smoke -- node scripts/smoke-packaged.mjs [path-to-exe]
 import { spawn, spawnSync } from 'node:child_process';
@@ -12,17 +17,42 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fileReader, readAsarFile, readAsarHeader } from './check-win-payload.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const exe = process.argv[2] ? path.resolve(process.argv[2]) : path.join(root, 'release', 'win-unpacked', 'DesktopCat.exe');
 if (!fs.existsSync(exe)) {
-  console.error(`smoke: ${exe} not found (run npm run package first)`);
+  console.error(`smoke: ${exe} not found (run npm run package first, or pass the exe, e.g. release/<version>/windows/win-unpacked/DesktopCat.exe)`);
+  process.exit(2);
+}
+
+/** The version in a build's app.asar package.json (read statically, nothing runs), or null. */
+function packagedVersion(asarPath) {
+  if (!fs.existsSync(asarPath)) return null;
+  const r = fileReader(asarPath);
+  try {
+    const bytes = readAsarFile(r, readAsarHeader(r), 'package.json');
+    if (!bytes) return null;
+    const version = JSON.parse(bytes.toString('utf8')).version;
+    return typeof version === 'string' ? version : null;
+  } catch {
+    return null;
+  } finally {
+    r.close();
+  }
+}
+const repoVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const appVersion = packagedVersion(path.join(path.dirname(exe), 'resources', 'app.asar'));
+if (appVersion !== repoVersion) {
+  console.error(
+    `smoke: ${exe} is ${appVersion === null ? 'a build without a readable resources/app.asar package.json' : `version ${appVersion}`}, the repository is ${repoVersion}; refusing to smoke the wrong build (pass the exe of this version's build)`,
+  );
   process.exit(2);
 }
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'dcat-smoke-'));
 const env = { ...process.env, DESKTOP_CAT_USER_DATA: userData, DESKTOP_CAT_LOGIN_ITEM: 'off' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const result = { exe: path.relative(root, exe), checks: {} };
+const result = { exe: path.relative(root, exe), appVersion, checks: {} };
 
 const first = spawn(exe, [], { env, stdio: 'ignore', detached: false });
 let firstExit = null;

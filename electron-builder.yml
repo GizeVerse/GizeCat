@@ -6,18 +6,13 @@ npmRebuild: false
 directories:
   output: release
   buildResources: build
-files:
-  - out/**/*
-  - "!out/preview/**"
-  - "!out/native/**"
-  # The web host is its own static build, not part of the desktop app (review H1).
-  - "!out/web/**"
-  - "!out/web-test/**"
-  - assets/**/*
-  - package.json
-  - LICENSE
-  - THIRD_PARTY_NOTICES.md
-  - "!**/*.map"
+# 1.4.0: there is deliberately NO top-level `files` list. Each platform section below carries the
+# complete list. electron-builder 26 turns a top-level list into its own matcher and adds "**/*" to a
+# platform list that holds only exclusions, which packed the whole project tree (old installers,
+# local state, sources) into app.asar (1.4.0 review WINREG-1). One explicit list per platform means
+# one matcher, never exclusions-only; its "!" patterns also filter node_modules. Keep the three
+# lists identical apart from their marked platform lines; scripts/check-win-payload.mjs fails on
+# any app.asar entry outside the allowed set.
 asar: true
 extraMetadata:
   main: out/main/index.js
@@ -43,6 +38,18 @@ win:
     - node_modules/koffi/**
     - node_modules/@koromix/koffi-win32-${arch}/**
   files:
+    - out/**/*
+    - "!out/preview/**"
+    - "!out/native/**"
+    # The web host is its own static build, not part of the desktop app (review H1).
+    - "!out/web/**"
+    - "!out/web-test/**"
+    - assets/**/*
+    - package.json
+    - LICENSE
+    - THIRD_PARTY_NOTICES.md
+    - "!**/*.map"
+    # Windows only: the other architecture's koffi binary stays out of this installer.
     - "!node_modules/@koromix/koffi-win32-!(${arch})/**"
 # Linux (ADR 0004 §11): IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED; built in a container only.
 # deb/rpm need a homepage and a maintainer e-mail, which the owner has not chosen yet.
@@ -63,6 +70,17 @@ linux:
   asarUnpack:
     - node_modules/koffi/**
     - node_modules/@koromix/koffi-linux-x64/**
+  files:
+    - out/**/*
+    - "!out/preview/**"
+    - "!out/native/**"
+    - "!out/web/**"
+    - "!out/web-test/**"
+    - assets/**/*
+    - package.json
+    - LICENSE
+    - THIRD_PARTY_NOTICES.md
+    - "!**/*.map"
 # macOS (ADR 0004 §11; 1.4.0): THEORETICALLY_COMPATIBLE_NOT_EXECUTED (never run on a Mac).
 # - Floor-only (decision D1): no window climbing and no FFI, so koffi is not shipped and the payload
 #   has no native module; universal builds only need lipo for Electron's own binaries.
@@ -109,6 +127,17 @@ mac:
     NSBluetoothAlwaysUsageDescription: "GizeCat never uses Bluetooth. If macOS asks, choose Don't Allow."
     NSBluetoothPeripheralUsageDescription: "GizeCat never uses Bluetooth. If macOS asks, choose Don't Allow."
   files:
+    - out/**/*
+    - "!out/preview/**"
+    - "!out/native/**"
+    - "!out/web/**"
+    - "!out/web-test/**"
+    - assets/**/*
+    - package.json
+    - LICENSE
+    - THIRD_PARTY_NOTICES.md
+    - "!**/*.map"
+    # macOS only: koffi is not used on macOS (floor-only, no FFI), so it is not shipped.
     - "!node_modules/koffi/**"
     - "!node_modules/@koromix/**"
 nsis:

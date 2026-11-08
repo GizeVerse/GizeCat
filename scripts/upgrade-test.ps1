@@ -9,7 +9,8 @@
 #   node scripts/with-lock.mjs upgrade-test -- powershell -NoProfile -ExecutionPolicy Bypass -File scripts/upgrade-test.ps1 -OldInstaller <path to Desktop-Cat-Setup-1.0.x.exe> [-Arch x64|arm64] [-Installer <path to the new installer>]
 #
 # 1.4.0: the NEW installer is chosen like install-test.ps1 does (exactly
-# Desktop-Cat-Setup-<package.json version>-<arch>.exe in release\ or release\<version>\, -Arch
+# Desktop-Cat-Setup-<package.json version>-<arch>.exe in release\, release\<version>\ or
+# release\<version>\windows\, -Arch
 # defaulting to the PC's native architecture), never by file date. Installers up to 1.3.0 have no
 # architecture suffix and are all x64. On a Windows on Arm PC the cross-architecture upgrade is
 # -OldInstaller Desktop-Cat-Setup-1.3.0.exe (x64) -Arch arm64: the same appId, so NSIS treats it
@@ -42,8 +43,10 @@ function Resolve-Installer([string]$repoRoot, [string]$version, [string]$arch, [
   }
   $name = "Desktop-Cat-Setup-$version-$arch.exe"
   $release = Join-Path $repoRoot 'release'
-  $found = @(@($release, (Join-Path $release $version)) | ForEach-Object { Join-Path $_ $name } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-  if ($found.Count -eq 0) { throw "$name not found in release\ or release\$version\; package it first (docs/RELEASE_CHECKLIST.md) or pass -Installer <path>" }
+  # release\ (npm run package:win), release\<version>\ (up to 1.3.0), release\<version>\windows\ (the 1.4.0 release run).
+  $versioned = Join-Path $release $version
+  $found = @(@($release, $versioned, (Join-Path $versioned 'windows')) | ForEach-Object { Join-Path $_ $name } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+  if ($found.Count -eq 0) { throw "$name not found in release\, release\$version\ or release\$version\windows\; package it first (docs/RELEASE_CHECKLIST.md) or pass -Installer <path>" }
   if ($found.Count -gt 1) { throw "several copies of $name ($($found -join ', ')); pass -Installer <path>" }
   return Get-Item -LiteralPath $found[0]
 }

@@ -16,6 +16,9 @@
 //   koffi never loads it, about +1 MB).
 // - The asar integrity resource of the exe (type INTEGRITY, name ELECTRONASAR) matches the SHA-256
 //   of the app.asar header, when the enableEmbeddedAsarIntegrityValidation fuse is on.
+// - app.asar holds only the app (out/{main,preload,renderer}, assets, node_modules, package.json,
+//   LICENSE, THIRD_PARTY_NOTICES.md) and stays under 32 MB: never sources, docs, local state or old
+//   installers (the 1.4.0 review WINREG-1 failure mode).
 // - The fuse wire in the exe matches electronFuses in electron-builder.yml.
 // - resources/native/DesktopCatUia.exe (UI Automation helper, optional) is IL-only AnyCPU (COR20
 //   ILONLY set, 32BITREQUIRED clear); 32BITPREFERRED is a warning (it would run as x86 on ARM64).
@@ -263,6 +266,21 @@ export function* walkAsar(node, prefix = '') {
   }
 }
 
+/**
+ * What an app.asar may hold: the built bundles, assets, production node_modules and the package and
+ * legal files (the electron-builder.yml `files` lists; 1.3.0's archive held exactly these). The
+ * 1.4.0 review (WINREG-1) found a platform `files` list of exclusions only made electron-builder pack
+ * the whole project tree (~1.5 GB, local state included) while every other check here still passed.
+ */
+export const ASAR_ALLOWED = [/^out\/(main|preload|renderer)\//, /^assets\//, /^node_modules\//, /^package\.json$/, /^LICENSE$/, /^THIRD_PARTY_NOTICES\.md$/];
+/** 1.3.0's app.asar was about 1.4 MB: a generous bound that a whole-project pack (GBs) cannot pass. */
+export const MAX_ASAR_BYTES = 32 * 1024 * 1024;
+
+/** Files in the archive outside ASAR_ALLOWED. */
+export function asarStrayEntries(entries) {
+  return entries.filter((e) => !e.dir && !ASAR_ALLOWED.some((re) => re.test(e.path))).map((e) => e.path);
+}
+
 export function readAsarFile(r, asar, p) {
   const node = asarLookup(asar.header, p);
   if (!node || node.files || node.unpacked || node.offset === undefined) return null;
@@ -456,6 +474,11 @@ export function checkPayload(opts, repoRoot) {
       const entries = [...walkAsar(asar.header)];
       const hash = asarHeaderHash(asar.raw);
       result.asar = { bytes: ar.size, headerBytes: asar.raw.length, files: entries.filter((e) => !e.dir).length, unpackedFiles: entries.filter((e) => !e.dir && e.node && e.node.unpacked).length, headerSha256: hash };
+      // Only the app: never sources, tests, docs, local state or old installers.
+      const stray = asarStrayEntries(entries);
+      result.asar.strayEntries = stray.length;
+      if (stray.length > 0) fail(`app.asar holds ${stray.length} file(s) outside the app's own files (e.g. ${stray.slice(0, 5).join(', ')})`);
+      if (ar.size > MAX_ASAR_BYTES) fail(`app.asar is ${ar.size} bytes, over the ${MAX_ASAR_BYTES}-byte bound`);
       const pkgBytes = readAsarFile(ar, asar, 'package.json');
       if (pkgBytes) {
         const pkg = JSON.parse(pkgBytes.toString('utf8'));

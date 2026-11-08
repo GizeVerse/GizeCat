@@ -15,8 +15,9 @@
 #   node scripts/with-lock.mjs install-test -- powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-test.ps1 [-Arch x64|arm64] [-Installer <path>]
 #
 # 1.4.0: one installer per architecture. -Arch defaults to the PC's native architecture; the
-# installer is exactly Desktop-Cat-Setup-<package.json version>-<arch>.exe in release\ or
-# release\<version>\ (none or several copies is an error; -Installer names one by path). An x64
+# installer is exactly Desktop-Cat-Setup-<package.json version>-<arch>.exe in release\,
+# release\<version>\ or release\<version>\windows\ (none or several copies is an error;
+# -Installer names one by path). An x64
 # installer may be tested on Windows 11 on Arm (x64 emulation); the arm64 installer refuses to
 # run anywhere but Windows on Arm, so -Arch arm64 on an x64 PC is refused here.
 param(
@@ -46,8 +47,10 @@ function Resolve-Installer([string]$repoRoot, [string]$version, [string]$arch, [
   }
   $name = "Desktop-Cat-Setup-$version-$arch.exe"
   $release = Join-Path $repoRoot 'release'
-  $found = @(@($release, (Join-Path $release $version)) | ForEach-Object { Join-Path $_ $name } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-  if ($found.Count -eq 0) { throw "$name not found in release\ or release\$version\; package it first (docs/RELEASE_CHECKLIST.md) or pass -Installer <path>" }
+  # release\ (npm run package:win), release\<version>\ (up to 1.3.0), release\<version>\windows\ (the 1.4.0 release run).
+  $versioned = Join-Path $release $version
+  $found = @(@($release, $versioned, (Join-Path $versioned 'windows')) | ForEach-Object { Join-Path $_ $name } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+  if ($found.Count -eq 0) { throw "$name not found in release\, release\$version\ or release\$version\windows\; package it first (docs/RELEASE_CHECKLIST.md) or pass -Installer <path>" }
   if ($found.Count -gt 1) { throw "several copies of $name ($($found -join ', ')); pass -Installer <path>" }
   return Get-Item -LiteralPath $found[0]
 }

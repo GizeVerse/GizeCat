@@ -37,6 +37,7 @@
     "android:apk": "node scripts/with-lock.mjs android -- node scripts/android-gradle.mjs :app:assembleRelease",
     "android:aab": "node scripts/with-lock.mjs android -- node scripts/android-gradle.mjs :app:bundleRelease",
     "android:trial": "node scripts/with-lock.mjs android -- node scripts/android-gradle.mjs :app:assembleTrial",
+    "release:sums": "node scripts/release-sums.mjs",
     "capability-matrix": "node scripts/capability-matrix.mjs",
     "check": "npm run typecheck && npm run lint && npm test",
     "verify": "node scripts/with-lock.mjs verify -- npm run check"

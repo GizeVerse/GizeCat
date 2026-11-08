@@ -23,44 +23,44 @@ Run on a Windows 10/11 x64 machine. Heavy steps go through `node scripts/with-lo
 ## Package: Windows (x64 and ARM64)
 
 - [ ] Stage the ARM64 koffi binary: `node scripts/stage-koffi-arch.mjs --arch arm64`, then `git diff --exit-code -- package.json package-lock.json` prints nothing. Do not run `npm ci` after staging.
-- [ ] `npm run package:win` → `release/Desktop-Cat-Setup-<version>-x64.exe` and `release/Desktop-Cat-Setup-<version>-arm64.exe` (or the explicit `npx electron-builder --win nsis --x64 --arm64 --publish never -c.directories.output=release/<version>/windows`; the arch flags are required). `npm run package` alone builds x64 only.
+- [ ] For a release, package into the versioned folder: `npx electron-builder --win nsis --x64 --arm64 --publish never -c.directories.output=release/<version>/windows` (after `node scripts/build.mjs`; the arch flags are required) → `release/<version>/windows/Desktop-Cat-Setup-<version>-x64.exe`, `…-arm64.exe`, `win-unpacked/` and `win-arm64-unpacked/`. `npm run package:win` builds the same into `release/` instead, and `npm run package` alone builds x64 only. **`<release>` below is the folder you packaged into**: `release/<version>/windows` for a release (only installers there are covered by `npm run release:sums`), `release` after `npm run package:win`. Older builds left in the other folder are never evidence for this version.
 - [ ] Code signing: set `CSC_LINK`/`CSC_KEY_PASSWORD` (or Azure Trusted Signing) if an identity exists. **Never** describe an unsigned build as signed.
-- [ ] `node scripts/check-win-payload.mjs --arch x64 --dir <release>/win-unpacked` and `--arch arm64 --dir <release>/win-arm64-unpacked` — exit 0 (executable machine, koffi binary per arch, asar header and integrity, fuses).
-- [ ] `npx @electron/fuses read --app release/win-unpacked/DesktopCat.exe` — RunAsNode, NODE_OPTIONS and inspect disabled; ASAR integrity + only-load-from-ASAR enabled.
-- [ ] `release/win-unpacked/resources/app.asar.unpacked/node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node` exists, and `release/win-arm64-unpacked/resources/app.asar.unpacked/node_modules/@koromix/koffi-win32-arm64/win32_arm64/koffi.node` exists.
-- [ ] `release/win-unpacked/resources/native/DesktopCatUia.exe` exists and `DesktopCatUia.exe --version` prints the protocol version (the build only warns when csc.exe is missing; a release must not ship without the helper).
-- [ ] `node scripts/smoke-packaged.mjs` — packaged exe starts, 0 log errors, second launch exits 0.
+- [ ] `node scripts/check-win-payload.mjs --arch x64 --dir <release>/win-unpacked` and `--arch arm64 --dir <release>/win-arm64-unpacked` — exit 0 (executable machine, koffi binary per arch, asar header and integrity, fuses, nothing in `app.asar` outside the app's allow-list, `app.asar` under 32 MB) and no warning that the `app.asar` version differs from `package.json`.
+- [ ] `npx @electron/fuses read --app <release>/win-unpacked/DesktopCat.exe` — RunAsNode, NODE_OPTIONS and inspect disabled; ASAR integrity + only-load-from-ASAR enabled.
+- [ ] `<release>/win-unpacked/resources/app.asar.unpacked/node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node` exists, and `<release>/win-arm64-unpacked/resources/app.asar.unpacked/node_modules/@koromix/koffi-win32-arm64/win32_arm64/koffi.node` exists.
+- [ ] `<release>/win-unpacked/resources/native/DesktopCatUia.exe` exists and `DesktopCatUia.exe --version` prints the protocol version (the build only warns when csc.exe is missing; a release must not ship without the helper).
+- [ ] `node scripts/smoke-packaged.mjs <release>\win-unpacked\DesktopCat.exe` — packaged exe starts, 0 log errors, second launch exits 0. Always pass the exe: with no argument the script uses `release\win-unpacked`. It refuses (exit 2, nothing launched) a build whose `app.asar` version is not the repository's.
 - [ ] `node scripts/taskbar-probe.mjs` — overlays keep the taskbar topmost (NonRudeHWND) and the reveal strip still hits the taskbar.
 - [ ] `node scripts/uia-probe.mjs --browsers edge,chrome` — tab strips found through the shipped helper with your own throwaway browser instances; no web-accessibility activation.
 - [ ] `node scripts/login-item-probe.mjs` — Electron's Run-value quoting and StartupApproved rules still match the app's reader.
 - [ ] Manual: install the previous release, then upgrade → settings migrate (v1 → v2), startup is registered once with the installed path and the one-time notice appears; a Task Manager disable survives the upgrade.
 - [ ] Manual: reveal an auto-hide taskbar with the mouse next to the cat → it may hop on and ride, is set down calmly when it hides, and taskbar buttons stay clickable.
-- [ ] `powershell -File scripts/install-test.ps1 -Arch x64` — exits 0: silent install, smoke, silent uninstall, shortcuts and uninstall entry removed.
+- [ ] `powershell -File scripts/install-test.ps1 -Arch x64 -Installer <release>\Desktop-Cat-Setup-<version>-x64.exe` — exits 0: silent install, smoke, silent uninstall, shortcuts and uninstall entry removed. (Without `-Installer` it looks in `release\`, `release\<version>\` and `release\<version>\windows\` and refuses when it finds none or several copies.)
 - [ ] Manual: install over the previous version → settings and cat memories preserved.
 - [ ] Manual: multi-monitor with different scale factors (drag the cat across), disconnect a monitor while the cat is on it.
 - [ ] Manual: tray left/right click, right-click menu on the cat, shortcut toggle, diagnostics export dialog.
-- [ ] ARM64, only on a Windows on Arm PC or disposable ARM64 VM: `node scripts/smoke-packaged.mjs <release>\win-arm64-unpacked\DesktopCat.exe`, `install-test.ps1 -Arch arm64`, `install-test.ps1 -Arch x64` (emulation), `upgrade-test.ps1 -OldInstaller Desktop-Cat-Setup-1.3.0.exe -Arch arm64`. Until this runs, the ARM64 runtime stays THEORETICALLY_COMPATIBLE_NOT_EXECUTED.
+- [ ] ARM64, only on a Windows on Arm PC or disposable ARM64 VM: `node scripts/smoke-packaged.mjs <release>\win-arm64-unpacked\DesktopCat.exe`, `install-test.ps1 -Arch arm64 -Installer <release>\Desktop-Cat-Setup-<version>-arm64.exe`, `install-test.ps1 -Arch x64 -Installer <release>\Desktop-Cat-Setup-<version>-x64.exe` (emulation), `upgrade-test.ps1 -OldInstaller Desktop-Cat-Setup-1.3.0.exe -Arch arm64 -Installer <release>\Desktop-Cat-Setup-<version>-arm64.exe`. Until this runs, the ARM64 runtime stays THEORETICALLY_COMPATIBLE_NOT_EXECUTED.
 
 ## Package: macOS
 
-- [ ] Commit first, then `npm run package:mac:adhoc-docker` (Docker Desktop running; start it detached on a shared machine) → `release/<version>/mac/GizeCat-<version>-mac-x64-adhoc.zip`, `…-arm64-adhoc.zip`, `README-adhoc.txt`, `SHA256SUMS.txt`. Ad-hoc zips are never called signed or notarized.
+- [ ] Commit first, then `npm run package:mac:adhoc-docker` (Docker Desktop running; start it detached on a shared machine) → `release/<version>/mac/GizeCat-<version>-mac-x64-adhoc.zip`, `…-arm64-adhoc.zip`, `README-adhoc.txt`, `SHA256SUMS.txt` (a build by-product, not attached). Ad-hoc zips are never called signed or notarized.
 - [ ] Optional, owner only: dispatch `.github/workflows/macos-packages.yml` (job `developer-id`, environment `macos-signing` with a required reviewer and the signing secrets) for Developer ID signed and notarized DMG and zip, x64, arm64 and universal.
 - [ ] On a real Mac (Apple Silicon and Intel), before any macOS status moves: the checklist in [docs/gizeverse/04-macos.md](gizeverse/04-macos.md#mac-checklist-additions-run-on-real-hardware-none-has-run).
 
 ## Package: web app
 
-- [ ] `npm run package:web` → `release/<version>/web/` (folder, `GizeCat-web-<version>.zip`, `README-web.txt`, `SHA256SUMS.txt`). The build's own check must pass (exact file set, no test hook or key-listener code, pinned CSP, precache list).
+- [ ] `npm run package:web` → `release/<version>/web/` (folder, `GizeCat-web-<version>.zip`, `README-web.txt`, `SHA256SUMS.txt`, a build by-product that is not attached). The build's own check must pass (exact file set, no test hook or key-listener code, pinned CSP, precache list).
 - [ ] Optional, owner only: enable GitHub Pages (Source: GitHub Actions) and dispatch `.github/workflows/pages.yml`. A successful deployment is not evidence that the app works on an iPad or an Android tablet.
 
 ## Package: Android
 
-- [ ] `npm run android:apk`, `npm run android:aab` and `npm run android:trial` from the final commit, **without** `--no-web` → `release/<version>/android/` with `SHA256SUMS-android.txt`.
+- [ ] `npm run android:apk`, `npm run android:aab` and `npm run android:trial` from the final commit, **without** `--no-web` → `release/<version>/android/` with `SHA256SUMS-android.txt` (a build by-product, not attached). Note the commit you built from: the APK does not record it.
 - [ ] Inspect the merged manifest: no `<uses-permission>` (an inspection, not a test).
 - [ ] Owner only: sign the release APK and AAB with the owner's upload keystore (`android/keystore.properties`). Unsigned outputs keep `-unsigned` in their names and are described as unsigned.
 - [ ] The trial APK, if attached at all, is labelled as debug-signed and for trials only.
 
 ## Publish (owner)
 
-- [ ] One `SHA256SUMS.txt` covering every attached file; publish it with the release notes.
+- [ ] `npm run release:sums` (`scripts/release-sums.mjs`) after the last package is in place → `release/<version>/SHA256SUMS.txt`, one line per `*.exe`, `*.dmg`, `*.zip`, `*.apk` and `*.aab` in `release/<version>/{windows,mac,web,android}`. Check that it lists exactly the files you attach, then attach it to the release. It is the only checksum file attached; the per-folder `SHA256SUMS.txt` and `SHA256SUMS-android.txt` stay behind.
 - [ ] Remove from the release notes any artifact that was not produced.
 - [ ] README: update the "current release" line when the release is published.

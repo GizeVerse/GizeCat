@@ -7,7 +7,7 @@
 // reads the test scripts and only their Resolve-Installer function runs, against a temp folder.
 // When electron-builder's NSIS is cached, the guard is compiled into a small silent harness and
 // run (it writes one marker file in a temp folder). REAL only for the runIf blocks that read a
-// packaged folder in release/1.4.0 or the staged node_modules package, when they exist.
+// packaged folder in release/<version>/windows or the staged node_modules package, when they exist.
 import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -75,7 +75,7 @@ interface PayloadResult {
   warnings: string[];
   appVersion?: string | null;
   koffi: { unpackedPlatforms: string[]; otherArchInAsar: string[]; binary?: { machine: string } };
-  asar?: { integrity: { resource: boolean; matches: boolean } };
+  asar?: { integrity: { resource: boolean; matches: boolean }; strayEntries?: number };
   fuses?: { sentinels: number; mismatches: unknown[] };
   uiaHelper?: { present: boolean; platform?: string };
   otherPe: { mismatches: unknown[]; expectedOther: { file: string }[] };
@@ -95,6 +95,10 @@ interface PayloadApi {
   readAsarHeader(r: Reader): Asar;
   asarHeaderHash(raw: Buffer): string;
   readAsarFile(r: Reader, asar: Asar, p: string): Buffer | null;
+  walkAsar(node: AsarNode, prefix?: string): Iterable<{ path: string; dir: boolean; node: AsarNode }>;
+  ASAR_ALLOWED: RegExp[];
+  MAX_ASAR_BYTES: number;
+  asarStrayEntries(entries: { path: string; dir: boolean }[]): string[];
   koffiPackagesInAsar(header: AsarNode): { name: string; binaries: { path: string; unpacked: boolean }[] }[];
   scanFor(r: Reader, needle: Buffer, chunk?: number): number[];
   parseFuseWire(bytes: Buffer): { version: number; length: number; states: Record<string, string> };
@@ -296,6 +300,10 @@ interface PayloadFixture {
   breakIntegrity?: boolean;
   helperFlags?: number;
   fuses?: Record<string, '0' | '1'>;
+  /** Extra files packed into app.asar (paths relative to its root). */
+  extraAsar?: Record<string, Buffer>;
+  /** Zero bytes appended to app.asar after its data (its header stays valid). */
+  asarPadBytes?: number;
 }
 
 function writeFile(file: string, data: Buffer | string): void {
@@ -315,7 +323,9 @@ function writePayload(dir: string, arch: Arch, f: PayloadFixture = {}): void {
     [`${pkgDir}/win32_${arch}/koffi.node`]: { unpacked: true },
   };
   if (f.otherArchPacked) asarFiles[`node_modules/@koromix/koffi-win32-${other}/win32_${other}/koffi.node`] = { data: Buffer.from('other') };
-  const asar = buildAsar(asarFiles);
+  for (const [p, data] of Object.entries(f.extraAsar ?? {})) asarFiles[p] = { data };
+  const built = buildAsar(asarFiles);
+  const asar = f.asarPadBytes ? Buffer.concat([built, Buffer.alloc(f.asarPadBytes)]) : built;
   const raw = payload.readAsarHeader(payload.bufferReader(asar)).raw;
   const hash = f.breakIntegrity ? '0'.repeat(64) : payload.asarHeaderHash(raw);
   const integrity = Buffer.from(JSON.stringify([{ file: 'resources\\app.asar', alg: 'SHA256', value: hash }]));
@@ -501,6 +511,32 @@ describe('check-win-payload: an unpacked folder', () => {
     expect(r.failures).toContain('fuse runAsNode is enabled, electron-builder.yml says disabled');
   });
 
+  it('fails an app.asar that holds files outside the app (sources, docs, local state, old installers)', () => {
+    const dir = freshDir();
+    writePayload(dir, 'x64', {
+      extraAsar: {
+        'src/main/app.ts': Buffer.from('// source'),
+        'release/Desktop-Cat-Setup-1.2.0.exe': Buffer.from('MZ'),
+        '.claude/state/notes.json': Buffer.from('{}'),
+      },
+    });
+    const r = payload.checkPayload(options('x64', dir), ROOT);
+    expect(r.ok).toBe(false);
+    expect(r.asar?.strayEntries).toBe(3);
+    expect(r.failures.some((m) => m.startsWith("app.asar holds 3 file(s) outside the app's own files"))).toBe(true);
+    expect(r.failures.find((m) => m.startsWith('app.asar holds'))).toContain('src/main/app.ts');
+  });
+
+  it('fails an app.asar over MAX_ASAR_BYTES (32 MB), even when every entry is allowed', () => {
+    expect(payload.MAX_ASAR_BYTES).toBe(32 * 1024 * 1024);
+    const dir = freshDir();
+    writePayload(dir, 'arm64', { asarPadBytes: payload.MAX_ASAR_BYTES });
+    const r = payload.checkPayload(options('arm64', dir), ROOT);
+    expect(r.ok).toBe(false);
+    expect(r.asar?.strayEntries).toBe(0);
+    expect(r.failures.some((m) => /^app\.asar is \d+ bytes, over the 33554432-byte bound$/.test(m))).toBe(true);
+  });
+
   it('fails a UI Automation helper that requires 32-bit, warns on one that prefers it', () => {
     const required = freshDir();
     writePayload(required, 'arm64', { helperFlags: 0x1 | 0x2 });
@@ -513,10 +549,58 @@ describe('check-win-payload: an unpacked folder', () => {
   });
 });
 
+describe('app.asar allow-list (asarStrayEntries)', () => {
+  const entries = (paths: string[]): { path: string; dir: boolean }[] => [...payload.walkAsar(payload.readAsarHeader(payload.bufferReader(buildAsar(Object.fromEntries(paths.map((p) => [p, { data: Buffer.from('x') }]))))).header)];
+
+  it('allows only the built bundles, assets, node_modules and the package and legal files', () => {
+    const allowed = [
+      'out/main/index.js',
+      'out/preload/settings.js',
+      'out/renderer/overlay/index.html',
+      'assets/sounds/meow.wav',
+      'node_modules/zod/package.json',
+      'package.json',
+      'LICENSE',
+      'THIRD_PARTY_NOTICES.md',
+    ];
+    expect(payload.asarStrayEntries(entries(allowed))).toEqual([]);
+  });
+
+  it('reports every other file by path, and never a directory', () => {
+    const stray = [
+      'src/main/app.ts',
+      'docs/PRIVACY.md',
+      'out/web/index.html',
+      'out/preview/cat.png',
+      'release/Desktop-Cat-Setup-1.2.0.exe',
+      '.claude/state/notes.json',
+      'tests/unit/x.test.ts',
+      'electron-builder.yml',
+      'package-lock.json',
+      'LICENSE.txt',
+      'assets.zip',
+    ];
+    const listed = entries(['out/main/index.js', ...stray]);
+    expect(listed.some((e) => e.dir)).toBe(true);
+    expect(payload.asarStrayEntries(listed).sort()).toEqual([...stray].sort());
+  });
+
+  it('keeps the allow-list anchored: a prefix or suffix of an allowed name is not allowed', () => {
+    for (const re of payload.ASAR_ALLOWED) expect(re.source.startsWith('^'), re.source).toBe(true);
+    expect(payload.asarStrayEntries([{ path: 'x/package.json', dir: false }, { path: 'package.json.bak', dir: false }, { path: 'outside/main/a.js', dir: false }])).toEqual([
+      'x/package.json',
+      'package.json.bak',
+      'outside/main/a.js',
+    ]);
+  });
+});
+
 describe('packaged 1.4.0 folders (REAL when they exist)', () => {
+  // The versioned release output (docs/platforms/building-and-packaging.md):
+  // -c.directories.output=release/<version>/windows.
   const folders: [Arch, string][] = [
-    ['x64', path.join(ROOT, 'release', repoVersion, 'win-unpacked')],
-    ['arm64', path.join(ROOT, 'release', repoVersion, 'win-arm64-unpacked')],
+    ['x64', path.join(ROOT, 'release', repoVersion, 'windows', 'win-unpacked')],
+    ['arm64', path.join(ROOT, 'release', repoVersion, 'windows', 'win-arm64-unpacked')],
   ];
   for (const [arch, dir] of folders) {
     it.runIf(fs.existsSync(path.join(dir, 'DesktopCat.exe')))(`${path.relative(ROOT, dir)} passes the static payload check`, () => {
@@ -607,6 +691,52 @@ describe('electron-builder.yml: one installer per architecture', () => {
   it('names each installer by architecture and builds no combined installer', () => {
     expect(nsis).toContain('artifactName: Desktop-Cat-Setup-${version}-${arch}.${ext}');
     expect(nsis).toMatch(/buildUniversalInstaller: false/);
+  });
+});
+
+describe('electron-builder.yml: one complete files list per platform, none at the top level (WINREG-1)', () => {
+  const yml = read('electron-builder.yml');
+  const section = (name: string, next: string): string => {
+    const start = yml.indexOf(`\n${name}:\n`);
+    const end = yml.indexOf(`\n${next}:\n`);
+    if (start === -1 || end === -1 || end < start) throw new Error(`electron-builder.yml: no ${name} section before ${next}`);
+    return yml.slice(start, end);
+  };
+  /** The entries of a platform section's `files:` list, unquoted; comment lines are skipped. */
+  const filesOf = (sec: string): string[] => {
+    const marker = '\n  files:\n';
+    const at = sec.indexOf(marker);
+    if (at === -1) return [];
+    const out: string[] = [];
+    for (const line of sec.slice(at + marker.length).split('\n')) {
+      if (/^ {4}#/.test(line)) continue;
+      const m = /^ {4}- (.+)$/.exec(line);
+      if (!m) break;
+      out.push(must(m[1], 'entry').replace(/^"(.*)"$/, '$1'));
+    }
+    return out;
+  };
+  // The app's own files: what scripts/check-win-payload.mjs ASAR_ALLOWED accepts, nothing else.
+  const COMMON = ['out/**/*', '!out/preview/**', '!out/native/**', '!out/web/**', '!out/web-test/**', 'assets/**/*', 'package.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '!**/*.map'];
+
+  it('has no top-level files list (electron-builder 26 would add "**/*" to an exclusions-only platform list)', () => {
+    expect(yml).not.toMatch(/^files:/m);
+  });
+
+  it('win, linux and mac each carry the complete list plus only their own platform lines', () => {
+    expect(filesOf(section('win', 'linux'))).toEqual([...COMMON, '!node_modules/@koromix/koffi-win32-!(${arch})/**']);
+    expect(filesOf(section('linux', 'mac'))).toEqual(COMMON);
+    expect(filesOf(section('mac', 'nsis'))).toEqual([...COMMON, '!node_modules/koffi/**', '!node_modules/@koromix/**']);
+  });
+
+  it('no platform list is exclusions only', () => {
+    for (const [name, next] of [
+      ['win', 'linux'],
+      ['linux', 'mac'],
+      ['mac', 'nsis'],
+    ] as const) {
+      expect(filesOf(section(name, next)).some((e) => !e.startsWith('!')), name).toBe(true);
+    }
   });
 });
 
@@ -769,8 +899,16 @@ describe('install-test.ps1 and upgrade-test.ps1: which installer is tested', () 
       const dup = freshDir();
       writeFile(path.join(dup, 'release', 'Desktop-Cat-Setup-1.4.0-x64.exe'), 'MZ');
       writeFile(path.join(dup, 'release', v, 'Desktop-Cat-Setup-1.4.0-x64.exe'), 'MZ');
+      // The 1.4.0 release run writes to release\<version>\windows\ (WINREG-3).
+      const win = freshDir();
+      for (const a of ['x64', 'arm64']) writeFile(path.join(win, 'release', v, 'windows', `Desktop-Cat-Setup-1.4.0-${a}.exe`), 'MZ');
+      writeFile(path.join(win, 'release', 'Desktop-Cat-Setup-1.2.0.exe'), 'MZ');
+      // A stale copy next to the fresh versioned one is never picked silently.
+      const dupWin = freshDir();
+      writeFile(path.join(dupWin, 'release', 'Desktop-Cat-Setup-1.4.0-x64.exe'), 'MZ');
+      writeFile(path.join(dupWin, 'release', v, 'windows', 'Desktop-Cat-Setup-1.4.0-x64.exe'), 'MZ');
       for (const script of ['install-test.ps1', 'upgrade-test.ps1']) {
-        const [x64, arm64, missing, several, explicitOk, explicitWrongArch, explicitAbsent] = resolve(path.join(ROOT, 'scripts', script), [
+        const [x64, arm64, missing, several, explicitOk, explicitWrongArch, explicitAbsent, winX64, winArm64, severalWin] = resolve(path.join(ROOT, 'scripts', script), [
           { root, version: v, arch: 'x64' },
           { root, version: v, arch: 'arm64' },
           { root, version: '9.9.9', arch: 'x64' },
@@ -778,7 +916,14 @@ describe('install-test.ps1 and upgrade-test.ps1: which installer is tested', () 
           { root, version: v, arch: 'arm64', explicit: rel(v, 'Desktop-Cat-Setup-1.4.0-arm64.exe') },
           { root, version: v, arch: 'x64', explicit: rel(v, 'Desktop-Cat-Setup-1.4.0-arm64.exe') },
           { root, version: v, arch: 'x64', explicit: rel('nothing.exe') },
+          { root: win, version: v, arch: 'x64' },
+          { root: win, version: v, arch: 'arm64' },
+          { root: dupWin, version: v, arch: 'x64' },
         ]);
+        expect(winX64?.path?.toLowerCase(), script).toMatch(/\\release\\1\.4\.0\\windows\\desktop-cat-setup-1\.4\.0-x64\.exe$/);
+        expect(winArm64?.path?.toLowerCase(), script).toMatch(/\\release\\1\.4\.0\\windows\\desktop-cat-setup-1\.4\.0-arm64\.exe$/);
+        expect(severalWin?.error, script).toMatch(/several copies of Desktop-Cat-Setup-1\.4\.0-x64\.exe/);
+        expect(missing?.error, script).toMatch(/not found in release\\, release\\9\.9\.9\\ or release\\9\.9\.9\\windows\\/);
         expect(x64?.path?.toLowerCase(), script).toMatch(/\\release\\1\.4\.0\\desktop-cat-setup-1\.4\.0-x64\.exe$/);
         expect(arm64?.path?.toLowerCase(), script).toMatch(/\\release\\1\.4\.0\\desktop-cat-setup-1\.4\.0-arm64\.exe$/);
         expect(missing?.error, script).toMatch(/Desktop-Cat-Setup-9\.9\.9-x64\.exe not found/);
