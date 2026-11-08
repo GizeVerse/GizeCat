@@ -33,6 +33,10 @@ export function renderCapabilityMatrix(): string {
     `What ${BRAND.product} claims about each capability on each platform. A status is a claim about **evidence**, not a promise; see ADR 0004 §2 and CONTRIBUTING.md. No platform other than Windows is supported until the app has run on it and the result is recorded.`,
   );
   out.push('');
+  out.push(
+    `**Which release this evidence is from.** These statuses (VERIFIED for IMPLEMENTED_AND_LOCALLY_VERIFIED; "IMPL, UNVERIFIED" for IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED; and the others) are the per-capability engineering record, and every run behind them was made with ${BRAND.product} 1.3.0 or earlier. **No 1.4.0 artifact has been installed or run, and no platform, Windows included, has been tested with 1.4.0.** The 1.4.0 status of each target and artifact is in [docs/platforms/README.md](../platforms/README.md).`,
+  );
+  out.push('');
   out.push('## Statuses');
   out.push('');
   out.push('| Short | Status | Meaning |');
@@ -40,6 +44,8 @@ export function renderCapabilityMatrix(): string {
   for (const s of VERIFICATION_STATUSES) out.push(`| ${SHORT[s]} | ${s} | ${MEANING[s]} |`);
   out.push('');
   out.push('## Overview');
+  out.push('');
+  out.push('Evidence from 1.3.0 and earlier; nothing here has run with 1.4.0 ([1.4.0 statuses](../platforms/README.md)).');
   out.push('');
   out.push(`| Capability | ${PLATFORM_IDS.map((p) => PLATFORM_LABELS[p]).join(' | ')} |`);
   out.push(`|---|${PLATFORM_IDS.map(() => '---').join('|')}|`);

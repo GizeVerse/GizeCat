@@ -15,6 +15,16 @@ describe('docs/gizeverse/capability-matrix.md', () => {
     expect(onDisk).toBe(renderCapabilityMatrix());
   });
 
+  it('says its statuses record 1.3.0-era evidence and that nothing in 1.4.0 has run (1.4.0 review DOCS-5)', () => {
+    const text = renderCapabilityMatrix();
+    const head = text.split('## Statuses')[0]!;
+    expect(head).toContain('1.3.0 or earlier');
+    expect(head).toContain('No 1.4.0 artifact has been installed or run, and no platform, Windows included, has been tested with 1.4.0.');
+    expect(head).toContain('](../platforms/README.md)');
+    const overviewIntro = text.split('## Overview')[1]!.split('\n| ')[0]!;
+    expect(overviewIntro).toContain('nothing here has run with 1.4.0');
+  });
+
   it('has one row per capability in the overview and a section per platform', () => {
     const text = renderCapabilityMatrix();
     for (const p of PLATFORM_IDS) expect(text).toContain(`(\`${p}\`)`);

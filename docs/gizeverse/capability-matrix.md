@@ -4,6 +4,8 @@
 
 What GizeCat claims about each capability on each platform. A status is a claim about **evidence**, not a promise; see ADR 0004 §2 and CONTRIBUTING.md. No platform other than Windows is supported until the app has run on it and the result is recorded.
 
+**Which release this evidence is from.** These statuses (VERIFIED for IMPLEMENTED_AND_LOCALLY_VERIFIED; "IMPL, UNVERIFIED" for IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED; and the others) are the per-capability engineering record, and every run behind them was made with GizeCat 1.3.0 or earlier. **No 1.4.0 artifact has been installed or run, and no platform, Windows included, has been tested with 1.4.0.** The 1.4.0 status of each target and artifact is in [docs/platforms/README.md](../platforms/README.md).
+
 ## Statuses
 
 | Short | Status | Meaning |
@@ -16,6 +18,8 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 | NOT IMPL | NOT_IMPLEMENTED | Nothing exists |
 
 ## Overview
+
+Evidence from 1.3.0 and earlier; nothing here has run with 1.4.0 ([1.4.0 statuses](../platforms/README.md)).
 
 | Capability | Windows 10/11 | macOS | Linux (X11 session) | Linux (Wayland session, app under XWayland) | Linux (Wayland session, native) | Web browser (desktop) | Android | iOS / iPadOS |
 |---|---|---|---|---|---|---|---|---|
