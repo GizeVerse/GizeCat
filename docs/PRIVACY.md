@@ -2,6 +2,8 @@
 
 Desktop Cat is a local desktop companion. It has **no accounts, no telemetry, no analytics, no crash upload and no update pings**. With default settings it makes **no network requests at all**.
 
+The sections below describe the Windows app. The 1.4.0 release candidate adds macOS, an installable web app for tablets and browsers, an Android app and a portable profile file: see [Other devices (1.4.0 release candidate)](#other-devices-140-release-candidate) and the comparison in [docs/platforms/privacy-and-permissions.md](platforms/privacy-and-permissions.md).
+
 ## What the cat observes (always on, stays on this PC)
 
 | Signal | How | What is kept |
@@ -69,3 +71,49 @@ There is no automatic update check. Installing a new version is a manual action.
 ## Your controls
 
 Hide the cat (tray / `Ctrl+Alt+Shift+C`), pause it, turn off interactions (fully click-through), privacy-pause or disable screen analysis, revoke consent, clear history, reset personality, turn off *Walk on browser tabs*, *Play with the taskbar* or *Climb windows* (Settings → Behavior), turn off launch at sign-in (Settings → General, or Task Manager → Startup apps — the app never overrides a Task Manager disable), export diagnostics (a JSON file you can inspect before sharing), uninstall (also removes the startup entry).
+
+## Other devices (1.4.0 release candidate)
+
+1.4.0 is not released, and none of it has run on a device. This section describes what the code and its configuration do.
+
+### Windows on Arm
+
+The ARM64 installer is the same app with the ARM64 build of its native library. It collects, stores and sends exactly what the x64 app does. The npm registry is contacted only on the build machine, to fetch that library; the app never contacts it.
+
+### macOS
+
+- **No permission prompts.** 1.4.0 never asks for Accessibility, Screen Recording, Input Monitoring, camera, microphone or Bluetooth. Electron's built-in reasons for camera, microphone, audio capture and Bluetooth are replaced with "GizeCat never uses …; choose Don't Allow".
+- **No screen analysis.** Perception is not available on macOS and fails closed: no capture code runs, and no Screen Recording prompt can appear. Window titles and window positions of other apps are not read (the cat stays on the floor).
+- **Files:** the same files as on Windows, in `~/Library/Application Support/Desktop Cat`. API keys, if any, are protected by the macOS Keychain (item "Desktop Cat Safe Storage").
+- **Open at login** is off by default and written only when you turn it on, for the app in /Applications. The app writes nothing at startup.
+- **Diagnostics** add `os.arm64Translation`: true when an x64 build runs under Rosetta (or under emulation on Windows on Arm). It is a boolean, not personal data.
+
+### The web app (iPad, Android Chrome, desktop browsers)
+
+- **Permissions:** none. No camera, microphone, location or notifications. The installed web app asks the browser to keep its storage (`navigator.storage.persist()`); the browser decides by itself.
+- **Network:** the page itself cannot make requests (CSP `connect-src 'none'`). The only traffic is the browser loading the app's own files from the site that hosts it: on first load, once per version when the service worker keeps an offline copy, and the browser's own update checks of `sw.js` and the manifest. No page data is ever sent. The host's server may log those file requests, like any website; GizeCat has no control over that.
+- **Storage keys:** localStorage `gizecat.web.cat.v1` (the cat) and `gizecat.web.settings.v1` (its settings, including personality). The service-worker cache `gizecat-shell-<version>-<hash>` holds only the app's own files.
+- **Deleting:** Settings → Start again → **Start over with a new cat** (the cat and its settings), removing the Home Screen app or uninstalling the installed app, or clearing the site's data in the browser. Safari may delete a Safari tab's data after 7 days without a visit; a Home Screen app keeps its own storage.
+- **Shared origin:** on a GitHub project site, the web app shares its browser storage and caches with every other GitHub Pages site of the same owner. GizeCat deletes only its own `gizecat-shell-*` caches. A custom domain avoids the sharing.
+- **No keyboard listening.** The build fails if the web files contain key-listener code. The name field reads its value when you finish editing it, like any form field; Escape closing the sheet is the browser's own dialog behaviour.
+
+### The Android app
+
+- **No permissions at all.** No internet permission, so Android blocks every network request. No storage, overlay, location, camera or microphone permission. Every web permission request in the WebView is denied.
+- **No network:** three layers (no internet permission; a native layer that answers every request outside the app's own files with an empty "not found"; CSP `connect-src 'none'`).
+- **No telemetry:** WebView usage metrics are opted out.
+- **Data:** the cat and its settings live in the WebView's storage inside the app's private storage, with the same two keys as the web app. Nothing syncs.
+- **Backup policy:** no cloud backup (`allowBackup="false"`). On Android 12 and later, a device-to-device transfer may copy the cat's data (`app_webview/`). Uninstalling offers to keep the data.
+- **Files:** the app writes a file only through the system "save as" screen, at a place you choose, and reads one only from the system file picker. There is no storage permission.
+- **No DevTools** in release or trial builds.
+
+### The profile file
+
+1.4.0 adds a portable file to move a cat to another device (format: `src/shared/profileTransfer.ts`). **Take your cat to another device** saves and loads it: Settings → Personality on Windows and macOS, and the settings sheet in the web app and the Android app. On the desktop the file is chosen in the system's own save and open dialogs; in the web app it is a download, the share sheet (installed iPad app) or a picked file; in the Android app it is the system "save as" screen or file picker. Before anything changes you see what the file would change and choose what to load.
+
+- **It contains:** the cat's name, its identity (`catId`) and birth time, its 7 personality traits, its look (coat, style, size, opacity, animation speed, shadow, emotes), and the carried behaviour, handling and sound preferences. Its counters, learned habits and bond are included only if you choose "what it has learned".
+- **It never contains:** API keys, screen-analysis or AI settings, exclusion lists, window titles, display ids or positions, folder paths, startup or shortcut settings, or diagnostics.
+- It is plain, unencrypted JSON, at most 64 KiB, written only where you choose. No network and no account are involved. It is a copy, not a sync.
+- **An import never weakens privacy:** it never turns on screen analysis, AI or consent; it never touches startup, shortcuts or diagnostics; it never switches tab-strip reading back on (`tabStrips`, `explorerTabs`, `terminalTabs`) when it is off on the device; and device-only settings stay as they are.
+- Loading a different cat replaces the current one: its stats, drives and memory reset, and its place on screen stays. Loading the same cat updates its personality and keeps its memory unless you choose "what it has learned".
+- A file from a newer major format version is refused ("update GizeCat"); a newer minor version loads, and a few details may not.

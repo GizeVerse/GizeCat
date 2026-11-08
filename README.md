@@ -22,10 +22,13 @@ GizeCat is the first character of **GizeVerse**, a small, open-source home for p
 - **Works offline; no AI required.** Screen perception is optional and **off by default**; see [Privacy and AI vision](#privacy-and-ai-vision).
 - **Lightweight.** About 1–1.5 % of one CPU core while awake and under 1 % asleep on the Windows 11 test machine ([benchmark](docs/gizeverse/10-performance-dependencies.md)).
 - **Settings** for appearance, behaviour, personality, privacy, AI and diagnostics, in light and dark themes, keyboard accessible.
+- **Take your cat with you (1.4.0 candidate, never run on a device).** Save the cat to a file and load it on another computer, an iPad or an Android tablet. Nothing is uploaded and there is no account; it is a copy, not a sync ([what the file holds](docs/platforms/privacy-and-permissions.md#the-profile-file)).
 
 ## Download and install (Windows 10/11)
 
-Download the latest `Desktop-Cat-Setup-<version>.exe` from **[Releases](https://github.com/GizeVerse/GizeCat/releases)**, check its SHA-256 against the release notes, and run it.
+**Current release: 1.3.0**, for Windows x64. **1.4.0 is a release candidate and is not published yet.** It adds a Windows on Arm installer, macOS builds, an installable web app for iPads and Android tablets, and a native Android tablet app. None of the 1.4.0 builds has run on a device. Install guides and the status of every target: [docs/platforms/](docs/platforms/README.md).
+
+Download the latest `Desktop-Cat-Setup-<version>.exe` from **[Releases](https://github.com/GizeVerse/GizeCat/releases)** (from 1.4.0: `Desktop-Cat-Setup-<version>-x64.exe`, or `-arm64.exe` for Windows on Arm PCs), check its SHA-256 against the release notes, and run it.
 - **No admin needed.** It is a per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`.
 - **SmartScreen.** The installer is **not code-signed**, so Windows may warn: choose **More info → Run anyway**.
 - **First start.** The cat appears at the bottom of your screen, and a Welcome page explains the controls.
@@ -39,16 +42,18 @@ You can also build it yourself; see [Build, run, test](#build-run-test).
 
 ## Platforms
 
-**Windows 10/11 is the only supported platform.** Other platforms have code for them, but nothing outside Windows is a supported release until it has run on real hardware. Each capability's status is in the **[capability matrix](docs/gizeverse/capability-matrix.md)** (generated from code).
+**Windows 10/11 is the only supported platform.** Other platforms have code for them, but nothing outside Windows is a supported release until it has run on real hardware. Each capability's status is in the **[capability matrix](docs/gizeverse/capability-matrix.md)** (generated from code). The 1.4.0 candidate's status per target and per artifact is in **[docs/platforms/](docs/platforms/README.md)**.
 
-| Platform | What exists | How far it has been verified |
+| Platform | What exists | What has actually run |
 |---|---|---|
-| Windows 10/11 | The full app | Validated on Windows 11 hardware ([tested environments](#tested-environments)) |
-| Web browser | The real cat in a page, with mouse and touch | Automated tests in Chrome 156 and Edge 156 on Windows; phone layouts only under desktop-browser emulation ([report](docs/gizeverse/07-web-host.md)) |
+| Windows 10/11 (x64) | The full app | Validated on Windows 11 hardware through 1.3.0 ([tested environments](#tested-environments)); the 1.4.0 installer has not been run |
+| Windows on Arm (ARM64) | 1.4.0 candidate: the full app as an ARM64 installer | Built on an x64 PC and checked statically; **never run on Arm hardware** ([guide](docs/platforms/windows.md)) |
+| Web browser | The real cat in a page, with mouse and touch; 1.4.0 makes it an installable web app | 1.3.0: automated tests in Chrome 156 and Edge 156 on Windows; phone layouts only under desktop-browser emulation ([report](docs/gizeverse/07-web-host.md)). The 1.4.0 web app has not run in a browser. |
 | Linux, X11 session with a compositing window manager | The overlay on the screen floor (no window climbing) | Builds and passes its tests on Linux; the app has run only in a container under a virtual X server, never on a real Linux desktop. One known one-pixel click-through gap ([report](docs/gizeverse/05-linux.md)). |
 | Linux, Wayland session | No overlay, on purpose: Wayland gives apps no way to stay on top and pass clicks through safely. Tray and Settings only. | Blocked by the platform |
-| macOS | A platform profile (overlay panel, menus, coordinates) | Implemented, **never run on a Mac** ([report](docs/gizeverse/04-macos.md)) |
-| Android, iOS/iPadOS | The web version in the browser; no native app | Android: desktop-browser emulation only. iOS: not run. Native overlays are not possible or not a fit ([why](docs/gizeverse/08-mobile-boundaries.md)). |
+| macOS (Intel, Apple Silicon) | 1.4.0 candidate: the desktop app on the screen floor (no window climbing), a menu-bar icon, a Dock switch, an opt-in "Open at login", no permission prompts. Ad-hoc test zips (not notarized); signed and notarized builds need the owner's Apple credentials. | Implemented, **never run on a Mac** ([guide](docs/platforms/macos.md), [report](docs/gizeverse/04-macos.md)) |
+| iPad | 1.4.0 candidate: the installable web app (Safari → Share → Add to Home Screen). No App Store app; the cat lives inside its own window, because iPadOS lets no app draw over other apps. | **Never run on an iPad** or in Safari ([guide](docs/platforms/ipados.md)) |
+| Android tablets | 1.4.0 candidate: a native app with no permissions, and the web app installed from Chrome. The cat lives inside its own window. Release builds are unsigned until the owner creates a release key. | Compiled and packaged; **never run on a device or emulator** ([guide](docs/platforms/android.md), [why no overlay](docs/gizeverse/08-mobile-boundaries.md)) |
 
 ## Privacy and AI vision
 
@@ -80,7 +85,7 @@ Details: [docs/PRIVACY.md](docs/PRIVACY.md), [docs/AI_SETUP.md](docs/AI_SETUP.md
 | Tray icon | Left-click show/hide; right-click menu (pause, interactions on/off, vision privacy pause, call, settings, quit) |
 | `Ctrl+Alt+Shift+C` | Show/hide (configurable) |
 
-In the web host: tap the cat, stroke it with a finger to pet it, or hold it and drag. Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
+In the web host: tap the cat, stroke it with a finger to pet it, or hold it and drag. On macOS (1.4.0 candidate) a click on the menu-bar icon opens its menu instead of hiding the cat, and the shortcut is `Control+Option+Shift+C`. Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## What is implemented
 
@@ -118,7 +123,8 @@ Design and review: [ADR 0004](docs/adr/0004-gizeverse-platform.md). Reports: [do
 - Top, left and right taskbars as surfaces (they are tracked, but only bottom auto-hide taskbars are ledges); Firefox and vertical-tab layouts for tab strips.
 - Sounds (meows/purrs) — not implemented.
 - Multiple skins per cat at once, localisation beyond English.
-- Code signing and auto-update — not configured (no signing identity available).
+- Code signing and auto-update — not configured (no signing identity available). For 1.4.0: Developer ID signing and notarization on macOS, an Android release key, Google Play and public web hosting all need the owner's credentials.
+- The cat over other apps on iPad or Android: not possible on iPadOS, and ruled out on Android by its touch rules ([why](docs/gizeverse/08-mobile-boundaries.md)).
 
 ## Build, run, test
 
@@ -130,10 +136,14 @@ node node_modules/electron/install.js   # Electron 44 downloads its binary lazil
 npm run dev                             # development build + run (separate userData via --user-data-dir if desired)
 npm run typecheck; npm run lint; npm test
 npm run build; npx playwright test      # E2E: launches the real app (a cat appears briefly)
-npm run package                         # -> release/Desktop-Cat-Setup-<version>.exe (+ release/win-unpacked)
+npm run package                         # -> release/Desktop-Cat-Setup-<version>-x64.exe (+ release/win-unpacked)
+npm run package:win                     # x64 + ARM64 installers (stages the ARM64 koffi binary first)
 npm run package:linux                   # Linux AppImage + tar.gz (run on Linux; see docs/gizeverse/05-linux.md)
-npm run package:mac                     # macOS dmg + zip (needs a Mac; unsigned; never built here)
+npm run package:mac                     # macOS dmg + zip, x64 + arm64 (needs a Mac; not notarized without the owner's identity)
+npm run package:mac:adhoc-docker        # macOS ad-hoc test zips from a Linux container (commit first; Docker Desktop)
 npm run build:web; npm run test:web     # web host -> out/web, and its Playwright tests (installed Chrome and Edge)
+npm run package:web                     # installable web app -> release/<version>/web/ (folder, zip, SHA256SUMS)
+npm run android:apk; npm run android:aab; npm run android:trial   # Android app (JDK 17+, Android SDK 36) -> release/android/
 node scripts/capability-matrix.mjs      # regenerate docs/gizeverse/capability-matrix.md from src/shared/platform.ts
 node scripts/smoke-packaged.mjs         # smoke-test the packaged exe
 powershell -File scripts/install-test.ps1   # silent install -> smoke -> silent uninstall
@@ -142,12 +152,13 @@ node scripts/qa-desktop.mjs             # real-desktop compositing check
 npx electron scripts/render-preview.cjs # art contact sheets -> out/preview/
 ```
 
-On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <command>`.
+On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <command>`. Every platform's setup and packaging steps: [docs/platforms/building-and-packaging.md](docs/platforms/building-and-packaging.md).
 
 ## Tested environments
 
 | Environment | What ran | Result |
 |---|---|---|
+| 1.4.0 release candidate: Windows x64 and ARM64, macOS, iPad, Android tablets, the installable web app | Builds and static checks only (type checks, lint, the web bundle build, a Gradle build of the Android trial APK). No test was executed for 1.4.0. | **not run on any device**, see [docs/platforms/](docs/platforms/README.md) |
 | GizeVerse foundation (2026-11-06): Windows 11, same machine | verify full (3790 unit/integration tests, 30 Playwright tests against the real app), REAL lively scenarios (window, throws, covered support, hunt, screen edge), builder-config equivalence, packaged smoke | pass, see [docs/gizeverse/03-windows-regression.md](docs/gizeverse/03-windows-regression.md) |
 | Web host: Windows 11, Chrome 156, Edge 156 | 25 Playwright tests (drawing, click routing, petting, drag, persistence, no network, no key listeners), plus the same under desktop Chrome Pixel 7 emulation | pass (REAL in the browsers; phone layout SIMULATED), see [docs/gizeverse/07-web-host.md](docs/gizeverse/07-web-host.md) |
 | Linux: Debian 12 container (Docker), Node 24.21, Electron 44.9.3 under Xvfb | typecheck, lint, 3755 unit tests, build, AppImage + tar.gz, overlay policy (no compositor / compositor / compositor dies), X-server click routing, packaged start with the sandbox, `--no-sandbox` refusal | pass; a 1x1 px non-click-through spot at the overlay origin (SIMULATED desktop), see [docs/gizeverse/05-linux.md](docs/gizeverse/05-linux.md) |
@@ -164,7 +175,7 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 
 ## Documentation
 
-[GizeVerse platform (ADR 0004)](docs/adr/0004-gizeverse-platform.md) · [Capability matrix](docs/gizeverse/capability-matrix.md) · [GizeVerse reports](docs/gizeverse/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Roadmap](ROADMAP.md) · [Architecture decision record](docs/adr/0001-architecture.md) · [User guide](docs/USER_GUIDE.md) · [Privacy](docs/PRIVACY.md) · [Threat model](docs/THREAT_MODEL.md) · [AI setup](docs/AI_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Test report](docs/TEST_REPORT.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Example settings](docs/settings.example.json) · [Research notes](docs/research/)
+[Platforms and install guides (1.4.0 candidate)](docs/platforms/README.md) · [GizeVerse platform (ADR 0004)](docs/adr/0004-gizeverse-platform.md) · [Capability matrix](docs/gizeverse/capability-matrix.md) · [GizeVerse reports](docs/gizeverse/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Roadmap](ROADMAP.md) · [Architecture decision record](docs/adr/0001-architecture.md) · [User guide](docs/USER_GUIDE.md) · [Privacy](docs/PRIVACY.md) · [Threat model](docs/THREAT_MODEL.md) · [AI setup](docs/AI_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Test report](docs/TEST_REPORT.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Example settings](docs/settings.example.json) · [Research notes](docs/research/)
 
 ## License
 

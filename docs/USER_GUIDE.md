@@ -1,8 +1,10 @@
 # Desktop Cat — User guide
 
+This guide describes the Windows app. For macOS, iPad and Android tablets (the 1.4.0 release candidate, never run on those devices), see [Other devices](#other-devices-140-release-candidate) and [docs/platforms/](platforms/README.md).
+
 ## First start
 
-1. Run `Desktop-Cat-Setup-<version>.exe`. It installs for your Windows account only (no administrator rights). The build is not code-signed, so SmartScreen may say "Windows protected your PC": choose **More info → Run anyway** if you trust the file you built or downloaded.
+1. Run `Desktop-Cat-Setup-<version>.exe` (from 1.4.0: `Desktop-Cat-Setup-<version>-x64.exe`, or `-arm64.exe` on a Windows on Arm PC; see [which installer](platforms/windows.md#which-installer)). It installs for your Windows account only (no administrator rights). The build is not code-signed, so SmartScreen may say "Windows protected your PC": choose **More info → Run anyway** if you trust the file you built or downloaded.
 2. The cat wakes up with a stretch at the bottom of your screen. A **Welcome** page opens once: it explains the controls and confirms that screen analysis is **off**.
 3. The cat lives in the **notification area** (tray). If you don't see the icon, open the `^` overflow and drag it onto the taskbar.
 4. **Desktop Cat starts automatically when you sign in to Windows** (new in v1.1, on by default; a one-time notification tells you when this was switched on). Turn it off in Settings → General (Task Manager → Startup apps then lists Desktop Cat as *Disabled*), or directly in Task Manager → Startup apps. If you turn it off in Task Manager, Desktop Cat never turns it back on by itself; to re-enable it, enable it there again. It may appear a few seconds after sign-in, because Windows delays startup apps.
@@ -79,3 +81,25 @@ Windows Settings → Apps → Installed apps → **Desktop Cat** → Uninstall. 
 ## Limits (by design of Windows)
 
 The cat cannot appear above: exclusive-fullscreen games, the lock screen / UAC prompts (secure desktop), or — for interaction — windows of apps running as administrator (Windows blocks input from normal apps to elevated ones). It also hides itself on monitors where a fullscreen app is in front, by default.
+
+## Other devices (1.4.0 release candidate)
+
+1.4.0 is not released, and **none of it has run on these devices**. The cat, its personality presets and its coats are the same everywhere; this is what differs. Install steps, permissions and limits: [docs/platforms/](platforms/README.md).
+
+### macOS
+
+- The cat walks on the floor of each screen, just above the Dock. It does not climb windows, ride the Dock or walk on browser tabs, and it does not hide for fullscreen apps (the fullscreen setting has no effect).
+- **Menu-bar icon:** a click opens its menu (Show/Hide is in the menu); a click does not hide the cat.
+- **Dock icon:** on by default. Settings → General → **Show GizeCat in the Dock** turns it off; the menu-bar icon stays.
+- **Open at login:** off by default. Turn it on in Settings → General; it works only when the app is in the Applications folder, and macOS may ask you to approve it in System Settings → General → Login Items.
+- **Shortcut:** Control+Option+Shift+C shows or hides the cat.
+- Screen analysis and AI vision are not available on macOS.
+
+### iPad and Android tablets
+
+- The cat lives inside its own app window, never over other apps.
+- **Touch:** stroke the cat back and forth to pet it; tap it to say hello; press and hold for a moment, then drag to pick it up; let go to drop it, or flick to throw it.
+- **Toolbar:** Call the cat, Sleep or Wake, Pause, Sound, Settings.
+- **Settings:** your cat (name, coat, drawing style, size, shadow, emotes), personality (Calm, Playful, Mischievous), sound (off until you turn it on; the device's volume and silent mode apply), install hints, where the cat is saved, how to play, privacy, Reset settings and Start over with a new cat.
+- On iPad, install the web app first (Safari → Share → Add to Home Screen), then meet your cat: a cat met in a Safari tab may not come along, and Safari may clear a tab's data after 7 days without a visit.
+- Each device and each app has its own cat. Settings → **Take your cat to another device** saves your cat to a file and loads one, so you can move it (on Windows and macOS it is on the Personality page).

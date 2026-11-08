@@ -266,3 +266,25 @@ Confirmed sound by the reviewer (REAL):
 - the logical world is consistent across renderMapping, hit rects, Mover, simWorld and catHost;
 - catHost has no Electron or Node imports;
 - the ADR covers every `dipToScreen*` call site.
+
+## Addendum: 1.4.0 (release candidate)
+
+- Date: 2026-11-08. Branch `release/1.4.0-universal-devices`. Not released; the owner approves a release later.
+- **No invariant in CLAUDE.md changes.** The Windows behaviour validated for 1.3.0 stays the reference.
+- **Labels.** 1.4.0 reports use the owner's release vocabulary: IMPLEMENTED, COMPILED_OR_PACKAGED, THEORETICALLY_COMPATIBLE_NOT_EXECUTED, REQUIRES_OWNER_CREDENTIALS, BLOCKED_BY_PLATFORM, NOT_IMPLEMENTED ([docs/platforms/README.md](../platforms/README.md#status-vocabulary-for-140)). The capability table (§2) keeps its own vocabulary, and nothing in 1.4.0 has run on any device.
+
+| # | Concern | Decision |
+|---|---|---|
+| W1 | Windows installers | One NSIS installer per architecture: `Desktop-Cat-Setup-<version>-x64.exe` and `-arm64.exe`. Same appId, so either installs over 1.3.0 or over the other as an upgrade. Each carries only its own koffi binary (`scripts/stage-koffi-arch.mjs` stages the ARM64 one at the lockfile's version and integrity). The ARM64-only installer refuses to run on non-Arm PCs (`customInit` in `build/installer.nsh`); the x64 installer is unchanged by construction. `scripts/check-win-payload.mjs` checks both unpacked builds statically. The ARM64 build is cross-built on x64 and has never run. |
+| M-D1 | macOS surfaces | Floor only. Window surfaces, the Dock as a surface and fullscreen awareness stay NOT_IMPLEMENTED: the only permission-free window-bounds source needs native code that has never run. |
+| M-D3 | macOS overlay level | **Amends G7 and §5:** the darwin panel uses the `floating` level, not `screen-saver`, so menus, the menu bar, the Dock and system alerts draw over the cat. Electron's panel joins every Space and shows over fullscreen apps, so review M1 is moot. |
+| M-D4 | Dock | The Dock icon stays on by default (§6), with a darwin-only switch (`general.showDockIcon`) that sets the activation policy. Never `LSUIElement`. |
+| M-D6 | Login item | **Amends §2.2 and §7:** macOS gets an opt-in login item through SMAppService (`setLoginItemSettings`), off by default, with no writes at startup and a write gate that requires a packaged build in /Applications. Linux autostart stays NOT_IMPLEMENTED. The capability test now allows an implemented login item on win32 and darwin only, and darwin's may claim code, never a platform run. |
+| M-D10 | Entitlements | Hardened runtime with `com.apple.security.cs.allow-jit` only. |
+| M-D11 | macOS artifacts | **Amends §11:** a macOS runner builds DMG and zip for x64, arm64 and universal (Developer ID and notarization with the owner's credentials, through the manual `macos-packages.yml`); a Linux container builds ad-hoc zips for x64 and arm64 only, named `-adhoc`. The bundle stays `Desktop Cat.app` (§9). |
+| P1 | Tablets, web | **Amends G8 and G9:** the web host becomes an installable PWA (manifest, icons, a versioned offline service worker, a settings sheet, safe areas). The CSP adds `manifest-src` and `worker-src 'self'` and drops `data:` images. It is the iPad experience; a native iPad app was evaluated and is not justified now. |
+| A1 | Tablets, Android | **Amends G9:** a native Kotlin WebView app (`android/`) serves the same `out/web` bundle from `https://appassets.androidplatform.net` with zero permissions, no cloud backup and a hardened WebView. One narrow, Android-only file bridge (`gizecatNative`, one message type) saves profile files. Capacitor was rejected ([14-android-app.md](../gizeverse/14-android-app.md)). A desktop-style overlay stays BLOCKED (§13). |
+| F1 | Profile format | **Amends §10:** `src/shared/profileTransfer.ts` defines a versioned, platform-agnostic profile file (`IDENTITY.profileKind` = `gizeverse-character-profile`, format 1.0, `character: 'cat'`, at most 64 KiB). It is the first persisted character kind. An exhaustive field policy classifies every setting, so a new setting fails typecheck until it is classified. It never carries secrets, AI or perception settings, paths or device-only settings; a newer major format is refused; an import never re-enables an opt-out. Hosts: "Take your cat to another device" on the desktop (main parses and applies; the renderer never sees a path or file content), in the web app and in the Android app. |
+| I1 | New frozen identifiers | `androidApplicationId` `io.github.gizeverse.gizecat`, `androidWebOrigin` `https://appassets.androidplatform.net` and `profileKind` `gizeverse-character-profile`, added to §9's list and pinned by tests. |
+
+Statuses per target and artifact: [docs/platforms/README.md](../platforms/README.md). Reports: [04-macos.md](../gizeverse/04-macos.md#140-update), [07-web-host.md](../gizeverse/07-web-host.md#140-the-installable-tablet-web-app), [08-mobile-boundaries.md](../gizeverse/08-mobile-boundaries.md#140-update), [14-android-app.md](../gizeverse/14-android-app.md).

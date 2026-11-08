@@ -2,6 +2,20 @@
 
 Status: 2026-11-06, branch `feat/gizeverse-foundation`. Research and design only: **no native mobile code exists**, and no physical phone or tablet was used. Source ids (M1–M17) refer to [00-baseline-audit.md](00-baseline-audit.md), "Sources"; those marked [\*] there were not opened by the auditor and are UNVERIFIED as quoted.
 
+## 1.4.0 update
+
+2026-11-08, branch `release/1.4.0-universal-devices` (release candidate). This section updates the recommendation below; the 1.3.0 research tables after it are kept as they were. Statuses use the 1.4.0 vocabulary ([docs/platforms/README.md](../platforms/README.md#status-vocabulary-for-140)). **Nothing here has run on a phone, a tablet or an emulator.**
+
+| Option | 1.4.0 decision | Status |
+|---|---|---|
+| The web host as an installable PWA (iPad Safari, Android Chrome) | Built: manifest, icons, offline service worker, settings sheet, safe areas ([07-web-host.md](07-web-host.md#140-the-installable-tablet-web-app)) | Code IMPLEMENTED; bundle COMPILED_OR_PACKAGED; on devices THEORETICALLY_COMPATIBLE_NOT_EXECUTED; public hosting REQUIRES_OWNER_CREDENTIALS |
+| A store app wrapping the web host on Android | A **native Kotlin WebView app replaces the earlier Capacitor recommendation**: zero permissions, no JavaScript interface object, two AndroidX libraries ([14-android-app.md](14-android-app.md)) | Code IMPLEMENTED; trial APK COMPILED_OR_PACKAGED; on devices THEORETICALLY_COMPATIBLE_NOT_EXECUTED; signed release and Google Play REQUIRES_OWNER_CREDENTIALS |
+| A native iPad app (SwiftUI or WKWebView) | Evaluated and **not justified now**: it would add no capability beyond the PWA (the cat still lives only inside its own window), and the App Store needs the owner's Apple Developer Program enrollment | NOT_IMPLEMENTED |
+| A desktop-style overlay over other apps | Unchanged: impossible on iPadOS; ruled out on Android by the 80 % opacity rule | BLOCKED_BY_PLATFORM |
+| An optional Android overlay behind "Display over other apps" | Not built; it would be a different product (a touchable bubble) | NOT_IMPLEMENTED |
+
+**Moving a cat between devices.** Persistence formats still differ per host (desktop JSON files, web localStorage, the Android app's WebView storage). 1.4.0 adds a portable, versioned profile file in shared code (`src/shared/profileTransfer.ts`, kind `gizeverse-character-profile`, format 1.0). It carries the cat's identity, traits, look and preferences, and its memory only on request. "Take your cat to another device" saves and loads it on the desktop, in the web app and in the Android app (IMPLEMENTED; never run on a device). A sync of the cat's memory would still need a server, which stays outside the privacy design.
+
 ## The short answer
 
 - A desktop-style GizeCat **over other apps is not possible on iOS** and is **not a fit on Android**.
@@ -36,6 +50,8 @@ Status: 2026-11-06, branch `feat/gizeverse-foundation`. Research and design only
   - Perception is desktop-only and off by default. Mobile screen capture needs per-session OS consent (Android MediaProjection) or does not exist for third-party apps (iOS), so GizeCat does not offer it on mobile.
 
 ## Recommendation
+
+1.3.0 recommendation, kept as written; [1.4.0 update](#140-update) replaces item 2 with a native WebView app on Android and the PWA on iPad.
 
 1. Ship and verify the web host first; it is the only mobile experience this project can test.
 2. If a store app is wanted, wrap the web host with Capacitor. Run the store review question (guideline 4.2) first.

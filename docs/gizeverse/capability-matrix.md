@@ -29,7 +29,7 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 | Walks on browser tab strips | VERIFIED | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Notices when you are away | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED |
 | Gets out of the way of fullscreen apps | VERIFIED | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
-| Starts when you sign in | VERIFIED | NOT IMPL | NOT IMPL | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED |
+| Starts when you sign in | VERIFIED | IMPL, UNVERIFIED | NOT IMPL | NOT IMPL | NOT IMPL | BLOCKED | BLOCKED | BLOCKED |
 | Tray / menu-bar icon | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED |
 | Show/hide shortcut | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Encrypted API-key storage | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED |
@@ -42,7 +42,7 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | IMPLEMENTED_AND_LOCALLY_VERIFIED | Procedural rig in per-display overlays. | [report](../../docs/TEST_REPORT.md#v120-2026-11-05-a-lively-cat) |
+| The character is shown and animated | IMPLEMENTED_AND_LOCALLY_VERIFIED | Procedural rig in per-display overlays (run on x64 hardware; the 1.4.0 ARM64 build has never run). | [report](../../docs/TEST_REPORT.md#v120-2026-11-05-a-lively-cat) |
 | Drawn over other apps (transparent, always on top) | IMPLEMENTED_AND_LOCALLY_VERIFIED | Transparent, topmost, non-focusable toolbar windows; NonRudeHWND keeps the taskbar topmost. | [report](../../docs/TEST_REPORT.md#v120-2026-11-05-a-lively-cat) |
 | Clicks pass through everywhere except the character | IMPLEMENTED_AND_LOCALLY_VERIFIED | Interactive only over the hit region while the renderer is healthy (T8). | [report](../../docs/TEST_REPORT.md#v120-2026-11-05-a-lively-cat) |
 | Sees the pointer outside its own window | IMPLEMENTED_AND_LOCALLY_VERIFIED | GetCursorPos poll in main. | [report](../../docs/TEST_REPORT.md#v120-2026-11-05-a-lively-cat) |
@@ -65,21 +65,21 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same renderer; overlays use logical coordinates (points). On the floor of the work area only. | — |
-| Drawn over other apps (transparent, always on top) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Panel-type, screen-saver level, accepts the first click, hidden from Mission Control. Never run on a Mac. | — |
+| The character is shown and animated | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same renderer; overlays use logical coordinates (points). On the floor of the work area only (no window climbing). Never run on a Mac. | — |
+| Drawn over other apps (transparent, always on top) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Panel at the floating level (below menus, the menu bar and the Dock); on every Space and above fullscreen apps by Electron's panel behaviour; accepts the first click; hidden from Mission Control. Never run on a Mac. | — |
 | Clicks pass through everywhere except the character | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | setIgnoreMouseEvents plus the shared hit-region poll. Never run on a Mac. | — |
 | Sees the pointer outside its own window | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | screen.getCursorScreenPoint (documented to need no permission). | — |
 | Several displays, mixed scaling | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Logical coordinates (points) avoid mixed-scale overlap; synthetic layouts only. | — |
-| Climbs and walks on other apps' windows | NOT_IMPLEMENTED | Needs window geometry of other apps and a consent design (Screen Recording / Accessibility). | — |
+| Climbs and walks on other apps' windows | NOT_IMPLEMENTED | Floor only in 1.4.0: the only permission-free source of window bounds (CGWindowListCopyWindowInfo) needs native code that has never run. | — |
 | Rides the taskbar / dock | NOT_IMPLEMENTED | The Dock is not modelled as a surface. | — |
 | Walks on browser tab strips | NOT_IMPLEMENTED | Windows UI Automation only. | — |
 | Notices when you are away | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | powerMonitor.getSystemIdleTime. | — |
-| Gets out of the way of fullscreen apps | NOT_IMPLEMENTED | No fullscreen detection off Windows yet. | — |
-| Starts when you sign in | NOT_IMPLEMENTED | Not implemented on this platform yet (ADR 0004 §7); nothing is registered. | — |
-| Tray / menu-bar icon | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Menu-bar icon; the Dock icon stays, and clicking it opens Settings. | — |
+| Gets out of the way of fullscreen apps | NOT_IMPLEMENTED | No detection; panel overlays also show over fullscreen apps, so the fullscreen setting has no effect. | — |
+| Starts when you sign in | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | SMAppService via setLoginItemSettings; opt-in (off by default), needs the app in /Applications; never run on a Mac. | — |
+| Tray / menu-bar icon | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Template menu-bar icon (a different shape per state); a click opens the menu; the Dock icon is on by default and can be turned off in Settings. | — |
 | Show/hide shortcut | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Electron globalShortcut (Control+Option+Shift+C). | — |
 | Encrypted API-key storage | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | safeStorage (Keychain). | — |
-| Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | Fails closed: exclusions are Windows executable names and capture needs a Screen Recording consent design. | — |
+| Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | Fails closed: exclusions are Windows executable names and capture needs a Screen Recording consent design; 1.4.0 asks for no macOS permission. | — |
 | Touch gestures (pet, drag, throw) | NOT_IMPLEMENTED | Desktop overlay is pointer-driven. | — |
 | Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same WebAudio cues. | — |
 | Remembers the character between runs | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | JSON in ~/Library/Application Support. | — |
@@ -157,9 +157,9 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | IMPLEMENTED_AND_LOCALLY_VERIFIED | The real sim, host and renderer in a page (Chrome 156 and Edge 156 on Windows 11). | [report](../../docs/gizeverse/07-web-host.md#results) |
+| The character is shown and animated | IMPLEMENTED_AND_LOCALLY_VERIFIED | The real sim, host and renderer in a page (Chrome 156 and Edge 156 on Windows 11, 1.3.0); the 1.4.0 installable web app has not run in a browser. | [report](../../docs/gizeverse/07-web-host.md#results) |
 | Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | A web page cannot draw over other apps; the character lives inside the page. | — |
-| Clicks pass through everywhere except the character | IMPLEMENTED_AND_LOCALLY_VERIFIED | In-page: the page keeps its clicks outside the hit region; a press on the cat stays with the cat. | [report](../../docs/gizeverse/07-web-host.md#results) |
+| Clicks pass through everywhere except the character | IMPLEMENTED_AND_LOCALLY_VERIFIED | In-page: the page keeps its clicks outside the hit region; a press on the cat stays with the cat (1.3.0 run; the 1.4.0 toolbar has not run). | [report](../../docs/gizeverse/07-web-host.md#results) |
 | Sees the pointer outside its own window | BLOCKED_BY_PLATFORM_OR_PERMISSION | Browsers report the pointer only over the page. | — |
 | Several displays, mixed scaling | BLOCKED_BY_PLATFORM_OR_PERMISSION | One viewport. | — |
 | Climbs and walks on other apps' windows | BLOCKED_BY_PLATFORM_OR_PERMISSION | Browsers do not expose other windows. | — |
@@ -173,38 +173,38 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 | Encrypted API-key storage | BLOCKED_BY_PLATFORM_OR_PERMISSION | No secrets: the web host has no AI or network features. | — |
 | Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not offered on the web host (no screen access, no network). | — |
 | Touch gestures (pet, drag, throw) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Touch routing exists and passed under device emulation (see Android); no touch-screen PC was tested. | — |
-| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | The same WebAudio cues as the desktop; not tested in the web host. | — |
-| Remembers the character between runs | IMPLEMENTED_AND_LOCALLY_VERIFIED | localStorage, validated with the desktop migrations; a reload keeps the cat. | [report](../../docs/gizeverse/07-web-host.md#results) |
+| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | The same WebAudio cues as the desktop, started by a tap (Sound button or Settings); not tested in the web host. | — |
+| Remembers the character between runs | IMPLEMENTED_AND_LOCALLY_VERIFIED | localStorage, validated with the desktop migrations; a reload keeps the cat (1.3.0 run; the 1.4.0 storage changes have not run). | [report](../../docs/gizeverse/07-web-host.md#results) |
 
 ## Android (`android`)
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | SIMULATED_OR_MOCK_TESTED | The web host under desktop Chrome's Pixel 7 emulation; never run on Android or its Chrome. | [report](../../docs/gizeverse/07-web-host.md#results) |
-| Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | SYSTEM_ALERT_WINDOW needs a permission, and since Android 12 touches pass through only at ≤ 80 % opacity. | — |
+| The character is shown and animated | SIMULATED_OR_MOCK_TESTED | 1.3.0: the web host under desktop Chrome's Pixel 7 emulation. 1.4.0 adds the installable web app and a native WebView app around the same bundle; neither has run on a device or emulator. | [report](../../docs/gizeverse/07-web-host.md#results) |
+| Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | SYSTEM_ALERT_WINDOW needs a permission, and since Android 12 touches pass through only at ≤ 80 % opacity; the app requests no permission and draws only inside itself. | — |
 | Clicks pass through everywhere except the character | BLOCKED_BY_PLATFORM_OR_PERMISSION | See overlay. | — |
 | Sees the pointer outside its own window | BLOCKED_BY_PLATFORM_OR_PERMISSION | Touch devices have no hovering pointer outside the app. | — |
 | Several displays, mixed scaling | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable to the in-page host. | — |
 | Climbs and walks on other apps' windows | BLOCKED_BY_PLATFORM_OR_PERMISSION | Other apps are not visible. | — |
 | Rides the taskbar / dock | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
 | Walks on browser tab strips | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
-| Notices when you are away | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code (page pointer idle); not run on Android. | — |
+| Notices when you are away | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code (page pointer idle) in the browser and the app; not run on Android. | — |
 | Gets out of the way of fullscreen apps | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
 | Starts when you sign in | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Tray / menu-bar icon | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Show/hide shortcut | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
-| Encrypted API-key storage | BLOCKED_BY_PLATFORM_OR_PERMISSION | No secrets on the web host. | — |
+| Encrypted API-key storage | BLOCKED_BY_PLATFORM_OR_PERMISSION | No secrets: the web app and the Android app have no AI or network features. | — |
 | Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | MediaProjection needs per-session consent; not offered. | — |
-| Touch gestures (pet, drag, throw) | SIMULATED_OR_MOCK_TESTED | Tap, stroke-to-pet and hold-to-drag passed under Pixel 7 emulation (touch through the DevTools protocol). | [report](../../docs/gizeverse/07-web-host.md#results) |
-| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code; not run on Android. | — |
-| Remembers the character between runs | SIMULATED_OR_MOCK_TESTED | Reload keeps the cat under Pixel 7 emulation. | [report](../../docs/gizeverse/07-web-host.md#results) |
+| Touch gestures (pet, drag, throw) | SIMULATED_OR_MOCK_TESTED | 1.3.0: tap, stroke-to-pet and hold-to-drag passed under Pixel 7 emulation (touch through the DevTools protocol); the 1.4.0 app has not run on a touch device. | [report](../../docs/gizeverse/07-web-host.md#results) |
+| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code, started by a tap; not run on Android. | — |
+| Remembers the character between runs | SIMULATED_OR_MOCK_TESTED | 1.3.0: a reload kept the cat under Pixel 7 emulation. 1.4.0: Chrome's storage, or the app's private WebView storage with no cloud backup; not run on Android. | [report](../../docs/gizeverse/07-web-host.md#results) |
 
 ## iOS / iPadOS (`ios`)
 
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
-| The character is shown and animated | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | The web host is plain web code, but it has never run in WebKit or Safari. | — |
-| Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | iOS has no public API for drawing over other apps. | — |
+| The character is shown and animated | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | The installable web app (Safari, Add to Home Screen) is plain web code, but it has never run in WebKit or Safari. | — |
+| Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | iOS and iPadOS have no public API for drawing over other apps. | — |
 | Clicks pass through everywhere except the character | BLOCKED_BY_PLATFORM_OR_PERMISSION | See overlay. | — |
 | Sees the pointer outside its own window | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not exposed. | — |
 | Several displays, mixed scaling | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable to the in-page host. | — |
@@ -216,8 +216,8 @@ What GizeCat claims about each capability on each platform. A status is a claim 
 | Starts when you sign in | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Tray / menu-bar icon | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
 | Show/hide shortcut | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable. | — |
-| Encrypted API-key storage | BLOCKED_BY_PLATFORM_OR_PERMISSION | No secrets on the web host. | — |
+| Encrypted API-key storage | BLOCKED_BY_PLATFORM_OR_PERMISSION | No secrets: the web app has no AI or network features. | — |
 | Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not available to apps or pages. | — |
 | Touch gestures (pet, drag, throw) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same touch routing; never run in Safari (WebKit touch and pointer events untested). | — |
-| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code; Safari needs a user gesture to start audio (untested). | — |
-| Remembers the character between runs | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | localStorage; Safari may evict it after 7 days without a visit (untested). | — |
+| Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same web code; Safari needs a tap to start audio, which the Sound button and Settings provide (untested). | — |
+| Remembers the character between runs | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | localStorage; a Safari tab may lose it after 7 days without a visit; a Home Screen app has separate storage (reported; untested). | — |

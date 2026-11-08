@@ -2,6 +2,56 @@
 
 GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is the first public release; earlier versions were built and tested locally but not published.
 
+## 1.4.0 (release candidate, unreleased)
+
+**Not released.** 1.3.0 stays the current release until the owner approves 1.4.0. **Nothing in 1.4.0 has run on any device.** Statuses use the release vocabulary: IMPLEMENTED, COMPILED_OR_PACKAGED, THEORETICALLY_COMPATIBLE_NOT_EXECUTED, REQUIRES_OWNER_CREDENTIALS, BLOCKED_BY_PLATFORM, NOT_IMPLEMENTED. Every target and artifact: [docs/platforms/](docs/platforms/README.md).
+
+### Added
+- **Windows on Arm.** One installer per architecture: `Desktop-Cat-Setup-1.4.0-x64.exe` and `Desktop-Cat-Setup-1.4.0-arm64.exe`. Each carries only its own native library. The ARM64 installer stops with a clear message on a PC that is not Windows on Arm. A static payload check (`scripts/check-win-payload.mjs`) reads both builds without running them. The ARM64 build is cross-built on x64 and has never run (THEORETICALLY_COMPATIBLE_NOT_EXECUTED).
+- **macOS as a desktop target** for Intel and Apple Silicon ([guide](docs/platforms/macos.md)):
+  - a template menu-bar icon whose click opens the menu;
+  - a Dock icon, on by default, with a "Show GizeCat in the Dock" switch;
+  - an opt-in "Open at login" through macOS's login-item service, off by default;
+  - an application menu without Hide, and a quick save at logout or shutdown;
+  - no permission prompts: Electron's camera, microphone and Bluetooth reasons now say GizeCat never uses them;
+  - Settings in macOS terms: "Open at login" in Diagnostics, the macOS Keychain in the API-key messages, and a note that the fullscreen setting has no effect;
+  - packaging: DMG and zip for x64, arm64 and universal through a manual workflow on a Mac runner (Developer ID signing and notarization: REQUIRES_OWNER_CREDENTIALS), and ad-hoc test zips for x64 and arm64 from a Linux container (not notarized).
+
+  It is floor-only (no window climbing), and it has never run on a Mac.
+- **An installable web app (PWA) for tablets** ([iPad](docs/platforms/ipados.md), [Android](docs/platforms/android.md#the-web-app-in-chrome)):
+  - a manifest and icons;
+  - an offline service worker with a versioned cache;
+  - a tablet layout with a toolbar and safe areas;
+  - a settings sheet (name, coat, style, size, shadow, emotes, personality, sound, storage status, Reset settings, Start over);
+  - sound that starts from a tap;
+  - `npm run package:web`, which writes a self-hostable zip.
+
+  Public hosting needs the owner (REQUIRES_OWNER_CREDENTIALS). It has never run on an iPad, an Android tablet or in a browser.
+- **A native Android tablet app** ([guide](docs/platforms/android.md), [decision record](docs/gizeverse/14-android-app.md)):
+  - a Kotlin WebView app around the same web bundle;
+  - no permissions at all, so there is no network access;
+  - no cloud backup, and a hardened WebView;
+  - one narrow file bridge for saving profile files.
+
+  The release APK and AAB are unsigned until the owner creates a release key; a debug-signed trial APK exists for sideload trials. It has been compiled and packaged, never run on a device or emulator.
+- **A portable profile format** (`src/shared/profileTransfer.ts`, `gizeverse-character-profile` format 1.0): the cat's identity, traits, look and preferences, and its memory only on request; never secrets, AI or perception settings, paths or device-only settings. A newer major version is refused, and an import never re-enables an opt-out. **Take your cat to another device** saves and loads it: Settings → Personality on Windows and macOS (the system's own save and open dialogs), and the settings sheet in the web app and the Android app. A preview shows what a file would change, and nothing changes until you confirm. Never run on a device.
+- **Diagnostics:** `os.arm64Translation` (true when an x64 build runs under Rosetta or Windows on Arm emulation).
+
+### Changed
+- **Windows installer file names** gain the architecture: `-x64` / `-arm64`. Shortcuts, the Apps entry and the install folder still say "Desktop Cat". The same appId means installing over 1.3.0 is an upgrade that keeps your cat (the upgrade to 1.4.0 has not been run).
+- **macOS overlay level** is `floating` instead of `screen-saver`, so menus, the menu bar, the Dock and system alerts draw over the cat.
+- **Web host CSP:** no `data:` images; `manifest-src` and `worker-src 'self'` added. The 1.3.0 wording "no network after load" is replaced by a precise one: the page itself can make no requests, and the only traffic is the browser loading the app's own files.
+- The untrusted-text helpers moved to `src/shared/text.ts` (the old path re-exports them).
+- The [capability matrix](docs/gizeverse/capability-matrix.md) marks the macOS login item as implemented and never run on a Mac, and notes which web and Android evidence is from 1.3.0.
+
+### Security
+- New threat-model entries for the profile file as untrusted input, the service worker, static hosting with a meta-tag CSP and the shared `github.io` origin, and the Android WebView file bridge ([THREAT_MODEL.md](docs/THREAT_MODEL.md), T17–T20).
+- New frozen identifiers, pinned by tests: `io.github.gizeverse.gizecat` (Android application id), `https://appassets.androidplatform.net` (Android web origin) and `gizeverse-character-profile` (profile tag).
+
+### Not done
+- No test was executed for 1.4.0. The new unit, Playwright and static tests are written and wait for the owner's run.
+- Signing, notarization, store listings, public web hosting and Android developer verification all need the owner's credentials.
+
 ## 1.3.0 — first public release
 
 ### Fixed

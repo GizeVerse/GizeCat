@@ -55,12 +55,17 @@ describe('capability table: honesty rules', () => {
     }
   });
 
-  it('declares perception fail-closed off Windows and login items implemented on Windows only', () => {
+  it('declares perception fail-closed off Windows, and login items implemented on Windows and macOS only', () => {
     for (const p of PLATFORM_IDS) {
       if (p === 'win32') continue;
       expect(isImplemented(CAPABILITY_MATRIX[p].perception.status), p).toBe(false);
+      // 1.4.0 (ADR 0004 addendum): macOS has an opt-in SMAppService login item; every other
+      // platform still registers nothing.
+      if (p === 'darwin') continue;
       expect(isImplemented(CAPABILITY_MATRIX[p].loginItem.status), p).toBe(false);
     }
+    // The macOS login item has never run on a Mac: it may claim code, never a platform run.
+    expect(CAPABILITY_MATRIX.darwin.loginItem.status).toBe('IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED');
   });
 });
 

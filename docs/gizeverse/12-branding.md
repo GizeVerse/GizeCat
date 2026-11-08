@@ -35,6 +35,25 @@ Each value lives in [src/shared/identity.ts](../../src/shared/identity.ts) with 
 
 **userData pin.** Without an override, the app now sets userData to `<appData>/Desktop Cat` before taking the single-instance lock. That is exactly today's default, so nothing moves today, and a later productName change can never move users' cats, settings, API keys or the lock. The startup test fails when the pin is removed (REAL: checked by disabling it).
 
+## 1.4.0 names (release candidate)
+
+| Where | 1.3.0 | 1.4.0 |
+|---|---|---|
+| Windows installer file | `Desktop-Cat-Setup-<version>.exe` | **`Desktop-Cat-Setup-<version>-x64.exe`** and **`Desktop-Cat-Setup-<version>-arm64.exe`** (one per architecture; `artifactName` in electron-builder.yml). The "Desktop Cat" prefix stays until the installer rename below. |
+| Windows shortcuts, Apps entry, install folder | Desktop Cat | Unchanged: Desktop Cat. The NSIS GUID derives from the appId, so the per-arch names do not affect upgrades. |
+| macOS artifacts | `package:mac` was never built | `GizeCat-<version>-mac-<x64, arm64, universal>.dmg` / `.zip`; ad-hoc test zips `GizeCat-<version>-mac-<arch>-adhoc.zip` |
+| macOS app bundle | `Desktop Cat.app` | Unchanged (frozen: the Keychain item and login items are keyed by the bundle and its id) |
+| macOS menus and Settings | — | "About GizeCat", "Quit GizeCat", "Show GizeCat in the Dock" |
+| Web app | — | Name GizeCat (manifest), icons generated from `build/icon.png`; `GizeCat-web-<version>.zip` |
+| Android app | — | Launcher name GizeCat (trial build: "GizeCat (trial)"); `GizeCat-<version>-android-*.apk` / `.aab` |
+
+**New frozen identifiers in 1.4.0** (in `src/shared/identity.ts`, pinned by `tests/unit/shared/identity.test.ts`, written and not run in 1.4.0):
+- `androidApplicationId` = `io.github.gizeverse.gizecat`: permanent once published on Google Play. It differs from the desktop appId.
+- `androidWebOrigin` = `https://appassets.androidplatform.net`: the Android cat's storage is keyed by it ([14-android-app.md](14-android-app.md)).
+- `profileKind` = `gizeverse-character-profile`: the tag of the portable profile file.
+
+No new logos or artwork were made; every icon derives from `build/icon.png`.
+
 ## Character seam
 
 [src/shared/character.ts](../../src/shared/character.ts): `CharacterDescriptor` and `CAT_CHARACTER`, built from the existing cat vocabularies (body size, clips, skins, reactions). It is the documented contract for a second GizeVerse character; nothing is persisted and no behaviour changes.
@@ -50,6 +69,6 @@ Each value lives in [src/shared/identity.ts](../../src/shared/identity.ts) with 
 
 ## Remaining steps (owner)
 
-1. **Installer names.** Rename the installer-visible names (builder `productName`, shortcutName, uninstallDisplayName, artifactName) only after `scripts/upgrade-test.ps1` passes from 1.2.0 on a disposable Windows user or VM. Never on a machine with a real install.
+1. **Installer names.** Rename the installer-visible names (builder `productName`, shortcutName, uninstallDisplayName, artifactName) only after `scripts/upgrade-test.ps1` passes from 1.2.0 on a disposable Windows user or VM. Never on a machine with a real install. Since 1.4.0 the test takes `-Arch x64|arm64`, and the rename must keep the `-x64` / `-arm64` suffixes.
 2. **Diagnostics export file name.** `desktop-cat-diagnostics-<stamp>.json` could become a GizeCat name, since the audit classes it as display. It was left as it is because tools may look for it.
 3. **Logos.** No new logos or assets were created; the cat icon has no text and needs no change.

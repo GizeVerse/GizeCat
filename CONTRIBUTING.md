@@ -21,6 +21,8 @@ npm run dev                             # development build, then run the app
 
 On macOS and Linux, typecheck, lint, the unit tests and the build should run. The app has a platform profile for both. It has never run on a Mac. On Linux it has run only in a container under a virtual X server, not on a real desktop, and it shows the cat only on an X11 session with a compositing window manager. What has actually run where is in the [capability matrix](docs/gizeverse/capability-matrix.md) and the GizeVerse reports in [docs/gizeverse/](docs/gizeverse/).
 
+Since 1.4.0 there are more build targets, each with its own setup: the ARM64 Windows installer (`npm run package:win` stages an extra native package from the npm registry), macOS packages (on a Mac, or ad-hoc zips from a Linux container with Docker), the installable web app (`npm run package:web`) and the Android app (a JDK 17+ and the Android SDK with platform 36 and build-tools 36.0.0). The steps are in [docs/platforms/building-and-packaging.md](docs/platforms/building-and-packaging.md). The Android project lives in `android/` and is outside ESLint and the TypeScript projects.
+
 ## Verify your change
 
 ```sh
@@ -60,6 +62,8 @@ Label every claim in a pull request, an issue reply or a report:
 "The config file exists", "the docs say so" and "it should work" are UNVERIFIED. Do not upgrade a label later: MOCKED stays MOCKED. Claims about a device, a cloud service or third-party software are REAL only if you observed them directly.
 
 ## Platform statuses
+
+Release notes and install guides for 1.4.0 use a separate release vocabulary for targets and artifacts (IMPLEMENTED, COMPILED_OR_PACKAGED, THEORETICALLY_COMPATIBLE_NOT_EXECUTED, REQUIRES_OWNER_CREDENTIALS, BLOCKED_BY_PLATFORM, NOT_IMPLEMENTED; see [docs/platforms/README.md](docs/platforms/README.md#status-vocabulary-for-140)). A build or a package is never a test.
 
 Each platform's capabilities carry one of six statuses:
 
@@ -109,6 +113,7 @@ Renaming any of them loses users' cats, settings, API keys or startup entries. T
 | `src/preload/` | Typed bridges between renderers and main, nothing else |
 | `src/web/` | The web host (ADR 0004 §8): the real catHost, sim and overlay renderer in one page, with no network, no key listeners and no perception. `npm run build:web`, `npm run test:web` (Playwright, installed Chrome/Edge); ESLint keeps key-event literals and Node out of it |
 | `native/uia-helper/` | The Windows UI Automation helper (tab-strip geometry only) |
+| `android/` | The Android tablet app (1.4.0): one Kotlin Activity with a hardened WebView that serves the `out/web` bundle; zero permissions ([decision record](docs/gizeverse/14-android-app.md), [android/README.md](android/README.md)) |
 | `tests/unit`, `tests/integration` | Vitest |
 | `tests/e2e` | Playwright against the real app (Windows) |
 | `scripts/` | Build, QA, benchmarks, packaging checks |
