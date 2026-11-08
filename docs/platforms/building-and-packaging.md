@@ -35,7 +35,7 @@ A release run into a versioned folder, step by step:
 1. `npm ci --ignore-scripts` and `node node_modules/electron/install.js`.
 2. `node scripts/with-lock.mjs stage-koffi -- node scripts/stage-koffi-arch.mjs --arch arm64`, then `git diff --exit-code -- package.json package-lock.json` (must print nothing).
 3. `node scripts/build.mjs`.
-4. `node scripts/with-lock.mjs package-win -- npx electron-builder --win nsis --x64 --arm64 --publish never -c.directories.output=release/<version>`. The arch flags are required: without them only the host's arch is built.
+4. `node scripts/with-lock.mjs package-win -- npx electron-builder --win nsis --x64 --arm64 --publish never -c.directories.output=release/<version>/windows`. The arch flags are required: without them only the host's arch is built.
 5. Static payload checks (they read files and never run a binary):
    - `node scripts/check-win-payload.mjs --arch x64 --dir release/<version>/win-unpacked --out <evidence>.json`
    - `node scripts/check-win-payload.mjs --arch arm64 --dir release/<version>/win-arm64-unpacked --out <evidence>.json`
@@ -100,14 +100,14 @@ The production build checks itself: the exact file set, no test hook or key-list
 
 `scripts/android-gradle.mjs` sets `JAVA_HOME` and `ANDROID_HOME` for the Gradle process only: the environment's values when they are valid, otherwise Android Studio's JBR and the default SDK folder. It first runs `scripts/build-web-app.mjs`, which rebuilds `out/web`, refuses source maps, test hooks and key-listener code, and copies the bundle into `android/app/src/main/assets/` (generated, gitignored).
 
-| Command | Gradle output | Copied to `release/android/` as |
+| Command | Gradle output | Copied to `release/<version>/android/` as |
 |---|---|---|
 | `npm run android:apk` | `android/app/build/outputs/apk/release/app-release-unsigned.apk` (`app-release.apk` when signed) | `GizeCat-<version>-android-unsigned.apk` (`GizeCat-<version>-android.apk` when signed) |
 | `npm run android:aab` | `android/app/build/outputs/bundle/release/app-release.aab` | `GizeCat-<version>-android-unsigned.aab` (`…-android.aab` when signed) |
 | `npm run android:trial` | `android/app/build/outputs/apk/trial/app-trial.apk` | `GizeCat-<version>-android-trial-debugsigned.apk` |
 | `npm run android:web` | `android/app/src/main/assets/` only | — |
 
-The copy step also writes `release/android/SHA256SUMS-android.txt`. Direct form: `node scripts/android-gradle.mjs :app:assembleRelease [--no-web] [--no-collect]`. Do not use `--no-web` for a release: it would package whatever web bundle is already in the assets folder.
+The copy step also writes `release/<version>/android/SHA256SUMS-android.txt`. Direct form: `node scripts/android-gradle.mjs :app:assembleRelease [--no-web] [--no-collect]`. Do not use `--no-web` for a release: it would package whatever web bundle is already in the assets folder.
 
 - `versionName` comes from `package.json`; `versionCode` = MAJOR×10000 + MINOR×100 + PATCH (1.4.0 → 10400).
 - The APK records the git commit it was built from, so build release artifacts from the final commit.
@@ -122,10 +122,10 @@ The copy step also writes `release/android/SHA256SUMS-android.txt`. Direct form:
 
 | Artifact | Folder |
 |---|---|
-| Windows installers and unpacked folders | `release/` (or `release/<version>/` with `-c.directories.output`) |
+| Windows installers and unpacked folders | `release/` (or `release/<version>/windows/` with `-c.directories.output`) |
 | macOS ad-hoc zips (container) | `release/<version>/mac/` |
 | macOS DMG and zip (Mac, workflow) | `release/` on the build machine; workflow artifacts on GitHub |
 | Web app | `release/<version>/web/` |
-| Android | `release/android/` |
+| Android | `release/<version>/android/` |
 
 `release/` is git-ignored. Publishing a release (uploading files to GitHub Releases) is an owner action; see [docs/RELEASE_CHECKLIST.md](../RELEASE_CHECKLIST.md).

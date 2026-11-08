@@ -7,7 +7,7 @@
 // Usage: node scripts/android-gradle.mjs <gradle tasks and options...> [--no-web] [--no-collect]
 //   --no-web      skip build-web-app (android/app/src/main/assets must already hold the bundle)
 //   --no-collect  leave the outputs in android/app/build/outputs instead of also copying them to
-//                 release/android/ with SHA256SUMS-android.txt
+//                 release/<version>/android/ with SHA256SUMS-android.txt
 // Examples: node scripts/android-gradle.mjs :app:assembleRelease
 //           node scripts/android-gradle.mjs :app:bundleRelease :app:assembleTrial
 //
@@ -106,7 +106,7 @@ child.on('close', (code, signal) => {
   if (!noCollect) collect();
 });
 
-/** Build outputs this run produced (newer than its start), with the release/android name for each. */
+/** Build outputs this run produced (newer than its start), with the release/<version>/android name for each. */
 function freshOutputs() {
   const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
   const out = path.join(androidDir, 'app', 'build', 'outputs');
@@ -129,7 +129,7 @@ function report() {
 function collect() {
   const { version, files } = freshOutputs();
   if (files.length === 0) return;
-  const dest = path.join(root, 'release', 'android');
+  const dest = path.join(root, 'release', version, 'android');
   fs.mkdirSync(dest, { recursive: true });
   for (const [file, name] of files) fs.copyFileSync(file, path.join(dest, name));
   const prefix = `GizeCat-${version}-android`;
@@ -139,5 +139,5 @@ function collect() {
     .sort()
     .map((n) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(dest, n))).digest('hex')}  ${n}`);
   fs.writeFileSync(path.join(dest, 'SHA256SUMS-android.txt'), `${lines.join('\n')}\n`);
-  console.log(`android-gradle: copied ${files.map(([, n]) => n).join(', ')} to release/android (SHA256SUMS-android.txt updated)`);
+  console.log(`android-gradle: copied ${files.map(([, n]) => n).join(', ')} to release/${version}/android (SHA256SUMS-android.txt updated)`);
 }

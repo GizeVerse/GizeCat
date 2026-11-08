@@ -23,7 +23,7 @@ Run on a Windows 10/11 x64 machine. Heavy steps go through `node scripts/with-lo
 ## Package: Windows (x64 and ARM64)
 
 - [ ] Stage the ARM64 koffi binary: `node scripts/stage-koffi-arch.mjs --arch arm64`, then `git diff --exit-code -- package.json package-lock.json` prints nothing. Do not run `npm ci` after staging.
-- [ ] `npm run package:win` → `release/Desktop-Cat-Setup-<version>-x64.exe` and `release/Desktop-Cat-Setup-<version>-arm64.exe` (or the explicit `npx electron-builder --win nsis --x64 --arm64 --publish never -c.directories.output=release/<version>`; the arch flags are required). `npm run package` alone builds x64 only.
+- [ ] `npm run package:win` → `release/Desktop-Cat-Setup-<version>-x64.exe` and `release/Desktop-Cat-Setup-<version>-arm64.exe` (or the explicit `npx electron-builder --win nsis --x64 --arm64 --publish never -c.directories.output=release/<version>/windows`; the arch flags are required). `npm run package` alone builds x64 only.
 - [ ] Code signing: set `CSC_LINK`/`CSC_KEY_PASSWORD` (or Azure Trusted Signing) if an identity exists. **Never** describe an unsigned build as signed.
 - [ ] `node scripts/check-win-payload.mjs --arch x64 --dir <release>/win-unpacked` and `--arch arm64 --dir <release>/win-arm64-unpacked` — exit 0 (executable machine, koffi binary per arch, asar header and integrity, fuses).
 - [ ] `npx @electron/fuses read --app release/win-unpacked/DesktopCat.exe` — RunAsNode, NODE_OPTIONS and inspect disabled; ASAR integrity + only-load-from-ASAR enabled.
@@ -54,7 +54,7 @@ Run on a Windows 10/11 x64 machine. Heavy steps go through `node scripts/with-lo
 
 ## Package: Android
 
-- [ ] `npm run android:apk`, `npm run android:aab` and `npm run android:trial` from the final commit, **without** `--no-web` → `release/android/` with `SHA256SUMS-android.txt`.
+- [ ] `npm run android:apk`, `npm run android:aab` and `npm run android:trial` from the final commit, **without** `--no-web` → `release/<version>/android/` with `SHA256SUMS-android.txt`.
 - [ ] Inspect the merged manifest: no `<uses-permission>` (an inspection, not a test).
 - [ ] Owner only: sign the release APK and AAB with the owner's upload keystore (`android/keystore.properties`). Unsigned outputs keep `-unsigned` in their names and are described as unsigned.
 - [ ] The trial APK, if attached at all, is labelled as debug-signed and for trials only.

@@ -11,7 +11,7 @@ release/
 .claude/settings.local.json
 
 # Android app (android/): Gradle and IDE state, the generated web bundle, local SDK paths,
-# signing secrets and build outputs (release/android holds collected APK/AAB files).
+# signing secrets and build outputs (release/<version>/android holds collected APK/AAB files).
 android/.gradle/
 android/.kotlin/
 android/build/

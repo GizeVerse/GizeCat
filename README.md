@@ -143,7 +143,7 @@ npm run package:mac                     # macOS dmg + zip, x64 + arm64 (needs a 
 npm run package:mac:adhoc-docker        # macOS ad-hoc test zips from a Linux container (commit first; Docker Desktop)
 npm run build:web; npm run test:web     # web host -> out/web, and its Playwright tests (installed Chrome and Edge)
 npm run package:web                     # installable web app -> release/<version>/web/ (folder, zip, SHA256SUMS)
-npm run android:apk; npm run android:aab; npm run android:trial   # Android app (JDK 17+, Android SDK 36) -> release/android/
+npm run android:apk; npm run android:aab; npm run android:trial   # Android app (JDK 17+, Android SDK 36) -> release/<version>/android/
 node scripts/capability-matrix.mjs      # regenerate docs/gizeverse/capability-matrix.md from src/shared/platform.ts
 node scripts/smoke-packaged.mjs         # smoke-test the packaged exe
 powershell -File scripts/install-test.ps1   # silent install -> smoke -> silent uninstall

@@ -87,7 +87,7 @@ built-in Kotlin from Google Maven and Maven Central.
 the environment's values when they are valid; otherwise Android Studio's JBR and the default SDK
 folder. It runs `scripts/build-web-app.mjs` first, which rebuilds `out/web` and copies it into
 `app/src/main/assets/` (generated and gitignored). After the build it copies the outputs to
-`release/android/` and writes `SHA256SUMS-android.txt`.
+`release/<version>/android/` and writes `SHA256SUMS-android.txt`.
 
 | Output | Command | Gradle output |
 | --- | --- | --- |
