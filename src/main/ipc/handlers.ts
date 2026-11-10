@@ -6,6 +6,7 @@ import type { z } from 'zod';
 import type { BehaviorProfileSnapshot } from '../../shared/behaviorProfile';
 import { parseBehaviorProfile } from '../../shared/behaviorProfileSchema';
 import type { HitRegion } from '../../shared/cat';
+import type { JournalEntry } from '../../shared/companion';
 import {
   ApplyProfileRequestSchema,
   ExportProfileRequestSchema,
@@ -38,7 +39,7 @@ import type { SettingsStore } from '../store/settingsStore';
 import type { ActionRunner } from './actions';
 import { createRateLimiter } from './rateLimit';
 import { rejectMainOwnedFields } from './startupState';
-import { toPerceptionPreview } from './viewState';
+import { sanitizeJournal, toPerceptionPreview } from './viewState';
 
 /** Shared overlay budget: pointer moves (the renderer caps them per time), hit regions, errors. */
 export const OVERLAY_MESSAGES_PER_SECOND = 240;
@@ -80,6 +81,8 @@ export interface IpcDeps {
   getSurfaceDiagnostics?: () => SurfaceDiagnostics;
   /** v1.2 behaviour profile for Diagnostics -> Behaviour (the sim's session snapshot; validated here). */
   getBehaviorProfile?: () => BehaviorProfileSnapshot;
+  /** Living Companion journal (the sim's own list; validated here before it leaves main). Absent: the channel answers an empty list. */
+  getJournal?: () => readonly JournalEntry[];
   /** 1.4.0 profile transfer (export, open with preview, apply); absent: the channels answer 'unavailable'. */
   profiles?: ProfileTransferService;
   clock: () => number;
@@ -281,6 +284,18 @@ export function registerIpcHandlers(deps: IpcDeps): IpcRegistration {
       throw new Error(behaviorUnavailable);
     }
     return parsed;
+  });
+
+  // Living Companion: the journal goes through the same kind of gate (known event ids, outcome tokens,
+  // finite times, bounded). A failing source answers an empty list, so the Journal page still renders.
+  onSettings(IPC.settingsGetJournal, (): JournalEntry[] => {
+    if (!deps.getJournal) return [];
+    try {
+      return sanitizeJournal(deps.getJournal());
+    } catch (err) {
+      warnThrottled('journal:failed', 'reading the journal failed', { error: err });
+      return [];
+    }
   });
 
   // 1.4.0 profile transfer. Strict payloads (no extra keys); the renderer sends no file content and

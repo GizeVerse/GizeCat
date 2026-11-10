@@ -17,7 +17,7 @@ const actions = (items: MenuItemModel[]) => items.flatMap((i) => (i.kind === 'se
 
 describe('tray menu', () => {
   it('has the documented entries and hides vision controls until perception is configured', () => {
-    expect(actions(trayMenuModel(base))).toEqual(['hide', 'pause', 'toggleInteractions', 'callCat', 'settings', 'quit']);
+    expect(actions(trayMenuModel(base))).toEqual(['hide', 'pause', 'toggleInteractions', 'callCat', 'startLaserMode', 'pauseEvents', 'settings', 'quit']);
     const vision = trayMenuModel({ ...base, perceptionConfigured: true, perceptionMode: 'ai-cloud' });
     const item = vision.find((i) => i.kind === 'item' && i.action === 'privacyPause');
     expect(item && item.kind === 'item' ? item.label : '').toBe('Vision (AI (cloud)): privacy pause');
@@ -34,7 +34,7 @@ describe('tray menu', () => {
 
 describe('cat context menu', () => {
   it('offers wake instead of sleep while asleep and disables actions while paused', () => {
-    expect(actions(catContextMenuModel(base))).toEqual(['pet', 'callCat', 'play', 'sleep', 'pause', 'hide', 'settings', 'quit']);
+    expect(actions(catContextMenuModel(base))).toEqual(['pet', 'callCat', 'play', 'sleep', 'startLaserMode', 'pauseEvents', 'pause', 'hide', 'settings', 'quit']);
     expect(actions(catContextMenuModel({ ...base, state: 'sleeping' }))).toContain('wake');
     const paused = catContextMenuModel({ ...base, paused: true });
     const pet = paused.find((i) => i.kind === 'item' && i.action === 'pet');

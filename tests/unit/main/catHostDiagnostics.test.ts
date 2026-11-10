@@ -135,6 +135,9 @@ describe('host debug state: guard stats, lifecycle and the overlay counters (F8)
       },
       surfaceDebugLines: () => [],
       behaviorProfile: () => emptyBehaviorProfile(0),
+      companionStatus: () => ({ mood: 'happy', event: null, nextEventInMs: null, nearestPersonality: 'calm', personalityIsAuto: true }),
+      journal: () => [],
+      clearJournal: () => undefined,
     } as unknown as CatSim;
     const overlays: HostOverlays = {
       render: () => undefined,

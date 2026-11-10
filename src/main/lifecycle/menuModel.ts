@@ -19,6 +19,10 @@ export type MenuAction =
   | 'toggleInteractions'
   | 'privacyPause'
   | 'privacyResume'
+  | 'startLaserMode'
+  | 'stopLaserMode'
+  | 'pauseEvents'
+  | 'resumeEvents'
   | 'settings'
   | 'quit';
 
@@ -37,6 +41,10 @@ export interface MenuContext {
   perceptionConfigured: boolean;
   perceptionPaused: boolean;
   perceptionMode: PerceptionMode;
+  /** Living Companion Laser Mode is on (session-only). Absent = off. */
+  laserActive?: boolean;
+  /** The user paused world events for this session. Absent = not paused. */
+  eventsPaused?: boolean;
 }
 
 const SLEEPY: ReadonlySet<BehaviorState> = new Set<BehaviorState>(['sleeping', 'fallingAsleep']);
@@ -70,6 +78,15 @@ function item(action: MenuAction, label: string, enabled = true): MenuItemModel 
   return { kind: 'item', action, label, enabled };
 }
 
+/** One toggling item: 'Laser mode' to start, 'Stop laser mode' to leave (the tray is always a way out). */
+function laserItem(ctx: MenuContext, enabledToStart: boolean): MenuItemModel {
+  return ctx.laserActive === true ? item('stopLaserMode', 'Stop laser mode') : item('startLaserMode', 'Laser mode', enabledToStart);
+}
+
+function eventsItem(ctx: MenuContext): MenuItemModel {
+  return ctx.eventsPaused === true ? item('resumeEvents', 'Resume world events') : item('pauseEvents', 'Pause world events');
+}
+
 export function trayMenuModel(ctx: MenuContext): MenuItemModel[] {
   const items: MenuItemModel[] = [
     item(ctx.hidden ? 'show' : 'hide', ctx.hidden ? `Show ${ctx.catName}` : `Hide ${ctx.catName}`),
@@ -87,6 +104,8 @@ export function trayMenuModel(ctx: MenuContext): MenuItemModel[] {
   items.push(
     { kind: 'separator' },
     item('callCat', `Call ${ctx.catName}`, !ctx.paused),
+    laserItem(ctx, !ctx.hidden && !ctx.paused),
+    eventsItem(ctx),
     item('settings', 'Settings…'),
     { kind: 'separator' },
     item('quit', QUIT_LABEL),
@@ -102,6 +121,9 @@ export function catContextMenuModel(ctx: MenuContext): MenuItemModel[] {
     item('callCat', 'Call to cursor', active),
     item('play', 'Play', active && !asleep),
     asleep ? item('wake', 'Wake up', active) : item('sleep', 'Go to sleep', active),
+    // The laser exit is offered while Laser Mode is on, whatever the cat is doing.
+    laserItem(ctx, active),
+    eventsItem(ctx),
     { kind: 'separator' },
     item(ctx.paused ? 'resume' : 'pause', ctx.paused ? 'Resume' : 'Pause'),
     item('hide', 'Hide'),

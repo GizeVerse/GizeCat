@@ -37,7 +37,7 @@
 //   (HostOverlays.noteResume).
 // - The event caps never drop pointer, lifecycle, system or command events.
 import { distanceToRect } from '../core/display/displayMath';
-import { EVERYWHERE, suggestPollIntervalMs, wallGuardRects } from '../core/interaction/clickThrough';
+import { DEFAULT_POLL_INTERVALS, EVERYWHERE, suggestPollIntervalMs, wallGuardRects } from '../core/interaction/clickThrough';
 import { CAT_BASE_WIDTH_DIP, type BehaviorState } from '../shared/cat';
 import type { Point, Rect } from '../shared/geometry';
 import type { Settings } from '../shared/settings';
@@ -46,7 +46,7 @@ import { SCREEN_EDGE_KIND, type ScreenEdgeBand, type Surface } from '../shared/s
 import type { WorldGeometry } from '../shared/world';
 import { simWorld } from '../core/display/simWorld';
 import type { ActivityMonitor, DisplayService, Logger, PerceptionService, SurfaceProvider, TaskbarTracker, Win32Api, WindowTracker } from './contracts';
-import type { OverlayInteractionStats } from './overlay/overlayManager';
+import type { OverlayInteractionStats, OverlayRenderExtras } from './overlay/overlayManager';
 import { BODY_MARGIN_SIDE_DIP, presenceRectPx } from './overlay/renderMapping';
 import type { CatPosition, ScreenEdgeGuard } from './surfaces/hostTypes';
 import { bandXRange } from './surfaces/edgeBands';
@@ -71,6 +71,8 @@ export const PLATFORM_MAX_AGE_MS = 1000;
 /** While hidden the surface set is fully re-read at most this often (event-driven updates still apply). */
 export const HIDDEN_SURFACE_MAX_AGE_MS = 5000;
 const FULLSCREEN_REFRESH_MS = 1000;
+/** The OS reduced-motion preference changes rarely; it is re-read this often (Living Companion). */
+const REDUCED_MOTION_REFRESH_MS = 5000;
 /** Bounds on the taskbar tracker's requested sample delay; hidden or locked it idles at 1 Hz. */
 export const MIN_TASKBAR_SAMPLE_MS = 16;
 export const MAX_TASKBAR_SAMPLE_MS = 1000;
@@ -159,7 +161,8 @@ export type HostSurfaceProvider = SurfaceProvider & {
 };
 
 export interface HostOverlays {
-  render(out: SimOutput, simNow: number, hidden: boolean): void;
+  /** `extras` (Living Companion): the laser dot and reduced-motion flag for this frame; absent = neither. */
+  render(out: SimOutput, simNow: number, hidden: boolean, extras?: OverlayRenderExtras): void;
   updateInteractivity(cursorPx: Point | null, blocked: boolean): void;
   isCursorOverCat(cursorPx: Point | null): boolean;
   readonly dragging: boolean;
@@ -209,6 +212,11 @@ export interface CatHostOptions {
    * after a lock; never polled while unlocked.
    */
   isSystemLocked?: () => boolean | null;
+  /**
+   * Living Companion: the OS reduced-motion preference (app.ts reads Electron's animation settings).
+   * Re-read every few seconds; a missing or throwing source means false. The sim ORs it with the setting.
+   */
+  getReducedMotion?: () => boolean;
 }
 
 export interface CatHostDebug {
@@ -273,6 +281,12 @@ export interface CatHost {
   catAnchor(): Point | null;
   /** Displays with a fullscreen app in front, as last handed to the sim (re-checked about once a second). */
   fullscreenDisplayIds(): readonly string[];
+  /** Living Companion Laser Mode: session-only, off at every start, never persisted. */
+  readonly laserActive: boolean;
+  setLaserMode(on: boolean): void;
+  /** Living Companion: the user paused world events for this session (session-only, never persisted). */
+  readonly eventsPaused: boolean;
+  setEventsPaused(paused: boolean): void;
   /**
    * v1.2 (ADR 0003 §6.1, §3; review C2) seam: screen rects (px) no overlay takes the mouse over
    * right now because of what the cat is doing: obstacle windows next to a cat clinging to, leaping
@@ -342,6 +356,10 @@ export function createCatHost(opts: CatHostOptions): CatHost {
   let injectedUserIdleMs: number | null = null;
   let fullscreenIds: string[] = [];
   let fullscreenAt = -Infinity;
+  let laserActive = false;
+  let eventsPaused = false;
+  let reducedMotion = false;
+  let reducedMotionAt = -Infinity;
   let quitWaiters: Array<() => void> = [];
   let ticks = 0;
   let tickErrors = 0;
@@ -912,6 +930,21 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
   }
 
+  /** The OS reduced-motion preference, cached; a source that is absent or throws means false. */
+  function osReducedMotion(nowReal: number): boolean {
+    if (!opts.getReducedMotion) return false;
+    if (nowReal - reducedMotionAt >= REDUCED_MOTION_REFRESH_MS) {
+      reducedMotionAt = nowReal;
+      reducedMotion = safe(() => opts.getReducedMotion?.() === true, false, 'reduced motion check');
+    }
+    return reducedMotion;
+  }
+
+  /** Displays the laser dot never draws over: a fullscreen app in front, unless the cat ignores those. */
+  function laserQuietIds(): readonly string[] {
+    return opts.getSettings().behavior.fullscreenBehavior === 'ignore' ? [] : fullscreenIds;
+  }
+
   function step(nowReal: number): number {
     const realDelta = lastReal === null ? 0 : Math.max(0, nowReal - lastReal);
     lastReal = nowReal;
@@ -945,6 +978,9 @@ export function createCatHost(opts: CatHostOptions): CatHost {
       ...(cursor !== null && Number.isFinite(cursorMovedAt) ? { cursorIdleMs: Math.max(0, nowReal - cursorMovedAt) } : {}),
       ...(edgeBands !== null ? { edgeBands } : {}),
       ...(edgeBands !== null && guardless !== null ? { edgeFullBothSides: guardless.fullBothSides, edgeCooldownScale: guardless.cooldownScale } : {}),
+      // Living Companion: only when set, so an ordinary tick's environment is unchanged.
+      ...(laserActive ? { laserMode: true } : {}),
+      ...(osReducedMotion(nowReal) ? { reducedMotion: true } : {}),
     };
     const base: Omit<SimEnv, 'now' | 'dt'> = {
       ...v12,
@@ -973,7 +1009,16 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     ticks++;
     attempt(() => trackGuardPhases(lastOutput, out, nowReal), 'click guard phases');
     lastOutput = out;
-    overlays.render(out, simNow, hidden);
+    // The cursor is handed on for the laser dot only while Laser Mode is on (never stored or logged).
+    const extras: OverlayRenderExtras | undefined =
+      (laserActive && !paused) || reducedMotion
+        ? {
+            ...(laserActive && !paused ? { laser: cursor ? { x: cursor.x, y: cursor.y } : null, laserQuietDisplayIds: laserQuietIds() } : {}),
+            ...(reducedMotion ? { reducedMotion: true } : {}),
+          }
+        : undefined;
+    if (extras) overlays.render(out, simNow, hidden, extras);
+    else overlays.render(out, simNow, hidden);
     opts.catStore.markDirty();
     if (out.state !== lastState) {
       lastState = out.state;
@@ -1154,7 +1199,7 @@ export function createCatHost(opts: CatHostOptions): CatHost {
         guardAsked = false;
         overlays.updateInteractivity(cursor, blocked);
         if (!guardAsked) restGuard(t);
-        const delay = hidden
+        const adaptive = hidden
           ? HIDDEN_POLL_MS
           : suggestPollIntervalMs({
               cursor,
@@ -1164,6 +1209,8 @@ export function createCatHost(opts: CatHostOptions): CatHost {
               catAsleep: lastOutput ? ASLEEP.has(lastOutput.state) : false,
               visible: lastOutput?.visible ?? false,
             });
+        // Laser Mode follows the cursor closely; the adaptive rate returns when it ends.
+        const delay = laserActive && !hidden ? Math.min(adaptive, DEFAULT_POLL_INTERVALS.fastMs) : adaptive;
         cursorDueAt = t + delay;
         pollErrors = 0;
       }
@@ -1356,6 +1403,35 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     catDisplayId: () => lastOutput?.displayId ?? null,
     catAnchor: () => (lastOutput ? { x: lastOutput.x, y: lastOutput.y } : null),
     fullscreenDisplayIds: () => [...fullscreenIds],
+    get laserActive() {
+      return laserActive;
+    },
+    setLaserMode(on) {
+      if (laserActive === on) return;
+      laserActive = on;
+      log.info(on ? 'laser mode on (session only)' : 'laser mode off');
+      // The poll timer was set at the slower rate: re-arm it now so the fast rate starts at once.
+      if (running && pollTimer !== null) {
+        timers.clearTimeout(pollTimer);
+        pollTimer = null;
+        cursorDueAt = -Infinity;
+        poll();
+      }
+      statusChanged();
+      // The next tick draws the dot, or sends the frame without it.
+      nudge();
+    },
+    get eventsPaused() {
+      return eventsPaused;
+    },
+    setEventsPaused(p) {
+      if (eventsPaused === p) return;
+      eventsPaused = p;
+      log.info(p ? 'world events paused (session only)' : 'world events resumed');
+      enqueue({ type: p ? 'command.eventsPause' : 'command.eventsResume' });
+      statusChanged();
+      nudge();
+    },
     clickGuardRectsPx: () => clickGuardRects(),
     setInjectedCursor(p) {
       injectedCursor = p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;

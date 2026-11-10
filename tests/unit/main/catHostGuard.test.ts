@@ -93,6 +93,9 @@ function rig(o: RigOptions = {}) {
     },
     surfaceDebugLines: () => [],
     behaviorProfile: () => emptyBehaviorProfile(0),
+    companionStatus: () => ({ mood: 'happy', event: null, nextEventInMs: null, nearestPersonality: 'calm', personalityIsAuto: true }),
+    journal: () => [],
+    clearJournal: () => undefined,
   };
   let cursor: Point = { x: 500, y: 500 };
   const source = {

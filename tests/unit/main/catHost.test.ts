@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createCatHost, type HostOverlays, type HostSurfaceProvider } from '../../../src/main/catHost';
 import type { ActivityMonitor, DisplayService, PerceptionService, TaskbarState, TaskbarTracker, Win32Api, WindowTracker } from '../../../src/main/contracts';
 import type { CatPosition } from '../../../src/main/surfaces';
+import type { OverlayRenderExtras } from '../../../src/main/overlay/overlayManager';
 import { emptyBehaviorProfile } from '../../../src/shared/behaviorProfile';
 import type { Point } from '../../../src/shared/geometry';
 import type { PersistedCat } from '../../../src/shared/catState';
@@ -58,6 +59,7 @@ interface HarnessOptions {
   win32Available?: boolean;
   timeScale?: number;
   surfaces?: HostSurfaceProvider | null;
+  reducedMotion?: () => boolean;
   taskbars?: TaskbarTracker | null;
 }
 
@@ -91,6 +93,9 @@ function harness(opts: HarnessOptions = {}) {
     },
     surfaceDebugLines: () => [],
     behaviorProfile: () => emptyBehaviorProfile(0),
+    companionStatus: () => ({ mood: 'happy', event: null, nextEventInMs: null, nearestPersonality: 'calm', personalityIsAuto: true }),
+    journal: () => [],
+    clearJournal: () => undefined,
   };
   let cursor: Point = { x: 500, y: 500 };
   const win32 = {
@@ -126,10 +131,10 @@ function harness(opts: HarnessOptions = {}) {
     request: (reason: string, focus: unknown) => perceptionCalls.push([reason, focus]),
   } as unknown as PerceptionService;
   const display = { world } as unknown as DisplayService;
-  const renders: Array<{ hidden: boolean; simNow: number }> = [];
+  const renders: Array<{ hidden: boolean; simNow: number; extras?: OverlayRenderExtras }> = [];
   const interactivity: boolean[] = [];
   const overlays: HostOverlays = {
-    render: (_out, simNow, hidden) => renders.push({ simNow, hidden }),
+    render: (_out, simNow, hidden, extras) => renders.push({ simNow, hidden, ...(extras ? { extras } : {}) }),
     updateInteractivity: (_c, blocked) => interactivity.push(blocked),
     isCursorOverCat: () => false,
     dragging: false,
@@ -157,6 +162,7 @@ function harness(opts: HarnessOptions = {}) {
     timeScale: opts.timeScale ?? 1,
     surfaces: opts.surfaces,
     taskbars: opts.taskbars,
+    getReducedMotion: opts.reducedMotion,
   });
   return {
     host,
@@ -713,5 +719,119 @@ describe('cat host: taskbar sampling', () => {
     expect(taskbars.samples).toEqual([]);
     expect(h.host.debug().taskbarDelayMs).toBeNull();
     h.host.stop();
+  });
+});
+
+describe('cat host: Living Companion session state', () => {
+  it('starts with laser mode and event pause off and an ordinary tick carries neither', () => {
+    const h = harness();
+    expect(h.host.laserActive).toBe(false);
+    expect(h.host.eventsPaused).toBe(false);
+    h.host.start();
+    h.timers.advance(0);
+    expect('laserMode' in h.ticks[0]!.env).toBe(false);
+    expect('reducedMotion' in h.ticks[0]!.env).toBe(false);
+    expect(h.renders[0]!.extras).toBeUndefined();
+    h.host.stop();
+  });
+
+  it('hands the sim laserMode and the overlays the cursor only while laser mode is on', () => {
+    const h = harness();
+    h.host.start();
+    h.timers.advance(0);
+    h.host.setLaserMode(true);
+    h.timers.advance(50);
+    expect(h.host.laserActive).toBe(true);
+    expect(h.ticks.at(-1)!.env.laserMode).toBe(true);
+    expect(h.renders.at(-1)!.extras).toEqual({ laser: { x: 500, y: 500 }, laserQuietDisplayIds: [] });
+    h.host.setLaserMode(false);
+    h.timers.advance(50);
+    expect('laserMode' in h.ticks.at(-1)!.env).toBe(false);
+    expect(h.renders.at(-1)!.extras).toBeUndefined();
+    h.host.stop();
+  });
+
+  it('keeps the dot off a fullscreen display unless the cat ignores fullscreen apps', () => {
+    const h = harness();
+    h.setFullscreen(['1']);
+    h.host.start();
+    h.host.setLaserMode(true);
+    h.timers.advance(50);
+    expect(h.renders.at(-1)!.extras?.laserQuietDisplayIds).toEqual(['1']);
+    h.settings.behavior.fullscreenBehavior = 'ignore';
+    h.timers.advance(50);
+    expect(h.renders.at(-1)!.extras?.laserQuietDisplayIds).toEqual([]);
+    h.host.stop();
+  });
+
+  it('uses the Electron cursor fallback for the dot without Win32', () => {
+    const h = harness({ win32Available: false });
+    h.host.start();
+    h.host.setLaserMode(true);
+    h.timers.advance(50);
+    // Without Win32 the Electron fallback answers, so the point is the fallback one, never a stale one.
+    expect(h.renders.at(-1)!.extras?.laser).toEqual({ x: 7, y: 8 });
+    h.host.stop();
+  });
+
+  it('polls the cursor at the fast rate while laser mode is on and returns to the adaptive rate after', () => {
+    const h = harness();
+    h.host.start();
+    h.timers.advance(1000);
+    const calm = h.interactivity.length;
+    h.host.setLaserMode(true);
+    const before = h.interactivity.length;
+    h.timers.advance(1000);
+    const fast = h.interactivity.length - before;
+    expect(fast).toBeGreaterThan(calm * 2);
+    h.host.setLaserMode(false);
+    const mid = h.interactivity.length;
+    h.timers.advance(1000);
+    expect(h.interactivity.length - mid).toBeLessThanOrEqual(calm + 2);
+    h.host.stop();
+  });
+
+  it('leaves no timer behind after stop, laser mode on or not', () => {
+    const h = harness();
+    h.host.start();
+    h.host.setLaserMode(true);
+    h.timers.advance(100);
+    h.host.stop();
+    expect(h.timers.size).toBe(0);
+  });
+
+  it('sends the sim the event pause and resume commands when the state changes, once each', () => {
+    const h = harness();
+    h.host.start();
+    h.timers.advance(0);
+    h.host.setEventsPaused(true);
+    h.host.setEventsPaused(true);
+    h.timers.advance(50);
+    expect(h.ticks.flatMap((t) => t.events).filter((e) => e.type === 'command.eventsPause')).toHaveLength(1);
+    expect(h.host.eventsPaused).toBe(true);
+    h.host.setEventsPaused(false);
+    h.timers.advance(50);
+    expect(h.ticks.flatMap((t) => t.events).filter((e) => e.type === 'command.eventsResume')).toHaveLength(1);
+    expect(h.host.eventsPaused).toBe(false);
+    h.host.stop();
+  });
+
+  it('reads the OS reduced-motion preference guarded: true is passed on, a throw means false', () => {
+    const on = harness({ reducedMotion: () => true });
+    on.host.start();
+    on.timers.advance(0);
+    expect(on.ticks[0]!.env.reducedMotion).toBe(true);
+    expect(on.renders[0]!.extras).toEqual({ reducedMotion: true });
+    on.host.stop();
+    const broken = harness({
+      reducedMotion: () => {
+        throw new Error('no such setting');
+      },
+    });
+    broken.host.start();
+    broken.timers.advance(0);
+    expect('reducedMotion' in broken.ticks[0]!.env).toBe(false);
+    expect(broken.log.entries.some((e) => e.msg === 'reduced motion check failed')).toBe(true);
+    broken.host.stop();
   });
 });

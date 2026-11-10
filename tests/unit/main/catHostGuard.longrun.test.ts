@@ -154,6 +154,9 @@ function rig(o: RigOptions = {}) {
     },
     surfaceDebugLines: () => [],
     behaviorProfile: () => emptyBehaviorProfile(0),
+    companionStatus: () => ({ mood: 'happy', event: null, nextEventInMs: null, nearestPersonality: 'calm', personalityIsAuto: true }),
+    journal: () => [],
+    clearJournal: () => undefined,
   };
   /** Win32 input: the cursor (null read = GetCursorPos failing, as on a locked desktop) and the press count. */
   const input: { cursor: Point; cursorWorks: boolean; down: boolean; presses: number } = { cursor: { x: 300, y: 300 }, cursorWorks: true, down: false, presses: 0 };

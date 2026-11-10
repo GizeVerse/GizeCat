@@ -3,12 +3,12 @@
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { app, BaseWindow, BrowserWindow, globalShortcut, ipcMain, Menu, powerMonitor, safeStorage, screen, session, shell } from 'electron';
+import { app, BaseWindow, BrowserWindow, globalShortcut, ipcMain, Menu, powerMonitor, safeStorage, screen, session, shell, systemPreferences } from 'electron';
 import { adoptCatInto, createCatSim, migrateCatState, summarizeCat } from '../core/behavior';
 import { simWorld } from '../core/display/simWorld';
 import { createGestureRecognizer } from '../core/interaction/gestures';
 import { BRAND } from '../shared/brand';
-import type { AppStatus, SettingsViewState } from '../shared/ipc';
+import type { AppStatus, CompanionStatus, SettingsViewState } from '../shared/ipc';
 import { IPC } from '../shared/ipc';
 import type { PerceptionStatus } from '../shared/perception';
 import { CAPABILITY_MATRIX, type PlatformReport } from '../shared/platform';
@@ -34,6 +34,7 @@ import { createLoginItemService, LOGIN_ITEM_NAME } from './lifecycle/loginItem';
 import { createDarwinLoginItemService, DARWIN_LOGIN_ITEMS_SETTINGS_URL, type LoginItemPort } from './lifecycle/loginItemDarwin';
 import { announceLaunchAtLogin } from './lifecycle/loginItemNotice';
 import { catContextMenuModel, type MenuContext } from './lifecycle/menuModel';
+import { buildCompanionStatus } from './ipc/viewState';
 import { createQuitSequence } from './lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndWindow } from './lifecycle/sessionEnd';
 import { createShortcutManager } from './lifecycle/shortcuts';
@@ -308,6 +309,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
       settings: s,
       status: status(),
       cat: summarizeCat(sim, s.general.catName),
+      // Living Companion: absent when the sim cannot report it; the settings window works without.
+      ...companionField(s),
       apiKeys: { anthropic: secrets.has('anthropic'), openaiCompatible: secrets.has('openai-compatible') },
       resources: resources.samples(),
       versions: {
@@ -319,6 +322,16 @@ export function startApp(boot: AppBootstrap): RunningApp {
       },
       paths: { userData: boot.userData, logs: logger.logDir ?? '' },
     };
+  }
+
+  /** Living Companion live status for the view state (never persisted; ids and numbers only). */
+  function companionField(s: Settings): { companion?: CompanionStatus } {
+    const h = host;
+    const companion = buildCompanionStatus(sim, h ? h.state : sim.state, s.companion.personality, {
+      eventsPaused: h?.eventsPaused ?? false,
+      laserActive: h?.laserActive ?? false,
+    });
+    return companion ? { companion } : {};
   }
 
   function menuContext(): MenuContext {
@@ -333,6 +346,8 @@ export function startApp(boot: AppBootstrap): RunningApp {
       perceptionConfigured: s.perception.visualMode !== 'off',
       perceptionPaused: s.perception.paused,
       perceptionMode: perception?.status.mode ?? 'off',
+      laserActive: h.laserActive,
+      eventsPaused: h.eventsPaused,
     };
   }
 
@@ -421,6 +436,13 @@ export function startApp(boot: AppBootstrap): RunningApp {
     setSurfaceOutlines: (on) => {
       outlines.setEnabled(on);
       refreshUi();
+    },
+    // Living Companion session state lives in the host (off at every start, never persisted).
+    setLaserMode: (on) => requireHost().setLaserMode(on),
+    setEventsPaused: (p) => requireHost().setEventsPaused(p),
+    clearJournal: () => {
+      sim.clearJournal();
+      void catStore.save();
     },
     setPaused: (p) => requireHost().setPaused(p),
     setHidden: (h) => requireHost().setHidden(h),
@@ -606,6 +628,15 @@ export function startApp(boot: AppBootstrap): RunningApp {
     timeScale: boot.timeScale,
     surfaces,
     taskbars,
+    // Living Companion: the OS reduced-motion preference. Absent on other builds or platforms (or
+    // throwing) it means false; it needs no permission and is OR'd with the setting by the sim.
+    getReducedMotion: () => {
+      try {
+        return systemPreferences.getAnimationSettings().prefersReducedMotion === true;
+      } catch {
+        return false;
+      }
+    },
     // Diagnosis H5: the lock is re-derived on resume and while held, so a lost unlock-screen event
     // cannot block the cat for good. Windows only: elsewhere 'locked' may be unsupported, and an
     // unknown state must never end a lock (perception pauses while locked).
@@ -707,6 +738,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     },
     getSurfaceDiagnostics: () => surfaceDiagnostics.get().diagnostics,
     getBehaviorProfile: () => sim.behaviorProfile(),
+    getJournal: () => (typeof sim.journal === 'function' ? sim.journal() : []),
     profiles,
     clock: () => performance.now(),
   });

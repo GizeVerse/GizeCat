@@ -1148,3 +1148,87 @@ describe('overlay manager: interaction stats and field logs (F8)', () => {
     expect(rig.mgr.interactionStats().failClosedPolls).toBeGreaterThan(150);
   });
 });
+
+describe('overlay manager: Living Companion props and the laser dot', () => {
+  type Frame = { visible: boolean; props?: Array<{ x: number; y: number }>; laser?: Point | null; reducedMotion?: boolean };
+  const frames = (id: string): Frame[] => rig.win(id).webContents.sent.filter((m) => m.channel === IPC.overlayRender).map((m) => m.payload as Frame);
+  const prop = (x: number, y = 800) => ({ id: 1, kind: 'mouse' as const, x, y, size: 40, dir: 1 as const, alpha: 1, p: 0, rot: 0, variant: 0 });
+
+  it('sends a visible frame with the props to a display the cat is not on, in that display local DIP', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }, { props: [prop(1700)] }), 1, false);
+    const b = frames('B').at(-1)!;
+    expect(b.visible).toBe(true);
+    expect(b.props).toEqual([expect.objectContaining({ x: 100, y: 800 })]);
+    // The cat's own display only gets the props that reach it.
+    expect(frames('A').at(-1)!.props).toEqual([]);
+  });
+
+  it('keeps a display without cat or props quiet, and clears props with one hidden frame when they end', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    expect(frames('B')).toHaveLength(0);
+    rig.mgr.render(output({ x: 800, y: 860 }, { props: [prop(1700)] }), 2, false);
+    expect(frames('B')).toHaveLength(1);
+    rig.mgr.render(output({ x: 800, y: 860 }, { props: [] }), 3, false);
+    const last = frames('B').at(-1)!;
+    expect(last.visible).toBe(false);
+    expect(last.props).toEqual([]);
+  });
+
+  it('hiding the cat clears props everywhere', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }, { props: [prop(1700), prop(300)] }), 1, false);
+    rig.mgr.render(output({ x: 800, y: 860 }, { props: [prop(1700), prop(300)] }), 2, true);
+    for (const id of ['A', 'B']) {
+      const last = frames(id).at(-1)!;
+      expect(last.visible).toBe(false);
+      expect(last.props).toEqual([]);
+    }
+  });
+
+  it('draws the laser dot only on the display that holds the cursor, mapped to local DIP, and shows that display', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false, { laser: { x: 1900, y: 500 }, laserQuietDisplayIds: [] });
+    expect(frames('A').at(-1)!.laser).toBeNull();
+    const b = frames('B').at(-1)!;
+    expect(b.visible).toBe(true);
+    expect(b.laser).toEqual({ x: 300, y: 500 });
+  });
+
+  it('withholds the dot on a display with a fullscreen app in front and sends nothing there', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false, { laser: { x: 1900, y: 500 }, laserQuietDisplayIds: ['B'] });
+    expect(frames('B')).toHaveLength(0);
+    expect(frames('A').at(-1)!.laser).toBeNull();
+  });
+
+  it('sends one clearing null when Laser Mode ends, then no laser field again, and never makes an overlay interactive', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false, { laser: { x: 300, y: 500 }, laserQuietDisplayIds: [] });
+    expect(frames('A').at(-1)!.laser).toEqual({ x: 300, y: 500 });
+    // The dot is not part of any hit region: a cursor on it stays click-through.
+    rig.mgr.updateInteractivity({ x: 300, y: 500 }, false);
+    expect(rig.win('A').ignoreMouse).toBe(true);
+    rig.mgr.render(output({ x: 800, y: 860 }), 2, false);
+    expect(frames('A').at(-1)!.laser).toBeNull();
+    rig.mgr.render(output({ x: 800, y: 860 }), 3, false);
+    expect('laser' in frames('A').at(-1)!).toBe(false);
+  });
+
+  it('draws no dot while the cat is hidden or out of sight', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false, { laser: { x: 300, y: 500 }, laserQuietDisplayIds: [] });
+    rig.mgr.render(output({ x: 800, y: 860 }), 2, true, { laser: { x: 300, y: 500 }, laserQuietDisplayIds: [] });
+    expect(frames('A').at(-1)!.visible).toBe(false);
+    expect(frames('A').at(-1)!.laser).toBeNull();
+    rig.mgr.render(output({ x: 800, y: 860 }, { visible: false }), 3, false, { laser: { x: 1900, y: 500 }, laserQuietDisplayIds: [] });
+    expect(frames('B').filter((f) => f.laser).length).toBe(0);
+  });
+
+  it('carries the reduced-motion preference, alone or from the setting', () => {
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    expect('reducedMotion' in frames('A').at(-1)!).toBe(false);
+    rig.mgr.render(output({ x: 800, y: 860 }), 2, false, { reducedMotion: true });
+    expect(frames('A').at(-1)!.reducedMotion).toBe(true);
+    rig.mgr.dispose();
+    const settings = defaultSettings();
+    settings.companion.reducedMotion = true;
+    rig = makeRig({ getSettings: () => settings });
+    rig.mgr.render(output({ x: 800, y: 860 }), 1, false);
+    expect(frames('A').at(-1)!.reducedMotion).toBe(true);
+  });
+});

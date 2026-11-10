@@ -15,6 +15,8 @@ import type {
   SettingsApi,
   SettingsViewState,
 } from '../shared/ipc';
+// Type only: companion.ts is plain constants and types, but the preload stays free of runtime imports.
+import type { JournalEntry } from '../shared/companion';
 import type { BehaviorProfileSnapshot } from '../shared/behaviorProfile';
 // Type only, like every shared import here: profileTransfer.ts builds zod schemas at load.
 import type { ProfileParts } from '../shared/profileTransfer';
@@ -34,6 +36,7 @@ type SettingsChannel =
   | 'settingsExportProfile'
   | 'settingsOpenProfile'
   | 'settingsApplyProfile'
+  | 'settingsGetJournal'
   | 'settingsStateChanged';
 
 // Importing IPC at runtime would bundle zod (≈440 KB) into the preload, because
@@ -52,6 +55,7 @@ const CH = {
   settingsExportProfile: 'settings:export-profile',
   settingsOpenProfile: 'settings:open-profile',
   settingsApplyProfile: 'settings:apply-profile',
+  settingsGetJournal: 'settings:get-journal',
   settingsStateChanged: 'settings:state-changed',
 } as const satisfies Pick<typeof IPC, SettingsChannel>;
 
@@ -77,6 +81,8 @@ const api: SettingsApi = {
       token: String(token),
       parts: { cat: parts?.cat === true, appearance: parts?.appearance === true, preferences: parts?.preferences === true, memory: parts?.memory === true },
     }),
+  // Living Companion: the journal as main validated it (event ids, outcome tokens and dates only).
+  getJournal: () => invoke<JournalEntry[]>(CH.settingsGetJournal),
   onStateChanged(cb: (state: SettingsViewState) => void): () => void {
     if (typeof cb !== 'function') throw new TypeError('onStateChanged expects a function');
     const listener = (_event: IpcRendererEvent, state: SettingsViewState): void => cb(state);
