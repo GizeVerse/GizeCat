@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" class="doc">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Privacy - GizeCat</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+    <link rel="stylesheet" href="web.css" />
+  </head>
+  <body>
+    <p class="doc-back"><a href="index.html">Back to GizeCat</a></p>
+    <main>
+      <h1>Privacy</h1>
+      <p>This page is about the GizeCat web app (in a browser, or added to the Home Screen of an iPad or an Android tablet) and the GizeCat Android app. In short: your cat stays on your device, and nothing is sent anywhere.</p>
+
+      <h2>What is kept, and where</h2>
+      <ul>
+        <li><strong>Your cat and its settings</strong> (its name, look, personality, what it has learned and the choices you make in Settings) are kept on this device only: in the browser's local storage for the web app, and in the app's private storage for the Android app.</li>
+        <li><strong>The app's own files</strong> are kept in the browser's offline cache by the web app, so that it can start without a connection. They are the same for everyone and hold nothing about you or your cat. The Android app has these files inside the app, so it keeps no such copy.</li>
+      </ul>
+      <p>GizeCat keeps nothing else. What it keeps stays until you delete it, but a browser can also clear it by itself: Safari may do so after 7 days without a visit to a Safari tab, and a browser may do so when space runs low. An app on an iPad's Home Screen has its own storage.</p>
+
+      <h2>What is sent</h2>
+      <p>Nothing about you or your cat is sent anywhere. There are no accounts, no ads, no analytics and no telemetry. GizeCat never listens to your keyboard and never sees your screen.</p>
+      <ul>
+        <li><strong>The web app</strong> makes no network requests beyond fetching its own files from the site that hosts it: when you open it, once per version for the offline copy, and the browser's own update checks. The page itself cannot make network requests. The site's server can see those requests for files and may log them, as with any website; they carry nothing from your cat.</li>
+        <li><strong>The Android app</strong> has no internet permission, so Android itself blocks its network access. It loads only its own files, from inside the app, and it turns off the system's usage reports for its web view. Its data is not part of any cloud backup. On Android 12 and later, moving to a new device with Android's own device-to-device transfer may bring the cat along.</li>
+      </ul>
+      <p>If the web app is hosted at an address it shares with other sites, such as a GitHub project site, the browser's storage on that address is shared with them too.</p>
+
+      <h2>Permissions</h2>
+      <p>GizeCat requests no permissions: no camera, no microphone, no location and no notifications. Its sounds are made on the device. The Android app declares no permissions at all, and it refuses any permission a web page could ask for.</p>
+      <p>The one thing the installed web app asks is for the browser to keep its storage instead of clearing it. The browser decides by itself, and this gives GizeCat access to nothing else.</p>
+
+      <h2>Saving your cat to a file</h2>
+      <p>A profile file is created only when you ask for one, with <strong>Save my cat to a file</strong> in Settings, and it goes only where you put it. GizeCat reads a file only when you choose one with <strong>Load a cat from a file</strong>. Nothing is uploaded.</p>
+      <p>The file holds your cat's name, identity and birth time, its personality, its look, and its behaviour, handling and sound preferences. What it has learned (counters, learned habits and bond) is included only if you tick that option.</p>
+      <p>A profile file never contains API keys; screen-analysis, AI or consent settings; exclusion lists; window titles, display ids, screen positions or favourite spots; folder paths; startup or shortcut settings; diagnostics; or moods and recent memories.</p>
+      <p>It is plain, unencrypted text: anyone who has the file can read your cat's name and settings.</p>
+
+      <h2>Deleting everything</h2>
+      <ul>
+        <li><strong>Start over:</strong> in Settings, under Start again, <strong>Start over with a new cat</strong> deletes your cat and its settings from this device, and a new cat arrives.</li>
+        <li><strong>An app on an iPad's Home Screen:</strong> remove it from the Home Screen, and its storage goes with it.</li>
+        <li><strong>A browser tab, or an app installed from the browser:</strong> uninstall the app if there is one, and clear this site's data in the browser's settings, which also removes the offline copy. Uninstalling alone may leave the data in the browser.</li>
+        <li><strong>The Android app:</strong> uninstall it, or clear its data in Android's app settings. If Android offers to keep the app's data when you uninstall, do not keep it.</li>
+        <li><strong>A file you saved</strong> is yours: delete it wherever you put it. GizeCat does not know where it is.</li>
+      </ul>
+    </main>
+    <p class="doc-back"><a href="index.html">Back to GizeCat</a></p>
+  </body>
+</html>

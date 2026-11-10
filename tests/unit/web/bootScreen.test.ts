@@ -22,20 +22,26 @@ function fakeScreen() {
 describe('the first screen', () => {
   it('is removed when the cat starts', () => {
     const f = fakeScreen();
-    settleBootScreen(f.screen, true);
+    settleBootScreen(f.screen, 'started');
     expect(f.removed()).toBe(1);
     expect(f.added).toEqual([]);
   });
 
-  it('shows the failure message when the cat could not start, and stays', () => {
+  it('shows the failure message when the cat could not be drawn, and stays', () => {
     const f = fakeScreen();
-    settleBootScreen(f.screen, false);
+    settleBootScreen(f.screen, 'no-cat');
     expect(f.removed()).toBe(0);
     expect(f.added).toEqual(['failed']);
   });
 
+  it('also marks a page that stopped, so its dead toolbar stays hidden', () => {
+    const f = fakeScreen();
+    settleBootScreen(f.screen, 'crashed');
+    expect(f.removed()).toBe(0);
+    expect(f.added).toEqual(['failed', 'crashed']);
+  });
+
   it('does nothing without the element', () => {
-    expect(() => settleBootScreen(null, true)).not.toThrow();
-    expect(() => settleBootScreen(null, false)).not.toThrow();
+    for (const outcome of ['started', 'no-cat', 'crashed'] as const) expect(() => settleBootScreen(null, outcome)).not.toThrow();
   });
 });

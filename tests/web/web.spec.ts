@@ -31,6 +31,7 @@ const SHELL_FILES = [
   'licenses.html',
   'main.js',
   'manifest.webmanifest',
+  'privacy.html',
   'sw.js',
   'web.css',
 ];
@@ -596,6 +597,29 @@ test('the sheet says the app is ready offline, and its About section opens the s
   try {
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Third-party notices', level: 1 })).toBeVisible();
+    await Promise.all([page.waitForEvent('load'), press(page.getByRole('link', { name: 'Back to GizeCat' }).first(), info)]);
+    await waitReady(page);
+  } finally {
+    await page.context().setOffline(false);
+  }
+});
+
+test('the About section opens the static privacy page, and it opens offline too', async ({ page }, info) => {
+  await openPage(page);
+  await page.waitForFunction(() => Boolean((globalThis as unknown as PageGlobals).navigator.serviceWorker?.controller), undefined, { timeout: 30_000 });
+  const sheet = await openSheet(page, info);
+  const link = sheet.getByRole('link', { name: 'Privacy statement' });
+  await expect(link).toHaveAttribute('href', 'privacy.html');
+  await Promise.all([page.waitForEvent('load'), press(link, info)]);
+  expect(new URL(page.url()).pathname).toBe('/privacy.html');
+  await expect(page.getByRole('heading', { name: 'Privacy', level: 1 })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Back to GizeCat' }).first()).toHaveAttribute('href', 'index.html');
+  expect(await page.locator('script').count()).toBe(0);
+  // SIMULATED offline: Chrome's network emulation (the worker serves the page and the way back).
+  await page.context().setOffline(true);
+  try {
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Privacy', level: 1 })).toBeVisible();
     await Promise.all([page.waitForEvent('load'), press(page.getByRole('link', { name: 'Back to GizeCat' }).first(), info)]);
     await waitReady(page);
   } finally {

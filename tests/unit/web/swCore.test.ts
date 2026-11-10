@@ -27,6 +27,13 @@ describe('service worker routing', () => {
     expect(routeRequest(get('https://example.test/other-app/licenses.html', 'navigate'), SCOPE, withPage)).toEqual(pass);
   });
 
+  it('answers a load of the privacy page from the shell, only when the build has it', () => {
+    const withPage = [...FILES, 'privacy.html'];
+    expect(routeRequest(get(`${SCOPE}privacy.html`, 'navigate'), SCOPE, withPage)).toEqual({ kind: 'shell', key: 'privacy.html' });
+    expect(routeRequest(get(`${SCOPE}privacy.html`, 'navigate'), SCOPE, FILES)).toEqual(pass);
+    expect(routeRequest(get(`${SCOPE}next/privacy.html`, 'navigate'), SCOPE, withPage)).toEqual(pass);
+  });
+
   it('passes every other page load in the scope to the network: other sites, nested copies, missing pages', () => {
     // GizeCat at the root of a shared origin (scope '/'): another project site and the host's 404 page stay theirs.
     const root = 'https://owner.example.test/';

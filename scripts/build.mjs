@@ -6,7 +6,8 @@
 //   --web-test  also build out/web-test: the web host with the read-only window.__gizecatWebTest hook
 //               for tests/web (never in out/web)
 // 1.4.0 (installable web app): the web host also gets its manifest, icons (scripts/web-icons.mjs),
-// a static third-party notices page (licenses.html, scripts/web-licenses.mjs) and, in production
+// static third-party notices and privacy pages (licenses.html from scripts/web-licenses.mjs,
+// privacy.html from src/web) and, in production
 // builds, a versioned service worker (sw.js, from src/web/sw.ts) whose precache list is every other
 // file of the build. out/web is then checked by scripts/web-csp.mjs. The web
 // path needs no Windows tooling (--web-only skips the native helper).
@@ -115,7 +116,7 @@ function copyStatic() {
 
 const webDirs = () => [webDir, ...(webTest ? [webTestDir] : [])];
 
-/** The web host's page, stylesheet and manifest next to its bundle, the icons (scripts/web-icons.mjs) and the notices page (scripts/web-licenses.mjs). */
+/** The web host's pages, stylesheet and manifest next to its bundle, the icons (scripts/web-icons.mjs) and the notices page (scripts/web-licenses.mjs). */
 function copyWebStatic() {
   const srcDir = path.join(root, 'src', 'web');
   for (const dstDir of webDirs()) {

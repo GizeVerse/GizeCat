@@ -104,8 +104,9 @@ Hosting
 - Opening index.html from disk (file://) does not work: browsers do not run the app's module
   script from a file.
 - Serve manifest.webmanifest as application/manifest+json and .js files as text/javascript.
-- A GitHub project site works as it is (https://<owner>.github.io/<repository>/): the manifest's
-  start_url and scope are relative, and the service worker only ever answers inside that path.
+- A GitHub project site (https://<owner>.github.io/<repository>/) should need no changes: every URL
+  inside, the manifest's start_url and its scope are relative, and the service worker only ever
+  answers inside that path. The project has not deployed one.
 
 Optional response headers (if the host allows them; the page already carries its policy as a meta tag)
 - Every file: Content-Security-Policy: ${WEB_CSP}; frame-ancestors 'none'
@@ -125,6 +126,8 @@ Privacy
   per version for the offline copy, and the browser's own update checks.
 - The cat and its settings stay in the browser's storage on the device (localStorage).
 - It never listens to the keyboard and never sees the screen.
+- privacy.html is the privacy statement for the people using the app, linked from the sheet's About
+  section.
 
 Updating
 - Replace all the files together. The service worker's cache is named after a hash of the files,

@@ -190,6 +190,7 @@ export const WS = {
     title: 'About',
     text: `${P} is the first ${BRAND.platform} character.`,
     version: (v: string) => `Version ${v}`,
+    privacy: 'Privacy statement',
     licenses: 'Third-party notices',
   },
   status: {

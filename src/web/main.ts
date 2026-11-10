@@ -426,6 +426,7 @@ function boot(): void {
   if (shouldRegisterServiceWorker(mode, hostEnv, __WEB_SW__)) {
     registerServiceWorker({
       container: 'serviceWorker' in navigator ? navigator.serviceWorker : undefined,
+      pageUrl: window.location.href,
       whenLoaded: (cb) => {
         if (document.readyState === 'complete') cb();
         else window.addEventListener('load', () => cb(), { once: true });
@@ -496,13 +497,13 @@ function boot(): void {
   if (document.visibilityState === 'hidden') onVisibility();
   refreshUi();
   // The first screen (index.html) ends here: the cat is up, or it could not be drawn at all.
-  settleBootScreen(document.getElementById('boot'), runtime !== null);
+  settleBootScreen(document.getElementById('boot'), runtime !== null ? 'started' : 'no-cat');
 }
 
 try {
   boot();
 } catch (err) {
   // Whatever stopped the page before the cat ran: the failure message now, not after the stylesheet's wait.
-  settleBootScreen(document.getElementById('boot'), false);
+  settleBootScreen(document.getElementById('boot'), 'crashed');
   throw err;
 }

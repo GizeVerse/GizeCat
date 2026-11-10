@@ -149,8 +149,10 @@ textarea {
   animation: none;
 }
 
-/* The toolbar does nothing until main.js runs. With a failure the page still works without the cat. */
-#boot:not(.failed) ~ .bar {
+/* The toolbar does nothing until main.js runs. If only the cat could not be drawn (.failed) the page
+   still works without it; if the page itself stopped (.crashed) the buttons would do nothing. */
+#boot:not(.failed) ~ .bar,
+#boot.crashed ~ .bar {
   visibility: hidden;
 }
 
@@ -701,7 +703,7 @@ html.gizecat-hold * {
   -webkit-user-select: none;
 }
 
-/* ---- licenses.html (scripts/web-licenses.mjs): a plain document that scrolls and can be selected */
+/* ---- licenses.html (scripts/web-licenses.mjs) and privacy.html: plain documents that scroll and can be selected */
 html.doc {
   touch-action: auto;
   overscroll-behavior: auto;

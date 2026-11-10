@@ -1,8 +1,8 @@
 // What the installable web app's static files must be for public hosting at a project-site subpath
 // and for an iPad Home Screen app, read from the source files (no browser): every URL relative, a
 // stable manifest id, the status bar overlaid with safe-area padding, the CSS-only first screen, and
-// the static licenses page (scripts/web-licenses.mjs) with the production checks that hold it
-// to that (scripts/web-csp.mjs). REAL: reads the committed files; nothing is written.
+// the static licenses and privacy pages with the production checks that hold them to that
+// (scripts/web-csp.mjs). REAL: reads the committed files; nothing is written.
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -10,15 +10,20 @@ import { describe, expect, it } from 'vitest';
 import * as cspModule from '../../../scripts/web-csp.mjs';
 // @ts-expect-error a plain .mjs script without declarations
 import * as licensesModule from '../../../scripts/web-licenses.mjs';
+// @ts-expect-error a plain .mjs script without declarations
+import * as packageWebModule from '../../../scripts/package-web.mjs';
 
 const csp = cspModule as {
   WEB_CSP: string;
   WEB_LICENSES_CSP: string;
+  WEB_PRIVACY_CSP: string;
+  WEB_FORBIDDEN: readonly string[];
   WEB_SHELL_FILES: readonly string[];
   isRelativeUrl(value: unknown): boolean;
   absoluteUrlProblems(name: string, html: string): string[];
   manifestProblems(text: string): string[];
   licensesProblems(html: string): string[];
+  privacyProblems(html: string): string[];
   metaCsp(html: string): string | null;
 };
 const licenses = licensesModule as {
@@ -26,15 +31,19 @@ const licenses = licensesModule as {
   markdownToHtml(markdown: string): string;
   renderLicensesHtml(sources: { notices: string; apacheTerms: string }): string;
 };
+const packageWeb = packageWebModule as { readmeText(version: string, files: readonly string[]): string };
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const INDEX = read('src/web/index.html');
 const MANIFEST = read('src/web/manifest.webmanifest');
 const CSS = read('src/web/web.css');
+const MAIN = read('src/web/main.ts');
+const SHEET = read('src/web/settingsPanel.ts');
 const NOTICES = read('THIRD_PARTY_NOTICES.md');
 const APACHE = read('src/web/apache-2.0.txt');
 const PAGE = licenses.renderLicensesHtml({ notices: NOTICES, apacheTerms: APACHE });
+const PRIVACY = read('src/web/privacy.html');
 
 describe('the page and the manifest under any path', () => {
   it('has only relative URLs in index.html', () => {
@@ -65,6 +74,10 @@ describe('the page and the manifest under any path', () => {
 
   it('keeps the licenses page in the production file set', () => {
     expect(csp.WEB_SHELL_FILES).toContain('licenses.html');
+  });
+
+  it('keeps the privacy page in the production file set', () => {
+    expect(csp.WEB_SHELL_FILES).toContain('privacy.html');
   });
 });
 
@@ -99,6 +112,12 @@ describe('the first screen', () => {
     expect(CSS).toMatch(/\.boot-failed \{[^}]*visibility: hidden;[^}]*animation: boot-show/);
     expect(CSS).toMatch(/\.boot-wait \{[^}]*animation: boot-hide/);
   });
+
+  it('shows the toolbar after a failure only when the page itself kept running', () => {
+    expect(CSS).toMatch(/#boot:not\(\.failed\) ~ \.bar,\s*#boot\.crashed ~ \.bar \{\s*visibility: hidden;/);
+    expect(MAIN).toContain("runtime !== null ? 'started' : 'no-cat'");
+    expect(MAIN).toMatch(/catch \(err\) \{[^}]*settleBootScreen\(document\.getElementById\('boot'\), 'crashed'\);/);
+  });
 });
 
 describe('the notices page', () => {
@@ -123,6 +142,56 @@ describe('the notices page', () => {
     expect(csp.licensesProblems(PAGE.replace('</main>', '<p onclick="x">y</p></main>')).join()).toContain('handler');
     expect(csp.licensesProblems(PAGE.replace('</main>', '<iframe></iframe></main>')).join()).toContain('embedded');
     expect(csp.licensesProblems('<p>nothing</p>').join()).toContain('CSP');
+  });
+});
+
+describe('the privacy page', () => {
+  it('is static: its own CSP, no script, no handler, no form, only relative URLs', () => {
+    expect(csp.privacyProblems(PRIVACY)).toEqual([]);
+    expect(csp.metaCsp(PRIVACY)).toBe(csp.WEB_PRIVACY_CSP);
+    expect(PRIVACY).not.toMatch(/<script\b/i);
+    expect(csp.absoluteUrlProblems('privacy.html', PRIVACY)).toEqual([]);
+    for (const banned of csp.WEB_FORBIDDEN) expect(PRIVACY, banned).not.toContain(banned);
+  });
+
+  it('says what is kept, what is sent, what is asked for, what a file holds and how to delete it all', () => {
+    for (const heading of ['What is kept, and where', 'What is sent', 'Permissions', 'Saving your cat to a file', 'Deleting everything']) expect(PRIVACY, heading).toContain(`<h2>${heading}</h2>`);
+    for (const statement of ['local storage', 'offline cache', 'no telemetry', 'no internet permission', 'requests no permissions', 'only when you ask', 'never contains', 'Start over with a new cat', 'remove it from the Home Screen', 'uninstall it']) {
+      expect(PRIVACY, statement).toContain(statement);
+    }
+  });
+
+  it('names no contact details and links only back to the app', () => {
+    expect(PRIVACY).not.toMatch(/https?:\/\/|[\w.-]+@[\w.-]+/);
+    expect([...PRIVACY.matchAll(/<a href="([^"]*)"/g)].map((m) => m[1])).toEqual(['index.html', 'index.html']);
+  });
+
+  it('is linked from the sheet next to the notices', () => {
+    expect(SHEET).toContain("href: 'privacy.html'");
+    expect(SHEET.indexOf('[privacyLink]')).toBeGreaterThan(-1);
+    expect(SHEET.indexOf('[privacyLink]')).toBeLessThan(SHEET.indexOf('[licensesLink]'));
+  });
+
+  it('refuses a page with a script, a handler or a frame, or without the statements', () => {
+    expect(csp.privacyProblems(PRIVACY.replace('</main>', '<script>x</script></main>')).join()).toContain('script');
+    expect(csp.privacyProblems(PRIVACY.replace('</main>', '<p onclick="x">y</p></main>')).join()).toContain('handler');
+    expect(csp.privacyProblems(PRIVACY.replace('</main>', '<iframe></iframe></main>')).join()).toContain('embedded');
+    expect(csp.privacyProblems(PRIVACY.replace(/internet permission/g, 'x')).join()).toContain('internet permission');
+    expect(csp.privacyProblems('<p>nothing</p>').join()).toContain('CSP');
+  });
+});
+
+describe('the web package README', () => {
+  const README = packageWeb.readmeText('1.4.0', ['index.html']);
+
+  it('states the GitHub project site as a design, not as something that has been deployed', () => {
+    expect(README).not.toContain('works as it is');
+    expect(README).toContain('should need no changes');
+    expect(README).toContain('The project has not deployed one.');
+  });
+
+  it('names the privacy page', () => {
+    expect(README).toContain('privacy.html');
   });
 });
 

@@ -10,9 +10,22 @@ export interface BootScreenLike {
   readonly classList: { add(name: string): void };
 }
 
+/**
+ * How main.js ended:
+ * - started: the cat is up;
+ * - no-cat: everything ran but the cat could not be drawn, so the sheet and the toolbar still work;
+ * - crashed: the page itself stopped, so its toolbar has no working buttons.
+ */
+export type BootOutcome = 'started' | 'no-cat' | 'crashed';
+
 /** The cat started: the first screen goes. It could not: the failure message, at once. */
-export function settleBootScreen(screen: BootScreenLike | null, started: boolean): void {
+export function settleBootScreen(screen: BootScreenLike | null, outcome: BootOutcome): void {
   if (!screen) return;
-  if (started) screen.remove();
-  else screen.classList.add('failed');
+  if (outcome === 'started') {
+    screen.remove();
+    return;
+  }
+  screen.classList.add('failed');
+  // web.css keeps the toolbar hidden with this class.
+  if (outcome === 'crashed') screen.classList.add('crashed');
 }

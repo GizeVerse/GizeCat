@@ -269,11 +269,13 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   // ---- about
   // A plain link in the same window: it stays inside an installed app, opens offline, and the page's
   // own link comes back here. A new window would leave the Home Screen app for Safari.
+  const privacyLink = h('a', { href: 'privacy.html', text: WS.about.privacy });
   const licensesLink = h('a', { href: 'licenses.html', text: WS.about.licenses });
   const aboutSection = h('section', {}, [
     h('h3', { text: WS.about.title }),
     h('p', { text: WS.about.text }),
     h('p', { class: 'note', text: WS.about.version(deps.version) }),
+    h('p', {}, [privacyLink]),
     h('p', {}, [licensesLink]),
   ]);
 

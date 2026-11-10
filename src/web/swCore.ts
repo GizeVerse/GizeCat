@@ -2,15 +2,15 @@
 // The worker keeps one versioned cache of the app's own files (the "shell") and serves them
 // offline. It never caches anything else (no runtime caching), never touches a request outside its
 // scope or origin, answers only the app's own pages (the scope root, its index.html and the static
-// licenses page), and on activation deletes only older caches of its own scope: other apps on a
-// shared origin (e.g. a github.io organization site), and other GizeCat copies at other paths, keep
-// theirs.
+// licenses and privacy pages), and on activation deletes only older caches of its own scope: other
+// apps on a shared origin (e.g. a github.io organization site), and other GizeCat copies at other
+// paths, keep theirs.
 
 /** Every cache this app creates starts with this; nothing else is ever deleted. */
 export const SHELL_CACHE_PREFIX = 'gizecat-shell-';
 
-/** The app's one other page (the third-party notices, linked from the sheet): it opens offline too. */
-export const LICENSES_PAGE = 'licenses.html';
+/** The app's other pages (third-party notices and privacy statement, linked from the sheet): they open offline too. */
+export const STATIC_PAGES: readonly string[] = ['licenses.html', 'privacy.html'];
 
 /**
  * A short, stable hash of the worker's registration scope (FNV-1a, 32 bits, 8 lowercase hex
@@ -60,7 +60,7 @@ const PASS: Route = Object.freeze({ kind: 'pass' });
 /**
  * Where a request goes. Only GETs on the worker's own origin inside its scope are ever answered;
  * `files` are the shell's paths relative to the scope (as precached). A page load is answered
- * only for the app's own pages (the scope root or index.html under it, and its licenses page);
+ * only for the app's own pages (the scope root or index.html under it, and its static pages);
  * every other page load in the scope (another site on the same origin, a nested copy, the host's
  * 404 page) goes to the network untouched.
  */
@@ -84,7 +84,7 @@ export function routeRequest(req: RouteInput, scopeUrl: string, files: readonly 
   }
   if (req.mode === 'navigate') {
     if (rel === '' || rel === 'index.html') return { kind: 'navigate' };
-    return rel === LICENSES_PAGE && files.includes(rel) ? { kind: 'shell', key: rel } : PASS;
+    return STATIC_PAGES.includes(rel) && files.includes(rel) ? { kind: 'shell', key: rel } : PASS;
   }
   if (rel === '') rel = 'index.html';
   return files.includes(rel) ? { kind: 'shell', key: rel } : PASS;

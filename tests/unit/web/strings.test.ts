@@ -17,6 +17,7 @@ describe('web strings', () => {
     expect(WS.offline.ready).toContain('Ready to work offline');
     expect(WS.offline['update-ready']).toContain('new version');
     expect(WS.about.licenses).toMatch(/\S/);
+    expect(WS.about.privacy).toMatch(/\S/);
   });
 
   it('has a text for every install hint except none', () => {
