@@ -92,6 +92,8 @@ internal data class ScreenMetrics(
  *   Since Android 12 a touch passes through another app's overlay only if the overlay is at most
  *   0.8 opaque (InputManager.getMaximumObscuringOpacityForTouch), so on Android 12+ it is drawn at
  *   0.8, a slightly dimmer cat; below Android 12 it is opaque.
+ *   While world-event props or the laser dot exist the page widens this window into a wide, short stage
+ *   (src/web/stageWindow.ts) and shrinks it back afterwards; it stays untouchable either way.
  * - the TOUCH window (an invisible view, only the cat's footprint plus a small pad) takes the cat's
  *   touches, reads them in raw screen coordinates (a window that moves under the finger would shift
  *   window-relative ones) with the event's own time, and sends them to the page. It is removed while
@@ -117,8 +119,20 @@ internal class OverlayWindow(private val context: Context, private val callbacks
     companion object {
         private const val BRIDGE_NAME = "gizecatOverlay"
         private const val MAX_MESSAGE_CHARS = 2048
-        /** The cat's window at the largest cat size (2.5) is 430 x 490 dp; anything much larger is refused, so a page can never ask for a screen-sized window. */
-        private const val MAX_WINDOW_DP = 600.0
+        /**
+         * The TOUCH window is the cat's footprint plus a small pad (at the largest cat size, 2.5, about 260 x 190 dp);
+         * anything much larger is refused, so a page can never ask for a screen-sized touch window.
+         */
+        private const val MAX_TOUCH_DP = 600.0
+
+        /**
+         * The VISUAL window is the cat's window (at the largest cat size 430 x 490 dp), or while world-event props or the
+         * laser dot exist a wide, short "stage" strip that holds them too (src/web/stageWindow.ts): up to the widest
+         * screens, a few body heights tall. It never takes a touch (FLAG_NOT_TOUCHABLE), so its size costs nothing in
+         * input. Keep in lockstep with STAGE_MAX_W_DP / STAGE_MAX_H_DP in src/web/floatingProtocol.ts.
+         */
+        private const val MAX_STAGE_W_DP = 4096.0
+        private const val MAX_STAGE_H_DP = 900.0
 
         /** At most this opaque while the window lets touches through: Android 12+ passes them on only at 0.8 or less (the maximum obscuring opacity for touches). */
         private const val PASS_THROUGH_ALPHA = 0.8f
@@ -326,9 +340,10 @@ internal class OverlayWindow(private val context: Context, private val callbacks
         val th = number("th") ?: return
         val vis = json.opt("vis") as? Boolean ?: return
         val touch = json.opt("touch") as? Boolean ?: return
-        if (w < 1.0 || h < 1.0 || w > MAX_WINDOW_DP || h > MAX_WINDOW_DP) return
-        // The touch window is never larger than the cat's own window.
-        if (tw < 1.0 || th < 1.0 || tw > w || th > h) return
+        // A stage that is too large is refused whole (never clipped silently into a different layout).
+        if (w < 1.0 || h < 1.0 || w > MAX_STAGE_W_DP || h > MAX_STAGE_H_DP) return
+        // The touch window keeps its own tight bound, and is never larger than the visual window.
+        if (tw < 1.0 || th < 1.0 || tw > MAX_TOUCH_DP || th > MAX_TOUCH_DP || tw > w || th > h) return
         if (Math.abs(x) > 100_000.0 || Math.abs(y) > 100_000.0 || Math.abs(tx) > 100_000.0 || Math.abs(ty) > 100_000.0) return
         wanted = Wanted(Rects(x, y, w, h), vis, touch, Rects(tx, ty, tw, th))
         scheduleFrame()

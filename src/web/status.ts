@@ -41,6 +41,13 @@ export function describeCat(s: CatStatusInput): string {
   return `${name} ${PHRASES[s.state] ?? 'is here'}.`;
 }
 
+/** What the cat is doing as a bare phrase for a status chip, e.g. "walking" ("wants some attention"). */
+export function activityLabel(state: BehaviorState): string {
+  const phrase = PHRASES[state];
+  if (!phrase) return 'here';
+  return phrase.startsWith('is ') ? phrase.slice(3) : phrase;
+}
+
 /** The cat sleeps or is about to: the Sleep / Wake button offers Wake. */
 export function isAsleep(state: BehaviorState): boolean {
   return state === 'sleeping' || state === 'fallingAsleep';

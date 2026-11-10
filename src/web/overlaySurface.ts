@@ -8,7 +8,8 @@
 //   same place inside it, and the WINDOW moves: every frame the cat is shown, this surface fixes the
 //   window's origin from the cat's footprint (so the renderer's overlay-local coordinates are the
 //   cat's, constant) and tells native where the window goes. Native moves it with WindowManager;
-//   nothing is drawn outside it;
+//   nothing is drawn outside it. Exception (Living Companion): while world-event props or the laser
+//   dot exist the window widens into a still "stage" that holds them too (stageWindow.ts);
 // - touches are not DOM events: native reads them in the window's coordinate-free, raw screen space
 //   (a moving window would shift client coordinates under a finger) and sends them as 'ptr'
 //   messages, which are turned into the pointer events the router already understands;
@@ -22,8 +23,10 @@ import type { Point, Rect } from '../shared/geometry';
 import type { Settings } from '../shared/settings';
 import type { SimOutput } from '../shared/sim';
 import type { OverlayCommand, OverlayInbound, OverlayOutbound, PointerKind, ScreenMetrics } from './floatingProtocol';
+import { laserBounds, propsBounds } from '../renderer/overlay/propBounds';
 import { createOverlayDisplayService, type OverlayDisplayService } from './overlayDisplay';
 import type { RoutedEvent } from './pointerRouter';
+import { createStageTracker } from './stageWindow';
 
 /** Size of the window that holds the cat, dp: the footprint plus the room the renderer may draw into (renderMapping.presenceRectPx). */
 export function windowSizeDip(appearance: Pick<Settings['appearance'], 'size' | 'emotes'>): { width: number; height: number } {
@@ -93,11 +96,23 @@ export interface OverlayTargets {
   getAppearance(): Pick<Settings['appearance'], 'size' | 'emotes'>;
 }
 
+export interface PresenceInfo {
+  cat: boolean;
+  laser: Point | null;
+}
+
+const DEFAULT_PRESENCE: PresenceInfo = { cat: true, laser: null };
+
 export interface OverlaySurface {
   /** The display service for createWebOverlays / createCatHost / the sim's world. */
   readonly display: OverlayDisplayService;
-  /** createWebOverlays' onPresence: the cat is drawn (out) or not (null). Fixes the window and reports it. */
-  onPresence(out: SimOutput | null): void;
+  /**
+   * createWebOverlays' onPresence: something is drawn (out) or nothing is (null). Fixes the window and
+   * reports it. `info.cat` is false while only world-event props are drawn (the cat is out of view: no
+   * touch window then); `info.laser` is the laser dot's world position or null. Returns true when the
+   * window's origin jumped (the stage appeared, moved or went away): the caller must snap that frame.
+   */
+  onPresence(out: SimOutput | null, info?: PresenceInfo): boolean;
   /** Starts listening to native and says hello. Call once the cat runs. */
   connect(targets: OverlayTargets): () => void;
   /**
@@ -140,6 +155,8 @@ export function createOverlaySurface(
   now: () => number = () => performance.now(),
 ): OverlaySurface {
   const display = createOverlayDisplayService(initial);
+  /** The widened visual window while props or the laser dot exist (stageWindow.ts). */
+  const stage = createStageTracker();
   type Win = { x: number; y: number; w: number; h: number; vis: boolean; touch: boolean; tx: number; ty: number; tw: number; th: number };
   let lastWin: Win | null = null;
   let hint: { x: number; y: number; at: number } | null = null;
@@ -155,9 +172,9 @@ export function createOverlaySurface(
     return ms + skew;
   };
 
-  function report(rect: Rect | null, touchRect: Rect | null): void {
+  function report(rect: Rect | null, touchRect: Rect | null, catTouch = true): void {
     const size = windowSizeDip(getAppearance());
-    const touch = touchable();
+    const touch = touchable() && catTouch;
     const next: Win =
       rect && touchRect
         ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height, vis: true, touch, tx: touchRect.x, ty: touchRect.y, tw: touchRect.width, th: touchRect.height }
@@ -190,15 +207,26 @@ export function createOverlaySurface(
 
   return {
     display,
-    onPresence(out) {
+    onPresence(out, info = DEFAULT_PRESENCE) {
       if (!out) {
+        // Nothing is drawn: both windows go (vis false), and so does the stage.
+        stage.reset();
         report(null, null);
-        return;
+        return false;
       }
-      const rect = windowRectFor(out.boundsPx, getAppearance(), display.metrics.density);
-      // Before the renderer's mapping reads it: the cat is then drawn at the same spot of the window every frame.
-      display.setOrigin({ x: rect.x, y: rect.y });
-      report(rect, touchRectFor(out.boundsPx, display.metrics.density));
+      const appearance = getAppearance();
+      const density = display.metrics.density;
+      const catWin = windowRectFor(out.boundsPx, appearance, density);
+      const m = display.metrics;
+      const props = out.props && out.props.length > 0 ? propsBounds(out.props, appearance.size) : null;
+      const dot = info.laser ? laserBounds(info.laser.x, info.laser.y) : null;
+      const plan = stage.plan({ now: now(), catWin, extras: [props, dot], screen: { x: 0, y: 0, width: m.width, height: m.height }, density });
+      // Before the renderer's mapping reads it: without a stage the cat is drawn at the same spot of the
+      // window every frame; with one the window holds still and the cat moves inside it.
+      display.setOrigin({ x: plan.rect.x, y: plan.rect.y });
+      // The touch window is the 1.4.2 tight rectangle around the cat, whatever the visual window is.
+      report(plan.rect, touchRectFor(out.boundsPx, density), info.cat);
+      return plan.reorigin;
     },
     cursorHint() {
       if (!hint) return null;
@@ -215,7 +243,11 @@ export function createOverlaySurface(
           case 'metrics':
             // A rotation or a resized display moves the world under an active press: end it cleanly
             // (a held cat is dropped where it is) instead of feeding it coordinates of another layout.
-            if (display.update(m.metrics)) targets.router.cancel();
+            if (display.update(m.metrics)) {
+              targets.router.cancel();
+              // The old stage belongs to the old screen: the next frame starts again from the cat's window.
+              stage.reset();
+            }
             return;
           case 'ptr':
             targets.router.handle(pointerEvent(m.k, m.id, { x: m.x, y: m.y }, pageTime(m.ms)));

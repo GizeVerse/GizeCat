@@ -31,7 +31,7 @@ import { settleBootScreen } from './bootScreen';
 import { createWebDisplayService } from './display';
 import { connectControlBridge, connectOverlayBridge, isOverlaySurface } from './floatingBridges';
 import { parseMetricsQuery } from './floatingProtocol';
-import { createAndroidPanel, type AndroidPanel } from './androidPanel';
+import { createAndroidPanel, type AndroidPanel, type CompanionSource } from './androidPanel';
 import { createFloatingUi, type FloatingUi } from './floatingUi';
 import { detectHostMode, installHint, readHostEnv, shouldRegisterServiceWorker, shouldRequestPersistence } from './hostMode';
 import { createOverlaySurface, TOUCH_PAD_DP } from './overlaySurface';
@@ -41,6 +41,7 @@ import { createPointerRouter, type RouterTarget } from './pointerRouter';
 import { createBrowserSaver, selectProfileSaver } from './profileFiles';
 import { createProfileUi } from './profileUi';
 import { readSafeAreaInsets } from './safeArea';
+import { NO_SESSION_FLAGS, readSessionFlags, writeSessionFlags, type SessionFlags } from './sessionFlags';
 import { applyWebPatch, patchFor, resetWebSettings, type WebPatchResult } from './settingsModel';
 import { createSettingsPanel, type SettingsPanel } from './settingsPanel';
 import { describeCat, isAsleep } from './status';
@@ -148,7 +149,7 @@ function boot(): void {
     logger: log.child('overlay'),
     blocked: catBlocked,
     onCatGone: () => router.cancel(),
-    onPresence: surface ? (out) => surface.onPresence(out) : undefined,
+    onPresence: surface ? (out, info) => surface.onPresence(out, info) : undefined,
   });
   const deliverSimEvents = (events: SimEvent[]): void => {
     host?.enqueueAll(events);
@@ -256,7 +257,17 @@ function boot(): void {
     // The floating cat sees a pointer only while one is on its own window (a press or a mouse hover) or
     // as a fresh hint from a touch inside GizeCat's own app window; a touch that ended is not a pointer
     // left standing there (Android shows an app nothing outside its own windows).
+    // The same source feeds Laser Mode's dot (the host hands it on only while that mode is on): the page's
+    // own pointer in the app and the browser, and in the floating window only what Android delivers there.
     cursorFallback: () => (surface ? (router.pressed || router.hovering ? router.cursor : surface.cursorHint()) : router.cursor),
+    // "Remove animations" on Android reaches the WebView as prefers-reduced-motion; absent or throwing means no.
+    getReducedMotion: () => {
+      try {
+        return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      } catch {
+        return false;
+      }
+    },
     clock,
     onStatusChange: () => {
       if (host) recorder?.noteState(host.state);
@@ -264,6 +275,26 @@ function boot(): void {
     },
   });
   const catHost = host;
+
+  // ---- session-only choices: Laser Mode and "pause world events" (sessionFlags.ts). Off at every start;
+  // the app page hands them to the floating page through a tiny record plus native's "settings changed".
+  const localStore = (): Storage | null => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  };
+  let flags: SessionFlags = surface ? readSessionFlags(localStore) : NO_SESSION_FLAGS;
+  /** Pushes the flags into the host: Laser Mode and the events pause both end with the page (nothing is stored in the cat). */
+  function applyFlags(next: SessionFlags): void {
+    flags = next;
+    catHost.setLaserMode(flags.laser);
+    catHost.setEventsPaused(flags.eventsPaused);
+  }
+  applyFlags(flags);
+  // The app screen starts clean: a record left by an earlier session is never honoured.
+  if (controlPort) writeSessionFlags(localStore, NO_SESSION_FLAGS);
   display.onChange((world) => {
     overlays.onDisplayChanged();
     catHost.onDisplayChanged(world);
@@ -554,6 +585,8 @@ function boot(): void {
       reloadSettings: () => {
         settings = storage.loadSettings();
         catHost.updateSettings(settings);
+        // Laser Mode and the events pause travel the same way: the app page wrote them, native said "changed".
+        applyFlags(readSessionFlags(localStore));
       },
       router,
       getAppearance: () => settings.appearance,
@@ -567,9 +600,54 @@ function boot(): void {
   if (controlPort && settingsPanel) {
     const control = controlPort;
     const sheet = settingsPanel;
+    // While the floating cat runs its own WebView owns the cat and the stored copy; this parked page never
+    // writes it and shows the stored snapshot instead (the floating cat saves it every 30 seconds).
+    const floatingNow = (): boolean => floatingUi?.state.running ?? false;
+    const companion: CompanionSource = {
+      live: () => !floatingNow(),
+      status: () => {
+        if (floatingNow()) return null;
+        try {
+          return { ...sim.companionStatus(), state: sim.state };
+        } catch {
+          return null;
+        }
+      },
+      journal: () => {
+        try {
+          if (!floatingNow()) return sim.journal();
+          // A read of what the floating cat last saved; the random source and clock only matter for a cat that does not exist yet.
+          return storage.loadCat(() => 0.5, Date.now()).cat.world.journal;
+        } catch {
+          return [];
+        }
+      },
+      clearJournal: () => {
+        if (floatingNow()) return false;
+        try {
+          sim.clearJournal();
+          catStore.markDirty();
+          // The normal save path, now: a cleared journal must not come back from an older save.
+          return catStore.saveSync();
+        } catch {
+          return false;
+        }
+      },
+    };
     const panelUi = createAndroidPanel({
       getSettings: () => settings,
       apply: (patch, save) => applyPatch(patch, save),
+      companion,
+      session: {
+        get: () => flags,
+        set: (next) => {
+          applyFlags(next);
+          writeSessionFlags(localStore, next);
+          // The floating cat re-reads them (and the settings) when native says so.
+          if (floatingNow()) control.send('settingsChanged');
+        },
+      },
+      onSoundGesture: () => audio.unlock(),
       onCustomize: () => {
         router.cancel();
         sheet.open();
@@ -605,9 +683,15 @@ function boot(): void {
         }
       },
     });
+    // A floating cat that outlived this page may still hold flags the clean start just erased: tell it, once.
+    let flagsSynced = false;
     control.onState((s) => {
       floatingUi?.update(s);
       panelUi.setFloatingState(s);
+      if (!flagsSynced) {
+        flagsSynced = true;
+        if (s.running) control.send('settingsChanged');
+      }
     });
     // The toolbar's "Panel" button returns to the panel from the in-app cat.
     const btnPanel = byId('btn-panel', HTMLButtonElement);

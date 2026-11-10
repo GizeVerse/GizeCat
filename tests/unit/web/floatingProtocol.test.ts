@@ -12,6 +12,9 @@ import {
   parseScreenMetrics,
   serializeControlOp,
   serializeOverlayOutbound,
+  STAGE_MAX_H_DP,
+  STAGE_MAX_W_DP,
+  TOUCH_MAX_DP,
 } from '../../../src/web/floatingProtocol';
 
 const METRICS = { width: 1280, height: 800, density: 2, insets: { top: 24, right: 0, bottom: 48, left: 0 } };
@@ -104,6 +107,17 @@ describe('overlay page -> native', () => {
     expect(parseOverlayOutbound(`{${base}}`)).toBeNull();
     expect(parseOverlayOutbound(`{${base},"tx":1,"ty":2,"tw":0,"th":4}`)).toBeNull();
     expect(parseOverlayOutbound(`{${base},"tx":1,"ty":2,"tw":3,"th":4,"extra":1}`)).toBeNull();
+  });
+
+  it('accepts a wide, short stage for the visual window, with the touch window still tight', () => {
+    const stage = `"t":"win","x":-20,"y":500,"w":${STAGE_MAX_W_DP},"h":${STAGE_MAX_H_DP},"vis":true,"touch":true`;
+    expect(parseOverlayOutbound(`{${stage},"tx":300,"ty":600,"tw":${TOUCH_MAX_DP},"th":120}`)).toMatchObject({ t: 'win', w: STAGE_MAX_W_DP, h: STAGE_MAX_H_DP, tw: TOUCH_MAX_DP });
+    // One dp over a cap is refused whole; the touch window has its own, much smaller cap.
+    expect(parseOverlayOutbound(`{"t":"win","x":0,"y":0,"w":${STAGE_MAX_W_DP + 1},"h":10,"vis":true,"touch":true,"tx":0,"ty":0,"tw":3,"th":4}`)).toBeNull();
+    expect(parseOverlayOutbound(`{"t":"win","x":0,"y":0,"w":10,"h":${STAGE_MAX_H_DP + 1},"vis":true,"touch":true,"tx":0,"ty":0,"tw":3,"th":4}`)).toBeNull();
+    expect(parseOverlayOutbound(`{${stage},"tx":0,"ty":0,"tw":${TOUCH_MAX_DP + 1},"th":4}`)).toBeNull();
+    // The key set of the message did not grow with the stage.
+    expect(parseOverlayOutbound(`{${stage},"tx":0,"ty":0,"tw":3,"th":4,"stage":true}`)).toBeNull();
   });
 });
 

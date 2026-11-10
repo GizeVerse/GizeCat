@@ -28,6 +28,15 @@ export const OVERLAY_SURFACE_VALUE = 'overlay';
 export const MAX_MESSAGE_CHARS = 2048;
 /** Largest coordinate or size accepted (dp): far beyond any display, finite and safe to compute with. */
 const LIMIT_DP = 100_000;
+/**
+ * The VISUAL window may widen into a "stage" while world-event props or the laser dot exist
+ * (stageWindow.ts): a wide, short strip. Width up to the widest screens, height a few body heights.
+ * Native (OverlayWindow.kt MAX_STAGE_W_DP / MAX_STAGE_H_DP) refuses anything larger; keep in lockstep.
+ */
+export const STAGE_MAX_W_DP = 4096;
+export const STAGE_MAX_H_DP = 900;
+/** The TOUCH window stays the cat's footprint plus a pad: never larger than this (OverlayWindow.kt MAX_TOUCH_DP). */
+export const TOUCH_MAX_DP = 600;
 
 /** Insets of the display's system bars and cutout, dp. */
 export interface InsetsDp {
@@ -79,7 +88,8 @@ export interface RectDp {
 
 /**
  * Overlay page -> native. The rectangle `x y w h` is the VISUAL window: the cat and the room it draws
- * into. It never takes touches (native makes it not touchable), so everything outside the cat's touch
+ * into, widened into a wide, short stage while world-event props or the laser dot exist (stageWindow.ts;
+ * up to STAGE_MAX_W_DP x STAGE_MAX_H_DP, the key set is unchanged). It never takes touches (native makes it not touchable), so everything outside the cat's touch
  * window reaches the app underneath. `tx ty tw th` is the TOUCH window: only the cat's own footprint
  * and a small pad, a separate, invisible window that takes the cat's touches. `touch` is false while
  * the cat takes none (paused, interactions off): native then removes the touch window altogether.
@@ -256,12 +266,12 @@ export function parseOverlayOutbound(text: unknown): OverlayOutbound | null {
       if (!hasOnly(o, ['t', 'x', 'y', 'w', 'h', 'vis', 'touch', 'tx', 'ty', 'tw', 'th'])) return null;
       const x = num(o.x, -LIMIT_DP, LIMIT_DP);
       const y = num(o.y, -LIMIT_DP, LIMIT_DP);
-      const w = num(o.w, 1, LIMIT_DP);
-      const h = num(o.h, 1, LIMIT_DP);
+      const w = num(o.w, 1, STAGE_MAX_W_DP);
+      const h = num(o.h, 1, STAGE_MAX_H_DP);
       const tx = num(o.tx, -LIMIT_DP, LIMIT_DP);
       const ty = num(o.ty, -LIMIT_DP, LIMIT_DP);
-      const tw = num(o.tw, 1, LIMIT_DP);
-      const th = num(o.th, 1, LIMIT_DP);
+      const tw = num(o.tw, 1, TOUCH_MAX_DP);
+      const th = num(o.th, 1, TOUCH_MAX_DP);
       if (x === null || y === null || w === null || h === null || tx === null || ty === null || tw === null || th === null) return null;
       if (typeof o.vis !== 'boolean' || typeof o.touch !== 'boolean') return null;
       return { t: 'win', x, y, w, h, vis: o.vis, touch: o.touch, tx, ty, tw, th };

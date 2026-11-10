@@ -269,9 +269,15 @@ describe('Android floating cat (1.4.1)', () => {
     expect(overlayWindow).toContain('alpha = PASS_THROUGH_ALPHA');
     expect(overlayWindow).toContain('touchParams = newParams(0,');
     expect(overlayWindow).toContain('removeViewImmediate(touchRoot)');
-    // The window's size comes from the page and is bounded (a dp ceiling), never the display's size.
-    expect(overlayWindow).toContain('MAX_WINDOW_DP');
-    expect(overlayWindow).toMatch(/if \(w < 1\.0 \|\| h < 1\.0 \|\| w > MAX_WINDOW_DP \|\| h > MAX_WINDOW_DP\) return/);
+    // The window's size comes from the page and is bounded: the visual window up to a wide, short stage
+    // (Living Companion props and laser dot; it never takes a touch), the touch window to its own tight cap.
+    expect(overlayWindow).toContain('MAX_STAGE_W_DP = 4096.0');
+    expect(overlayWindow).toContain('MAX_STAGE_H_DP = 900.0');
+    expect(overlayWindow).toContain('MAX_TOUCH_DP = 600.0');
+    expect(overlayWindow).toMatch(/if \(w < 1\.0 \|\| h < 1\.0 \|\| w > MAX_STAGE_W_DP \|\| h > MAX_STAGE_H_DP\) return/);
+    expect(overlayWindow).toMatch(/tw > MAX_TOUCH_DP \|\| th > MAX_TOUCH_DP \|\| tw > w \|\| th > h/);
+    // The stage never changes the key set of the 'win' message, and the visual window stays untouchable.
+    expect(overlayWindow).toContain('setOf("t", "x", "y", "w", "h", "vis", "touch", "tx", "ty", "tw", "th")');
     // Hidden or not drawn: the window leaves the WindowManager, so it cannot obstruct anything.
     expect(overlayWindow).toContain('windowManager.removeViewImmediate(visualRoot)');
     expect(overlayWindow).toContain('touchRoot.filterTouchesWhenObscured = true');

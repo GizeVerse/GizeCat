@@ -1022,6 +1022,104 @@ button.danger {
   color: var(--muted);
 }
 
+/* Companion status chips, section sub-headings, the events list and the journal (androidPanel.ts). */
+.pcard .subhead {
+  margin: 1.1rem 0 0.4rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--sheet-line);
+  font-size: 1rem;
+}
+
+.pcard .status-block .subhead {
+  margin-top: 0.8rem;
+}
+
+.status-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.5rem;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.status-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-height: 3rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--sheet-line);
+  border-radius: 0.7rem;
+  background: var(--bg);
+}
+
+.status-chip[hidden] {
+  display: none;
+}
+
+.sc-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.sc-value {
+  font-weight: 600;
+  font-size: 0.98rem;
+  overflow-wrap: anywhere;
+}
+
+/* 48 px touch targets for the switches and the details toggle in the panel. */
+.panel .panel-row {
+  min-height: 3rem;
+}
+
+.panel details.events-list {
+  margin-top: 0.5rem;
+}
+
+.panel details.events-list > summary {
+  display: flex;
+  align-items: center;
+  min-height: 3rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.journal-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journal-entry {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--sheet-line);
+  border-radius: 0.7rem;
+  background: var(--bg);
+}
+
+.journal-date {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.journal-text {
+  line-height: 1.4;
+}
+
+.journal-empty {
+  color: var(--muted);
+}
+
+.panel button {
+  min-height: 3rem;
+}
+
 .panel-foot {
   max-width: 62rem;
   margin: 1rem auto 0;

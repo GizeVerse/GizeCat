@@ -20,7 +20,19 @@ import type { Settings } from '../shared/settings';
 import type { SimOutput } from '../shared/sim';
 import type { HostOverlays } from '../main/catHost';
 import type { DisplayService, Logger } from '../main/contracts';
-import { displaysShowingCat, hiddenRenderState, mapRenderState } from '../main/overlay/renderMapping';
+import { displaysShowingCat, displaysShowingProps, hiddenRenderState, mapRenderState } from '../main/overlay/renderMapping';
+import type { PresenceInfo } from './overlaySurface';
+
+/**
+ * What the host adds to one frame (CatHost passes it only while it has something to say; structurally the
+ * desktop's OverlayRenderExtras): the laser dot in world px (null: Laser Mode is on but there is no pointer)
+ * and the OS reduced-motion preference. `laserQuietDisplayIds` is the desktop's fullscreen rule: unused here.
+ */
+export interface WebRenderExtras {
+  laser?: Point | null;
+  laserQuietDisplayIds?: readonly string[];
+  reducedMotion?: boolean;
+}
 
 /** Reported hit regions are trusted while fresh or while the cat has not moved since (overlayManager). */
 export const HIT_REGION_FRESH_MS = 300;
@@ -47,10 +59,11 @@ export interface WebOverlaysOptions {
   debug?: boolean;
   /**
    * The floating cat (overlaySurface.ts): called on every render, before the snapshot is mapped to
-   * overlay-local coordinates, with the cat's output while it is drawn and with null while it is not
-   * (hidden or out of the work area). It may change the display's origin; nothing else uses it.
+   * overlay-local coordinates, with the cat's output while the cat or its world-event props are drawn
+   * and with null while nothing is (hidden or out of the work area). It may change the display's
+   * origin; returning true says it jumped, so this frame snaps (nothing interpolates across a re-origin).
    */
-  onPresence?: (out: SimOutput | null) => void;
+  onPresence?: (out: SimOutput | null, info: PresenceInfo) => boolean | void;
 }
 
 export interface WebOverlaysDebug {
@@ -139,26 +152,32 @@ export function createWebOverlays(opts: WebOverlaysOptions): WebOverlays {
     }
   }
 
-  function render(out: SimOutput, simNow: number, hidden: boolean): void {
+  function render(out: SimOutput, simNow: number, hidden: boolean, extras?: WebRenderExtras): void {
     lastOutput = out;
     lastHidden = hidden;
     const settings = opts.getSettings();
     const appearance = settings.appearance;
     const d = opts.display.world.displays[0];
-    const showing = d ? displaysShowingCat(out, [d], appearance, hidden) : new Set<string>();
+    const catShowing = d ? displaysShowingCat(out, [d], appearance, hidden) : new Set<string>();
+    // World-event props are drawn whether or not the cat is on this display (its presence rect is not theirs).
+    const propsShowing = d ? displaysShowingProps(out, [d], hidden) : new Set<string>();
+    const showing = new Set<string>([...catShowing, ...propsShowing]);
+    const catHere = d !== undefined && catShowing.has(d.id);
     const now = opts.clock();
     // A cue is new on its first emission only (by `at`); it is never sent again.
     const cue = out.sound ?? null;
     const newCue = cue !== null && Number.isFinite(cue.at) && cue.at !== lastSoundAt;
     if (newCue) lastSoundAt = cue.at;
     const shown = d !== undefined && showing.has(d.id);
+    // Only while Laser Mode is on does the host pass a dot at all; the position is never kept here.
+    const laser = extras && extras.laser !== undefined ? extras.laser : undefined;
     try {
-      opts.onPresence?.(shown ? out : null);
+      if (opts.onPresence?.(shown ? out : null, { cat: catHere, laser: laser ?? null }) === true) needSnap = true;
     } catch (err) {
       log.warn('overlay presence listener failed', { error: err });
     }
     if (d && showing.has(d.id)) {
-      const state = mapRenderState(out, appearance, {
+      const mapped = mapRenderState(out, appearance, {
         seq: ++seq,
         toLocalDip: (p) => opts.display.toLocalDip(d.id, p),
         scaleFactor: d.scaleFactor,
@@ -168,7 +187,13 @@ export function createWebOverlays(opts: WebOverlaysOptions): WebOverlays {
         movementSpeed: settings.behavior.movementSpeed,
         soundOwner: settings.sound.enabled && newCue && ready,
         soundVolume: settings.sound.volume,
+        displayBoundsPx: d.workAreaPx,
+        ...(laser !== undefined ? { laser } : {}),
+        // The OS preference (Android: "remove animations") or the user's own switch.
+        reducedMotion: extras?.reducedMotion === true || settings.companion.reducedMotion,
       });
+      // Props without the cat on this display: still a visible frame, so the renderer draws the props.
+      const state = !catHere && !hidden ? { ...mapped, visible: true } : mapped;
       if (!active) {
         active = true;
         activatedAt = now;

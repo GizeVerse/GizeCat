@@ -222,3 +222,65 @@ describe('web overlays: hit regions (overlayManager rules)', () => {
     expect(h.log.entries.filter((e) => e.level === 'warn')).toHaveLength(20);
   });
 });
+
+// Living Companion: world-event props, the laser dot and reduced motion reach the renderer, and a
+// re-origin from the floating surface snaps the frame.
+describe('web overlays: world-event props, laser and reduced motion', () => {
+  const PROP = { id: 1, kind: 'mouse', x: 200, y: 700, size: 30, dir: 1, alpha: 1, p: 0, rot: 0, variant: 0 } as const;
+
+  function build(onPresence?: (out: SimOutput | null, info: { cat: boolean; laser: { x: number; y: number } | null }) => boolean | void) {
+    const time = manualTime(5000);
+    const display = createWebDisplayService({ viewport: () => ({ width: 1280, height: 720 }), listen: () => () => undefined, timers: time.timers });
+    const settings = defaultSettings();
+    const overlays = createWebOverlays({ display, getSettings: () => settings, clock: time.now, logger: memoryLogger(), ...(onPresence ? { onPresence } : {}) });
+    const frames: CatRenderState[] = [];
+    overlays.api.onRender((s) => frames.push(s));
+    overlays.api.ready();
+    return { overlays, frames, settings };
+  }
+
+  it('maps the props, the laser dot and the OS reduced-motion flag into the frame', () => {
+    const h = build();
+    h.overlays.render(output({ props: [PROP] }), 100, false, { laser: { x: 500, y: 650 }, reducedMotion: true });
+    expect(h.frames.at(-1)).toMatchObject({ props: [{ id: 1, kind: 'mouse', x: 200, y: 700 }], laser: { x: 500, y: 650 }, reducedMotion: true });
+  });
+
+  it('honours the reduced-motion setting too, and sends no dot when Laser mode gave none', () => {
+    const h = build();
+    h.settings.companion.reducedMotion = true;
+    h.overlays.render(output(), 100, false);
+    expect(h.frames.at(-1)).toMatchObject({ reducedMotion: true });
+    expect(h.frames.at(-1)?.laser).toBeUndefined();
+    h.overlays.render(output(), 133, false, { laser: null });
+    expect(h.frames.at(-1)?.laser).toBeNull();
+  });
+
+  it('sends a visible frame for props while the cat itself is not drawn, and nothing while hidden', () => {
+    const h = build();
+    h.overlays.render(output({ visible: false, props: [PROP] }), 100, false);
+    expect(h.frames.at(-1)).toMatchObject({ visible: true, props: [{ id: 1 }] });
+    const count = h.frames.length;
+    h.overlays.render(output({ visible: false, props: [PROP] }), 133, true);
+    expect(h.frames.length).toBe(count + 1);
+    expect(h.frames.at(-1)).toMatchObject({ visible: false });
+  });
+
+  it('tells the surface what is drawn and snaps the frame when it reports a re-origin', () => {
+    const calls: { cat: boolean; laser: { x: number; y: number } | null }[] = [];
+    let reorigin = false;
+    const h = build((_out, info) => {
+      calls.push(info);
+      return reorigin;
+    });
+    h.overlays.render(output({ props: [PROP] }), 100, false, { laser: { x: 500, y: 650 } });
+    expect(calls.at(-1)).toEqual({ cat: true, laser: { x: 500, y: 650 } });
+    h.overlays.render(output({ props: [PROP] }), 133, false);
+    expect(h.frames.at(-1)?.snap).toBe(false);
+    reorigin = true;
+    h.overlays.render(output({ props: [PROP] }), 166, false);
+    expect(h.frames.at(-1)?.snap).toBe(true);
+    reorigin = false;
+    h.overlays.render(output({ visible: false, props: [PROP] }), 200, false);
+    expect(calls.at(-1)).toMatchObject({ cat: false });
+  });
+});

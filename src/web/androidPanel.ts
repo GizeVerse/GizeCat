@@ -1,31 +1,82 @@
-// The Android app's home panel (1.4.2): the screen a person opens GizeCat to. It replaces the
-// toolbar-and-sheet as the first thing seen in the native app (the sheet stays, behind "More looks
-// and sound" and "All settings", and the in-app cat stays, behind "Show the cat in this app").
+// The Android app's home panel (1.4.2, rebuilt for the Living Companion): the screen a person opens
+// GizeCat to. It replaces the toolbar-and-sheet as the first thing seen in the native app (the sheet
+// stays, behind "More looks and sound" and "All settings", and the in-app cat stays, behind "Show the
+// cat in this app").
 //
-// What it holds, top to bottom: the floating cat (status, a large Start/Stop, Pause and Hide, the
-// permission state and the in-app explanation that precedes Android's own settings page), the cat
-// (name, coat, size), movement (personality, walking speed, screen edges, hunting, playfulness),
-// touch (petting, carrying, throwing), battery (when it falls asleep, how active it is) and a footer.
-// Every control goes through the web allow-list (settingsModel.ts), exactly like the sheet; nothing
-// here reads the screen, other apps or the network. The floating cat itself is a separate service:
-// opening and closing this panel never touches its state.
+// Sections, top to bottom: COMPANION (the floating cat: status, a large Start/Stop, Pause and Hide, the
+// permission state, the in-app explanation that precedes Android's own settings page, and live status
+// chips for mood, activity, personality and the world event), APPEARANCE (name, coat, size),
+// PERSONALITY (the seven profiles and Auto), BEHAVIOR (activity, speed, rest and sleep, screen edges,
+// hunting, and the world events with a switch for each), INTERACTIONS (petting, carrying, throwing and
+// the session-only Laser mode), AUDIO, ACCESSIBILITY and JOURNAL. Every control goes through the web
+// allow-list (settingsModel.ts), exactly like the sheet; nothing here reads the screen, other apps or
+// the network. The floating cat itself is a separate service in another WebView: opening and closing
+// this panel never touches its state, and while it runs this parked page only READS what it last
+// saved (the journal) and never writes the cat.
 //
 // Built with the CSP-safe helpers (no innerHTML, no style attributes). DOM access only through the
-// elements this module creates.
+// elements this module creates. The one timer (live status, every 2 s) runs only while the panel is
+// open and the page is visible.
 import { h, uid } from '../renderer/settings/dom';
 import { coatArt } from '../renderer/settings/skins';
-import { SKINS, type SkinId } from '../shared/cat';
+import { SKINS, type BehaviorState, type SkinId } from '../shared/cat';
+import { ALL_EVENT_IDS, JOURNAL_MAX, PERSONALITY_IDS, type AnyEventId, type JournalEntry, type Mood, type PersonalityChoice, type PersonalityId } from '../shared/companion';
+import { PERSONALITY_TEXT } from '../shared/personalityText';
 import { disabledBehaviorSet, type BehaviorId, type Settings } from '../shared/settings';
 import { ACTIVITY_PRESET_IDS, type ActivityPresetId } from '../shared/settingsPresets';
+import { eventDescription, eventName, formatJournalDate, journalText } from '../shared/worldText';
 import type { FloatingElements } from './floatingUi';
 import type { FloatingState } from './floatingProtocol';
-import { CAT_NAME_MAX, LEVEL_RANGE, MOVEMENT_RANGE, patchFor, selectedPreset, SIZE_RANGE, SLEEP_RANGE, type WebField, type WebPatchResult } from './settingsModel';
+import type { SessionFlags } from './sessionFlags';
+import {
+  CAT_NAME_MAX,
+  LEVEL_RANGE,
+  MOVEMENT_RANGE,
+  PACE_RANGE,
+  patchFor,
+  selectedPreset,
+  SIZE_RANGE,
+  SLEEP_RANGE,
+  VOLUME_RANGE,
+  type WebField,
+  type WebPatchResult,
+} from './settingsModel';
+import { activityLabel } from './status';
 import { WS } from './strings';
+
+/** What the status chips show: the in-page sim's companion status plus its behaviour state. */
+export interface CompanionView {
+  mood: Mood;
+  event: AnyEventId | null;
+  nextEventInMs: number | null;
+  nearestPersonality: PersonalityId;
+  personalityIsAuto: boolean;
+  state: BehaviorState;
+}
+
+/**
+ * Where the panel reads the cat from (main.ts). While the floating cat runs its WebView owns the cat,
+ * so `live()` is false: no live status (null), the journal is the stored snapshot, and it cannot be
+ * cleared from here.
+ */
+export interface CompanionSource {
+  live(): boolean;
+  status(): CompanionView | null;
+  /** Oldest first, as the sim keeps it. */
+  journal(): readonly JournalEntry[];
+  /** True when the journal was cleared and saved. */
+  clearJournal(): boolean;
+}
 
 export interface AndroidPanelDeps {
   getSettings: () => Settings;
   /** One control's patch, through the web allow-list; `save` false is a live preview while a slider moves. */
   apply: (patch: Record<string, Record<string, unknown>>, save: boolean) => WebPatchResult;
+  companion: CompanionSource;
+  /** Laser mode and the events pause: session-only, never stored with the settings (sessionFlags.ts). */
+  session: { get(): SessionFlags; set(next: SessionFlags): void };
+  /** A switch that turns sound on was just flipped (inside the gesture): unlock the AudioContext. */
+  onSoundGesture?: () => void;
   /** Opens the full settings sheet (more coats, drawing styles, sound, profile, start over). */
   onCustomize: () => void;
   /** Leaves the panel for the in-app cat. */
@@ -54,8 +105,12 @@ interface Slider {
   set(v: number): void;
 }
 
+/** How often the live status and the journal are re-read while the panel is open, ms. */
+const LIVE_REFRESH_MS = 2000;
+
 export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
   let isOpen = false;
+  let liveTimer: number | null = null;
 
   const change = (c: WebField, save = true): void => {
     const patch = patchFor(c);
@@ -122,6 +177,9 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
     return h('section', { class: 'pcard', 'aria-labelledby': headingId, id }, [h('h2', { id: headingId, text: title }), ...children]);
   };
 
+  /** A smaller heading inside a card. */
+  const subhead = (text: string): HTMLElement => h('h3', { class: 'subhead', text });
+
   // ---- header
   const chip = h('span', { class: 'chip', 'aria-live': 'polite' });
   const head = h('header', { class: 'panel-head' }, [
@@ -130,7 +188,7 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
     chip,
   ]);
 
-  // ---- floating cat (the elements createFloatingUi drives)
+  // ---- companion: the floating cat (the elements createFloatingUi drives) and the live status
   const heroText = h('p', { class: 'lead' });
   const startBtn = h('button', { type: 'button', class: 'primary big' });
   const pauseBtn = h('button', { type: 'button', hidden: true });
@@ -146,17 +204,30 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
   const askOpen = h('button', { type: 'button', class: 'primary' });
   const askLater = h('button', { type: 'button' });
   const ask = h('div', { class: 'panel-ask', role: 'region', hidden: true }, [askTitle, askText, h('div', { class: 'actions' }, [askOpen, askLater])]);
-  const hero = pcard(WS.panel.hero.title, [
+
+  const chipItem = (label: string): { root: HTMLElement; value: HTMLElement } => {
+    const value = h('span', { class: 'sc-value' });
+    return { root: h('li', { class: 'status-chip' }, [h('span', { class: 'sc-label', text: label }), value]), value };
+  };
+  const moodChip = chipItem(WS.panel.companion.mood);
+  const doingChip = chipItem(WS.panel.companion.activity);
+  const personalityChip = chipItem(WS.panel.companion.personality);
+  const eventChip = chipItem(WS.panel.companion.event);
+  const liveNote = h('p', { class: 'note', hidden: true, text: WS.panel.companion.floatingNote });
+  const statusChips = h('div', { class: 'status-block' }, [h('h3', { class: 'subhead', text: WS.panel.companion.statusTitle }), h('ul', { class: 'status-chips' }, [moodChip.root, doingChip.root, personalityChip.root, eventChip.root]), liveNote]);
+
+  const hero = pcard(WS.panel.companion.title, [
     heroText,
     h('div', { class: 'hero-actions' }, [startBtn, pauseBtn, hideBtn, stopBtn]),
     statusLine,
     ask,
+    statusChips,
     h('div', { class: 'perm-list' }, [overlayRow, notifRow]),
     h('p', { class: 'note', text: WS.panel.permissions.note }),
   ]);
   hero.classList.add('hero');
 
-  // ---- your cat
+  // ---- appearance
   const nameId = uid('panel-name');
   const nameErrId = uid('panel-name-error');
   const nameInput = h('input', { type: 'text', id: nameId, maxlength: CAT_NAME_MAX, autocomplete: 'off', autocapitalize: 'words', enterkeyhint: 'done', spellcheck: 'false', 'aria-describedby': nameErrId });
@@ -178,36 +249,151 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
   moreBtn.addEventListener('click', () => deps.onCustomize());
   const catCard = pcard(WS.panel.cat.title, [h('div', { class: 'field' }, [h('label', { for: nameId, text: WS.cat.nameLabel }), nameInput, nameErr]), coat.root, size.root, h('div', { class: 'actions' }, [moreBtn])]);
 
-  // ---- movement
-  const personality = radioCards<ActivityPresetId>(
+  // ---- personality: the seven profiles and Auto (the cat never changes the choice)
+  const PERSONALITY_VALUES: readonly PersonalityChoice[] = ['auto', ...PERSONALITY_IDS];
+  const personality = radioCards<PersonalityChoice>(
+    'personality',
+    WS.panel.personality.groupLabel,
+    PERSONALITY_VALUES,
+    (p) =>
+      p === 'auto'
+        ? [h('span', { class: 'title', text: WS.panel.personality.auto }), h('span', { class: 'desc', text: WS.panel.personality.autoDesc })]
+        : [h('span', { class: 'title', text: PERSONALITY_TEXT[p].name }), h('span', { class: 'desc', text: PERSONALITY_TEXT[p].summary })],
+    (p) => change({ field: 'personality', value: p }),
+    true,
+  );
+  const personalityCard = pcard(WS.panel.personality.title, [h('p', { class: 'note', text: WS.panel.personality.desc }), personality.root]);
+
+  // ---- behavior
+  const preset = radioCards<ActivityPresetId>(
     'preset',
-    WS.panel.movement.personality,
+    WS.panel.behavior.activityLabel,
     ACTIVITY_PRESET_IDS,
     (p) => [h('span', { class: 'title', text: WS.presets[p].title }), h('span', { class: 'desc', text: WS.presets[p].desc })],
     (p) => change({ field: 'preset', value: p }),
     true,
   );
-  const speed = slider(WS.panel.movement.speed, MOVEMENT_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'movementSpeed', value: v }, save));
+  const speed = slider(WS.panel.behavior.speed, MOVEMENT_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'movementSpeed', value: v }, save));
   const toggle = (id: BehaviorId, enabled: boolean): void => change({ field: 'behaviorToggle', id, enabled, current: deps.getSettings() });
-  const edges = switchRow(WS.panel.movement.edges, WS.panel.movement.edgesDesc, (on) => toggle('screenEdges', on));
-  const hunt = switchRow(WS.panel.movement.hunt, WS.panel.movement.huntDesc, (on) => {
+  const edges = switchRow(WS.panel.behavior.edges, WS.panel.behavior.edgesDesc, (on) => toggle('screenEdges', on));
+  const hunt = switchRow(WS.panel.behavior.hunt, WS.panel.behavior.huntDesc, (on) => {
     // Hunting is the chase and the pounce; the pounce needs the chase.
     toggle('chaseCursor', on);
     toggle('pounce', on);
   });
-  const play = slider(WS.panel.movement.play, LEVEL_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'cursorPlay', value: v }, save));
-  const movementCard = pcard(WS.panel.movement.title, [personality.root, speed.root, edges.root, hunt.root, play.root]);
+  const play = slider(WS.panel.behavior.play, LEVEL_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'cursorPlay', value: v }, save));
+  const sleep = slider(WS.panel.behavior.sleep, SLEEP_RANGE, (v) => WS.panel.behavior.sleepValue(Math.round(v)), (v, save) => change({ field: 'sleepMinutes', value: v }, save));
+  const activity = slider(WS.panel.behavior.activity, LEVEL_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'autonomy', value: v }, save));
 
-  // ---- touch
-  const petting = switchRow(WS.panel.touch.petting, null, (on) => change({ field: 'petting', value: on }));
-  const dragging = switchRow(WS.panel.touch.dragging, null, (on) => change({ field: 'dragging', value: on }));
-  const throwing = switchRow(WS.panel.touch.throwing, null, (on) => change({ field: 'throwing', value: on }));
-  const touchCard = pcard(WS.panel.touch.title, [petting.root, dragging.root, throwing.root, h('p', { class: 'note', text: WS.panel.touch.note })]);
+  // World events: the master switch, the rare pool, the pace, a session pause and one switch per event.
+  const eventsMaster = switchRow(WS.panel.behavior.eventsMaster, WS.panel.behavior.eventsMasterDesc, (on) => change({ field: 'eventsEnabled', value: on }));
+  const eventsRare = switchRow(WS.panel.behavior.eventsRare, WS.panel.behavior.eventsRareDesc, (on) => change({ field: 'rareEvents', value: on }));
+  const eventsPace = slider(WS.panel.behavior.eventsPace, PACE_RANGE, (v) => WS.panel.behavior.eventsPaceValue(v), (v, save) => change({ field: 'eventPace', value: v }, save));
+  const eventsPause = switchRow(WS.panel.behavior.eventsPause, WS.panel.behavior.eventsPauseDesc, (on) => {
+    deps.session.set({ ...deps.session.get(), eventsPaused: on });
+    refresh();
+  });
+  const eventSwitches = new Map<AnyEventId, HTMLInputElement>();
+  const eventRows = ALL_EVENT_IDS.map((id) => {
+    const row = switchRow(eventName(id), eventDescription(id), (on) => change({ field: 'eventToggle', id, enabled: on, current: deps.getSettings() }));
+    eventSwitches.set(id, row.input);
+    return row.root;
+  });
+  const eventsList = h('details', { class: 'events-list' }, [h('summary', { text: WS.panel.behavior.eventsList }), h('p', { class: 'note', text: WS.panel.behavior.eventsListNote }), ...eventRows]);
+  const behaviorCard = pcard(WS.panel.behavior.title, [
+    preset.root,
+    speed.root,
+    edges.root,
+    hunt.root,
+    play.root,
+    subhead(WS.panel.behavior.restTitle),
+    sleep.root,
+    activity.root,
+    h('p', { class: 'note', text: WS.panel.behavior.restNote }),
+    subhead(WS.panel.behavior.eventsTitle),
+    eventsMaster.root,
+    eventsRare.root,
+    eventsPace.root,
+    eventsPause.root,
+    eventsList,
+  ]);
 
-  // ---- battery
-  const sleep = slider(WS.panel.battery.sleep, SLEEP_RANGE, (v) => WS.panel.battery.sleepValue(Math.round(v)), (v, save) => change({ field: 'sleepMinutes', value: v }, save));
-  const activity = slider(WS.panel.battery.activity, LEVEL_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'autonomy', value: v }, save));
-  const batteryCard = pcard(WS.panel.battery.title, [sleep.root, activity.root, h('p', { class: 'note', text: WS.panel.battery.note })]);
+  // ---- interactions
+  const petting = switchRow(WS.panel.interactions.petting, null, (on) => change({ field: 'petting', value: on }));
+  const dragging = switchRow(WS.panel.interactions.dragging, null, (on) => change({ field: 'dragging', value: on }));
+  const throwing = switchRow(WS.panel.interactions.throwing, null, (on) => change({ field: 'throwing', value: on }));
+  const laser = switchRow(WS.panel.interactions.laser, WS.panel.interactions.laserDesc, (on) => {
+    deps.session.set({ ...deps.session.get(), laser: on });
+    refresh();
+  });
+  const laserNeedsHunt = h('p', { class: 'note', hidden: true, text: WS.panel.interactions.laserNeedsHunt });
+  const interactionsCard = pcard(WS.panel.interactions.title, [
+    petting.root,
+    dragging.root,
+    throwing.root,
+    h('p', { class: 'note', text: WS.panel.interactions.note }),
+    laser.root,
+    laserNeedsHunt,
+    h('p', { class: 'note', text: WS.panel.interactions.laserLimit }),
+  ]);
+
+  // ---- audio
+  const soundMaster = switchRow(WS.panel.audio.master, WS.panel.audio.masterDesc, (on) => {
+    // Inside the gesture: the one moment a phone lets audio start.
+    if (on) deps.onSoundGesture?.();
+    change({ field: 'soundEnabled', value: on });
+  });
+  const soundCat = switchRow(WS.panel.audio.cat, null, (on) => change({ field: 'soundCat', value: on }));
+  const soundWorld = switchRow(WS.panel.audio.world, null, (on) => change({ field: 'soundWorld', value: on }));
+  const volume = slider(WS.panel.audio.volume, VOLUME_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'volume', value: v }, save));
+  const audioNote = h('p', { class: 'note', text: WS.panel.audio.needsSound });
+  const audioCard = pcard(WS.panel.audio.title, [soundMaster.root, soundCat.root, soundWorld.root, volume.root, audioNote]);
+
+  // ---- accessibility
+  const reduced = switchRow(WS.panel.accessibility.reducedMotion, WS.panel.accessibility.reducedMotionDesc, (on) => change({ field: 'reducedMotion', value: on }));
+  const accessibilityCard = pcard(WS.panel.accessibility.title, [reduced.root, h('p', { class: 'note', text: WS.panel.accessibility.systemNote })]);
+
+  // ---- journal: newest first, dates and sentences from worldText.ts
+  const journalEnabled = switchRow(WS.panel.journal.enabled, null, (on) => change({ field: 'journalEnabled', value: on }));
+  const journalCount = h('p', { class: 'note', 'aria-live': 'polite' });
+  const journalList = h('ol', { class: 'journal-list' });
+  const journalEmpty = h('p', { class: 'journal-empty', hidden: true });
+  const journalNote = h('p', { class: 'note', hidden: true, text: WS.panel.journal.storedNote });
+  const journalMsg = h('p', { class: 'note', role: 'status', 'aria-live': 'polite' });
+  const clearBtn = h('button', { type: 'button', class: 'danger', text: WS.panel.journal.clear });
+  const clearYes = h('button', { type: 'button', class: 'danger', text: WS.panel.journal.clearConfirm });
+  const clearNo = h('button', { type: 'button', text: WS.panel.journal.clearCancel });
+  const clearAsk = h('div', { class: 'panel-ask', role: 'group', 'aria-label': WS.panel.journal.clear, hidden: true }, [
+    h('p', { text: WS.panel.journal.clearAsk }),
+    h('div', { class: 'actions' }, [clearYes, clearNo]),
+  ]);
+  clearBtn.addEventListener('click', () => {
+    clearAsk.hidden = false;
+    clearNo.focus();
+  });
+  clearNo.addEventListener('click', () => {
+    clearAsk.hidden = true;
+    clearBtn.focus();
+  });
+  clearYes.addEventListener('click', () => {
+    clearAsk.hidden = true;
+    journalMsg.textContent = deps.companion.clearJournal() ? WS.panel.journal.cleared : WS.panel.journal.clearFailed;
+    journalSignature = '';
+    refreshLive();
+    clearBtn.focus();
+  });
+  const journalCard = pcard(WS.panel.journal.title, [
+    h('p', { class: 'note', text: WS.panel.journal.desc }),
+    journalEnabled.root,
+    journalCount,
+    journalEmpty,
+    journalList,
+    journalNote,
+    h('div', { class: 'actions' }, [clearBtn]),
+    clearAsk,
+    journalMsg,
+  ]);
+  let journalSignature = '';
 
   // ---- footer
   const stageBtn = h('button', { type: 'button', text: WS.panel.footer.stage });
@@ -216,8 +402,56 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
   allBtn.addEventListener('click', () => deps.onCustomize());
   const footer = h('footer', { class: 'panel-foot' }, [h('div', { class: 'actions' }, [stageBtn, allBtn]), h('p', { class: 'note', text: WS.about.version(deps.version) })]);
 
-  const grid = h('div', { class: 'panel-grid' }, [hero, catCard, movementCard, touchCard, batteryCard]);
+  const grid = h('div', { class: 'panel-grid' }, [hero, catCard, personalityCard, behaviorCard, interactionsCard, audioCard, accessibilityCard, journalCard]);
   const root = h('main', { class: 'panel', id: 'panel', 'aria-label': 'GizeCat', hidden: true }, [head, grid, footer]);
+
+  /** The live status chips and the journal: read from the cat (or its stored snapshot), never written here. */
+  function refreshLive(): void {
+    const s = deps.getSettings();
+    const live = deps.companion.live();
+    const status = deps.companion.status();
+    const flags = deps.session.get();
+    liveNote.hidden = live;
+    moodChip.root.hidden = status === null;
+    doingChip.root.hidden = status === null;
+    if (status) {
+      moodChip.value.textContent = WS.panel.companion.moods[status.mood] ?? String(status.mood);
+      doingChip.value.textContent = activityLabel(status.state);
+    }
+    // 'auto' shows its nearest profile once the live cat can say which; the choice itself never changes.
+    const choice = s.companion.personality;
+    personalityChip.value.textContent =
+      choice === 'auto'
+        ? status && status.personalityIsAuto
+          ? WS.panel.companion.personalityAuto(PERSONALITY_TEXT[status.nearestPersonality]?.name ?? '')
+          : WS.panel.personality.auto
+        : PERSONALITY_TEXT[choice].name;
+    let eventText: string;
+    if (!s.companion.events.enabled) eventText = WS.panel.companion.eventOff;
+    else if (flags.eventsPaused) eventText = WS.panel.companion.eventPaused;
+    else if (status?.event) eventText = WS.panel.companion.eventRunning(eventName(status.event));
+    else if (status && status.nextEventInMs !== null && Number.isFinite(status.nextEventInMs)) eventText = WS.panel.companion.eventNext(Math.max(1, Math.round(status.nextEventInMs / 60_000)));
+    else eventText = WS.panel.companion.eventNone;
+    // Without a live cat nothing is known about the schedule: only the switches above can be said.
+    eventChip.root.hidden = status === null && s.companion.events.enabled && !flags.eventsPaused;
+    eventChip.value.textContent = eventText;
+
+    const entries = deps.companion.journal();
+    const newest = entries.length > 0 ? entries[entries.length - 1] : undefined;
+    const signature = `${live ? 'l' : 's'}:${entries.length}:${newest ? newest.at : 0}:${s.companion.journal.enabled ? 1 : 0}`;
+    journalNote.hidden = live;
+    clearBtn.disabled = !live;
+    if (signature !== journalSignature) {
+      journalSignature = signature;
+      const shown = entries.slice(-JOURNAL_MAX).reverse();
+      journalList.replaceChildren(
+        ...shown.map((e) => h('li', { class: 'journal-entry' }, [h('time', { class: 'journal-date', text: formatJournalDate(e.at) }), h('span', { class: 'journal-text', text: journalText(e.id, e.outcome) })])),
+      );
+      journalCount.textContent = shown.length > 0 ? WS.panel.journal.count(shown.length) : '';
+      journalEmpty.hidden = shown.length > 0;
+      journalEmpty.textContent = s.companion.journal.enabled ? WS.panel.journal.empty : WS.panel.journal.emptyOff;
+    }
+  }
 
   function refresh(): void {
     const s = deps.getSettings();
@@ -225,17 +459,51 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
     if (document.activeElement !== nameInput) nameInput.value = s.general.catName;
     coat.set(s.appearance.skin);
     size.set(s.appearance.size);
-    personality.set(selectedPreset(s));
+    personality.set(s.companion.personality);
+    preset.set(selectedPreset(s));
     speed.set(s.behavior.movementSpeed);
     edges.input.checked = !off.has('screenEdges');
     hunt.input.checked = !off.has('chaseCursor') && !off.has('pounce');
     play.set(s.behavior.cursorPlay);
     play.input.disabled = off.has('chaseCursor');
+    sleep.set(s.behavior.sleepAfterIdleMinutes);
+    activity.set(s.behavior.autonomy);
+
+    const events = s.companion.events;
+    const disabled = new Set<AnyEventId>(events.disabled);
+    eventsMaster.input.checked = events.enabled;
+    eventsRare.input.checked = events.rare;
+    eventsRare.input.disabled = !events.enabled;
+    eventsPace.set(events.pace);
+    eventsPace.input.disabled = !events.enabled;
+    eventsPause.input.checked = deps.session.get().eventsPaused;
+    eventsPause.input.disabled = !events.enabled;
+    for (const [id, input] of eventSwitches) {
+      input.checked = !disabled.has(id);
+      input.disabled = !events.enabled;
+    }
+
     petting.input.checked = s.interaction.petting;
     dragging.input.checked = s.interaction.dragging;
     throwing.input.checked = s.interaction.throwing;
-    sleep.set(s.behavior.sleepAfterIdleMinutes);
-    activity.set(s.behavior.autonomy);
+    laser.input.checked = deps.session.get().laser;
+    // Chasing a light is cursor play: with hunting and pointer play off the cat will not follow the dot.
+    laser.input.disabled = off.has('chaseCursor');
+    laserNeedsHunt.hidden = !off.has('chaseCursor');
+
+    soundMaster.input.checked = s.sound.enabled;
+    soundCat.input.checked = s.sound.cat;
+    soundWorld.input.checked = s.sound.world;
+    soundCat.input.disabled = !s.sound.enabled;
+    soundWorld.input.disabled = !s.sound.enabled;
+    volume.set(s.sound.volume);
+    volume.input.disabled = !s.sound.enabled;
+    audioNote.hidden = s.sound.enabled;
+
+    reduced.input.checked = s.companion.reducedMotion;
+    journalEnabled.input.checked = s.companion.journal.enabled;
+    journalSignature = '';
+    refreshLive();
   }
 
   function setFloatingState(state: FloatingState): void {
@@ -247,11 +515,19 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
     overlayState.className = `row-state ${state.overlayPermission ? 'ok' : 'needed'}`;
     notifState.textContent = state.notifications ? WS.panel.permissions.notificationsOn : state.canAskNotifications ? WS.panel.permissions.notificationsOptional : WS.panel.permissions.notificationsOff;
     notifState.className = `row-state ${state.notifications ? 'ok' : 'optional'}`;
+    // Whether the floating cat runs decides what the status and the journal can show.
+    if (isOpen) refreshLive();
   }
   // Before native answers: calm defaults, not a guess about the permission.
   heroText.textContent = WS.panel.hero.off;
   chip.textContent = WS.panel.chip.off;
   chip.className = 'chip chip-off';
+
+  function stopLiveTimer(): void {
+    if (liveTimer === null) return;
+    window.clearInterval(liveTimer);
+    liveTimer = null;
+  }
 
   function setOpen(open: boolean): void {
     if (isOpen === open) return;
@@ -265,8 +541,17 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
     }
     if (open) {
       refresh();
+      // Nothing keeps the CPU busy behind a page nobody can see: no ticks while hidden.
+      liveTimer = window.setInterval(() => {
+        if (!document.hidden) refreshLive();
+      }, LIVE_REFRESH_MS);
       head.querySelector('h1')?.setAttribute('tabindex', '-1');
       head.querySelector<HTMLElement>('h1')?.focus();
+    } else {
+      stopLiveTimer();
+      // A half-answered confirmation does not wait for the next visit.
+      clearAsk.hidden = true;
+      journalMsg.textContent = '';
     }
   }
 

@@ -180,3 +180,86 @@ describe('overlay surface', () => {
     expect(h.router.cancel).toHaveBeenCalled();
   });
 });
+
+// Living Companion: the visual window widens into a stage while props or the laser dot exist
+// (src/web/stageWindow.ts) and the touch window stays the tight 1.4.2 rectangle.
+describe('overlay surface stage', () => {
+  type Win = Extract<OverlayOutbound, { t: 'win' }>;
+  const MOUSE = { id: 1, kind: 'mouse', x: 100, y: 740, size: 30, dir: 1, alpha: 1, p: 0, rot: 0, variant: 0 } as const;
+  const withProps = { ...OUT, props: [MOUSE] } as unknown as SimOutput;
+
+  function stageHarness() {
+    const posted: OverlayOutbound[] = [];
+    const port: OverlayPort = { post: (m) => posted.push(m), onMessage: () => () => undefined };
+    let t = 1000;
+    const surface = createOverlaySurface(METRICS, port, () => ({ size: 1, emotes: false }), () => true, () => t);
+    const wins = (): Win[] => posted.filter((m): m is Win => m.t === 'win');
+    return { surface, wins, posted, advance: (ms: number) => void (t += ms) };
+  }
+
+  it('widens the visual window for a prop away from the cat and leaves the touch rectangle exactly as before', () => {
+    const plain = stageHarness();
+    plain.surface.onPresence(OUT);
+    const normal = plain.wins().at(-1)!;
+    const h = stageHarness();
+    expect(h.surface.onPresence(OUT)).toBe(false);
+    expect(h.surface.onPresence(withProps)).toBe(true);
+    const stage = h.wins().at(-1)!;
+    expect(stage.x).toBeLessThan(normal.x);
+    expect(stage.x).toBeLessThanOrEqual(MOUSE.x);
+    expect(stage.x + stage.w).toBeGreaterThanOrEqual(normal.x + normal.w);
+    expect(stage.w).toBeGreaterThan(normal.w);
+    expect({ tx: stage.tx, ty: stage.ty, tw: stage.tw, th: stage.th }).toEqual({ tx: normal.tx, ty: normal.ty, tw: normal.tw, th: normal.th });
+    // The origin is the stage's, so the renderer's local coordinates shift with it.
+    expect(h.surface.display.origin.x).toBe(stage.x);
+  });
+
+  it('holds still while the props stay, and shrinks back after the hold with one re-origin', () => {
+    const h = stageHarness();
+    h.surface.onPresence(withProps);
+    const count = h.wins().length;
+    h.advance(100);
+    expect(h.surface.onPresence(withProps)).toBe(false);
+    expect(h.wins().length).toBe(count);
+    h.advance(1000);
+    expect(h.surface.onPresence(OUT)).toBe(false);
+    // Still within the hold: the wide window stays and nothing is re-posted.
+    expect(h.wins().length).toBe(count);
+    h.advance(1000);
+    expect(h.surface.onPresence(OUT)).toBe(true);
+    const back = h.wins().at(-1)!;
+    expect(back.w).toBe(windowSizeDip({ size: 1, emotes: false }).width);
+    expect(back.x).toBeCloseTo(400 - 44, 0);
+  });
+
+  it('holds a laser dot that is far from the cat, and goes with a null presence', () => {
+    const h = stageHarness();
+    h.surface.onPresence(OUT, { cat: true, laser: { x: 1100, y: 120 } });
+    const stage = h.wins().at(-1)!;
+    expect(stage.x + stage.w).toBeGreaterThanOrEqual(1100);
+    expect(stage.y).toBeLessThanOrEqual(120);
+    h.surface.onPresence(null);
+    expect(h.wins().at(-1)).toMatchObject({ vis: false });
+    // A fresh start after the cat was gone: back to the cat's window at once.
+    h.surface.onPresence(OUT);
+    expect(h.wins().at(-1)!.w).toBe(windowSizeDip({ size: 1, emotes: false }).width);
+  });
+
+  it('takes no touches while only props are drawn (the cat is out of view)', () => {
+    const h = stageHarness();
+    h.surface.onPresence(withProps, { cat: false, laser: null });
+    expect(h.wins().at(-1)).toMatchObject({ vis: true, touch: false });
+    h.surface.onPresence(withProps, { cat: true, laser: null });
+    expect(h.wins().at(-1)).toMatchObject({ touch: true });
+  });
+
+  it('keeps the stage inside the protocol caps and the screen', () => {
+    const h = stageHarness();
+    const far = { ...OUT, props: [{ ...MOUSE, x: 5000, y: 5000 }, { ...MOUSE, id: 2, x: -4000, y: 700 }] } as unknown as SimOutput;
+    h.surface.onPresence(far);
+    const w = h.wins().at(-1)!;
+    expect(w.w).toBeLessThanOrEqual(4096);
+    expect(w.h).toBeLessThanOrEqual(900);
+    expect(w.x).toBeGreaterThanOrEqual(-44 - 1);
+  });
+});
