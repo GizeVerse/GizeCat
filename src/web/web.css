@@ -786,3 +786,81 @@ html.doc body {
 .doc code {
   overflow-wrap: anywhere;
 }
+
+/* ---- the floating cat (Android app only: these elements stay `hidden` everywhere else) */
+.floating-status {
+  position: fixed;
+  left: max(0.75rem, env(safe-area-inset-left));
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+  z-index: 24;
+  box-sizing: border-box;
+  max-width: 34rem;
+  margin: 0;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--sheet-line);
+  border-radius: 0.6rem;
+  background: var(--sheet-bg);
+  color: var(--fg);
+  font-size: 0.95rem;
+}
+
+.floating-ask {
+  position: fixed;
+  left: max(0.75rem, env(safe-area-inset-left));
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+  z-index: 26;
+  box-sizing: border-box;
+  max-width: 34rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--sheet-line);
+  border-radius: 0.8rem;
+  background: var(--sheet-bg);
+  color: var(--fg);
+}
+
+.floating-ask h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.1rem;
+}
+
+.floating-ask p {
+  margin: 0.4rem 0;
+}
+
+.floating-ask .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+/* While the cat floats over other apps the app's own cat is parked: no canvas, no cat buttons. */
+html.gizecat-floating-on #cat,
+html.gizecat-floating-on #btn-call,
+html.gizecat-floating-on #btn-sleep,
+html.gizecat-floating-on #btn-pause,
+html.gizecat-floating-on #btn-sound {
+  display: none;
+}
+
+/* The floating cat's window (?surface=overlay): the page is only the cat on a transparent window.
+   No toolbar, boot screen, sheet or status text; nothing but the canvas. */
+html.gizecat-overlay,
+html.gizecat-overlay body {
+  background: transparent;
+}
+
+html.gizecat-overlay .bar,
+html.gizecat-overlay #boot,
+html.gizecat-overlay #settings,
+html.gizecat-overlay .floating-status,
+html.gizecat-overlay .floating-ask,
+html.gizecat-overlay .visually-hidden,
+html.gizecat-overlay .noscript,
+html.gizecat-overlay body::before {
+  display: none !important;
+}

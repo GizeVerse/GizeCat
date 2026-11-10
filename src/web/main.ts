@@ -29,7 +29,11 @@ import { OverlayRuntime } from '../renderer/overlay/runtime';
 import { browserAudioMaker, createSharedAudio } from './audioUnlock';
 import { settleBootScreen } from './bootScreen';
 import { createWebDisplayService } from './display';
+import { connectControlBridge, connectOverlayBridge, isOverlaySurface } from './floatingBridges';
+import { parseMetricsQuery } from './floatingProtocol';
+import { createFloatingUi, type FloatingUi } from './floatingUi';
 import { detectHostMode, installHint, readHostEnv, shouldRegisterServiceWorker, shouldRequestPersistence } from './hostMode';
+import { createOverlaySurface } from './overlaySurface';
 import { createWebLogger } from './logger';
 import { createPointerRouter, type RouterTarget } from './pointerRouter';
 import { createBrowserSaver, selectProfileSaver } from './profileFiles';
@@ -86,13 +90,24 @@ function boot(): void {
   let settings = storage.loadSettings();
   const catLoad = storage.loadCat(Math.random, Date.now());
 
+  // ---- the floating cat (Android app, 1.4.0 preview 2): this page is either the app screen, or the
+  // transparent window the foreground service floats over other apps (`?surface=overlay`). Only the
+  // app's own origin has either bridge; anywhere else both are null and the page is the plain web host.
+  const root = document.documentElement;
+  const overlayPort = mode.kind === 'android-app' && isOverlaySurface(window.location.search) ? connectOverlayBridge(window) : null;
+  const overlayMetrics = overlayPort ? parseMetricsQuery(window.location.search) : null;
+  const surface = overlayPort && overlayMetrics ? createOverlaySurface(overlayMetrics, overlayPort, () => settings.appearance, () => !catBlocked()) : null;
+  if (surface) root.classList.add('gizecat-overlay');
+  const controlPort = mode.kind === 'android-app' && !surface ? connectControlBridge(window) : null;
+
   // ---- platform stand-ins: one logical display; no windows, taskbars, perception or keyboard.
   // The layout viewport (the document never scrolls, so iOS toolbars do not collapse, and neither
-  // pinch zoom nor an on-screen keyboard changes it); the canvas is sized from the same source.
-  const root = document.documentElement;
+  // pinch zoom nor an on-screen keyboard changes it); the canvas is sized from the same source. In
+  // the floating window the viewport is only that small window: the world is the whole screen
+  // (overlayDisplay.ts) and the renderer's canvas follows the cat.
   const viewport = (): { width: number; height: number } => ({ width: root.clientWidth || window.innerWidth, height: root.clientHeight || window.innerHeight });
   const probe = document.getElementById('safe-area-probe');
-  const display = createWebDisplayService({
+  const display = surface ? surface.display : createWebDisplayService({
     viewport,
     insets: () => readSafeAreaInsets(probe, (el) => window.getComputedStyle(el)),
     listen: (cb) => {
@@ -113,18 +128,23 @@ function boot(): void {
   let host: CatHost | null = null;
   let suspended = false;
   let panel: SettingsPanel | null = null;
+  /** The app screen's floating-cat controls (Android app, outside the floating window); null elsewhere. */
+  let floatingUi: FloatingUi | null = null;
   /** Test build only (see installTestHook below). */
   let recorder: WebTestRecorder | null = null;
 
   const zoomed = (): boolean => (window.visualViewport?.scale ?? 1) > ZOOMED_SCALE;
+  /** The cat takes no pointer right now (also tells the floating window to let touches through). */
+  const catBlocked = (): boolean =>
+    !host || host.hidden || host.paused || host.locked || suspended || !settings.interaction.enabled || (panel?.isOpen ?? false) || zoomed();
   const overlays = createWebOverlays({
     display,
     getSettings: () => settings,
     clock,
     logger: log.child('overlay'),
-    blocked: () =>
-      !host || host.hidden || host.paused || host.locked || suspended || !settings.interaction.enabled || (panel?.isOpen ?? false) || zoomed(),
+    blocked: catBlocked,
     onCatGone: () => router.cancel(),
+    onPresence: surface ? (out) => surface.onPresence(out) : undefined,
   });
   const deliverSimEvents = (events: SimEvent[]): void => {
     host?.enqueueAll(events);
@@ -245,7 +265,11 @@ function boot(): void {
     }
     settings = r.settings;
     catHost.updateSettings(settings);
-    if (save) storage.saveSettings(settings);
+    if (save) {
+      storage.saveSettings(settings);
+      // The floating cat lives in another WebView of this app: native tells it to re-read the settings.
+      if (save && floatingUi?.state.running) controlPort?.send('settingsChanged');
+    }
     refreshUi();
     return r;
   }
@@ -261,6 +285,8 @@ function boot(): void {
   };
 
   function startOver(): boolean {
+    // The floating cat owns the stored cat and keeps its own live copy: it would write the old cat back.
+    if (floatingUi?.state.running) return false;
     // Synchronous from here to the reload: no pagehide save can run in between, and the frozen
     // store would refuse it anyway, so the old cat is never written back.
     if (storage.available && !storage.clearAll()) return false;
@@ -270,7 +296,9 @@ function boot(): void {
   }
 
   const dialogEl = document.getElementById('settings');
-  if (dialogEl) {
+  if (surface) {
+    // The floating window has no sheet: the app screen owns the settings and tells native when they changed.
+  } else if (dialogEl) {
     panel = createSettingsPanel({
       dialog: dialogEl as HTMLDialogElement,
       getSettings: () => settings,
@@ -280,6 +308,7 @@ function boot(): void {
         settings = resetWebSettings();
         catHost.updateSettings(settings);
         storage.saveSettings(settings);
+        if (floatingUi?.state.running) controlPort?.send('settingsChanged');
         refreshUi();
       },
       onStartOver: startOver,
@@ -316,6 +345,8 @@ function boot(): void {
    * forgotten on close like any cat here. False, with nothing changed, when storage refused.
    */
   function adoptProfile(next: Settings, nextCat: PersistedCat): boolean {
+    // Same reason as startOver: stop the floating cat first.
+    if (floatingUi?.state.running) return false;
     if (!storage.available) {
       const before = settings;
       settings = next;
@@ -459,7 +490,11 @@ function boot(): void {
   // computer-asleep signal: the sim settles the cat asleep (its 'locked' mode) and wakes it on
   // resume, the host keeps no flag of its own, and the browser throttles the hidden page's timers,
   // so the slower asleep ticks cost next to nothing.
-  document.addEventListener('visibilitychange', onVisibility);
+  // Not in the floating window: its WebView is detached from any window while the cat is hidden or
+  // not yet drawn, which a WebView reports as a hidden page. Native's suspend and wake commands
+  // (overlaySurface.ts) carry the screen-off signal there; this would fight them and throttle the
+  // timers that bring the window back.
+  if (!surface) document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('pagehide', () => catStore.saveSync());
   // A press can lose its release when the window loses focus mid-drag.
   window.addEventListener('blur', () => router.cancel());
@@ -491,10 +526,78 @@ function boot(): void {
   runtime?.start();
   catHost.start();
   catStore.start();
-  // RouterTarget is structural (the router has no DOM types); a Document listens the same way.
-  router.attach(document as unknown as RouterTarget);
+  if (surface) {
+    // The floating window: touches come from native (raw screen coordinates), not from the DOM, and
+    // native's commands drive the lifecycle. Not hooked to the document at all.
+    surface.connect({
+      setPaused: (paused) => catHost.setPaused(paused),
+      setHidden: (hidden) => catHost.setHidden(hidden),
+      onSystem: (kind) => catHost.onSystem(kind),
+      saveNow: () => catStore.saveSync(),
+      reloadSettings: () => {
+        settings = storage.loadSettings();
+        catHost.updateSettings(settings);
+      },
+      router,
+      getAppearance: () => settings.appearance,
+    });
+  } else {
+    // RouterTarget is structural (the router has no DOM types); a Document listens the same way.
+    router.attach(document as unknown as RouterTarget);
+  }
+
+  // ---- the app screen's floating-cat controls (Android app only)
+  const floatingEls = {
+    start: byId('btn-float', HTMLButtonElement),
+    pause: byId('btn-f-pause', HTMLButtonElement),
+    hide: byId('btn-f-hide', HTMLButtonElement),
+    stop: byId('btn-f-stop', HTMLButtonElement),
+    ask: document.getElementById('floating-ask'),
+    askText: document.getElementById('floating-ask-text'),
+    askOpen: byId('floating-ask-open', HTMLButtonElement),
+    askLater: byId('floating-ask-later', HTMLButtonElement),
+    status: document.getElementById('floating-status'),
+  };
+  if (controlPort && floatingEls.start && floatingEls.pause && floatingEls.hide && floatingEls.stop && floatingEls.ask && floatingEls.askText && floatingEls.askOpen && floatingEls.askLater && floatingEls.status) {
+    const control = controlPort;
+    floatingUi = createFloatingUi({
+      els: {
+        start: floatingEls.start,
+        pause: floatingEls.pause,
+        hide: floatingEls.hide,
+        stop: floatingEls.stop,
+        ask: floatingEls.ask,
+        askText: floatingEls.askText,
+        askOpen: floatingEls.askOpen,
+        askLater: floatingEls.askLater,
+        status: floatingEls.status,
+      },
+      control,
+      catName: () => settings.general.catName,
+      // The floating cat starts from the stored cat: write the live one first.
+      beforeStart: () => {
+        catStore.saveSync();
+      },
+      onRunningChange: (running) => {
+        if (running) {
+          // Parked: one cat only. Its saves stop for good; the floating cat's WebView owns the stored cat.
+          router.cancel();
+          catStore.freeze();
+          catHost.setHidden(true);
+          root.classList.add('gizecat-floating-on');
+        } else {
+          // The floating cat saved the cat before it stopped: a fresh page loads exactly that cat.
+          window.location.reload();
+        }
+      },
+    });
+    control.onState((s) => floatingUi?.update(s));
+    control.send('query');
+  } else if (controlPort) {
+    log.warn('the floating cat controls are missing from the page');
+  }
   if (catLoad.source === 'recovered') catStore.markDirty();
-  if (document.visibilityState === 'hidden') onVisibility();
+  if (!surface && document.visibilityState === 'hidden') onVisibility();
   refreshUi();
   // The first screen (index.html) ends here: the cat is up, or it could not be drawn at all.
   settleBootScreen(document.getElementById('boot'), runtime !== null ? 'started' : 'no-cat');

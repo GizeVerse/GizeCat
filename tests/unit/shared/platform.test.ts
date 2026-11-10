@@ -50,9 +50,17 @@ describe('capability table: honesty rules', () => {
   });
 
   it('keeps the overlay off where it could block the desktop (native Wayland, XWayland, every in-page host)', () => {
-    for (const p of ['linux-wayland', 'linux-xwayland', 'web', 'android', 'ios'] as const) {
+    for (const p of ['linux-wayland', 'linux-xwayland', 'web', 'ios'] as const) {
       expect(CAPABILITY_MATRIX[p].overlay.status, p).toBe('BLOCKED_BY_PLATFORM_OR_PERMISSION');
     }
+  });
+
+  it('Android 1.4.0 preview 2 draws a small overlay window behind a permission: implemented, never verified on a device', () => {
+    // A native app, not an in-page host: its overlay is a small window, not a click-through screen.
+    expect(CAPABILITY_MATRIX.android.overlay.status).toBe('IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED');
+    expect(CAPABILITY_MATRIX.android.overlay.note).toContain('Display over other apps');
+    // Exact click-through stays blocked: Android has no input region for an app window.
+    expect(CAPABILITY_MATRIX.android.clickThrough.status).toBe('BLOCKED_BY_PLATFORM_OR_PERMISSION');
   });
 
   it('declares perception fail-closed off Windows, and login items implemented on Windows and macOS only', () => {

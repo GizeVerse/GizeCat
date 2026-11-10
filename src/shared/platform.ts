@@ -225,8 +225,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<PlatformId, Readonly<Record<Capa
   },
   android: {
     characterView: S("1.3.0: the web host under desktop Chrome's Pixel 7 emulation. 1.4.0 adds the installable web app and a native WebView app around the same bundle; neither has run on a device or emulator.", WEB_REPORT),
-    overlay: B('SYSTEM_ALERT_WINDOW needs a permission, and since Android 12 touches pass through only at ≤ 80 % opacity; the app requests no permission and draws only inside itself.'),
-    clickThrough: B('See overlay.'),
+    overlay: U('1.4.0 preview 2: a foreground service draws the cat in a small transparent TYPE_APPLICATION_OVERLAY window that follows it, behind "Display over other apps" (opt-in, opened from the app only on request). Compiled, never run on a device or emulator.'),
+    clickThrough: B('Android gives an app window no input region and, since Android 12, passes touches through another app\'s overlay only at ≤ 80 % opacity. The window is only the cat and a margin (about 44 dp at size 1), so touches elsewhere reach the apps beneath; touches in the margin are consumed.'),
     globalCursor: B('Touch devices have no hovering pointer outside the app.'),
     multiDisplay: B('Not applicable to the in-page host.'),
     windowSurfaces: B('Other apps are not visible.'),

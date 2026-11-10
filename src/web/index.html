@@ -39,9 +39,23 @@
         <button type="button" id="btn-pause">Pause</button>
         <button type="button" id="btn-sound">Turn sound on</button>
         <button type="button" id="btn-settings" aria-haspopup="dialog" aria-controls="settings">Settings</button>
+        <!-- The floating cat (Android app only; hidden everywhere else and filled by floatingUi.ts). -->
+        <button type="button" id="btn-float" hidden>Float over apps</button>
+        <button type="button" id="btn-f-pause" hidden>Pause floating cat</button>
+        <button type="button" id="btn-f-hide" hidden>Hide floating cat</button>
+        <button type="button" id="btn-f-stop" hidden>Stop floating cat</button>
       </div>
     </header>
     <p id="cat-status" class="visually-hidden" role="status" aria-live="polite"></p>
+    <p id="floating-status" class="floating-status" role="status" aria-live="polite" hidden></p>
+    <section id="floating-ask" class="floating-ask" hidden>
+      <h2 id="floating-ask-title">Let your cat walk over other apps</h2>
+      <div id="floating-ask-text"></div>
+      <div class="actions">
+        <button type="button" id="floating-ask-open" class="primary">Open Android settings</button>
+        <button type="button" id="floating-ask-later">Not now</button>
+      </div>
+    </section>
     <noscript><p class="noscript">The cat needs JavaScript to live here.</p></noscript>
     <!-- Filled by src/web/settingsPanel.ts (About, privacy, storage and install notes live there). -->
     <dialog id="settings" class="sheet" aria-labelledby="settings-title"></dialog>

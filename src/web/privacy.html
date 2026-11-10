@@ -32,7 +32,8 @@
       <p>If the web app is hosted at an address it shares with other sites, such as a GitHub project site, the browser's storage on that address is shared with them too.</p>
 
       <h2>Permissions</h2>
-      <p>GizeCat requests no permissions: no camera, no microphone, no location and no notifications. Its sounds are made on the device. The Android app declares no permissions at all, and it refuses any permission a web page could ask for.</p>
+      <p>In a browser or as an installed web app, GizeCat requests no permissions: no camera, no microphone, no location and no notifications. Its sounds are made on the device. The Android app never uses the camera, the microphone or your location either.</p>
+      <p>The Android app asks only for what the optional floating cat needs, and only when you start it: Android's "Display over other apps" (you turn it on yourself, in Android's own settings page), a foreground service that keeps the cat on screen, and, on Android 13 and later, permission to show that service's small notification. The floating cat only draws the cat. It does not read, capture or record what is on your screen, does not look at other apps and uses no network. Without these permissions the cat lives inside the app, as before. The Android app refuses any permission a web page could ask for.</p>
       <p>The one thing the installed web app asks is for the browser to keep its storage instead of clearing it. The browser decides by itself, and this gives GizeCat access to nothing else.</p>
 
       <h2>Saving your cat to a file</h2>

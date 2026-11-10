@@ -45,6 +45,12 @@ export interface WebOverlaysOptions {
   onCatGone?: () => void;
   /** Draw hit regions and debug info (OverlayConfig.debug). */
   debug?: boolean;
+  /**
+   * The floating cat (overlaySurface.ts): called on every render, before the snapshot is mapped to
+   * overlay-local coordinates, with the cat's output while it is drawn and with null while it is not
+   * (hidden or out of the work area). It may change the display's origin; nothing else uses it.
+   */
+  onPresence?: (out: SimOutput | null) => void;
 }
 
 export interface WebOverlaysDebug {
@@ -140,6 +146,12 @@ export function createWebOverlays(opts: WebOverlaysOptions): WebOverlays {
     const cue = out.sound ?? null;
     const newCue = cue !== null && Number.isFinite(cue.at) && cue.at !== lastSoundAt;
     if (newCue) lastSoundAt = cue.at;
+    const shown = d !== undefined && showing.has(d.id);
+    try {
+      opts.onPresence?.(shown ? out : null);
+    } catch (err) {
+      log.warn('overlay presence listener failed', { error: err });
+    }
     if (d && showing.has(d.id)) {
       const state = mapRenderState(out, appearance, {
         seq: ++seq,

@@ -67,6 +67,37 @@ export const WS = {
     volumeLabel: 'Volume',
     volumeNeedsSound: 'Turn on Cat sounds to hear it.',
   },
+  // The floating cat (Android app only, 1.4.0 preview 2; floatingUi.ts). Wording promises nothing
+  // that was not observed on a device.
+  floating: {
+    start: 'Float over apps',
+    pause: 'Pause floating cat',
+    resume: 'Resume floating cat',
+    hide: 'Hide floating cat',
+    show: 'Show floating cat',
+    stop: 'Stop floating cat',
+    askTitle: 'Let your cat walk over other apps',
+    askText: [
+      `${P} needs Android's "Display over other apps" permission to draw the cat on top of your launcher and other apps. Without it the cat can only live inside this app, which keeps working normally.`,
+      `${P} uses it only to draw the cat. It does not read what is on your screen, does not record anything and never touches the network. The cat takes touches only where it is drawn, and a small area around it.`,
+      `Android will open its own settings page. Turn on ${P} there, then come back. You can turn it off again at any time.`,
+    ],
+    askOpen: 'Open Android settings',
+    askLater: 'Not now',
+    running: (name: string) => `${name} is floating over your apps. Use these buttons, or the notification, to pause, hide or stop it.`,
+    runningPaused: (name: string) => `${name} is paused where it stands.`,
+    runningHidden: (name: string) => `${name} is hidden. Show it again with Show floating cat.`,
+    idleDenied: 'The floating cat stays off: Android has not allowed drawing over other apps. The cat still lives in this app.',
+    noNotifications: 'Notifications are off for this app, so the floating cat can only be controlled from this screen.',
+    stopped: {
+      none: '',
+      user: '',
+      'permission-missing': 'The floating cat did not start: "Display over other apps" is not allowed for this app.',
+      'permission-revoked': 'The floating cat stopped because Android took away the permission to draw over other apps.',
+      'renderer-failed': 'The floating cat stopped because its drawing kept failing. Starting it again may help.',
+      system: 'Android ended the floating cat. Start it again when you like.',
+    },
+  },
   help: {
     title: 'How to play',
     text: [
@@ -184,7 +215,7 @@ export const WS = {
     startOverConfirm: 'Delete my cat and start over',
     startOverCancel: 'Keep my cat',
     startOverAsk: 'This cannot be undone. Delete your cat?',
-    startOverFailed: 'Your cat could not be deleted: storage refused. Try again, or clear this site’s data in your browser settings.',
+    startOverFailed: 'Your cat could not be deleted: storage refused, or the floating cat is running (stop it first). Try again, or clear this site’s data in your browser settings.',
   },
   about: {
     title: 'About',

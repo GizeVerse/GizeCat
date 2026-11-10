@@ -24,7 +24,7 @@ Evidence from 1.3.0 and earlier; nothing here has run with 1.4.0 ([1.4.0 statuse
 | Capability | Windows 10/11 | macOS | Linux (X11 session) | Linux (Wayland session, app under XWayland) | Linux (Wayland session, native) | Web browser (desktop) | Android | iOS / iPadOS |
 |---|---|---|---|---|---|---|---|---|
 | The character is shown and animated | VERIFIED | IMPL, UNVERIFIED | SIMULATED | BLOCKED | BLOCKED | VERIFIED | SIMULATED | IMPL, UNVERIFIED |
-| Drawn over other apps (transparent, always on top) | VERIFIED | IMPL, UNVERIFIED | SIMULATED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
+| Drawn over other apps (transparent, always on top) | VERIFIED | IMPL, UNVERIFIED | SIMULATED | BLOCKED | BLOCKED | BLOCKED | IMPL, UNVERIFIED | BLOCKED |
 | Clicks pass through everywhere except the character | VERIFIED | IMPL, UNVERIFIED | SIMULATED | BLOCKED | BLOCKED | VERIFIED | BLOCKED | BLOCKED |
 | Sees the pointer outside its own window | VERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 | Several displays, mixed scaling | IMPL, UNVERIFIED | IMPL, UNVERIFIED | IMPL, UNVERIFIED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
@@ -185,8 +185,8 @@ Evidence from 1.3.0 and earlier; nothing here has run with 1.4.0 ([1.4.0 statuse
 | Capability | Status | Note | Evidence |
 |---|---|---|---|
 | The character is shown and animated | SIMULATED_OR_MOCK_TESTED | 1.3.0: the web host under desktop Chrome's Pixel 7 emulation. 1.4.0 adds the installable web app and a native WebView app around the same bundle; neither has run on a device or emulator. | [report](../../docs/gizeverse/07-web-host.md#results) |
-| Drawn over other apps (transparent, always on top) | BLOCKED_BY_PLATFORM_OR_PERMISSION | SYSTEM_ALERT_WINDOW needs a permission, and since Android 12 touches pass through only at ≤ 80 % opacity; the app requests no permission and draws only inside itself. | — |
-| Clicks pass through everywhere except the character | BLOCKED_BY_PLATFORM_OR_PERMISSION | See overlay. | — |
+| Drawn over other apps (transparent, always on top) | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | 1.4.0 preview 2: a foreground service draws the cat in a small transparent TYPE_APPLICATION_OVERLAY window that follows it, behind "Display over other apps" (opt-in, opened from the app only on request). Compiled, never run on a device or emulator. | — |
+| Clicks pass through everywhere except the character | BLOCKED_BY_PLATFORM_OR_PERMISSION | Android gives an app window no input region and, since Android 12, passes touches through another app's overlay only at ≤ 80 % opacity. The window is only the cat and a margin (about 44 dp at size 1), so touches elsewhere reach the apps beneath; touches in the margin are consumed. | — |
 | Sees the pointer outside its own window | BLOCKED_BY_PLATFORM_OR_PERMISSION | Touch devices have no hovering pointer outside the app. | — |
 | Several displays, mixed scaling | BLOCKED_BY_PLATFORM_OR_PERMISSION | Not applicable to the in-page host. | — |
 | Climbs and walks on other apps' windows | BLOCKED_BY_PLATFORM_OR_PERMISSION | Other apps are not visible. | — |
