@@ -1,13 +1,17 @@
 import type { CatSummary, Counters, Preferences, Stats, Traits } from '../../../shared/catState';
+import { PERSONALITY_IDS, type PersonalityChoice } from '../../../shared/companion';
 import type { SettingsAction } from '../../../shared/ipc';
+import { PERSONALITY_TEXT } from '../../../shared/personalityText';
 import type { PageContext, PageView } from '../context';
-import { button, group, meter, page, row, runAction, type RowParts } from '../controls';
+import { bullets, button, group, meter, page, radioGroup, row, runAction, setNote, statusLine, type RadioItem, type RowParts } from '../controls';
 import { confirmDanger } from '../dialog';
 import { h, icon } from '../dom';
 import { behaviorStateLabel, formatAge, formatCount, formatDecimal, formatPercent, formatRelativeTime, memoryDetailLabel, memoryKindLabel } from '../format';
 import { pagePoll } from '../livePoll';
+import { fieldId } from '../patch';
 import { transferRows } from '../profileView';
 import { coatArt } from '../skins';
+import type { FieldBinding } from '../store';
 import { deviceWords, platformWording, S } from '../strings';
 
 const P = S.personality;
@@ -75,6 +79,52 @@ function dangerRow(ctx: PageContext, title: string, desc: string, label: string,
   return parts;
 }
 
+type Choice = PersonalityChoice;
+
+/**
+ * The seven personalities, plus Auto, as radio cards. The choice (companion.personality) is the user's
+ * alone: the cat never changes it, and 'auto' is the default that keeps the traits it was born with.
+ * Names, sentences and "how it behaves" lines come from shared/personalityText.ts.
+ */
+function personalityChoice(ctx: PageContext): HTMLElement {
+  const parts = row({ title: P.choiceLabel, stacked: true, hideTitle: true });
+  const container = h('div', { class: 'option-cards personality-cards', 'aria-labelledby': parts.titleId, 'aria-describedby': parts.describedBy });
+  const card = (value: Choice, name: string, summary: string, behaves: readonly string[]): RadioItem<Choice> => ({
+    value,
+    el: h('button', { type: 'button', class: `option-card personality-${value}` }, [
+      h('span', { class: 'radio-dot', 'aria-hidden': 'true' }),
+      h('span', { class: 'option-text' }, [
+        h('span', { class: 'option-title', text: name }),
+        h('span', { class: 'option-desc', text: summary }),
+        h('span', { class: 'option-sub', text: P.howItBehaves }),
+        bullets(behaves, 'option-bullets'),
+      ]),
+    ]),
+  });
+  const items: Array<RadioItem<Choice>> = [
+    card('auto', P.autoTitle, P.autoSummary, P.autoBehaves),
+    ...PERSONALITY_IDS.map((id) => card(id, PERSONALITY_TEXT[id].name, PERSONALITY_TEXT[id].summary, PERSONALITY_TEXT[id].behaves)),
+  ];
+  container.append(...items.map((i) => i.el));
+  const status = statusLine();
+  parts.control.append(container, status);
+  const binding: FieldBinding = {
+    field: fieldId('companion', 'personality'),
+    isBusy: () => false,
+    sync: (v) => handle.set(isChoice(v) ? v : 'auto'),
+    showError: (msg) => setNote(parts.error, msg, 'error'),
+  };
+  const handle = radioGroup<Choice>(container, items, (choice) => {
+    handle.set(choice);
+    setNote(status, P.choiceSaved(choice === 'auto' ? P.autoTitle : PERSONALITY_TEXT[choice].name), 'ok');
+    ctx.store.set('companion', 'personality', choice, { origin: binding });
+  });
+  ctx.store.bind(binding);
+  return parts.row;
+}
+
+const isChoice = (v: unknown): v is Choice => v === 'auto' || (typeof v === 'string' && (PERSONALITY_IDS as readonly string[]).includes(v));
+
 export function personalityPage(ctx: PageContext): PageView {
   const art = h('div', { class: 'profile-art', 'aria-hidden': 'true' });
   const name = h('h2', { class: 'profile-name' });
@@ -94,8 +144,9 @@ export function personalityPage(ctx: PageContext): PageView {
 
   const element = page(P.title, [
     profile,
+    group(P.groupChoice, [personalityChoice(ctx)], P.groupChoiceDesc),
     h('p', { class: 'page-note' }, [icon('info'), h('span', { text: deviceWords(P.simulationNote, platformWording(ctx.store.view.status.platform)) })]),
-    group(P.groupTraits, [traits]),
+    group(P.groupTraits, [traits], P.traitsNote),
     group(P.groupStats, [stats]),
     group(P.groupLearned, [prefs]),
     group(P.groupCounters, [counters]),

@@ -22,6 +22,12 @@ describe('patch helpers', () => {
     expect(valuesEqual(['a', 'b'], ['b', 'a'])).toBe(false);
     expect(valuesEqual(['a'], 'a')).toBe(false);
     expect(valuesEqual(Number.NaN, Number.NaN)).toBe(true);
+    // Living Companion: companion.events and companion.journal are objects of primitives and a list.
+    expect(valuesEqual({ enabled: true, disabled: ['a'] }, { enabled: true, disabled: ['a'] })).toBe(true);
+    expect(valuesEqual({ enabled: true, disabled: ['a'] }, { enabled: true, disabled: [] })).toBe(false);
+    expect(valuesEqual({ enabled: true }, { enabled: true, rare: true })).toBe(false);
+    expect(valuesEqual({ a: 1 }, ['a'])).toBe(false);
+    expect(valuesEqual({ a: undefined }, { b: undefined })).toBe(false);
   });
 
   it('switches behaviours in canonical order without duplicates', () => {

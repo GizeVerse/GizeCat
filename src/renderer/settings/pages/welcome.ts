@@ -62,7 +62,7 @@ export function welcomePage(ctx: PageContext): PageView {
     void runAction(ctx, 'completeFirstRun', start, status).then((ok) => {
       if (ok) {
         setNote(status, W.started, 'ok');
-        ctx.navigate('general');
+        ctx.navigate('companion');
       }
     });
   });

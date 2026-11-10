@@ -5,12 +5,16 @@ import { isPageId, PAGE_IDS, type PageId } from './catalog';
 import type { PageContext, PageView } from './context';
 import { h, icon, setTextGlyphs, type GlyphName } from './dom';
 import { aboutPage } from './pages/about';
+import { accessibilityPage } from './pages/accessibility';
 import { aiPage } from './pages/ai';
 import { appearancePage } from './pages/appearance';
+import { audioPage } from './pages/audio';
 import { behaviorPage } from './pages/behavior';
+import { companionPage } from './pages/companion';
 import { diagnosticsPage } from './pages/diagnostics';
 import { generalPage } from './pages/general';
 import { interactionPage } from './pages/interaction';
+import { journalPage } from './pages/journal';
 import { personalityPage } from './pages/personality';
 import { privacyPage } from './pages/privacy';
 import { welcomePage } from './pages/welcome';
@@ -20,26 +24,34 @@ import { platformWording, S } from './strings';
 
 const NAV_ICONS: Record<PageId, GlyphName> = {
   welcome: 'home',
+  companion: 'sparkle',
   general: 'settings',
   appearance: 'color',
+  personality: 'heart',
   behavior: 'behavior',
   interaction: 'touch',
+  audio: 'volume',
+  accessibility: 'view',
+  journal: 'history',
   privacy: 'shield',
   ai: 'robot',
-  personality: 'heart',
   diagnostics: 'diagnostic',
   about: 'info',
 };
 
 const FACTORIES: Record<PageId, (ctx: PageContext) => PageView> = {
   welcome: welcomePage,
+  companion: companionPage,
   general: generalPage,
   appearance: appearancePage,
+  personality: personalityPage,
   behavior: behaviorPage,
   interaction: interactionPage,
+  audio: audioPage,
+  accessibility: accessibilityPage,
+  journal: journalPage,
   privacy: privacyPage,
   ai: aiPage,
-  personality: personalityPage,
   diagnostics: diagnosticsPage,
   about: aboutPage,
 };
@@ -133,7 +145,7 @@ export function mountApp(root: HTMLElement, api: SettingsApi, initial: SettingsV
 
   root.replaceChildren(h('div', { class: 'app' }, [nav, content]));
   root.removeAttribute('aria-busy');
-  show(fromHash() ?? (initial.settings.general.firstRunCompleted ? 'general' : 'welcome'), false);
+  show(fromHash() ?? (initial.settings.general.firstRunCompleted ? 'companion' : 'welcome'), false);
 
   return () => {
     if (current !== null) pages.get(current)?.onHide?.();

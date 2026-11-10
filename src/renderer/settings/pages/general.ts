@@ -1,13 +1,13 @@
 import type { AppStatus, LoginItemStatus } from '../../../shared/ipc';
 import type { RuntimeCapability } from '../../../shared/platform';
-import { MAX_CAT_NAME_LENGTH, MAX_SHORTCUT_LENGTH, STARTUP_STATES } from '../catalog';
+import { MAX_SHORTCUT_LENGTH, STARTUP_STATES } from '../catalog';
 import type { PageContext, PageView } from '../context';
-import { button, group, page, row, runAction, segmentedRow, setButtonLabel, setNote, textRow, toggleRow, toggleSwitch, type NoteTone } from '../controls';
+import { button, group, page, row, runAction, segmentedRow, setNote, textRow, toggleRow, toggleSwitch, type NoteTone } from '../controls';
 import { h, icon } from '../dom';
 import { displayAccelerator } from '../format';
 import { errorText } from '../store';
 import { platformWording, S, type PlatformWording } from '../strings';
-import { validateCatName, validateShortcut } from '../validate';
+import { validateShortcut } from '../validate';
 
 const G = S.general;
 
@@ -77,47 +77,11 @@ export function shortcutFieldText(wording: PlatformWording): { hint: string; pla
     : { hint: S.validation.shortcutHint, placeholder: G.shortcutPlaceholder };
 }
 
-/**
- * The simulation ignores a call while the cat is paused (main still reports success),
- * so the button is off then, as in the tray and the cat's menu, and says why. It is
- * also off while the cat is hidden; the visibility row explains that case.
- */
-export function callButtonState(status: Pick<AppStatus, 'visible' | 'paused'>): { disabled: boolean; note: string | null } {
-  if (!status.visible) return { disabled: true, note: null };
-  if (status.paused) return { disabled: true, note: G.callPaused };
-  return { disabled: false, note: null };
-}
+// Moved to the Companion page with the other rows that act on the running cat; re-exported for callers.
+export { callButtonState } from '../companionControls';
 
 export function generalPage(ctx: PageContext): PageView {
   const wording = platformWording(ctx.store.view.status.platform);
-  const name = textRow(ctx, 'general', 'catName', {
-    title: G.nameTitle,
-    desc: G.nameDesc,
-    icon: 'rename',
-    validate: validateCatName,
-    toValue: (v) => v,
-    maxLength: MAX_CAT_NAME_LENGTH + 8,
-    spellcheck: false,
-  });
-
-  const call = row({ title: G.callTitle, desc: G.callDesc, icon: 'people' });
-  const callBtn = button(G.callButton(ctx.store.settings.general.catName));
-  call.control.append(callBtn);
-  callBtn.addEventListener('click', () => void runAction(ctx, 'callCat', callBtn, call.note));
-
-  const visibility = row({ title: G.visibilityTitle, desc: G.visibilityDesc, icon: 'view' });
-  const visBtn = button(G.hide);
-  visibility.control.append(visBtn);
-  visBtn.addEventListener('click', () => {
-    void runAction(ctx, ctx.store.view.status.visible ? 'hide' : 'show', visBtn, visibility.note);
-  });
-
-  const pause = row({ title: G.pauseTitle, desc: G.pauseDesc, icon: 'pause' });
-  const pauseBtn = button(G.pause);
-  pause.control.append(pauseBtn);
-  pauseBtn.addEventListener('click', () => {
-    void runAction(ctx, ctx.store.view.status.paused ? 'resume' : 'pause', pauseBtn, pause.note);
-  });
 
   // Launch at sign-in is main-owned: the switch runs the enable/disableLaunchAtLogin actions
   // instead of patching settings, and always shows what main reports afterwards.
@@ -233,26 +197,13 @@ export function generalPage(ctx: PageContext): PageView {
   quitBtn.addEventListener('click', () => void runAction(ctx, 'quit', quitBtn, quit.note));
 
   const element = page(G.title, [
-    group(G.groupCat, [name.parts.row, call.row, visibility.row, pause.row]),
     group(G.groupStartup, [notice, launch.row, startState.parts.row]),
     group(G.groupShortcuts, [shortcuts.parts.row, shortcut.parts.row]),
     group(G.groupApp, [dock.parts.row, quit.row]),
   ]);
 
   ctx.store.subscribe((view) => {
-    const { status, settings } = view;
-    setButtonLabel(callBtn, G.callButton(settings.general.catName));
-    setButtonLabel(visBtn, status.visible ? G.hide : G.show);
-    setButtonLabel(pauseBtn, status.paused ? G.resume : G.pause);
-    const callState = callButtonState(status);
-    callBtn.disabled = callState.disabled;
-    if (callState.note) setNote(call.note, callState.note, 'info');
-    else if (call.note.classList.contains('tone-info')) setNote(call.note, null);
-    if (!status.visible) setNote(visibility.note, G.hiddenNow, 'info');
-    else if (visibility.note.classList.contains('tone-info')) setNote(visibility.note, null);
-    if (status.paused) setNote(pause.note, G.pausedNow, 'info');
-    else if (pause.note.classList.contains('tone-info')) setNote(pause.note, null);
-
+    const { status } = view;
     syncLaunchRow(status);
     notice.hidden = !status.loginItem.showNotice;
     dock.parts.row.hidden = !dockRowVisible(status);

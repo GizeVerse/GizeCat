@@ -57,15 +57,24 @@ const providersComplete: [Missing<AiProviderId, (typeof PROVIDER_IDS)[number]>] 
 const startupStatesComplete: [Missing<StartupState, (typeof STARTUP_STATES)[number]>] extends [never] ? true : false = true;
 export const CATALOG_COMPLETE = behaviorsComplete && livelyComplete && providersComplete && startupStatesComplete;
 
+/**
+ * Navigation order (Living Companion): the cat first (Companion), then how it looks and who it is,
+ * what it does, how you meet it, its sound, and the quiet/accessibility options; the journal, then the
+ * privacy and AI pages and the app's own pages. Ids are hash targets (settings/index.html#journal).
+ */
 export const PAGE_IDS = [
   'welcome',
+  'companion',
   'general',
   'appearance',
+  'personality',
   'behavior',
   'interaction',
+  'audio',
+  'accessibility',
+  'journal',
   'privacy',
   'ai',
-  'personality',
   'diagnostics',
   'about',
 ] as const;

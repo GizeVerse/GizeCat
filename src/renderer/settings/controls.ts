@@ -3,7 +3,7 @@ import type { SettingsAction } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import type { PageContext } from './context';
 import { h, icon, uid, type Child, type GlyphName } from './dom';
-import { formatValue, nearestStopIndex, snapToStep, type BoolKey, type FieldKey, type NumericField, type SectionKey, type StrKey } from './fields';
+import { formatValue, nearestStopIndex, snapToStep, type BoolKey, type FieldKey, type NumericField, type RangeSpec, type SectionKey, type StrKey } from './fields';
 import { fieldId, type Leaf } from './patch';
 import { errorText, type FieldBinding } from './store';
 import { S } from './strings';
@@ -260,6 +260,37 @@ export function toggleRow<Sec extends SectionKey>(ctx: PageContext, section: Sec
   };
 }
 
+/** How a switch maps to and from a leaf that holds more than that one flag (companion.events, companion.journal). */
+export interface BoolLeafMap {
+  read(leaf: unknown): boolean;
+  /** The whole new leaf value; `current` is the newest intended one, so other parts of it are kept. */
+  write(current: unknown, on: boolean): unknown;
+}
+
+/** A switch for one flag inside an object leaf; the whole object is sent, as the settings merge expects. */
+export function nestedToggleRow<Sec extends SectionKey>(ctx: PageContext, section: Sec, key: FieldKey<Sec>, map: BoolLeafMap, opts: RowOptions): ToggleHandle {
+  const parts = row(opts);
+  const sw = toggleSwitch(parts.titleId, parts.describedBy);
+  parts.control.append(sw.root);
+  const binding = makeBinding(fieldId(section, key), parts, sw.input, () => false, (v) => {
+    sw.input.checked = map.read(v);
+    sw.refresh();
+  });
+  sw.input.addEventListener('change', () => {
+    const next = map.write(ctx.store.intended(section, key), sw.input.checked);
+    ctx.store.set(section, key, next as Settings[Sec][FieldKey<Sec>], { origin: binding });
+  });
+  ctx.store.bind(binding);
+  return {
+    parts,
+    input: sw.input,
+    setDisabled(disabled: boolean) {
+      sw.input.disabled = disabled;
+      parts.row.classList.toggle('is-disabled', disabled);
+    },
+  };
+}
+
 export interface SliderHandle {
   parts: RowParts;
   input: HTMLInputElement;
@@ -271,6 +302,13 @@ export interface SliderOptions extends RowOptions {
   with?: readonly Leaf[];
 }
 
+/** How a number maps to and from a leaf that holds more than that number (companion.events holds pace, switches and a list). */
+export interface LeafMap {
+  read(leaf: unknown): number;
+  /** The whole new leaf value; `current` is the newest intended one, so the rest of the leaf is kept. */
+  write(value: number, current: unknown): unknown;
+}
+
 interface SliderModel {
   min: number;
   max: number;
@@ -278,6 +316,7 @@ interface SliderModel {
   toPosition(value: number): number;
   fromPosition(position: number): number;
   label(value: number): string;
+  leaf?: LeafMap;
 }
 
 function sliderControl<Sec extends SectionKey>(ctx: PageContext, field: NumericField<Sec>, model: SliderModel, opts: SliderOptions): SliderHandle {
@@ -304,14 +343,15 @@ function sliderControl<Sec extends SectionKey>(ctx: PageContext, field: NumericF
   };
   const key = field.key as FieldKey<Sec>;
   const binding = makeBinding(fieldId(field.section, key), parts, input, () => dragging, (v) => {
-    const value = typeof v === 'number' ? v : model.fromPosition(model.min);
+    const value = model.leaf ? model.leaf.read(v) : typeof v === 'number' ? v : model.fromPosition(model.min);
     input.value = String(model.toPosition(value));
     show(value);
   });
   const commit = (debounceMs: number): void => {
     const value = model.fromPosition(Number(input.value));
     show(value);
-    ctx.store.set(field.section, key, value as Settings[Sec][FieldKey<Sec>], { debounceMs, origin: binding, with: opts.with });
+    const stored = model.leaf ? model.leaf.write(value, ctx.store.intended(field.section, key)) : value;
+    ctx.store.set(field.section, key, stored as Settings[Sec][FieldKey<Sec>], { debounceMs, origin: binding, with: opts.with });
   };
   input.addEventListener('pointerdown', () => {
     dragging = true;
@@ -347,6 +387,29 @@ export function sliderRow<Sec extends SectionKey>(ctx: PageContext, field: Numer
     fromPosition: (p) => snapToStep(field, p),
     label: (v) => formatValue(field.format, v),
   }, opts);
+}
+
+/**
+ * Slider for one number inside an object leaf (Living Companion: companion.events.pace). The whole
+ * object is written back, built from the newest intended value, so a quick change of another control
+ * that shares the leaf is never lost.
+ */
+export function nestedSliderRow<Sec extends SectionKey>(
+  ctx: PageContext,
+  section: Sec,
+  key: FieldKey<Sec>,
+  range: RangeSpec,
+  leaf: LeafMap,
+  label: (value: number) => string,
+  opts: SliderOptions,
+): SliderHandle {
+  const field = { section, key, ...range } as unknown as NumericField<Sec>;
+  return sliderControl(
+    ctx,
+    field,
+    { min: range.min, max: range.max, step: range.step, toPosition: (v) => snapToStep(range, v), fromPosition: (p) => snapToStep(range, p), label, leaf },
+    opts,
+  );
 }
 
 /** Slider over discrete "nice" stops for long ranges; the label always shows the real value. */

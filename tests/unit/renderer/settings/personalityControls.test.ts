@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { applySettingsPatch, defaultSettings, IMPLIED_OPT_OUTS, LIVELY_BEHAVIORS, type LivelyBehavior, type ToggleableBehavior } from '../../../../src/shared/settings';
 import { BEHAVIOR_IDS, LIVELY_IDS, LIVELY_PARENT } from '../../../../src/renderer/settings/catalog';
 import { NUMERIC_FIELDS } from '../../../../src/renderer/settings/fields';
-import { SOUND_FIELD_IDS } from '../../../../src/renderer/settings/pages/appearance';
+import { SOUND_FIELD_IDS } from '../../../../src/renderer/settings/pages/audio';
 import { extraParentOff, FINE_TUNE_SLIDERS, PERSONALITY_FIELD_IDS, PERSONALITY_SLIDERS } from '../../../../src/renderer/settings/pages/behavior';
 import { presetLeaves, setExtraEnabled } from '../../../../src/renderer/settings/patch';
 import { PRESET_CHOICES } from '../../../../src/renderer/settings/presetView';
@@ -21,7 +21,9 @@ function v3OnlyLeaves(): string[] {
   const out: string[] = [];
   for (const [section, values] of Object.entries(defaultSettings())) {
     if (values === null || typeof values !== 'object') continue;
-    for (const key of Object.keys(values)) if (!v2.has(`${section}.${key}`)) out.push(`${section}.${key}`);
+    // The Living Companion leaves (the companion section, sound.cat, sound.world) are not schema v3 additions: they have their own controls.
+    if (section === 'companion') continue;
+    for (const key of Object.keys(values)) if (!v2.has(`${section}.${key}`) && !(section === 'sound' && (key === 'cat' || key === 'world'))) out.push(`${section}.${key}`);
   }
   return out;
 }

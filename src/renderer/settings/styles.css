@@ -2025,3 +2025,80 @@ p.row-desc {
   max-height: 180px;
   overflow-y: auto;
 }
+
+/* ---------- Living Companion ---------- */
+
+/* Personality cards: a sentence and a short "how it behaves" list under each name. */
+.personality-cards {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.option-sub {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.option-bullets {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.option-bullets li {
+  margin: 2px 0;
+}
+
+.journal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.journal-entry {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 4px 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--divider, var(--control-stroke));
+}
+
+.journal-entry:first-child {
+  border-top: 0;
+}
+
+.journal-date {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.journal-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.journal-event {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.journal-count {
+  margin-bottom: 6px;
+}
+
+@media (max-width: 640px) {
+  .journal-entry {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

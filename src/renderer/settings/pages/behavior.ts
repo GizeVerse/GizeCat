@@ -10,6 +10,7 @@ import { companionsFor, fieldId, presetLeaves, setBehaviorEnabled, setExtraEnabl
 import { intendedPresetValues, PRESET_CHOICES, presetSelection } from '../presetView';
 import type { FieldBinding } from '../store';
 import { platformWording, S } from '../strings';
+import { worldEventRows } from '../worldEventRows';
 
 const B = S.behavior;
 const F = NUMERIC_FIELDS;
@@ -261,10 +262,34 @@ export function fullscreenRowNote(status: Pick<AppStatus, 'platform'>): string |
   return cap.reason ?? B.fullscreenNoteElsewhere;
 }
 
+/**
+ * The "when an app is full screen" choice (behavior.fullscreenBehavior). It moved to Accessibility &
+ * Focus as "Full-screen quiet mode"; the row, its platform note and their behaviour are unchanged, so
+ * the page that shows it passes its own words.
+ */
+export function fullscreenControl(ctx: PageContext, words: { title: string; desc: string }): { row: HTMLElement; sync(): void } {
+  const parts = segmentedRow(
+    ctx,
+    'behavior',
+    'fullscreenBehavior',
+    (['hide', 'quiet', 'ignore'] as const).map((v) => ({ value: v, label: B.fullscreen[v] })),
+    { title: words.title, desc: words.desc, icon: 'fullscreen' },
+  ).parts;
+  let shown: string | null | undefined;
+  const sync = (): void => {
+    const note = fullscreenRowNote(ctx.store.view.status);
+    if (note === shown) return;
+    shown = note;
+    setNote(parts.note, note, 'info');
+  };
+  ctx.store.subscribe(sync);
+  return { row: parts.row, sync };
+}
+
 export function behaviorPage(ctx: PageContext): PageView {
   const status = ctx.store.view.status;
   const offered = (key: FieldKey<'behavior'>): boolean => settingRowOffered(fieldId('behavior', key), status);
-  const personality =[presetSelector(ctx), ...PERSONALITY_SLIDERS.map((s) => s.build(ctx).parts.row), fineTune(ctx)];
+  const personality = [presetSelector(ctx), ...PERSONALITY_SLIDERS.map((s) => s.build(ctx).parts.row), fineTune(ctx)];
   const habits = [
     sliderRow(ctx, F.movementSpeed, { title: B.speedTitle, desc: B.speedDesc, icon: 'behavior' }),
     sliderRow(ctx, F.chaseDuration, { title: B.chaseTitle, desc: B.chaseDesc, icon: 'stopwatch' }),
@@ -272,34 +297,22 @@ export function behaviorPage(ctx: PageContext): PageView {
     ...(offered('activitySensitivity') ? [sliderRow(ctx, F.activitySensitivity, { title: B.sensitivityTitle, desc: B.sensitivityDesc, icon: 'window' })] : []),
     sliderRow(ctx, F.sleepAfterIdleMinutes, { title: B.sleepTitle, desc: B.sleepDesc, icon: 'moon' }),
   ];
-  const fullscreen = segmentedRow(
-    ctx,
-    'behavior',
-    'fullscreenBehavior',
-    (['hide', 'quiet', 'ignore'] as const).map((v) => ({ value: v, label: B.fullscreen[v] })),
-    { title: B.fullscreenTitle, desc: B.fullscreenDesc, icon: 'fullscreen' },
-  ).parts;
-  let fullscreenNote: string | null | undefined;
-  const syncFullscreenNote = (): void => {
-    const note = fullscreenRowNote(ctx.store.view.status);
-    if (note === fullscreenNote) return;
-    fullscreenNote = note;
-    setNote(fullscreen.note, note, 'info');
-  };
-  ctx.store.subscribe(syncFullscreenNote);
   const awareness = [
     toggleRow(ctx, 'behavior', 'allowMultiMonitor', { title: B.multiMonitorTitle, desc: B.multiMonitorDesc, icon: 'monitor' }).parts.row,
     ...(offered('reactToTyping') ? [toggleRow(ctx, 'behavior', 'reactToTyping', { title: B.typingTitle, desc: B.typingDesc, icon: 'keyboard' }).parts.row] : []),
     ...(offered('reactToWindows') ? [toggleRow(ctx, 'behavior', 'reactToWindows', { title: B.windowsTitle, desc: B.windowsDesc, icon: 'window' }).parts.row] : []),
-    fullscreen.row,
   ];
+  const world = worldEventRows(ctx);
   const element = page(B.title, [
     group(B.groupPersonality, personality, B.groupPersonalityDesc),
     group(B.groupActivity, habits.map((s) => s.parts.row)),
+    group(B.groupWorld, world.master, B.groupWorldDesc),
+    group(B.groupWorldList, world.normal, B.groupWorldListDesc),
+    group(B.groupWorldRare, world.rare, B.groupWorldRareDesc),
     group(B.groupAwareness, awareness),
     group(B.groupBehaviors, BEHAVIOR_IDS.filter((b) => behaviorRowOffered(b, status)).map((b) => behaviorToggle(ctx, b)), B.groupBehaviorsDesc),
     // Right under the window-climbing and tab-strip toggles, which end the list where they are offered.
     ...behaviorPageNotes(status).map((note) => h('p', { class: 'page-note' }, [icon('info'), h('span', { text: note })])),
   ]);
-  return { id: 'behavior', title: B.title, element, onShow: syncFullscreenNote };
+  return { id: 'behavior', title: B.title, element };
 }

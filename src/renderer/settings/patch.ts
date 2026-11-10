@@ -56,10 +56,19 @@ export function readField<S extends SectionKey, K extends FieldKey<S>>(settings:
   return settings[section][key];
 }
 
-/** Structural equality for setting leaves (primitives and arrays of primitives). */
+const isPlainObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Structural equality for setting leaves: primitives, arrays and (Living Companion: companion.events,
+ * companion.journal) plain objects of those, so a switch moved back to where it was is not sent.
+ */
 export function valuesEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => valuesEqual(v, b[i]));
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every((k) => Object.prototype.hasOwnProperty.call(b, k) && valuesEqual(a[k], b[k]));
+  }
   return false;
 }
 

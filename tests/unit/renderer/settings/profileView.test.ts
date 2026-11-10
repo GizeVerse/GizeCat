@@ -11,7 +11,7 @@ import { buildProfile, IMPORT_NEVER_ENABLES, previewImport, type ProfilePreview 
 import { defaultSettings } from '../../../../src/shared/settings';
 import { aboutPlatformText } from '../../../../src/renderer/settings/pages/about';
 import { apiKeyDesc } from '../../../../src/renderer/settings/pages/ai';
-import { soundDescriptions } from '../../../../src/renderer/settings/pages/appearance';
+import { soundDescriptions } from '../../../../src/renderer/settings/pages/audio';
 import { fullscreenRowNote } from '../../../../src/renderer/settings/pages/behavior';
 import { loginItemRowLabel, osVersionLabel } from '../../../../src/renderer/settings/pages/diagnostics';
 import { applyNote, changeLabel, changeValue, exportNote, memoryAllowed, openNote, previewModel, PROFILE_PART_ORDER } from '../../../../src/renderer/settings/profileView';

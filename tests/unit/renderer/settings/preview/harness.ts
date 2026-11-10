@@ -88,7 +88,22 @@ const ROOT = process.cwd();
 const HARNESS = path.join(ROOT, 'out', 'preview', 'harness');
 const SERVE = path.join(HARNESS, 'app');
 const SHOTS = path.join(ROOT, 'out', 'preview');
-const PAGES = ['welcome', 'general', 'appearance', 'behavior', 'interaction', 'privacy', 'ai', 'personality', 'diagnostics', 'about'] as const;
+const PAGES = [
+  'welcome',
+  'companion',
+  'general',
+  'appearance',
+  'personality',
+  'behavior',
+  'interaction',
+  'audio',
+  'accessibility',
+  'journal',
+  'privacy',
+  'ai',
+  'diagnostics',
+  'about',
+] as const;
 const WIDTH = 1040;
 const HEIGHT = 760;
 const MAX_HEIGHT = 3200;
@@ -182,6 +197,17 @@ function act(action: SettingsAction): { ok: boolean; message?: string } {
     case 'hideSurfaceOutlines':
       st.surfaceOutlines = action === 'showSurfaceOutlines';
       break;
+    case 'startLaserMode':
+    case 'stopLaserMode':
+      if (view.companion) view.companion.laserActive = action === 'startLaserMode';
+      break;
+    case 'pauseEvents':
+    case 'resumeEvents':
+      if (view.companion) view.companion.eventsPaused = action === 'pauseEvents';
+      break;
+    case 'clearJournal':
+      journal.length = 0;
+      break;
     case 'resetPersonality':
     case 'clearHistory':
     case 'openLogsFolder':
@@ -193,7 +219,19 @@ function act(action: SettingsAction): { ok: boolean; message?: string } {
   return { ok: true };
 }
 
+/** Living Companion preview data: three journal lines (oldest first, as main returns them) and a live status. */
+const journal: Array<{ id: string; at: number; outcome: string }> = [
+  { id: 'butterflyEncounter', at: NOW - 3 * 24 * 3_600_000, outcome: 'watched' },
+  { id: 'boxAppears', at: NOW - 26 * 3_600_000, outcome: 'entered' },
+  { id: 'miniTsunami', at: NOW - 2 * 3_600_000, outcome: 'hopped' },
+];
+
+function previewCompanion(): NonNullable<SettingsViewState['companion']> {
+  return { mood: 'relaxed', activity: 'resting', personality: 'curious', personalityIsAuto: true, event: null, nextEventInMs: 14 * 60_000, eventsPaused: false, laserActive: false };
+}
+
 function installIpc(): void {
+  ipcMain.handle(IPC.settingsGetJournal, () => [...journal]);
   ipcMain.handle(IPC.settingsGetState, () => view);
   ipcMain.handle(IPC.settingsUpdate, (_e, patch) => {
     updates.push(patch);
@@ -275,6 +313,7 @@ async function goto(page: string): Promise<void> {
 async function openWindow(theme: 'light' | 'dark', w: number, h: number): Promise<void> {
   nativeTheme.themeSource = theme;
   view = previewView(NOW, { electron: process.versions.electron ?? '?', chrome: process.versions.chrome ?? '?', node: process.versions.node ?? '?' });
+  view.companion = previewCompanion();
   win = new BrowserWindow({
     show: false,
     width: w,
