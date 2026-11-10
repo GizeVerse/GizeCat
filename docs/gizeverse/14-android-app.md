@@ -2,7 +2,7 @@
 
 Status: accepted for the 1.4.0 release candidate, 2026-11-08. Code: `android/` ([android/README.md](../../android/README.md)). Statuses use the 1.4.0 vocabulary ([docs/platforms/README.md](../platforms/README.md#status-vocabulary-for-140)).
 
-**Evidence.** The project compiles and packages with Gradle on Windows (`:app:assembleTrial`, with AGP's lint-vital check reporting no issues): COMPILED_OR_PACKAGED. The app has **never run on a device or emulator**, so every runtime statement here is THEORETICALLY_COMPATIBLE_NOT_EXECUTED. A build is not a test.
+**Evidence.** The project compiles and packages with Gradle on Windows (`:app:assembleTrial`, `:app:assembleRelease` and `:app:bundleRelease`, with AGP's lint-vital check as part of the release tasks): COMPILED_OR_PACKAGED. The app has **never run on a device or emulator**, so every runtime statement here is THEORETICALLY_COMPATIBLE_NOT_EXECUTED. A build is not a test.
 
 ## Context
 
@@ -39,6 +39,7 @@ Both main values live in `src/shared/identity.ts` (`androidApplicationId`, `andr
 - No `SYSTEM_ALERT_WINDOW` and no foreground service. A desktop-style click-through overlay is BLOCKED_BY_PLATFORM (since Android 12, touches pass through another app's overlay only at ≤ 80 % opacity). An optional overlay that needs the "Display over other apps" permission is NOT_IMPLEMENTED.
 - androidx.core's `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` is removed from the merged manifest. Two AndroidX library components remain for baseline-profile installation: `InitializationProvider` (not exported) and `ProfileInstallReceiver` (exported, guarded by `android.permission.DUMP`).
 - WebView usage metrics are opted out; cleartext traffic is off.
+- No service, foreground service, alarm, job, wake lock or battery-optimisation request. Out of sight the WebView is paused and its timers stop.
 
 ### A4. Backup and data
 
@@ -71,7 +72,7 @@ The design first said "no WebChromeClient, no addWebMessageListener". The lead r
 
 | Type | What it is | Signing |
 |---|---|---|
-| `release` | R8 minify and resource shrinking | Only from `android/keystore.properties`; otherwise the APK and AAB are unsigned. An incomplete file is a build error. |
+| `release` | R8 minify and resource shrinking; version-control info off | The first source that holds anything: the `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` environment variables, then `android/keystore.properties`. Otherwise the APK and AAB are unsigned. A partial set or an incomplete file is a build error that names what is missing, never a value. |
 | `trial` | The release code with id suffix `.trial`, versionName `-trial` and the label "GizeCat (trial)"; not debuggable | The Android SDK debug keystore. For sideload trials only; never a release. |
 | `debug` | Developers only; WebView DevTools on | Debug keystore |
 
@@ -79,22 +80,25 @@ The design first said "no WebChromeClient, no addWebMessageListener". The lead r
 
 ### A8. Signing and distribution
 
-- No agent creates or handles the release keystore. The owner creates an upload keystore outside the repository, fills `android/keystore.properties` (gitignored) and backs both up offline (REQUIRES_OWNER_CREDENTIALS).
-- Google Play needs the owner's developer account, Play App Signing, a signed AAB, the data-safety form (no data collected or shared; no internet permission), a privacy policy address of the owner's choice, a content rating and target audience, and store graphics (REQUIRES_OWNER_CREDENTIALS).
-- Sideloading outside Play: Google's developer verification applies on certified devices. The design research recorded enforcement from 2026-09-30 in Brazil, Indonesia, Singapore and Thailand and worldwide in 2027, with ADB installs exempt. Registering is an owner action.
+- No agent creates or handles the release keystore. The owner creates an upload keystore outside the repository, supplies it through the environment or `android/keystore.properties` (gitignored), and backs both up offline (REQUIRES_OWNER_CREDENTIALS). `npm run android:release` builds the APK and the AAB. In CI, the manual `android-release.yml` has an unsigned path and a signed path whose secrets live in the GitHub Environment `android-signing`; it has never been started, and it cannot be started until its file is on `main`. Procedure: [android-signing.md](../platforms/android-signing.md).
+- Google Play needs the owner's developer account, Play App Signing, a signed AAB, the data-safety form (no data collected or shared; no internet permission), a privacy policy address of the owner's choice, a content rating and target audience, and store graphics (REQUIRES_OWNER_CREDENTIALS). Draft texts and a checklist for the owner: [docs/store/google-play/](../store/google-play/release-readiness.md). No listing exists.
+- Sideloading outside Play: Google says protections begin on 30 September 2026 for installs from participating stores in Brazil, Indonesia, Singapore and Thailand on certified devices, and expand globally in 2027. An earlier design note said ADB installs are exempt; that was not confirmed on the page read for this release. Registering is an owner action.
 - An unsigned APK cannot be installed and an unsigned AAB cannot be uploaded. Only the trial APK installs without owner credentials, as a separate app with its own cat.
 
 ### A9. Tablet-first configuration
 
-No forced orientation, `resizeableActivity="true"` (split screen, free-form windows), `singleTask` (one cat per device), edge to edge with the page padded to the safe area, and configuration changes that keep the live page. Lowest version: Android 10 (API 29) with an updated Android System WebView; compileSdk and targetSdk 36.
+No forced orientation, `resizeableActivity="true"` (split screen, free-form windows), `singleTask` (one cat per device), and edge to edge with the page padded to the safe area. `configChanges` keeps the live page through orientation, screen size and layout, density, keyboard, navigation, touchscreen and colour-mode changes, including a move to another display. It deliberately omits `uiMode`, `locale`, `layoutDirection` and `fontScale`: those recreate the Activity on purpose so the theme, system bars and text are applied again, and the cat is saved at `onPause` and reloads from localStorage. So not every configuration change keeps the live page. Lowest version: Android 10 (API 29) with an updated Android System WebView; compileSdk and targetSdk 36.
 
 ## Known limits
 
 - Never run: offline asset serving without the INTERNET permission (the standard WebViewAssetLoader pattern), the lifecycle (`onPause` making the page hidden before timers pause; the 30 s autosave bounds any loss), long-press and haptics against hold-to-drag, and device transfer.
-- An outdated Android System WebView (without ES2022 or `WEB_MESSAGE_LISTENER`) shows no cat, or no save bridge. There is no minimum-version guard.
+- An outdated Android System WebView (without ES2022 or `WEB_MESSAGE_LISTENER`) shows "GizeCat has not started" instead of a cat, or has no save bridge, so the save controls are hidden. There is no minimum-version guard.
 - `.json` files that a document provider labels `application/octet-stream` are not offered by the picker.
 - External links in the page do not open.
-- The Apache-2.0 notices of the two AndroidX libraries and their dependencies are in [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md), not inside the APK. An in-app licences page is needed before a store release (NOT_IMPLEMENTED).
+- The third-party notices are inside the APK: `licenses.html`, linked from Settings → About (IMPLEMENTED; never run on a device). Whether it meets a given store's rules is the owner's call. From that page, Android's Back sends the app to the background; the page has its own **Back to GizeCat** links.
+- The full privacy policy text is not inside the app (NOT_IMPLEMENTED); Settings has a short Privacy section.
+- The keyboard over the settings name field has not been handled: the app pads system bars and the cutout only, not the IME.
+- Two builds have not been compared, so reproducible builds are not claimed.
 
 ## Rejected alternatives
 

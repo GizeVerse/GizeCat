@@ -15,9 +15,10 @@ In both, the cat lives **inside its own window**. A desktop-style overlay that l
 
 ### How to get it
 
-- **Release APK and AAB:** `GizeCat-1.4.0-android-unsigned.apk` and `GizeCat-1.4.0-android-unsigned.aab` are **unsigned** until the owner creates a release key (REQUIRES_OWNER_CREDENTIALS). Android does not install an unsigned APK, and Google Play does not accept an unsigned AAB.
-- **Google Play:** not listed. A listing needs the owner's Google Play developer account (REQUIRES_OWNER_CREDENTIALS).
-- **Trial APK:** `GizeCat-1.4.0-android-trial-debugsigned.apk`, if the release lists it, is for sideload trials only:
+- **Release APK and AAB:** `GizeCat-1.4.0-android-unsigned.apk` and `GizeCat-1.4.0-android-unsigned.aab` are **unsigned** until the owner's release key exists (REQUIRES_OWNER_CREDENTIALS). Android does not install an unsigned APK, and Google Play does not accept an unsigned AAB.
+- **Signing pipeline:** ready, and it has never run, because no key exists. The build takes the key from the `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` environment variables, or else from `android/keystore.properties`. With neither, the outputs are unsigned. `npm run android:release` builds both, and the manual `android-release.yml` workflow does the same with its secrets in the `android-signing` environment. Signed files are named `GizeCat-1.4.0-android.apk` and `.aab`. The owner's procedure is in [android-signing.md](android-signing.md).
+- **Google Play:** not listed. A listing needs the owner's Google Play developer account (REQUIRES_OWNER_CREDENTIALS). Draft texts and a readiness list for the owner are in [docs/store/google-play/](../store/google-play/release-readiness.md).
+- **Trial APK:** `GizeCat-1.4.0-android-trial-debugsigned.apk`, if the release lists it, is for sideload trials only and is never a production release:
   - It is labelled **GizeCat (trial)** and has its own application id, `io.github.gizeverse.gizecat.trial`. It installs next to a later signed app, with its own, separate cat.
   - It is signed with the build machine's Android **debug** key. A debug key is a development key with a well-known password; it is not managed like a release key. The trial is not a release and will not be updated in place by a signed release.
 
@@ -31,7 +32,9 @@ In both, the cat lives **inside its own window**. A desktop-style overlay that l
 
 With a computer and USB debugging: `adb install GizeCat-1.4.0-android-trial-debugsigned.apk`.
 
-**Developer verification.** Google is rolling out developer verification for apps installed outside Google Play on certified Android devices. The 1.4.0 design research recorded enforcement from 2026-09-30 in Brazil, Indonesia, Singapore and Thailand, and worldwide in 2027, with ADB installs exempt. Where it is enforced, an app from an unregistered developer may not install by tapping the APK. Registering is an owner action (REQUIRES_OWNER_CREDENTIALS). Check Google's current rules; this page does not track them.
+If something goes wrong: [troubleshooting](troubleshooting.md#android-tablets).
+
+**Developer verification.** Google is rolling out developer verification on certified Android devices. Google says protections begin on 30 September 2026 for installs from participating stores in Brazil, Indonesia, Singapore and Thailand, and expand globally in 2027. Where it applies, an app from an unregistered developer may not install. Registering is an owner action (REQUIRES_OWNER_CREDENTIALS). Earlier design notes said ADB installs are exempt; that was not confirmed on the page read for this release. Check Google's current rules; this page does not track them.
 
 ### Permissions
 
@@ -39,21 +42,24 @@ With a computer and USB debugging: `adb install GizeCat-1.4.0-android-trial-debu
 - No internet permission, so Android itself forbids network access.
 - No storage permission. Profile files go through the system's own file picker and "save as" screen, at the place you choose.
 - No "Display over other apps", no foreground service, no location, camera or microphone. The WebView denies every web permission request.
+- No background work: no service, alarm, job, wake lock or battery-optimisation request.
 
 ### What works and what does not
 
 What exists in code (THEORETICALLY_COMPATIBLE_NOT_EXECUTED for every item; built, never run on a device or emulator):
 - The cat full-screen, edge to edge, with the floor above the gesture bar; touch gestures as on the iPad.
 - Works offline: the web bundle is inside the APK.
-- Rotation, split screen and resizing keep the live cat. Back moves the app to the background instead of closing it. In the background the cat saves and naps.
+- Rotation, split screen, resizing and a change of display density keep the live cat. A change of dark mode, language, layout direction or text size reloads the page on purpose, so the theme, system bars and text are applied again; the cat is saved first and comes back.
+- Back moves the app to the background instead of closing it. In the background the cat saves and naps.
 - If the WebView's renderer crashes, the page is rebuilt; after 3 crashes within 60 seconds a message is shown instead.
-- **Take your cat to another device** in Settings: saving goes through the system "save as" screen (a narrow, Android-only bridge), and loading through the system file picker.
+- **Take your cat to another device** in Settings ([guide](profile-transfer.md)): saving goes through the system "save as" screen (a narrow, Android-only bridge), and loading through the system file picker.
+- A third-party notices page, under Settings → About. From that page, Android's Back sends the app to the background; use its **Back to GizeCat** link.
 
 What it does not do:
 - Draw over other apps (see the top of this page).
 - Back up the cat to the cloud. Cloud backup is off by design (NOT_IMPLEMENTED).
 - Open links to other apps or websites. Navigation never leaves the app's own pages.
-- Show a cat on an outdated Android System WebView: the page then shows no cat. Update Android System WebView from Google Play.
+- Show a cat on an outdated Android System WebView: the page says "GizeCat has not started" instead. Update Android System WebView from Google Play ([steps](troubleshooting.md#the-android-system-webview-is-too-old)).
 
 ### Data
 
@@ -67,7 +73,7 @@ Touch and hold the GizeCat icon → **Uninstall**, or **Settings → Apps → Gi
 
 ## The web app in Chrome
 
-The same web app as on the iPad ([ipados.md](ipados.md)), installed from Chrome. It needs an HTTPS address: no public address exists yet (REQUIRES_OWNER_CREDENTIALS), and `GizeCat-web-1.4.0.zip` can be self-hosted on any static HTTPS host.
+The same web app as on the iPad ([ipados.md](ipados.md)), installed from Chrome. It needs an HTTPS address. The expected address, `https://gizeverse.github.io/GizeCat/`, is **not deployed** (REQUIRES_OWNER_CREDENTIALS), and `GizeCat-web-1.4.0.zip` can be self-hosted on any static HTTPS host.
 
 1. Open the address in **Chrome** on the tablet.
 2. Chrome menu (⋮) → **Install app** (or **Add to Home screen**). When Chrome offers it, GizeCat's Settings also shows an **Install GizeCat** button.
@@ -83,12 +89,14 @@ The same web app as on the iPad ([ipados.md](ipados.md)), installed from Chrome.
 | Item | Status |
 |---|---|
 | Release APK and AAB | COMPILED_OR_PACKAGED, unsigned |
+| Signing from the environment or `android/keystore.properties`; `android-release.yml` in the `android-signing` environment | IMPLEMENTED; never run, because no key exists |
 | Signed release APK and AAB | REQUIRES_OWNER_CREDENTIALS (the owner's release key) |
-| Google Play listing | REQUIRES_OWNER_CREDENTIALS (developer account, data-safety form, privacy policy address, content rating) |
+| Google Play listing | REQUIRES_OWNER_CREDENTIALS (developer account, data-safety form, privacy policy address, content rating). No listing exists |
 | Developer verification for sideloading | REQUIRES_OWNER_CREDENTIALS |
-| Trial APK | COMPILED_OR_PACKAGED; debug-signed; trials only |
+| Trial APK | COMPILED_OR_PACKAGED; debug-signed; sideload trials only |
 | Overlay over other apps | Click-through: BLOCKED_BY_PLATFORM. Optional permission-based: NOT_IMPLEMENTED |
-| Licences page inside the app | NOT_IMPLEMENTED (the notices are in [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md)) |
+| Licences page inside the app | IMPLEMENTED (Settings → About; a static page generated from [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md)); never run on a device |
+| Full privacy policy text inside the app | NOT_IMPLEMENTED (Settings has a short Privacy section) |
 
 ## Feedback
 

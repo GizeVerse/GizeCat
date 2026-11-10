@@ -81,8 +81,8 @@ Evidence from 1.3.0 and earlier; nothing here has run with 1.4.0 ([1.4.0 statuse
 | Gets out of the way of fullscreen apps | NOT_IMPLEMENTED | No detection; panel overlays also show over fullscreen apps, so the fullscreen setting has no effect. | — |
 | Starts when you sign in | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | SMAppService via setLoginItemSettings; opt-in (off by default), needs the app in /Applications; never run on a Mac. | — |
 | Tray / menu-bar icon | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Template menu-bar icon (a different shape per state); a click opens the menu; the Dock icon is on by default and can be turned off in Settings. | — |
-| Show/hide shortcut | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Electron globalShortcut (Control+Option+Shift+C). | — |
-| Encrypted API-key storage | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | safeStorage (Keychain). | — |
+| Show/hide shortcut | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Electron globalShortcut (Control+Option+Shift+C); the shortcut field also accepts Command. Never run on a Mac. | — |
+| Encrypted API-key storage | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | safeStorage (Keychain); with no key stored, status checks do not touch the Keychain. Never run on a Mac. | — |
 | Optional screen perception (opt-in) | BLOCKED_BY_PLATFORM_OR_PERMISSION | Fails closed: exclusions are Windows executable names and capture needs a Screen Recording consent design; 1.4.0 asks for no macOS permission. | — |
 | Touch gestures (pet, drag, throw) | NOT_IMPLEMENTED | Desktop overlay is pointer-driven. | — |
 | Optional sound | IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED | Same WebAudio cues. | — |

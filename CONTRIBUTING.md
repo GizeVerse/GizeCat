@@ -1,6 +1,6 @@
 # Contributing to GizeCat
 
-GizeCat (formerly Desktop Cat) is the first character of GizeVerse: one animated cat that lives in transparent, always-on-top, click-through overlays on your desktop, with optional, opt-in screen perception. The code is MIT-licensed. So far Windows 11 is the only platform it has been verified on.
+GizeCat (formerly Desktop Cat) is the first character of GizeVerse: one animated cat that lives in transparent, always-on-top, click-through overlays on your desktop, with optional, opt-in screen perception. The code is MIT-licensed. So far Windows 11 is the only platform where the app has run on real hardware.
 
 Thanks for helping. Please read this page before your first pull request; it is short on purpose.
 
@@ -21,7 +21,7 @@ npm run dev                             # development build, then run the app
 
 On macOS and Linux, typecheck, lint, the unit tests and the build should run. The app has a platform profile for both. It has never run on a Mac. On Linux it has run only in a container under a virtual X server, not on a real desktop, and it shows the cat only on an X11 session with a compositing window manager. What has actually run where is in the [capability matrix](docs/gizeverse/capability-matrix.md) and the GizeVerse reports in [docs/gizeverse/](docs/gizeverse/).
 
-Since 1.4.0 there are more build targets, each with its own setup: the ARM64 Windows installer (`npm run package:win` stages an extra native package from the npm registry), macOS packages (on a Mac, or ad-hoc zips from a Linux container with Docker), the installable web app (`npm run package:web`) and the Android app (a JDK 17+ and the Android SDK with platform 36 and build-tools 36.0.0). The steps are in [docs/platforms/building-and-packaging.md](docs/platforms/building-and-packaging.md). The Android project lives in `android/` and is outside ESLint and the TypeScript projects.
+Since 1.4.0 there are more build targets, each with its own setup: the ARM64 Windows installer (`npm run package:win` stages an extra native package from the npm registry), macOS packages (on a Mac, or ad-hoc zips from a disposable WSL 2 distro or a Linux container), the installable web app (`npm run package:web`) and the Android app (a JDK 17+ and the Android SDK with platform 36 and build-tools 36.0.0). The steps are in [docs/platforms/building-and-packaging.md](docs/platforms/building-and-packaging.md), and the manual GitHub workflows are in [docs/platforms/release-automation.md](docs/platforms/release-automation.md). The Android project lives in `android/` and is outside ESLint and the TypeScript projects.
 
 ## Verify your change
 

@@ -18,12 +18,14 @@
 | D8 | An explicit application menu (About, Services, Hide Others, Show All, Quit) **without Hide**, so Cmd+H can never order the overlays out. Edit and Window menus stay. |
 | D9 | **No permissions:** no Accessibility, Screen Recording or Input Monitoring request, no screen-capture usage string. Perception stays fail-closed until it has a consent design and a per-OS exclusion identity. Electron's camera, microphone, audio-capture and Bluetooth usage strings are replaced with "GizeCat never uses …; choose Don't Allow". |
 | D10 | **Minimal entitlements:** `com.apple.security.cs.allow-jit` only, in `build/entitlements.mac.plist` and the inherit plist, with the hardened runtime. Fallback if a signed build fails to start: `allow-unsigned-executable-memory`. |
-| D11 | **Artifact matrix.** A macOS runner builds DMG and zip for x64, arm64 and universal: Developer ID plus notarization when the owner's secrets exist, otherwise ad hoc. A Linux container builds ad-hoc zips for x64 and arm64 only, named `GizeCat-<version>-mac-<arch>-adhoc.zip` so they cannot be confused with notarized builds. |
-| D12 | Signed builds come only from a manual workflow (`macos-packages.yml`, `workflow_dispatch`) in the GitHub Environment `macos-signing` with a required reviewer. |
+| D11 | **Artifact matrix.** A macOS runner builds DMG and zip for x64, arm64 and universal: job `developer-id` signs and notarizes with the owner's secrets, and job `adhoc` signs ad hoc without secrets (hardened runtime off). A Linux environment (a disposable WSL 2 distro on Windows, or a container) builds ad-hoc zips for x64 and arm64 only. Every ad-hoc file carries `-adhoc` in its name (`GizeCat-<version>-mac-<arch>-adhoc.zip`, and `.dmg` from the runner), so it cannot be confused with a notarized build. |
+| D12 | Signed builds come only from a manual workflow (`macos-packages.yml`, `workflow_dispatch`) in the GitHub Environment `macos-signing` with a required reviewer. The workflow has never been started, and it cannot be started until its file is on `main`. |
 | D14 | A guarded window-geometry probe is deferred until a Mac exists (NOT_IMPLEMENTED). |
 | D15 | The bundle stays `Desktop Cat.app` with the frozen id `io.github.enesiltas.desktopcat` (the Keychain and login items are keyed by it). Artifacts are named `GizeCat-*`. |
 
 Also new: diagnostics report `os.arm64Translation` (true for an x64 build under Rosetta or Windows-on-Arm emulation; a boolean), and the "API key saved" message names the macOS Keychain.
+
+A static inspection of the Electron 44.9.3 sources found four macOS defects, and all four are fixed in code (IMPLEMENTED; THEORETICALLY_COMPATIBLE_NOT_EXECUTED). `platformReport()` called `safeStorage.isEncryptionAvailable()` at every status, which goes to the Keychain; with no key stored the status no longer asks. The Settings icons were private-use Segoe glyphs, which macOS would draw as boxes; they are plain Unicode symbols now. The shortcut field rejected Command and Cmd and showed `Super` and `Alt`. The Surfaces verdict named a PC and the taskbar; off Windows it now describes the floor.
 
 ### Statuses
 
@@ -33,8 +35,8 @@ Also new: diagnostics report `os.arm64Translation` (true for an x64 build under 
 | Window surfaces, Dock as a surface, fullscreen awareness | NOT_IMPLEMENTED (D1) |
 | Perception | NOT_IMPLEMENTED (fails closed by design, D9) |
 | Browser tab strips | BLOCKED_BY_PLATFORM (Windows UI Automation only) |
-| `GizeCat-1.4.0-mac-x64-adhoc.zip`, `GizeCat-1.4.0-mac-arm64-adhoc.zip` (Linux container) | COMPILED_OR_PACKAGED only once a real container run produced them; a zip proves only that it packages |
-| Ad-hoc zips from the macOS runner | THEORETICALLY_COMPATIBLE_NOT_EXECUTED (the workflow has never run) |
+| `GizeCat-1.4.0-mac-x64-adhoc.zip`, `GizeCat-1.4.0-mac-arm64-adhoc.zip` (disposable WSL 2 distro) | COMPILED_OR_PACKAGED; statically inspected by `scripts/check-mac-payload.mjs`; never run. A zip proves only that it packages |
+| Ad-hoc DMG and zip (x64, arm64, universal) from the macOS runner | THEORETICALLY_COMPATIBLE_NOT_EXECUTED (the workflow has never been started) |
 | Developer ID signed and notarized DMG and zip, x64, arm64, universal | REQUIRES_OWNER_CREDENTIALS |
 | Universal build | THEORETICALLY_COMPATIBLE_NOT_EXECUTED (a macOS host only) |
 
@@ -43,8 +45,11 @@ The capability matrix's darwin column records the same, in its own vocabulary ([
 ### Packaging
 
 - `electron-builder.yml`, mac section: DMG and zip for `[x64, arm64, universal]`, hardened runtime, the two entitlement plists, the replaced usage strings, koffi excluded, `notarize` deliberately unset (the workflow notarizes and staples).
-- Linux route: `npm run package:mac:adhoc-docker` (`scripts/package-mac-docker.mjs` and `scripts/docker/mac-adhoc-build.sh`): `git archive HEAD` into one `node:24-bookworm-slim` container, `electron-builder --mac dir --x64 --arm64`, ad-hoc signing with rcodesign 0.29.0 (sha256-checked), zips with their symbolic links kept, `README-adhoc.txt`, `SHA256SUMS.txt`, all copied to `release/<version>/mac/`.
-- Manual workflow `.github/workflows/macos-packages.yml`: job `adhoc` (no secrets) and job `developer-id` (environment `macos-signing`, a guard that fails closed without secrets, notarization by App Store Connect API key or Apple ID, then `codesign --verify --deep --strict`, the hardened-runtime flag, TeamIdentifier, an entitlements dump, `spctl`, `stapler validate`, DMG notarization and stapling, and removal of the key file).
+- WSL route, used for the 1.4.0 candidate: `npm run package:mac:adhoc-wsl` (`scripts/package-mac-wsl.mjs`). It imports its own uniquely named WSL 2 distro from the official Ubuntu 24.04 root filesystem (sha256-checked against Ubuntu's sums), runs `scripts/docker/mac-adhoc-build.sh` on a `git archive` of `HEAD`, and copies the results to `release/<version>/mac/`. It unregisters the distro on any normal or failed completion, and exits non-zero with the distro's name if that step fails. If the process is killed (Ctrl+C, a dying shell, a reboot), that cleanup does not run and the distro stays registered: remove it with `wsl --unregister gizecat-mac-build-<number>` (`wsl --list --quiet` shows the name, and the next run reports it without removing it). It never touches another distro or the Docker engine.
+- Container route: `npm run package:mac:adhoc-docker` (`scripts/package-mac-docker.mjs` and the same build script): one `node:24-bookworm-slim` container.
+- Both Linux routes: `electron-builder --mac dir --x64 --arm64`, ad-hoc signing with rcodesign 0.29.0 (sha256-checked), zips with their symbolic links kept, `README-adhoc.txt`, `SHA256SUMS.txt`. No hardened runtime and no DMG or universal build: electron-builder needs `hdiutil` for a DMG, and `@electron/universal` refuses non-Mac hosts.
+- Static inspection: `scripts/check-mac-payload.mjs` reads each zip's bytes and runs nothing. It checks the bundle parts, the symbolic links, the Mach-O architecture and signature presence, `Info.plist`, the contents of `app.asar` (no koffi), the asar integrity value and the Electron fuses.
+- Manual workflow `.github/workflows/macos-packages.yml`: job `adhoc` (no secrets; ad-hoc DMG and zip for x64, arm64 and universal; hardened runtime off; `-adhoc` names) and job `developer-id` (environment `macos-signing`, a guard that fails closed without secrets or on a partial set, notarization by App Store Connect API key or Apple ID, then the signature and hardened-runtime checks, TeamIdentifier, an entitlements dump, `spctl`, `stapler validate`, non-blocking DMG notarization and stapling, and removal of the key file).
 - Commands: [building-and-packaging.md](../platforms/building-and-packaging.md#macos-intel-apple-silicon-universal).
 
 ### Mac checklist additions (run on real hardware; none has run)
@@ -58,10 +63,17 @@ The capability matrix's darwin column records the same, in its own vocabulary ([
 - Login-item statuses (`enabled`, `requires-approval`, `not-registered`, `not-found`), from /Applications and from Downloads.
 - Logout and shutdown speed with the quick quit; the Keychain prompt; whether the Window menu lists overlay windows.
 - The first signed build starting under the hardened runtime with `allow-jit` only.
+- The ad-hoc zips starting at all: Gatekeeper's **Open Anyway**, and the app's frameworks loading with an ad-hoc signature.
+- Every Settings page: the plain Unicode icons have never been seen rendered.
+- A first launch with no API key shows no Keychain prompt; saving a key then shows it.
+- `Command+Shift+C` in the shortcut field stays as typed after saving, and hides or shows the cat.
+- With the Dock icon off, opening Settings from the menu-bar icon brings its window to the front.
 
 ### Known limits (1.4.0)
 
-- Settings words the macOS differences: the Diagnostics startup row reads "Open at login", the secure-storage messages name the macOS Keychain, and the fullscreen row explains that the setting has no effect (D2). None of this has been seen on a Mac.
+- Settings words the macOS differences: "this Mac", "menu bar", the Diagnostics startup row reads "Open at login", the secure-storage messages name the macOS Keychain, Option and Command in the shortcut field, and the fullscreen row explains that the setting has no effect (D2). None of this has been seen on a Mac.
+- Not reworded yet: the window rows that do not name Windows (they have no effect on a Mac), Diagnostics › Surfaces (taskbars and a tab-strip card), the capability list's "Windows UI Automation only", the import note that can name File Explorer, the Apps exclusion validator appending `.exe`, the "this PC" source strings in logs and exported diagnostics, and About mentioning koffi.
+- `enableCookieEncryption` is on in the Electron fuses, so Chromium's cookie store may still use the Keychain at launch (not checked on a Mac).
 - SMAppService needs macOS 13 or later; Electron's behaviour on older macOS was not checked.
 - The "Open Login Items settings" button opens `x-apple.systempreferences:com.apple.LoginItems-Settings.extension`. That pane id comes from the design pass, not from Apple documentation; the status text also names the place in words.
 - `hideFromScreenCapture` maps to NSWindowSharingNone; ScreenCaptureKit capture on macOS 15 and later may ignore it (not checked).

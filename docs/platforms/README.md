@@ -9,8 +9,12 @@ Pages:
 - [macos.md](macos.md): Macs with Intel or Apple Silicon.
 - [ipados.md](ipados.md): iPads, through the installable web app.
 - [android.md](android.md): Android tablets, through the native app or the web app in Chrome.
+- [troubleshooting.md](troubleshooting.md): the likely problems on each device, with steps.
+- [profile-transfer.md](profile-transfer.md): moving a cat to another device.
 - [privacy-and-permissions.md](privacy-and-permissions.md): what each version may access, stores and sends.
 - [building-and-packaging.md](building-and-packaging.md): how to build each artifact.
+- [release-automation.md](release-automation.md): the manual GitHub workflows, their secrets and the owner's steps.
+- [android-signing.md](android-signing.md): the owner's procedure for the Android release key.
 
 ## One character, four device families
 
@@ -19,9 +23,9 @@ It is the same cat everywhere. Every version runs the same behaviour simulation 
 | Family | What you install | What it is |
 |---|---|---|
 | Windows PCs | `Desktop-Cat-Setup-1.4.0-x64.exe` or `Desktop-Cat-Setup-1.4.0-arm64.exe` | The desktop app: a transparent, click-through overlay over your desktop |
-| Macs | `Desktop Cat.app` from a GizeCat zip or DMG | The same desktop app, following macOS conventions (menu bar, Dock) |
-| iPads | The GizeCat web app, added to the Home Screen from Safari | The cat inside its own app window |
-| Android tablets | The GizeCat Android app, or the web app installed from Chrome | The cat inside its own app window |
+| Macs | `Desktop Cat.app` from `GizeCat-1.4.0-mac-x64-adhoc.zip` or `GizeCat-1.4.0-mac-arm64-adhoc.zip` (ad-hoc signed, not notarized), or from a notarized DMG or zip once the owner has built one | The same desktop app, following macOS conventions (menu bar, Dock) |
+| iPads | The GizeCat web app, added to the Home Screen from Safari, once it is hosted | The cat inside its own app window |
+| Android tablets | The GizeCat Android app once it is signed, the debug-signed trial APK for sideload trials, or the web app from Chrome once it is hosted | The cat inside its own app window |
 
 ## What differs, and why
 
@@ -34,13 +38,13 @@ It is the same cat everywhere. Every version runs the same behaviour simulation 
 | Screen analysis and AI vision | Optional, off by default | Not available (fails closed; no permission is requested) | Not available | Not available |
 | Permissions it asks for | None (per-user install, no administrator rights) | None | None | None |
 | Where the cat is stored | `%APPDATA%\Desktop Cat` | `~/Library/Application Support/Desktop Cat` | The web app's storage on the iPad | The app's private storage, or Chrome's storage |
-| Updates | Install the new version over the old one | Replace the app | The host updates the files; the app picks them up at the next start | Install the new APK, or the host updates the web app |
+| Updates | Install the new version over the old one | Replace the app | The host updates the files. The new version downloads in the background; close the app and open it again to start it | Install the new APK, or the web app updates as on the iPad |
 
 **Why the cat climbs windows only on Windows.** On Windows, window positions, the taskbar and browser tab strips come from Win32 and UI Automation, and that code ran on hardware for 1.1 to 1.3. On macOS the only permission-free source of other windows' positions needs native code that has never run on a Mac, so 1.4.0 keeps the cat on the floor. Tablets show the cat inside its own window, so there are no other windows to climb.
 
 **Why tablets get the web app.** The web app is the same character code as the desktop app, it needs no permissions, and it is the only route that this project can build without store accounts. The Android app wraps that same web bundle with a hardened WebView and no permissions ([decision record](../gizeverse/14-android-app.md)). A native iPad app was evaluated and is not justified now: it would add nothing the web app cannot do, and an App Store release needs the owner's Apple Developer Program enrollment ([ipados.md](ipados.md)).
 
-**Moving a cat between devices.** 1.4.0 adds a portable profile file (`gizeverse-character-profile`, format 1.0). **Take your cat to another device** saves the cat to a file and loads one: in Settings → Personality on Windows and macOS, and in the settings sheet of the web app and the Android app. Before anything changes you see what the file would change and choose what to load. Nothing is uploaded, and the file goes only where you put it: it is a copy, not a sync. Its contents and limits are in [privacy-and-permissions.md](privacy-and-permissions.md#the-profile-file). IMPLEMENTED; like everything in 1.4.0, it has never run on a device. Without it, each device and each app has its own cat.
+**Moving a cat between devices.** 1.4.0 adds a portable profile file. **Take your cat to another device** saves the cat to a file and loads one. Before anything changes you see what the file would change and choose what to load. Nothing is uploaded: it is a copy, not a sync. The full guide is [profile-transfer.md](profile-transfer.md). IMPLEMENTED; like everything in 1.4.0, it has never run on a device. Without it, each device and each app has its own cat.
 
 ## Status vocabulary for 1.4.0
 
@@ -60,35 +64,39 @@ The per-feature [capability matrix](../gizeverse/capability-matrix.md) uses an o
 | Target | Code | Package | Runs on the device | Signing and store | Over other apps |
 |---|---|---|---|---|---|
 | Windows x64 (Windows 10/11) | IMPLEMENTED | COMPILED_OR_PACKAGED | THEORETICALLY_COMPATIBLE_NOT_EXECUTED for 1.4.0 (1.3.0 ran on Windows 11 x64) | REQUIRES_OWNER_CREDENTIALS (unsigned; no Microsoft Store listing) | IMPLEMENTED |
-| Windows ARM64 (Windows 11 on Arm) | IMPLEMENTED | COMPILED_OR_PACKAGED (built on an x64 PC; checked statically only) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (unsigned) | IMPLEMENTED |
-| macOS Intel (x64) | IMPLEMENTED | Ad-hoc zip: COMPILED_OR_PACKAGED only if the release lists it | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (Developer ID and notarization; no Mac App Store listing) | IMPLEMENTED |
-| macOS Apple Silicon (arm64) | IMPLEMENTED | Ad-hoc zip: COMPILED_OR_PACKAGED only if the release lists it | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS | IMPLEMENTED |
+| Windows ARM64 (Windows 11 on Arm) | IMPLEMENTED | COMPILED_OR_PACKAGED (built on an x64 PC; statically inspected only) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (unsigned) | IMPLEMENTED |
+| macOS Intel (x64) | IMPLEMENTED | COMPILED_OR_PACKAGED: ad-hoc zip, statically inspected only | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Ad-hoc signed, not notarized. Developer ID and notarization: REQUIRES_OWNER_CREDENTIALS. No Mac App Store listing | IMPLEMENTED |
+| macOS Apple Silicon (arm64) | IMPLEMENTED | COMPILED_OR_PACKAGED: ad-hoc zip, statically inspected only | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Ad-hoc signed, not notarized. Developer ID and notarization: REQUIRES_OWNER_CREDENTIALS | IMPLEMENTED |
 | macOS universal | IMPLEMENTED (configuration) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED (it can only be built on a Mac) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS | IMPLEMENTED |
-| iPadOS web app (Safari, Home Screen) | IMPLEMENTED | COMPILED_OR_PACKAGED (static web bundle) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Public HTTPS hosting: REQUIRES_OWNER_CREDENTIALS. App Store app: NOT_IMPLEMENTED | BLOCKED_BY_PLATFORM |
-| Android tablet app | IMPLEMENTED | COMPILED_OR_PACKAGED (trial APK; release APK and AAB unsigned) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (release key, Google Play, developer verification) | Click-through overlay: BLOCKED_BY_PLATFORM. Optional permission-based overlay: NOT_IMPLEMENTED |
-| Android tablet web app (Chrome) | IMPLEMENTED | COMPILED_OR_PACKAGED (same web bundle) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Public HTTPS hosting: REQUIRES_OWNER_CREDENTIALS | BLOCKED_BY_PLATFORM |
+| iPadOS web app (Safari, Home Screen) | IMPLEMENTED | COMPILED_OR_PACKAGED (static web bundle) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Public HTTPS hosting: REQUIRES_OWNER_CREDENTIALS (expected address `https://gizeverse.github.io/GizeCat/`, not deployed). App Store app: NOT_IMPLEMENTED | BLOCKED_BY_PLATFORM |
+| Android tablet app | IMPLEMENTED | COMPILED_OR_PACKAGED (trial APK; release APK and AAB unsigned) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (release key, Google Play, developer verification). The signing pipeline is IMPLEMENTED and has never run | Click-through overlay: BLOCKED_BY_PLATFORM. Optional permission-based overlay: NOT_IMPLEMENTED |
+| Android tablet web app (Chrome) | IMPLEMENTED | COMPILED_OR_PACKAGED (same web bundle) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Public HTTPS hosting: REQUIRES_OWNER_CREDENTIALS (same expected address, not deployed) | BLOCKED_BY_PLATFORM |
 
 Two Windows details: the x64 build on Windows 11 on Arm runs under emulation (THEORETICALLY_COMPATIBLE_NOT_EXECUTED), and the x64 build cannot run on Windows 10 on Arm, which has no x64 emulation (BLOCKED_BY_PLATFORM).
 
-**macOS packages for this candidate: none were produced.** electron-builder cannot build Mac packages on Windows. The Linux-container route (`npm run package:mac:adhoc-docker`) is implemented but could not run on the candidate's build PC, whose Docker engine stopped responding. Mac packages therefore come from a Mac, from the owner-run `macos-packages.yml` workflow, or from the container route on a PC where Docker works.
+**macOS packages for this candidate.** Ad-hoc signed, not notarized zips exist for Intel and Apple Silicon. They were built with `electron-builder --mac dir` in a disposable WSL 2 distro on the Windows build PC (`npm run package:mac:adhoc-wsl`), statically inspected by `scripts/check-mac-payload.mjs`, and never run. DMG and universal builds need a Mac: electron-builder needs `hdiutil`, and `@electron/universal` refuses other hosts. The manual `macos-packages.yml` workflow makes them on a Mac runner: ad-hoc signed without secrets, Developer ID signed and notarized with the owner's secrets. It has never been started.
+
+**The release workflows are manual and have never been started.** The default branch `main` has `ci.yml`, `installer-check.yml` and an older `release.yml`. `macos-packages.yml`, `pages.yml` and `android-release.yml` are not on `main`, so they cannot be started until the owner brings them there ([release automation](release-automation.md)).
 
 ## Status per artifact
 
-An artifact is COMPILED_OR_PACKAGED only if the GitHub release lists it with its SHA-256 in `SHA256SUMS.txt`. If a file below is not on the release page, it was not produced for this candidate. The candidate build's files, sizes and checksums, and the owner's steps before publishing, are in [the 1.4.0 candidate notes](../releases/1.4.0-release-candidate.md).
+These statuses describe the candidate build. **1.4.0 is not published**, so a file can be downloaded only once the owner attaches it to a release, with its SHA-256 in `SHA256SUMS.txt`. The candidate build's files, sizes and checksums, and the owner's steps before publishing, are in [the 1.4.0 candidate notes](../releases/1.4.0-release-candidate.md).
 
 | Artifact | For | Built by | Status |
 |---|---|---|---|
 | `Desktop-Cat-Setup-1.4.0-x64.exe` | Windows 10/11 on x64 PCs | The Windows release run into `release/1.4.0/windows` on an x64 Windows PC ([steps](building-and-packaging.md#windows-x64-and-arm64)) | COMPILED_OR_PACKAGED. Unsigned. Not installed or run for 1.4.0. |
 | `Desktop-Cat-Setup-1.4.0-arm64.exe` | Windows 11 on Arm PCs | The same run (cross-built), then a static payload check | COMPILED_OR_PACKAGED. Unsigned. Runtime THEORETICALLY_COMPATIBLE_NOT_EXECUTED. |
-| `GizeCat-1.4.0-mac-x64-adhoc.zip` | Intel Macs, testing | Linux container (`npm run package:mac:adhoc-docker`), ad-hoc signed | COMPILED_OR_PACKAGED only if listed. Not notarized. |
-| `GizeCat-1.4.0-mac-arm64-adhoc.zip` | Apple Silicon Macs, testing | The same container run | COMPILED_OR_PACKAGED only if listed. Not notarized. |
-| `GizeCat-1.4.0-mac-<x64, arm64, universal>.dmg` and `.zip` | Macs | The manual `macos-packages.yml` workflow on a Mac runner, with the owner's Apple credentials | REQUIRES_OWNER_CREDENTIALS |
+| The same two installers, Authenticode signed | Windows PCs | The manual `release.yml` workflow, job `windows-signed`, with `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` in the `windows-signing` environment | REQUIRES_OWNER_CREDENTIALS. Never started. |
+| `GizeCat-1.4.0-mac-x64-adhoc.zip` | Intel Macs, testing | A disposable WSL 2 distro on the Windows build PC (`npm run package:mac:adhoc-wsl`), ad-hoc signed, then a static payload check | COMPILED_OR_PACKAGED. Not notarized. Never run. |
+| `GizeCat-1.4.0-mac-arm64-adhoc.zip` | Apple Silicon Macs, testing | The same run | COMPILED_OR_PACKAGED. Not notarized. Never run. |
+| `GizeCat-1.4.0-mac-<x64, arm64, universal>-adhoc-macrunner.dmg` and `.zip` | Macs, testing | The manual `macos-packages.yml` workflow on a Mac runner, job `adhoc`, no secrets | THEORETICALLY_COMPATIBLE_NOT_EXECUTED. Never started. Not notarized. |
+| `GizeCat-1.4.0-mac-<x64, arm64, universal>.dmg` and `.zip` | Macs | The same workflow, job `developer-id`, with the owner's Apple credentials | REQUIRES_OWNER_CREDENTIALS. Never started. |
 | `GizeCat-web-1.4.0.zip` | Self-hosting the web app for iPads, Android tablets and desktop browsers | `npm run package:web` | COMPILED_OR_PACKAGED |
-| The web app at a public HTTPS address | iPads, Android tablets | The manual `pages.yml` workflow (GitHub Pages) or any static host | REQUIRES_OWNER_CREDENTIALS. No public address exists yet. |
+| The web app at a public HTTPS address | iPads, Android tablets | The manual `pages.yml` workflow (GitHub Pages) or any static host | REQUIRES_OWNER_CREDENTIALS. Expected address `https://gizeverse.github.io/GizeCat/`, **not deployed**. |
 | `GizeCat-1.4.0-android-unsigned.apk` | Android tablets | `npm run android:apk` | COMPILED_OR_PACKAGED. It cannot be installed until it is signed. |
 | `GizeCat-1.4.0-android-unsigned.aab` | Google Play | `npm run android:aab` | COMPILED_OR_PACKAGED. Uploading needs a signed AAB: REQUIRES_OWNER_CREDENTIALS. |
-| `GizeCat-1.4.0-android.apk` (signed) | Android tablets | The owner's release key | REQUIRES_OWNER_CREDENTIALS |
-| `GizeCat-1.4.0-android-trial-debugsigned.apk` | Sideload trials only | `npm run android:trial` | COMPILED_OR_PACKAGED. Signed with a debug key; not a release. |
+| `GizeCat-1.4.0-android.apk` and `.aab` (signed) | Android tablets, Google Play | `npm run android:release` with the owner's key, or the manual `android-release.yml` workflow ([signing](android-signing.md)) | REQUIRES_OWNER_CREDENTIALS. No key exists yet. |
+| `GizeCat-1.4.0-android-trial-debugsigned.apk` | Sideload trials only | `npm run android:trial` | COMPILED_OR_PACKAGED. Signed with a debug key; never a production release. |
 | `SHA256SUMS.txt` | Checking downloads | `npm run release:sums` (`scripts/release-sums.mjs`), run by the owner after the last package and attached to the release ([how](building-and-packaging.md#release-checksums)) | One line per installer, zip, DMG, APK and AAB in `release/1.4.0/{windows,mac,web,android}`. The per-folder checksum files the packaging scripts write are build by-products and are not attached. |
 
 ## Feedback

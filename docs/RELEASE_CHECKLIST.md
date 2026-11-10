@@ -24,7 +24,7 @@ Run on a Windows 10/11 x64 machine. Heavy steps go through `node scripts/with-lo
 
 - [ ] Stage the ARM64 koffi binary: `node scripts/stage-koffi-arch.mjs --arch arm64`, then `git diff --exit-code -- package.json package-lock.json` prints nothing. Do not run `npm ci` after staging.
 - [ ] For a release, package into the versioned folder: `npx electron-builder --win nsis --x64 --arm64 --publish never -c.directories.output=release/<version>/windows` (after `node scripts/build.mjs`; the arch flags are required) → `release/<version>/windows/Desktop-Cat-Setup-<version>-x64.exe`, `…-arm64.exe`, `win-unpacked/` and `win-arm64-unpacked/`. `npm run package:win` builds the same into `release/` instead, and `npm run package` alone builds x64 only. **`<release>` below is the folder you packaged into**: `release/<version>/windows` for a release (only installers there are covered by `npm run release:sums`), `release` after `npm run package:win`. Older builds left in the other folder are never evidence for this version.
-- [ ] Code signing: set `CSC_LINK`/`CSC_KEY_PASSWORD` (or Azure Trusted Signing) if an identity exists. **Never** describe an unsigned build as signed.
+- [ ] Code signing, if the owner has a certificate: set `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` for a local build, or run the manual `release.yml` workflow with `windows_signing: authenticode` (job `windows-signed`, environment `windows-signing` with a required reviewer). A `.pfx` is required. **Never** describe an unsigned build as signed.
 - [ ] `node scripts/check-win-payload.mjs --arch x64 --dir <release>/win-unpacked` and `--arch arm64 --dir <release>/win-arm64-unpacked` — exit 0 (executable machine, koffi binary per arch, asar header and integrity, fuses, nothing in `app.asar` outside the app's allow-list, `app.asar` under 32 MB) and no warning that the `app.asar` version differs from `package.json`.
 - [ ] `npx @electron/fuses read --app <release>/win-unpacked/DesktopCat.exe` — RunAsNode, NODE_OPTIONS and inspect disabled; ASAR integrity + only-load-from-ASAR enabled.
 - [ ] `<release>/win-unpacked/resources/app.asar.unpacked/node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node` exists, and `<release>/win-arm64-unpacked/resources/app.asar.unpacked/node_modules/@koromix/koffi-win32-arm64/win32_arm64/koffi.node` exists.
@@ -43,24 +43,33 @@ Run on a Windows 10/11 x64 machine. Heavy steps go through `node scripts/with-lo
 
 ## Package: macOS
 
-- [ ] Commit first, then `npm run package:mac:adhoc-docker` (Docker Desktop running; start it detached on a shared machine) → `release/<version>/mac/GizeCat-<version>-mac-x64-adhoc.zip`, `…-arm64-adhoc.zip`, `README-adhoc.txt`, `SHA256SUMS.txt` (a build by-product, not attached). Ad-hoc zips are never called signed or notarized.
-- [ ] Optional, owner only: dispatch `.github/workflows/macos-packages.yml` (job `developer-id`, environment `macos-signing` with a required reviewer and the signing secrets) for Developer ID signed and notarized DMG and zip, x64, arm64 and universal.
+- [ ] Commit first, then `npm run package:mac:adhoc-wsl` on a Windows PC with WSL 2, or `npm run package:mac:adhoc-docker` (Docker Desktop running). Start either one detached on a shared machine. → `release/<version>/mac/GizeCat-<version>-mac-x64-adhoc.zip`, `…-arm64-adhoc.zip`, `README-adhoc.txt`, `SHA256SUMS.txt` (a build by-product, not attached). Ad-hoc zips are never called Developer ID signed or notarized.
+- [ ] `node scripts/check-mac-payload.mjs --arch x64 --zip <zip>` and `--arch arm64 --zip <zip>` — exit 0. This reads the zip and runs nothing.
+- [ ] Optional, owner only: bring `.github/workflows/macos-packages.yml` to `main`, then dispatch it. Job `adhoc` needs no secrets and makes ad-hoc DMG and zip for x64, arm64 and universal, named `-adhoc`. Job `developer-id` (environment `macos-signing` with a required reviewer and the signing secrets) makes Developer ID signed and notarized DMG and zip. DMG and universal builds need a Mac.
 - [ ] On a real Mac (Apple Silicon and Intel), before any macOS status moves: the checklist in [docs/gizeverse/04-macos.md](gizeverse/04-macos.md#mac-checklist-additions-run-on-real-hardware-none-has-run).
 
 ## Package: web app
 
 - [ ] `npm run package:web` → `release/<version>/web/` (folder, `GizeCat-web-<version>.zip`, `README-web.txt`, `SHA256SUMS.txt`, a build by-product that is not attached). The build's own check must pass (exact file set, no test hook or key-listener code, pinned CSP, precache list).
-- [ ] Optional, owner only: enable GitHub Pages (Source: GitHub Actions) and dispatch `.github/workflows/pages.yml`. A successful deployment is not evidence that the app works on an iPad or an Android tablet.
+- [ ] Optional, owner only: bring `.github/workflows/pages.yml` to `main` and dispatch it (the Pages source is already set to GitHub Actions since 2026-11-08). The expected address is `https://gizeverse.github.io/GizeCat/`; the deploy job prints the real one. Only then may any document call the address live. A successful deployment is not evidence that the app works on an iPad or an Android tablet.
 
 ## Package: Android
 
-- [ ] `npm run android:apk`, `npm run android:aab` and `npm run android:trial` from the final commit, **without** `--no-web` → `release/<version>/android/` with `SHA256SUMS-android.txt` (a build by-product, not attached). Note the commit you built from: the APK does not record it.
-- [ ] Inspect the merged manifest: no `<uses-permission>` (an inspection, not a test).
-- [ ] Owner only: sign the release APK and AAB with the owner's upload keystore (`android/keystore.properties`). Unsigned outputs keep `-unsigned` in their names and are described as unsigned.
+- [ ] `npm run android:release` (or `npm run android:apk` and `npm run android:aab`) and `npm run android:trial` from the final commit, **without** `--no-web` → `release/<version>/android/` with `SHA256SUMS-android.txt` (a build by-product, not attached). Note the commit you built from: the APK does not record it.
+- [ ] Inspect the merged manifest: no `<uses-permission>` (an inspection, not a test). Confirm `licenses.html` is in the app's assets.
+- [ ] Owner only: sign the release APK and AAB with the owner's upload key. The key comes from the `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` environment variables, or else from `android/keystore.properties`; in CI, from the `android-signing` environment through `android-release.yml` ([android-signing.md](platforms/android-signing.md)). Unsigned outputs keep `-unsigned` in their names and are described as unsigned.
 - [ ] The trial APK, if attached at all, is labelled as debug-signed and for trials only.
+- [ ] Google Play, only if wanted: [docs/store/google-play/release-readiness.md](store/google-play/release-readiness.md). No document may say GizeCat is on Google Play until a listing is live.
+
+## Workflows (owner)
+
+The release workflows are manual and have never been started. `macos-packages.yml`, `pages.yml` and `android-release.yml` are not on `main`, so they cannot be started until the owner brings them there. Pushing to `main` also triggers `ci.yml`. Steps, inputs and secrets: [docs/platforms/release-automation.md](platforms/release-automation.md).
+
+- [ ] Each signing path's environment (`macos-signing`, `android-signing`, `windows-signing`) exists with a required reviewer **before** its first run. Its secrets are set on the environment, never repository-wide.
+- [ ] The first real run of each workflow is checked step by step, and every file it produces is inspected before anyone shares it.
 
 ## Publish (owner)
 
 - [ ] `npm run release:sums` (`scripts/release-sums.mjs`) after the last package is in place → `release/<version>/SHA256SUMS.txt`, one line per `*.exe`, `*.dmg`, `*.zip`, `*.apk` and `*.aab` in `release/<version>/{windows,mac,web,android}`. Check that it lists exactly the files you attach, then attach it to the release. It is the only checksum file attached; the per-folder `SHA256SUMS.txt` and `SHA256SUMS-android.txt` stay behind.
 - [ ] Remove from the release notes any artifact that was not produced.
-- [ ] README: update the "current release" line when the release is published.
+- [ ] README: update the "Current release" lines (under "Get it on your device" and "Download and install") when the release is published.

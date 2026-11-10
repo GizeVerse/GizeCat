@@ -41,11 +41,11 @@ Each value lives in [src/shared/identity.ts](../../src/shared/identity.ts) with 
 |---|---|---|
 | Windows installer file | `Desktop-Cat-Setup-<version>.exe` | **`Desktop-Cat-Setup-<version>-x64.exe`** and **`Desktop-Cat-Setup-<version>-arm64.exe`** (one per architecture; `artifactName` in electron-builder.yml). The "Desktop Cat" prefix stays until the installer rename below. |
 | Windows shortcuts, Apps entry, install folder | Desktop Cat | Unchanged: Desktop Cat. The NSIS GUID derives from the appId, so the per-arch names do not affect upgrades. |
-| macOS artifacts | `package:mac` was never built | `GizeCat-<version>-mac-<x64, arm64, universal>.dmg` / `.zip`; ad-hoc test zips `GizeCat-<version>-mac-<arch>-adhoc.zip` |
+| macOS artifacts | `package:mac` was never built | Developer ID signed and notarized: `GizeCat-<version>-mac-<x64, arm64, universal>.dmg` / `.zip`. Ad-hoc signed, never notarized: `GizeCat-<version>-mac-<arch>-adhoc.zip` (WSL or container route), and `-adhoc-macrunner.dmg` / `.zip` from the workflow |
 | macOS app bundle | `Desktop Cat.app` | Unchanged (frozen: the Keychain item and login items are keyed by the bundle and its id) |
 | macOS menus and Settings | — | "About GizeCat", "Quit GizeCat", "Show GizeCat in the Dock" |
 | Web app | — | Name GizeCat (manifest), icons generated from `build/icon.png`; `GizeCat-web-<version>.zip` |
-| Android app | — | Launcher name GizeCat (trial build: "GizeCat (trial)"); `GizeCat-<version>-android-*.apk` / `.aab` |
+| Android app | — | Launcher name GizeCat (trial build: "GizeCat (trial)"); `GizeCat-<version>-android.apk` / `.aab` when signed, `GizeCat-<version>-android-unsigned.apk` / `.aab` otherwise, `GizeCat-<version>-android-trial-debugsigned.apk` for the trial |
 
 **New frozen identifiers in 1.4.0** (in `src/shared/identity.ts`, pinned by `tests/unit/shared/identity.test.ts`, written and not run in 1.4.0):
 - `androidApplicationId` = `io.github.gizeverse.gizecat`: permanent once published on Google Play. It differs from the desktop appId.

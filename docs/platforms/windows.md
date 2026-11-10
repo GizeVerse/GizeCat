@@ -23,13 +23,14 @@ The installer, the shortcuts and the Apps entry are still named **Desktop Cat** 
 2. Check the download. In PowerShell, in your Downloads folder: `Get-FileHash .\Desktop-Cat-Setup-1.4.0-x64.exe -Algorithm SHA256`. The hash must match the line for that file in `SHA256SUMS.txt`.
 3. Quit a running GizeCat first: right-click its tray icon, then **Quit**.
 4. Run the installer. It installs for your Windows account only, into `%LOCALAPPDATA%\Programs\DesktopCat`. No administrator rights are needed.
-5. The installer is **not code-signed**, so SmartScreen may say "Windows protected your PC". Choose **More info → Run anyway** if the hash matched. When Smart App Control is on, it can block unsigned installers, and it has no per-app exception.
-6. The cat appears at the bottom of your screen, and a Welcome page explains the controls.
+5. The installer is **not code-signed**, so SmartScreen may say "Windows protected your PC". Choose **More info → Run anyway** if the hash matched. When Smart App Control is on, it can block unsigned installers, and it has no per-app exception ([what to do](troubleshooting.md#smart-app-control-blocks-the-installer)).
+6. The cat appears at the bottom of your screen, and a Welcome page explains the controls. If it does not: [troubleshooting](troubleshooting.md#the-cat-does-not-appear).
 
 ## Upgrading and switching architecture
 
 - Your cat and settings live in `%APPDATA%\Desktop Cat`, which every version uses. 1.4.0 keeps the same app identity, so installing it over 1.3.0 is an upgrade that keeps them. For 1.3.0, the upgrade from 1.2.0 was tested on a disposable machine; **the upgrade to 1.4.0 has not been run** (THEORETICALLY_COMPATIBLE_NOT_EXECUTED).
 - To switch between x64 and ARM64, install the other installer over the existing app. It is the same app, so the installer treats it as an upgrade: the install folder, the Apps entry and your data stay (THEORETICALLY_COMPATIBLE_NOT_EXECUTED).
+- To move your cat to another device, save it to a file: **Settings → Personality → Take your cat to another device** ([guide](profile-transfer.md)).
 
 ## Permissions
 
@@ -62,7 +63,9 @@ What it does not do:
 
 | Item | Status |
 |---|---|
-| Code-signed installers (fewer SmartScreen warnings; Smart App Control) | REQUIRES_OWNER_CREDENTIALS (a code-signing certificate) |
+| Unsigned installers, x64 and ARM64 | COMPILED_OR_PACKAGED. SmartScreen warns, and Smart App Control may block them |
+| Code-signed installers (fewer SmartScreen warnings; Smart App Control) | REQUIRES_OWNER_CREDENTIALS (a code-signing certificate). The path exists: the manual `release.yml` workflow, job `windows-signed`, with `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` in the `windows-signing` environment. It has never been started ([release automation](release-automation.md)) |
+| Signing with a key held only on a hardware token or cloud HSM | NOT_IMPLEMENTED |
 | Microsoft Store listing | NOT_IMPLEMENTED |
 
 ## Uninstall

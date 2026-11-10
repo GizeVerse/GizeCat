@@ -9,14 +9,15 @@
 
 ## How to get it
 
-macOS apps cannot be built on Windows with electron-builder, and the builds that macOS trusts need the owner's Apple Developer account. So there are two kinds of download:
+electron-builder can build the ad-hoc zips on Linux, but not on Windows itself. DMG and universal builds need a Mac: electron-builder needs `hdiutil` for a DMG, and `@electron/universal` refuses other hosts. The builds that macOS trusts also need the owner's Apple Developer account. So there are three kinds of download:
 
 | Download | What it is | Status |
 |---|---|---|
-| `GizeCat-1.4.0-mac-arm64-adhoc.zip`, `GizeCat-1.4.0-mac-x64-adhoc.zip` | Test builds made in a Linux container and signed **ad hoc** (no Apple identity). **Not notarized.** | COMPILED_OR_PACKAGED only if the release lists them |
-| `GizeCat-1.4.0-mac-<arm64, x64, universal>.dmg` and `.zip` | Builds signed with a Developer ID and notarized by Apple, made by a manual workflow on a Mac runner | REQUIRES_OWNER_CREDENTIALS. Not available until the owner provides Apple credentials. |
+| `GizeCat-1.4.0-mac-arm64-adhoc.zip`, `GizeCat-1.4.0-mac-x64-adhoc.zip` | Test builds made in a disposable WSL 2 distro on the Windows build PC, and signed **ad hoc** (no Apple identity). **Not notarized.** | COMPILED_OR_PACKAGED. Statically inspected by `scripts/check-mac-payload.mjs`. **Never run.** |
+| `GizeCat-1.4.0-mac-<arm64, x64, universal>-adhoc-macrunner.dmg` and `.zip` | Ad-hoc signed builds from the manual workflow `macos-packages.yml` on a Mac runner, with no secrets. **Not notarized.** | THEORETICALLY_COMPATIBLE_NOT_EXECUTED. The workflow has never been started. |
+| `GizeCat-1.4.0-mac-<arm64, x64, universal>.dmg` and `.zip` | Builds signed with a Developer ID and notarized by Apple, from the same workflow with the owner's secrets | REQUIRES_OWNER_CREDENTIALS. Not available until the owner provides Apple credentials. |
 
-**For the 1.4.0 candidate, neither kind exists yet.** The container route could not run on the build PC (its Docker engine stopped responding), and the signed builds wait for the owner's Apple credentials. Until one of them is produced, there is no macOS download; this page describes how the builds work and how to install one once it exists.
+`macos-packages.yml` is not on `main`, so it cannot be started until the owner brings it there ([release automation](release-automation.md)). 1.4.0 is not published: a zip can be downloaded only once the owner attaches it to a release.
 
 An ad-hoc build is **not equivalent to a notarized app or an App Store app.** Apple has not checked it, and macOS blocks it until you allow it by hand. Install one only if you trust its source and its SHA-256 matches.
 
@@ -32,6 +33,8 @@ Every download contains an app named **Desktop Cat.app**. The bundle name and it
 6. Alternative, for a build you trust: in Terminal, `xattr -dr com.apple.quarantine "/Applications/Desktop Cat.app"` removes the download mark, and the app then opens normally.
 7. macOS may ask whether Desktop Cat may use its Keychain item "Desktop Cat Safe Storage". Each new ad-hoc build can ask again, because its signature changes.
 
+If something goes wrong: [troubleshooting](troubleshooting.md#macos).
+
 ## Install a signed and notarized build (when available)
 
 1. Download the DMG for your Mac (arm64, x64, or universal for both) and check its SHA-256 as above.
@@ -44,6 +47,7 @@ GizeCat 1.4.0 requests **no permission** on macOS: no Accessibility, Screen Reco
 - Electron's built-in reasons for camera, microphone, audio capture and Bluetooth are replaced with "GizeCat never uses … If macOS asks, choose Don't Allow", so even an unexpected prompt says what is true.
 - Screen analysis is not available on macOS. It fails closed: no capture code runs, so no Screen Recording prompt can appear.
 - **Open at login** is off by default. If you turn it on, macOS may ask you to approve it in **System Settings → General → Login Items**. Settings then shows that it waits for your approval, with an **Open Login Items settings** button.
+- **Keychain.** With no API key saved, GizeCat does not ask the Keychain for its status. Saving an API key is what first needs it. Chromium's own cookie store may still ask at launch (not checked on a Mac).
 
 ## What works and what does not
 
@@ -55,7 +59,10 @@ What exists in code (THEORETICALLY_COMPATIBLE_NOT_EXECUTED for every item):
 - A Dock icon, on by default. **Settings → General → Show GizeCat in the Dock** turns it off; the menu-bar icon then stays.
 - **Settings → General → Open at login**, through macOS's login-item service. It works only when the app is in /Applications; a copy in Downloads shows the reason instead of the switch.
 - The application menu has About, Services, Hide Others, Show All and Quit, but no Hide, so Cmd+H can never hide the cat. Cmd+C and Cmd+V work in Settings.
-- The show/hide shortcut Control+Option+Shift+C.
+- The show/hide shortcut Control+Option+Shift+C. The shortcut field accepts Command and Cmd, and shows Option and Command. In `settings.json` they are stored as `Alt` and `Super`.
+- Settings in macOS terms: "this Mac", "menu bar", "Open at login". Settings icons are plain Unicode symbols, because the Windows icon font does not exist on a Mac.
+- The Behaviour page leaves out the taskbar, tab-strip and window-hop rows when those capabilities are unavailable.
+- **Take your cat to another device** in Settings → Personality ([guide](profile-transfer.md)).
 - A quick quit at logout or shutdown that saves the cat at once.
 
 What it does not do:
@@ -66,15 +73,18 @@ What it does not do:
 ## Limitations
 
 - Nothing has run on a Mac. The first-click delivery, the click-through and the panel level are the first things a Mac run must check ([checklist](../gizeverse/04-macos.md)).
-- "Hide from screenshots" asks macOS not to share the cat's windows. Screen capture on macOS 15 and later may ignore that request (not checked).
+- "Hide from screenshots" asks macOS not to share the cat's windows. Newer capture tools, on macOS 15 and later, may still show the cat (not checked).
+- The Apps exclusion list on the Privacy page has no effect on macOS, because screen analysis is unavailable.
+- Some rows and texts are still written for Windows. The window rows that do not name Windows have no effect on a Mac, Diagnostics › Surfaces still lists taskbars and tab strips, and About still mentions koffi, which macOS builds do not ship.
 - There is no automatic update. Replace the app with a new version.
 
 ## Signing and store status
 
 | Item | Status |
 |---|---|
-| Ad-hoc test zips (x64, arm64) | COMPILED_OR_PACKAGED only if the release lists them; never notarized |
-| Developer ID signing and notarization (DMG and zip, x64, arm64, universal) | REQUIRES_OWNER_CREDENTIALS (Apple Developer Program, a Developer ID certificate, a notarization key) |
+| Ad-hoc zips (x64, arm64), built in a disposable WSL 2 distro | COMPILED_OR_PACKAGED; never run; never notarized |
+| Ad-hoc DMG and zip (x64, arm64, universal), workflow job `adhoc` | THEORETICALLY_COMPATIBLE_NOT_EXECUTED (the workflow has never been started); never notarized |
+| Developer ID signing and notarization (DMG and zip, x64, arm64, universal), workflow job `developer-id` | REQUIRES_OWNER_CREDENTIALS (Apple Developer Program, a Developer ID certificate, a notarization key, in the `macos-signing` environment) |
 | Universal build | THEORETICALLY_COMPATIBLE_NOT_EXECUTED (only a Mac can build it) |
 | Mac App Store | NOT_IMPLEMENTED |
 

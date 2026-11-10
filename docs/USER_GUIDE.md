@@ -84,7 +84,7 @@ The cat cannot appear above: exclusive-fullscreen games, the lock screen / UAC p
 
 ## Other devices (1.4.0 release candidate)
 
-1.4.0 is not released, and **none of it has run on these devices**. The cat, its personality presets and its coats are the same everywhere; this is what differs. Install steps, permissions and limits: [docs/platforms/](platforms/README.md).
+1.4.0 is not released, and **none of it has run on these devices**. The cat, its personality presets and its coats are the same everywhere; this is what differs. Install steps, permissions and limits: [docs/platforms/](platforms/README.md). If something does not work: [troubleshooting by device](platforms/troubleshooting.md).
 
 ### macOS
 
@@ -92,7 +92,8 @@ The cat cannot appear above: exclusive-fullscreen games, the lock screen / UAC p
 - **Menu-bar icon:** a click opens its menu (Show/Hide is in the menu); a click does not hide the cat.
 - **Dock icon:** on by default. Settings → General → **Show GizeCat in the Dock** turns it off; the menu-bar icon stays.
 - **Open at login:** off by default. Turn it on in Settings → General; it works only when the app is in the Applications folder, and macOS may ask you to approve it in System Settings → General → Login Items.
-- **Shortcut:** Control+Option+Shift+C shows or hides the cat.
+- **Shortcut:** Control+Option+Shift+C shows or hides the cat. The shortcut field also accepts Command.
+- **Settings** use macOS terms ("this Mac", "menu bar", "Open at login"). Rows for things the Mac version cannot do, such as the taskbar, are left out where GizeCat reports them unavailable.
 - Screen analysis and AI vision are not available on macOS.
 
 ### iPad and Android tablets
@@ -100,6 +101,6 @@ The cat cannot appear above: exclusive-fullscreen games, the lock screen / UAC p
 - The cat lives inside its own app window, never over other apps.
 - **Touch:** stroke the cat back and forth to pet it; tap it to say hello; press and hold for a moment, then drag to pick it up; let go to drop it, or flick to throw it.
 - **Toolbar:** Call the cat, Sleep or Wake, Pause, Sound, Settings.
-- **Settings:** your cat (name, coat, drawing style, size, shadow, emotes), personality (Calm, Playful, Mischievous), sound (off until you turn it on; the device's volume and silent mode apply), install hints, where the cat is saved, how to play, privacy, Reset settings and Start over with a new cat.
+- **Settings:** your cat (name, coat, drawing style, size, shadow, emotes), personality (Calm, Playful, Mischievous), sound (off until you turn it on; the device's volume and silent mode apply), install hints, where the cat is saved and whether it can start offline, how to play, privacy, Reset settings, Start over with a new cat, and the third-party notices under About.
 - On iPad, install the web app first (Safari → Share → Add to Home Screen), then meet your cat: a cat met in a Safari tab may not come along, and Safari may clear a tab's data after 7 days without a visit.
-- Each device and each app has its own cat. Settings → **Take your cat to another device** saves your cat to a file and loads one, so you can move it (on Windows and macOS it is on the Personality page).
+- Each device and each app has its own cat. Settings → **Take your cat to another device** saves your cat to a file and loads one, so you can move it (on Windows and macOS it is on the Personality page). It is a copy, not a sync ([guide](platforms/profile-transfer.md)).

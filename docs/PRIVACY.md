@@ -84,7 +84,9 @@ The ARM64 installer is the same app with the ARM64 build of its native library. 
 
 - **No permission prompts.** 1.4.0 never asks for Accessibility, Screen Recording, Input Monitoring, camera, microphone or Bluetooth. Electron's built-in reasons for camera, microphone, audio capture and Bluetooth are replaced with "GizeCat never uses …; choose Don't Allow".
 - **No screen analysis.** Perception is not available on macOS and fails closed: no capture code runs, and no Screen Recording prompt can appear. Window titles and window positions of other apps are not read (the cat stays on the floor).
-- **Files:** the same files as on Windows, in `~/Library/Application Support/Desktop Cat`. API keys, if any, are protected by the macOS Keychain (item "Desktop Cat Safe Storage").
+- **Files:** the same files as on Windows, in `~/Library/Application Support/Desktop Cat`. API keys, if any, are protected by the macOS Keychain (item "Desktop Cat Safe Storage"). With no key saved, GizeCat does not ask the Keychain for its status. Saving a key is what first needs it. Chromium's own cookie store may still ask (not checked on a Mac).
+- **Exclusion list:** the Apps exclusion list has no effect on macOS, because screen analysis is unavailable there.
+- **Hide from screenshots** is a request to the system. Newer capture tools may still show the cat.
 - **Open at login** is off by default and written only when you turn it on, for the app in /Applications. The app writes nothing at startup.
 - **Diagnostics** add `os.arm64Translation`: true when an x64 build runs under Rosetta (or under emulation on Windows on Arm). It is a boolean, not personal data.
 
@@ -94,8 +96,9 @@ The ARM64 installer is the same app with the ARM64 build of its native library. 
 - **Network:** the page itself cannot make requests (CSP `connect-src 'none'`). The only traffic is the browser loading the app's own files from the site that hosts it: on first load, once per version when the service worker keeps an offline copy, and the browser's own update checks of `sw.js` and the manifest. No page data is ever sent. The host's server may log those file requests, like any website; GizeCat has no control over that.
 - **Storage keys:** localStorage `gizecat.web.cat.v1` (the cat) and `gizecat.web.settings.v1` (its settings, including personality). The service-worker cache `gizecat-shell-<scope hash>-<version>-<hash>` holds only the app's own files.
 - **Deleting:** Settings → Start again → **Start over with a new cat** (the cat and its settings), removing the Home Screen app or uninstalling the installed app, or clearing the site's data in the browser. Safari may delete a Safari tab's data after 7 days without a visit; a Home Screen app keeps its own storage.
-- **Shared origin:** on a GitHub project site, the web app shares its browser storage and caches with every other GitHub Pages site of the same owner. GizeCat deletes only older caches of its own copy (`gizecat-shell-<scope hash>-*`). A custom domain avoids the sharing.
+- **Shared origin:** on a GitHub project site, the web app shares its browser storage and caches with every other GitHub Pages site of the same owner. The expected address, `https://gizeverse.github.io/GizeCat/`, would be such a site; it is not deployed. GizeCat deletes only older caches of its own copy (`gizecat-shell-<scope hash>-*`). A custom domain avoids the sharing.
 - **No keyboard listening.** The build fails if the web files contain key-listener code. The name field reads its value when you finish editing it, like any form field; Escape closing the sheet is the browser's own dialog behaviour.
+- **Licences page:** `licenses.html` shows the third-party notices. It is static: no script, no form, and its own strict Content Security Policy. It is one more of the app's own files, kept for offline use. It sends and stores nothing.
 
 ### The Android app
 
@@ -106,10 +109,15 @@ The ARM64 installer is the same app with the ARM64 build of its native library. 
 - **Backup policy:** no cloud backup (`allowBackup="false"`). On Android 12 and later, a device-to-device transfer may copy the cat's data (`app_webview/`). Uninstalling offers to keep the data.
 - **Files:** the app writes a file only through the system "save as" screen, at a place you choose, and reads one only from the system file picker. There is no storage permission.
 - **No DevTools** in release or trial builds.
+- **Licences page:** the same static page as in the web app, served from the app's own files. Links on it are plain text, so it leads nowhere.
+
+### Build and signing secrets (not your data)
+
+Signing a release needs the project owner's keys: an Android upload keystore, an Apple Developer ID certificate and notarization key, a Windows code-signing certificate. None of them exists in any GizeCat app, installer or web bundle, and no app ever reads them. They have nothing to do with your data. The owner keeps them outside the repository, and in CI they live only in protected GitHub Environments (`android-signing`, `macos-signing`, `windows-signing`). The workflows that use them are manual and have never been started ([threat model](THREAT_MODEL.md), T22).
 
 ### The profile file
 
-1.4.0 adds a portable file to move a cat to another device (format: `src/shared/profileTransfer.ts`). **Take your cat to another device** saves and loads it: Settings → Personality on Windows and macOS, and the settings sheet in the web app and the Android app. On the desktop the file is chosen in the system's own save and open dialogs; in the web app it is a download, the share sheet (installed iPad app) or a picked file; in the Android app it is the system "save as" screen or file picker. Before anything changes you see what the file would change and choose what to load.
+1.4.0 adds a portable file to move a cat to another device (format: `src/shared/profileTransfer.ts`; [how to use it](platforms/profile-transfer.md)). **Take your cat to another device** saves and loads it: Settings → Personality on Windows and macOS, and the settings sheet in the web app and the Android app. On the desktop the file is chosen in the system's own save and open dialogs; in the web app it is a download, the share sheet (installed iPad app) or a picked file; in the Android app it is the system "save as" screen or file picker. Before anything changes you see what the file would change and choose what to load.
 
 - **It contains:** the cat's name, its identity (`catId`) and birth time, its 7 personality traits, its look (coat, style, size, opacity, animation speed, shadow, emotes), and the carried behaviour, handling and sound preferences. Its counters, learned habits and bond are included only if you choose "what it has learned".
 - **It never contains:** API keys, screen-analysis or AI settings, exclusion lists, window titles, display ids or positions, folder paths, startup or shortcut settings, or diagnostics.

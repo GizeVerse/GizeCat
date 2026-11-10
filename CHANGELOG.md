@@ -4,37 +4,51 @@ GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is th
 
 ## 1.4.0 (release candidate, unreleased)
 
-**Not released.** 1.3.0 stays the current release until the owner approves 1.4.0. **Nothing in 1.4.0 has run on any device.** Statuses use the release vocabulary: IMPLEMENTED, COMPILED_OR_PACKAGED, THEORETICALLY_COMPATIBLE_NOT_EXECUTED, REQUIRES_OWNER_CREDENTIALS, BLOCKED_BY_PLATFORM, NOT_IMPLEMENTED. Every target and artifact: [docs/platforms/](docs/platforms/README.md).
+**Not released.** 1.3.0 stays the current release until the owner publishes 1.4.0. **Nothing in 1.4.0 has run on any device.** A build is not a test. Statuses use the release vocabulary: IMPLEMENTED, COMPILED_OR_PACKAGED, THEORETICALLY_COMPATIBLE_NOT_EXECUTED, REQUIRES_OWNER_CREDENTIALS, BLOCKED_BY_PLATFORM, NOT_IMPLEMENTED. Every target and artifact: [docs/platforms/](docs/platforms/README.md).
 
 ### Added
-- **Windows on Arm.** One installer per architecture: `Desktop-Cat-Setup-1.4.0-x64.exe` and `Desktop-Cat-Setup-1.4.0-arm64.exe`. Each carries only its own native library. The ARM64 installer stops with a clear message on a PC that is not Windows on Arm. A static payload check (`scripts/check-win-payload.mjs`) reads both builds without running them. The ARM64 build is cross-built on x64 and has never run (THEORETICALLY_COMPATIBLE_NOT_EXECUTED).
+- **Windows on Arm.** One installer per architecture: `Desktop-Cat-Setup-1.4.0-x64.exe` and `Desktop-Cat-Setup-1.4.0-arm64.exe`. Each carries only its own native library. The ARM64 installer stops with a clear message on a PC that is not Windows on Arm. A static payload check (`scripts/check-win-payload.mjs`) reads both builds without running them, and fails on any file outside the app's allow-list. Both installers are unsigned. The ARM64 build is cross-built on x64 and has never run (THEORETICALLY_COMPATIBLE_NOT_EXECUTED).
 - **macOS as a desktop target** for Intel and Apple Silicon ([guide](docs/platforms/macos.md)):
   - a template menu-bar icon whose click opens the menu;
   - a Dock icon, on by default, with a "Show GizeCat in the Dock" switch;
   - an opt-in "Open at login" through macOS's login-item service, off by default;
   - an application menu without Hide, and a quick save at logout or shutdown;
   - no permission prompts: Electron's camera, microphone and Bluetooth reasons now say GizeCat never uses them;
-  - Settings in macOS terms: "Open at login" in Diagnostics, the macOS Keychain in the API-key messages, and a note that the fullscreen setting has no effect;
-  - packaging: DMG and zip for x64, arm64 and universal through a manual workflow on a Mac runner (Developer ID signing and notarization: REQUIRES_OWNER_CREDENTIALS), and ad-hoc test zips for x64 and arm64 from a Linux container (not notarized).
+  - Settings in macOS terms: "this Mac", "menu bar", "Open at login", Option and Command, the macOS Keychain in the API-key messages, and a note that the fullscreen setting has no effect;
+  - the shortcut field accepts Command and Cmd;
+  - plain Unicode icons in Settings, because the Windows icon font does not exist on a Mac;
+  - rows for taskbar, tab-strip and window-hop behaviour left out where those capabilities are unavailable;
+  - status checks that do not touch the Keychain while no API key is stored.
 
   It is floor-only (no window climbing), and it has never run on a Mac.
+- **macOS packages:**
+  - ad-hoc signed, **not notarized** zips for Intel and Apple Silicon: `GizeCat-1.4.0-mac-x64-adhoc.zip` and `GizeCat-1.4.0-mac-arm64-adhoc.zip`. They are built with `electron-builder --mac dir` in a disposable WSL 2 distro on Windows (`npm run package:mac:adhoc-wsl`) or in a Linux container (`npm run package:mac:adhoc-docker`). `scripts/check-mac-payload.mjs` inspects them statically. COMPILED_OR_PACKAGED, never run;
+  - DMG and zip for x64, arm64 and universal, from the manual `macos-packages.yml` workflow on a Mac runner: ad-hoc signed without secrets, with `-adhoc` names, or Developer ID signed and notarized with the owner's secrets (REQUIRES_OWNER_CREDENTIALS). DMG and universal builds need a Mac. The workflow has never been started.
 - **An installable web app (PWA) for tablets** ([iPad](docs/platforms/ipados.md), [Android](docs/platforms/android.md#the-web-app-in-chrome)):
-  - a manifest and icons;
-  - an offline service worker with a versioned cache;
-  - a tablet layout with a toolbar and safe areas;
+  - a manifest with a stable `id`, and icons;
+  - an offline service worker with a versioned cache, and one line in Settings that says where the offline copy stands;
+  - a CSS-only loading screen, and a failure message after 15 seconds if the app cannot start;
+  - a tablet layout with a toolbar and safe areas, a compact toolbar in narrow windows, and a Home Screen look that runs under the status bar;
   - a settings sheet (name, coat, style, size, shadow, emotes, personality, sound, storage status, Reset settings, Start over);
+  - a static third-party notices page, `licenses.html`, under Settings → About. It opens offline;
   - sound that starts from a tap;
   - `npm run package:web`, which writes a self-hostable zip.
 
-  Public hosting needs the owner (REQUIRES_OWNER_CREDENTIALS). It has never run on an iPad, an Android tablet or in a browser.
+  It is prepared for the GitHub project site `https://gizeverse.github.io/GizeCat/`. That address is the expected one and **it is not deployed** (REQUIRES_OWNER_CREDENTIALS). It has never run on an iPad, an Android tablet or in a browser.
 - **A native Android tablet app** ([guide](docs/platforms/android.md), [decision record](docs/gizeverse/14-android-app.md)):
   - a Kotlin WebView app around the same web bundle;
-  - no permissions at all, so there is no network access;
+  - no permissions at all, so there is no network access; no service, alarm, job or wake lock;
   - no cloud backup, and a hardened WebView;
-  - one narrow file bridge for saving profile files.
+  - one narrow file bridge for saving profile files;
+  - Back closes an open sheet first, then moves the app to the background;
+  - the same third-party notices page, in the app's own files;
+  - a signing pipeline: the key comes from the `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` environment variables, or else from `android/keystore.properties`. `npm run android:release` builds both outputs. A partial set stops the build and names what is missing, never a value. IMPLEMENTED; never run, because no key exists;
+  - draft Google Play texts and a readiness list for the owner ([docs/store/google-play/](docs/store/google-play/release-readiness.md)). No listing exists.
 
-  The release APK and AAB are unsigned until the owner creates a release key; a debug-signed trial APK exists for sideload trials. It has been compiled and packaged, never run on a device or emulator.
-- **A portable profile format** (`src/shared/profileTransfer.ts`, `gizeverse-character-profile` format 1.0): the cat's identity, traits, look and preferences, and its memory only on request; never secrets, AI or perception settings, paths or device-only settings. A newer major version is refused, and an import never re-enables an opt-out. **Take your cat to another device** saves and loads it: Settings → Personality on Windows and macOS (the system's own save and open dialogs), and the settings sheet in the web app and the Android app. A preview shows what a file would change, and nothing changes until you confirm. Never run on a device.
+  The release APK and AAB are unsigned until the owner's key exists (REQUIRES_OWNER_CREDENTIALS), and an unsigned APK cannot be installed. A debug-signed trial APK exists for sideload trials only and is never a production release. It has been compiled and packaged, never run on a device or emulator.
+- **A portable profile format** (`src/shared/profileTransfer.ts`, `gizeverse-character-profile` format 1.0): the cat's identity, traits, look and preferences, and its memory only on request; never secrets, AI or perception settings, paths or device-only settings. A newer major version is refused, and an import never re-enables an opt-out. **Take your cat to another device** saves and loads it: Settings → Personality on Windows and macOS (the system's own save and open dialogs), and the settings sheet in the web app and the Android app. A preview shows what a file would change, and nothing changes until you confirm. It is a copy, not a sync ([guide](docs/platforms/profile-transfer.md)). Never run on a device.
+- **Release automation** ([guide](docs/platforms/release-automation.md)). Four workflows, each manual only: `macos-packages.yml`, `android-release.yml`, `release.yml` (now with a `windows-signed` job using `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`, and draft attachment) and `pages.yml`. Signing secrets live in the protected GitHub Environments `macos-signing`, `android-signing` and `windows-signing`. **None has ever been started.** `macos-packages.yml`, `pages.yml` and `android-release.yml` are not on `main`, so they cannot be started until the owner brings them there.
+- **Documentation:** [troubleshooting by device](docs/platforms/troubleshooting.md), [moving a cat to another device](docs/platforms/profile-transfer.md), [Android signing](docs/platforms/android-signing.md).
 - **Diagnostics:** `os.arm64Translation` (true when an x64 build runs under Rosetta or Windows on Arm emulation).
 
 ### Changed
@@ -43,14 +57,18 @@ GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is th
 - **Web host CSP:** no `data:` images; `manifest-src` and `worker-src 'self'` added. The 1.3.0 wording "no network after load" is replaced by a precise one: the page itself can make no requests, and the only traffic is the browser loading the app's own files.
 - The untrusted-text helpers moved to `src/shared/text.ts` (the old path re-exports them).
 - The [capability matrix](docs/gizeverse/capability-matrix.md) marks the macOS login item as implemented and never run on a Mac, and notes which web and Android evidence is from 1.3.0.
+- **Android configuration:** the Activity also handles `touchscreen` and `colorMode`, so a move to another display keeps the live page. Changes of dark mode, language, layout direction and text size still rebuild the page on purpose. The release build no longer writes version-control info into the APK.
+- `THIRD_PARTY_NOTICES.md` names the product GizeCat, adds rcodesign as a build tool, and no longer says the Android app does not show the notices.
 
 ### Security
-- New threat-model entries for the profile file as untrusted input, the service worker, static hosting with a meta-tag CSP and the shared `github.io` origin, and the Android WebView file bridge ([THREAT_MODEL.md](docs/THREAT_MODEL.md), T17–T20).
+- New threat-model entries for the profile file as untrusted input, the service worker, static hosting with a meta-tag CSP and the shared `github.io` origin, the Android WebView file bridge, the static licences page, and the signing secrets of the release automation ([THREAT_MODEL.md](docs/THREAT_MODEL.md), T17–T22).
 - New frozen identifiers, pinned by tests: `io.github.gizeverse.gizecat` (Android application id), `https://appassets.androidplatform.net` (Android web origin) and `gizeverse-character-profile` (profile tag).
 
 ### Not done
 - No test was executed for 1.4.0. The new unit, Playwright and static tests are written and wait for the owner's run.
-- Signing, notarization, store listings, public web hosting and Android developer verification all need the owner's credentials.
+- No workflow in the release automation has been started.
+- Authenticode signing, Developer ID signing, notarization, Android release signing, store listings, public web hosting and Android developer verification all need the owner's credentials. No store listing exists.
+- Some Settings texts are still written for Windows when shown on a Mac ([limits](docs/platforms/macos.md#limitations)).
 
 ## 1.3.0 — first public release
 

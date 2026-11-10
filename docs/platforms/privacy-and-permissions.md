@@ -22,7 +22,7 @@ On macOS, 1.4.0 never asks for Accessibility, Screen Recording, Input Monitoring
 |---|---|
 | Windows | None with default settings. Optional AI vision talks only to the provider you configure ([PRIVACY.md](../PRIVACY.md#network-access)). |
 | macOS | None with default settings. Screen analysis and AI vision cannot run on macOS. The AI page's "List models" and "Test connection" buttons contact only the endpoint you configured, and only when you click them. |
-| Web app (iPad, Android Chrome, desktop browsers) | The page itself cannot make requests (its Content Security Policy has `connect-src 'none'`). The only traffic is the browser loading the app's own files from the site that hosts it: on first load, once per version for the offline copy, and the browser's own update checks of `sw.js` and the manifest. No page data is ever sent. |
+| Web app (iPad, Android Chrome, desktop browsers) | The page itself cannot make requests (its Content Security Policy has `connect-src 'none'`). The only traffic is the browser loading the app's own files from the site that hosts it: on first load, once per version for the offline copy, and the browser's own update checks of `sw.js` and the manifest. No page data is ever sent. The licences page is one more of those files; it is static and has no script. |
 | Android app | None. Three layers: no internet permission, a native layer that answers every request outside the app's own files with an empty "not found", and the same `connect-src 'none'` policy. |
 
 ## What is stored, and where
@@ -30,13 +30,13 @@ On macOS, 1.4.0 never asks for Accessibility, Screen Recording, Input Monitoring
 | Version | Where | What |
 |---|---|---|
 | Windows | `%APPDATA%\Desktop Cat` | Settings, the cat's state, logs; an encrypted API key only if you enter one ([details](../PRIVACY.md#what-is-stored-on-disk)) |
-| macOS | `~/Library/Application Support/Desktop Cat`; Keychain item "Desktop Cat Safe Storage" | The same files as on Windows; API keys, if any, are protected by the macOS Keychain |
+| macOS | `~/Library/Application Support/Desktop Cat`; Keychain item "Desktop Cat Safe Storage" | The same files as on Windows; API keys, if any, are protected by the macOS Keychain. With no key saved, GizeCat does not ask the Keychain for its status |
 | Web app | The browser's storage for the hosting site: `gizecat.web.cat.v1` and `gizecat.web.settings.v1` (localStorage); a service-worker cache `gizecat-shell-<scope hash>-<version>-<hash>` | The cat and its settings; the cache holds only the app's own files |
 | Android app | The app's private WebView storage on the tablet | The same two localStorage keys. No cloud backup; Android 12+ device-to-device transfer may copy them; uninstalling offers to keep them |
 
 Nothing syncs between devices. There is no server.
 
-**Shared web origin.** If the web app is hosted as a GitHub project site (`<owner>.github.io/<repository>/`), it shares its browser storage and caches with every other GitHub Pages site of the same owner. GizeCat only deletes older caches of its own copy (`gizecat-shell-<scope hash>-*`). A custom domain avoids the sharing; that is an owner decision.
+**Shared web origin.** If the web app is hosted as a GitHub project site (`<owner>.github.io/<repository>/`), it shares its browser storage and caches with every other GitHub Pages site of the same owner. That is how the expected address, `https://gizeverse.github.io/GizeCat/`, would work; it is not deployed. GizeCat only deletes older caches of its own copy (`gizecat-shell-<scope hash>-*`). A custom domain avoids the sharing; that is an owner decision.
 
 ## What every version never does
 
@@ -47,7 +47,7 @@ Nothing syncs between devices. There is no server.
 
 ## The profile file
 
-1.4.0 adds a portable file to carry a cat to another device (format: `src/shared/profileTransfer.ts`). **Take your cat to another device** saves and loads it: Settings → Personality on Windows and macOS, and the settings sheet in the web app and the Android app. IMPLEMENTED; never run on a device.
+1.4.0 adds a portable file to carry a cat to another device (format: `src/shared/profileTransfer.ts`). **Take your cat to another device** saves and loads it: Settings → Personality on Windows and macOS, and the settings sheet in the web app and the Android app. IMPLEMENTED; never run on a device. How to use it, device by device: [profile-transfer.md](profile-transfer.md).
 
 - **It contains:** the cat's name, its identity (`catId`) and birth time, its 7 personality traits, its look (coat, style, size, opacity, animation speed, shadow, emotes), and the carried behaviour, handling and sound preferences. Its counters, learned habits and bond only if you choose to include what it has learned.
 - **It never contains:** API keys, screen-analysis or AI settings, exclusion lists, window titles, display ids or positions, folder paths, startup or shortcut settings, or diagnostics.

@@ -158,7 +158,7 @@ The manual workflow `.github/workflows/android-release.yml` has never been start
 
 `ANDROID_KEYSTORE_FILE` is **not** a secret: the job decodes `ANDROID_KEYSTORE_BASE64` to a file under the runner's temp folder, sets this variable to its path, and deletes the file at the end.
 
-Set them with the GitHub CLI. Without a value on the command line, `gh` prompts and nothing lands in your history:
+Set them on the environment, with `--env android-signing`. Do not set them repository-wide: a repository secret would reach the job without the reviewer gate. Without a value on the command line, `gh` prompts and nothing lands in your history:
 
 ```powershell
 [Convert]::ToBase64String([IO.File]::ReadAllBytes('<KEYSTORE_PATH>')) | gh secret set ANDROID_KEYSTORE_BASE64 --repo GizeVerse/GizeCat --env android-signing

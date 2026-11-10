@@ -1,6 +1,6 @@
 # Third-party notices
 
-Desktop Cat is MIT-licensed (see `LICENSE`). It ships or bundles the following third-party software.
+GizeCat (formerly Desktop Cat) is MIT-licensed (see `LICENSE`). It ships or bundles the following third-party software.
 
 ## Shipped in the installer
 
@@ -17,6 +17,8 @@ Desktop Cat is MIT-licensed (see `LICENSE`). It ships or bundles the following t
 
 The UI Automation helper `resources\native\DesktopCatUia.exe` (v1.1) is original code from `native/uia-helper/`, compiled with the .NET Framework C# compiler. It uses the .NET Framework and its UI Automation assemblies (`UIAutomationClient`, `UIAutomationTypes`, `WindowsBase`) that are part of Windows; none of them are redistributed.
 
+The macOS packages (1.4.0) contain Electron, Chromium and Node.js as above, and no koffi.
+
 ## Bundled into the application JavaScript
 
 | Component | Version | License |
@@ -25,13 +27,13 @@ The UI Automation helper `resources\native\DesktopCatUia.exe` (v1.1) is original
 
 ## Build and test tools (not shipped)
 
-electron-builder 26.18.1 (MIT), esbuild 0.28.2 (MIT), TypeScript 6.0.3 (Apache-2.0), Vitest 5.0.5 (MIT), Playwright 1.64.1 (Apache-2.0), ESLint 10.13.0 (MIT), typescript-eslint 8.72.1 (MIT), @electron/fuses 2.1.3 (MIT). NSIS (zlib/libpng license) is downloaded by electron-builder to build the installer and its stub is part of the installer executable.
+electron-builder 26.18.1 (MIT), esbuild 0.28.2 (MIT), TypeScript 6.0.3 (Apache-2.0), Vitest 5.0.5 (MIT), Playwright 1.64.1 (Apache-2.0), ESLint 10.13.0 (MIT), typescript-eslint 8.72.1 (MIT), @electron/fuses 2.1.3 (MIT). NSIS (zlib/libpng license) is downloaded by electron-builder to build the installer and its stub is part of the installer executable. rcodesign 0.29.0 (apple-codesign, MPL-2.0) re-signs the ad-hoc macOS zips and is not part of them.
 
 ## Artwork, icons and sounds
 
 All cat artwork, animations, emotes and icons are original and drawn procedurally in code (`src/renderer/overlay/cat/`, `scripts/gen-icons.cjs`). No third-party art, sprites, fonts or sounds are included. The research references studied (Pixel-Pet, pixelpets, mochi-llm-pet, deskcat, desktop-pet-cat) were used for ideas only; no code or assets were copied (see `docs/research/reference-pets.md`).
 
-The settings window uses the Windows system fonts (Segoe UI Variable, Segoe Fluent Icons / MDL2 Assets) installed with Windows; no font files are bundled.
+The settings window uses the Windows system fonts (Segoe UI Variable, Segoe Fluent Icons / MDL2 Assets) installed with Windows. Off Windows it uses the system's own fonts and plain Unicode symbols. No font files are bundled.
 
 ## License texts
 
@@ -168,4 +170,4 @@ The launcher icon is the app's own artwork: `build/icon.png`, copied unchanged t
 
 Build tools, not shipped in the APK or AAB: the Android Gradle Plugin 9.0.1 with its D8/R8 and lint (Apache-2.0), the Kotlin compiler 2.2.10 built into it (Apache-2.0), and Gradle 9.1.0 (Apache-2.0). The Gradle wrapper (`android/gradlew`, `android/gradlew.bat`, `android/gradle/wrapper/gradle-wrapper.jar`; Apache-2.0, © the original authors of Gradle) is committed in the repository, so the build can download its pinned Gradle distribution.
 
-The Android app does not show these notices yet. Before a store release it needs an in-app licenses page, or a copy of this section in the bundled page.
+The web app and the Android app show these notices on a page linked from Settings → About. The page is generated from this file at build time and adds the full Apache-2.0 terms.

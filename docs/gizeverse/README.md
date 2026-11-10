@@ -38,6 +38,10 @@ Branch `feat/gizeverse-foundation`, cut from `feat/v1.2-lively` at `58b4cd6` (v1
 | 24 | 1.4.0: mobile boundaries revisited (native Android app, no native iPad app, profile format) | [08-mobile-boundaries.md](08-mobile-boundaries.md#140-update) |
 | 25 | 1.4.0 decisions in the platform ADR | [ADR 0004, 1.4.0 addendum](../adr/0004-gizeverse-platform.md#addendum-140-release-candidate) |
 | 26 | Building and packaging every artifact | [building-and-packaging.md](../platforms/building-and-packaging.md) |
+| 27 | 1.4.0: the manual release workflows, their secrets and the owner's steps | [release-automation.md](../platforms/release-automation.md) |
+| 28 | 1.4.0: signing the Android app, and Google Play readiness | [android-signing.md](../platforms/android-signing.md), [docs/store/google-play/](../store/google-play/release-readiness.md) |
+| 29 | 1.4.0: troubleshooting by device | [troubleshooting.md](../platforms/troubleshooting.md) |
+| 30 | 1.4.0: moving a cat to another device | [profile-transfer.md](../platforms/profile-transfer.md) |
 
 ## Status in one table
 
@@ -58,9 +62,9 @@ Branch `release/1.4.0-universal-devices`. **Not released**; 1.3.0 stays the curr
 | Target | What 1.4.0 adds | Runs on the device |
 |---|---|---|
 | Windows x64 and ARM64 | One installer per architecture; an ARM64-only guard; a static payload check | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
-| macOS Intel and Apple Silicon | Floating panel, template menu-bar icon, Dock switch, opt-in login item, packaging routes | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
-| iPad | The installable web app | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
-| Android tablets | A native WebView app with no permissions, and the installable web app | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
+| macOS Intel and Apple Silicon | Floating panel, template menu-bar icon, Dock switch, opt-in login item, packaging routes, ad-hoc zips (COMPILED_OR_PACKAGED, not notarized) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
+| iPad | The installable web app (expected project-site address not deployed) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
+| Android tablets | A native WebView app with no permissions and a ready signing pipeline (no key exists), and the installable web app | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
 | Every host | A portable profile file and "Take your cat to another device" to save and load it | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
 
 ## Risks and next milestone
@@ -74,7 +78,7 @@ Branch `release/1.4.0-universal-devices`. **Not released**; 1.3.0 stays the curr
    - Windows 10 and multi-monitor.
 5. **Linux packaging that keeps the sandbox** (a deb with an AppArmor profile, or a Flatpak). Without it, the AppImage is refused where it cannot sandbox.
 6. **Wayland and XWayland users see no cat.** A windowed or in-page companion is the candidate.
-7. **Web host size** (about 870 KB, half of it zod locales), and a PWA. Optionally a Capacitor wrapper for the mobile stores.
+7. **Web host size** (about 870 KB in 1.3.0, half of it zod locales). The 1.4.0 candidate adds the PWA and a native Android WebView app; Capacitor was rejected ([14-android-app.md](14-android-app.md)).
 8. **R2: a per-OS process identity for the privacy exclusions** before any window adapter or perception off Windows.
 
 ## Branch and status
