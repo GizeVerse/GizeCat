@@ -67,7 +67,12 @@ export interface WebOverlays extends HostOverlays {
   /** The in-page bridge for OverlayRuntime (the desktop's preload API, without IPC). */
   readonly api: OverlayApi;
   /** A pointer at `p` (CSS px) goes to the cat: the rules of a desktop overlay deciding to take the mouse. */
-  hitTest(p: Point, hovering?: boolean): boolean;
+  /**
+   * `pad` (CSS px, default 0) widens the hit zone: the reported hit regions and the cat's footprint,
+   * each grown by it. The floating cat's touch window uses it, so a finger anywhere on that window
+   * (the footprint plus a pad) is on the cat.
+   */
+  hitTest(p: Point, hovering?: boolean, pad?: number): boolean;
   /** The hit region in use right now (CSS px) and its age. */
   effectiveRegion(): { rects: readonly Rect[]; ageMs: number };
   /** The router's press state (HostOverlays.pressed / dragging). */
@@ -210,12 +215,18 @@ export function createWebOverlays(opts: WebOverlaysOptions): WebOverlays {
     return { rects: [out.boundsPx], ageMs };
   }
 
-  function hitTest(p: Point, hovering = false): boolean {
+  function hitTest(p: Point, hovering = false, pad = 0): boolean {
     if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return false;
     const region = effectiveRegion(opts.clock());
+    let rects: readonly Rect[] = region.rects;
+    if (pad > 0 && Number.isFinite(pad) && region.rects.length > 0 && lastOutput) {
+      // Only while the cat is there to touch (an empty region means hidden, out of view or not yet drawn).
+      const grow = (r: Rect): Rect => ({ x: r.x - pad, y: r.y - pad, width: r.width + 2 * pad, height: r.height + 2 * pad });
+      rects = [...region.rects, lastOutput.boundsPx].map(grow);
+    }
     return decideInteractive({
       cursor: p,
-      hitRects: region.rects,
+      hitRects: rects,
       interactive: hovering,
       interactionsEnabled: !blockedNow(),
       visible: active,

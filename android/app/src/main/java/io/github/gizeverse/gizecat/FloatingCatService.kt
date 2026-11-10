@@ -144,6 +144,7 @@ class FloatingCatService : Service() {
             return
         }
         FloatingState.started()
+        FloatingState.hintSink = { x, y -> window?.sendHint(x, y) }
         registerWatchers()
         enterForeground()
     }
@@ -180,6 +181,7 @@ class FloatingCatService : Service() {
     }
 
     private fun finish(reason: FloatingState.Stop) {
+        FloatingState.hintSink = null
         unregisterWatchers()
         FloatingState.stopped(reason)
         leaveForeground()
@@ -188,6 +190,7 @@ class FloatingCatService : Service() {
 
     override fun onDestroy() {
         // The system or stopSelf ended the service: nothing may outlive it.
+        FloatingState.hintSink = null
         unregisterWatchers()
         handler.removeCallbacksAndMessages(null)
         window?.let {

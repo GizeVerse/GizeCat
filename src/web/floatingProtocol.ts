@@ -49,23 +49,44 @@ export interface ScreenMetrics {
 export const OVERLAY_COMMANDS = ['pause', 'resume', 'hide', 'show', 'suspend', 'wake', 'save', 'reloadSettings'] as const;
 export type OverlayCommand = (typeof OVERLAY_COMMANDS)[number];
 
-export const POINTER_KINDS = ['down', 'move', 'up', 'cancel'] as const;
+/**
+ * down, move, up, cancel: a finger (or a pressed mouse button) on the cat's touch window.
+ * hover, leave: a mouse or trackpad pointer moving over it with no button pressed (Android delivers
+ * hover only to the window under the pointer, so this is the only pointer movement the cat can see).
+ */
+export const POINTER_KINDS = ['down', 'move', 'up', 'cancel', 'hover', 'leave'] as const;
 export type PointerKind = (typeof POINTER_KINDS)[number];
 
-/** Native -> overlay page. Pointer positions are raw screen coordinates in dp: the world's own. */
+/**
+ * Native -> overlay page. Pointer positions are raw screen coordinates in dp: the world's own. `ms`
+ * is the event's own time on native's uptime clock (MotionEvent.getEventTime), so a flick's speed is
+ * the finger's, not the message queue's. `hint` is a touch inside GizeCat's OWN app window (the only
+ * touches an app is allowed to see besides the cat's), offered to the cat as something to look at.
+ */
 export type OverlayInbound =
   | { t: 'metrics'; metrics: ScreenMetrics }
-  | { t: 'ptr'; k: PointerKind; id: number; x: number; y: number }
+  | { t: 'ptr'; k: PointerKind; id: number; x: number; y: number; ms: number }
+  | { t: 'hint'; x: number; y: number }
   | { t: 'cmd'; c: OverlayCommand };
 
+/** A rectangle in screen dp (whole device pixels). */
+export interface RectDp {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /**
- * Overlay page -> native. The window rectangle is in screen dp, whole device pixels. `touch` is false
- * while the cat takes no touches (paused, interactions off): native then makes the window not
- * touchable, so touches reach the app underneath.
+ * Overlay page -> native. The rectangle `x y w h` is the VISUAL window: the cat and the room it draws
+ * into. It never takes touches (native makes it not touchable), so everything outside the cat's touch
+ * window reaches the app underneath. `tx ty tw th` is the TOUCH window: only the cat's own footprint
+ * and a small pad, a separate, invisible window that takes the cat's touches. `touch` is false while
+ * the cat takes none (paused, interactions off): native then removes the touch window altogether.
  */
 export type OverlayOutbound =
   | { t: 'hello'; v: number }
-  | { t: 'win'; x: number; y: number; w: number; h: number; vis: boolean; touch: boolean }
+  | { t: 'win'; x: number; y: number; w: number; h: number; vis: boolean; touch: boolean; tx: number; ty: number; tw: number; th: number }
   | { t: 'saved'; ok: boolean };
 
 export const CONTROL_OPS = [
@@ -191,13 +212,20 @@ export function parseOverlayInbound(text: unknown): OverlayInbound | null {
       return metrics ? { t: 'metrics', metrics } : null;
     }
     case 'ptr': {
-      if (!hasOnly(o, ['t', 'k', 'id', 'x', 'y'])) return null;
+      if (!hasOnly(o, ['t', 'k', 'id', 'x', 'y', 'ms'])) return null;
       const k = POINTER_KINDS.find((p) => p === o.k);
       const id = num(o.id, 0, 1_000_000);
       const x = num(o.x, -LIMIT_DP, LIMIT_DP);
       const y = num(o.y, -LIMIT_DP, LIMIT_DP);
-      if (!k || id === null || !Number.isInteger(id) || x === null || y === null) return null;
-      return { t: 'ptr', k, id, x, y };
+      const ms = num(o.ms, 0, 1e13);
+      if (!k || id === null || !Number.isInteger(id) || x === null || y === null || ms === null) return null;
+      return { t: 'ptr', k, id, x, y, ms };
+    }
+    case 'hint': {
+      if (!hasOnly(o, ['t', 'x', 'y'])) return null;
+      const x = num(o.x, -LIMIT_DP, LIMIT_DP);
+      const y = num(o.y, -LIMIT_DP, LIMIT_DP);
+      return x === null || y === null ? null : { t: 'hint', x, y };
     }
     case 'cmd': {
       if (!hasOnly(o, ['t', 'c'])) return null;
@@ -225,13 +253,18 @@ export function parseOverlayOutbound(text: unknown): OverlayOutbound | null {
       return v === null ? null : { t: 'hello', v };
     }
     case 'win': {
-      if (!hasOnly(o, ['t', 'x', 'y', 'w', 'h', 'vis', 'touch'])) return null;
+      if (!hasOnly(o, ['t', 'x', 'y', 'w', 'h', 'vis', 'touch', 'tx', 'ty', 'tw', 'th'])) return null;
       const x = num(o.x, -LIMIT_DP, LIMIT_DP);
       const y = num(o.y, -LIMIT_DP, LIMIT_DP);
       const w = num(o.w, 1, LIMIT_DP);
       const h = num(o.h, 1, LIMIT_DP);
-      if (x === null || y === null || w === null || h === null || typeof o.vis !== 'boolean' || typeof o.touch !== 'boolean') return null;
-      return { t: 'win', x, y, w, h, vis: o.vis, touch: o.touch };
+      const tx = num(o.tx, -LIMIT_DP, LIMIT_DP);
+      const ty = num(o.ty, -LIMIT_DP, LIMIT_DP);
+      const tw = num(o.tw, 1, LIMIT_DP);
+      const th = num(o.th, 1, LIMIT_DP);
+      if (x === null || y === null || w === null || h === null || tx === null || ty === null || tw === null || th === null) return null;
+      if (typeof o.vis !== 'boolean' || typeof o.touch !== 'boolean') return null;
+      return { t: 'win', x, y, w, h, vis: o.vis, touch: o.touch, tx, ty, tw, th };
     }
     case 'saved':
       return hasOnly(o, ['t', 'ok']) && typeof o.ok === 'boolean' ? { t: 'saved', ok: o.ok } : null;

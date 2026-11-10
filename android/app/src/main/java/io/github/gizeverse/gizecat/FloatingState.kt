@@ -45,6 +45,17 @@ internal object FloatingState {
      */
     var appStarted = false
 
+    /**
+     * Set by the service while it runs: where a touch inside GizeCat's OWN app window goes (screen dp),
+     * offered to the cat as something to look at. Android shows an app no touch outside its own
+     * windows, so this and the cat's own window are the only pointers the cat can ever get.
+     */
+    var hintSink: ((Float, Float) -> Unit)? = null
+
+    fun hint(xDp: Float, yDp: Float) {
+        hintSink?.invoke(xDp, yDp)
+    }
+
     private val listeners = LinkedHashSet<() -> Unit>()
     private const val PREFS = "floating"
     private const val KEY_NOTIFICATIONS_ASKED = "notifications_asked"

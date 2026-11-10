@@ -148,6 +148,13 @@ export function isPriorityEvent(ev: SimEvent): boolean {
 export type HostSurfaceProvider = SurfaceProvider & {
   noteCat?(cat: CatPosition | null): void;
   edgeBands?(): readonly ScreenEdgeBand[] | null;
+  /**
+   * Android floating cat (1.4.2): this host has no Win32 click guard, but its screen edges are safe
+   * to climb (its window only takes the cat's own touches). With it the host hands edgeBands to the sim
+   * without the guard, and tells it to climb the left edge in full too (`fullBothSides`) and how much
+   * shorter the pause between edge visits is (`cooldownScale`, 0.05..1). Absent on Windows.
+   */
+  readonly guardlessScreenEdges?: { readonly fullBothSides: boolean; readonly cooldownScale: number };
   noteClickGuard?(state: ScreenEdgeGuard): void;
 };
 
@@ -926,13 +933,18 @@ export function createCatHost(opts: CatHostOptions): CatHost {
     }
     const envSurfaces = readSurfaces(nowReal);
     // Edge bands only with the click guard behind them (absent: the sim never climbs a screen edge).
-    edgeBands = input !== null && input.available && surfaces?.edgeBands ? safe(() => surfaces.edgeBands?.() ?? null, null, 'edge bands') : null;
+    // Android floating cat (1.4.2): a host with no Win32 click guard may declare guardless screen edges
+    // (nothing underneath can be covered by a click: its window only takes the cat's own touches).
+    // Windows never sets it, so its rule above is unchanged.
+    const guardless = surfaces?.guardlessScreenEdges ?? null;
+    edgeBands = (guardless !== null || (input !== null && input.available)) && surfaces?.edgeBands ? safe(() => surfaces.edgeBands?.() ?? null, null, 'edge bands') : null;
     const foreground = safe(() => tracker.getForeground(), null, 'foreground');
     const wall = wallClock();
     const v12: Partial<SimEnv> = {
       ...(buttons !== null ? { pointerButtonDown: buttons.down, pointerButtonPresses: buttons.presses } : {}),
       ...(cursor !== null && Number.isFinite(cursorMovedAt) ? { cursorIdleMs: Math.max(0, nowReal - cursorMovedAt) } : {}),
       ...(edgeBands !== null ? { edgeBands } : {}),
+      ...(edgeBands !== null && guardless !== null ? { edgeFullBothSides: guardless.fullBothSides, edgeCooldownScale: guardless.cooldownScale } : {}),
     };
     const base: Omit<SimEnv, 'now' | 'dt'> = {
       ...v12,

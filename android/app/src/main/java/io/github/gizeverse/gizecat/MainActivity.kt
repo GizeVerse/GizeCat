@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
@@ -272,6 +273,26 @@ class MainActivity : Activity() {
             if (resumed) root.post { reattachIfPending() }
             return true
         }
+    }
+
+    private var lastHintAt = 0L
+
+    /**
+     * While the floating cat runs, a touch inside GizeCat's own window is offered to the cat as
+     * something to look at (a "hint", screen dp, at most about every 60 ms). This is the one place the
+     * app sees a touch that is not on the cat, and it is only ever GizeCat's own window: Android lets
+     * no app watch touches in other apps, and nothing here tries to (no accessibility service, no
+     * screen reading). The event itself is passed on untouched.
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (FloatingState.running && ev.actionMasked != MotionEvent.ACTION_CANCEL) {
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN || ev.eventTime - lastHintAt >= 60) {
+                lastHintAt = ev.eventTime
+                val density = resources.displayMetrics.density
+                FloatingState.hint(ev.rawX / density, ev.rawY / density)
+            }
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onStart() {

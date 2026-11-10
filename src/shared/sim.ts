@@ -108,6 +108,18 @@ export interface SimEnv {
    */
   edgeBands?: readonly ScreenEdgeBand[];
   /**
+   * Android floating cat (1.4.2): the left edge is a full-height climb like the right one, not the
+   * desktop's short peek (the peek rule protects a visible desktop's sidebars and scrollbars, which a
+   * phone screen has not). Absent or false: the desktop rule, unchanged.
+   */
+  edgeFullBothSides?: boolean;
+  /**
+   * Android floating cat (1.4.2): multiplies the pause between screen-edge visits (default 1: the
+   * desktop's 4 to 8 minutes), clamped to 0.05..1, so a pet that lives on a phone screen visits its
+   * edges often enough to be seen. Absent: the desktop pause, unchanged.
+   */
+  edgeCooldownScale?: number;
+  /**
    * v1.2 (review C2): monotonic count of mouse-button presses (down edges, any button) since the host
    * started. Content-free (no position, no which-button); the sim only compares it with the previous
    * tick's value: a press ends a running hunt and blocks hunt starts for a few seconds (ADR 0003 §4.3).

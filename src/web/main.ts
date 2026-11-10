@@ -31,9 +31,11 @@ import { settleBootScreen } from './bootScreen';
 import { createWebDisplayService } from './display';
 import { connectControlBridge, connectOverlayBridge, isOverlaySurface } from './floatingBridges';
 import { parseMetricsQuery } from './floatingProtocol';
+import { createAndroidPanel, type AndroidPanel } from './androidPanel';
 import { createFloatingUi, type FloatingUi } from './floatingUi';
 import { detectHostMode, installHint, readHostEnv, shouldRegisterServiceWorker, shouldRequestPersistence } from './hostMode';
-import { createOverlaySurface } from './overlaySurface';
+import { createOverlaySurface, TOUCH_PAD_DP } from './overlaySurface';
+import { createScreenEdgeProvider } from './screenEdgeSurfaces';
 import { createWebLogger } from './logger';
 import { createPointerRouter, type RouterTarget } from './pointerRouter';
 import { createBrowserSaver, selectProfileSaver } from './profileFiles';
@@ -96,7 +98,7 @@ function boot(): void {
   const root = document.documentElement;
   const overlayPort = mode.kind === 'android-app' && isOverlaySurface(window.location.search) ? connectOverlayBridge(window) : null;
   const overlayMetrics = overlayPort ? parseMetricsQuery(window.location.search) : null;
-  const surface = overlayPort && overlayMetrics ? createOverlaySurface(overlayMetrics, overlayPort, () => settings.appearance, () => !catBlocked()) : null;
+  const surface = overlayPort && overlayMetrics ? createOverlaySurface(overlayMetrics, overlayPort, () => settings.appearance, () => !catBlocked(), clock) : null;
   if (surface) root.classList.add('gizecat-overlay');
   const controlPort = mode.kind === 'android-app' && !surface ? connectControlBridge(window) : null;
 
@@ -130,6 +132,8 @@ function boot(): void {
   let panel: SettingsPanel | null = null;
   /** The app screen's floating-cat controls (Android app, outside the floating window); null elsewhere. */
   let floatingUi: FloatingUi | null = null;
+  /** The Android app's home panel (androidPanel.ts); null in the browser and in the floating window. */
+  let androidPanel: AndroidPanel | null = null;
   /** Test build only (see installTestHook below). */
   let recorder: WebTestRecorder | null = null;
 
@@ -159,7 +163,10 @@ function boot(): void {
   };
   const router = createPointerRouter({
     gestures: createGestureRecognizer(),
-    hitTest: (p, hovering) => !insideBar(p) && overlays.hitTest(p, hovering),
+    // The floating cat's window is only the cat and its pad: the whole of it is "on the cat".
+    hitTest: (p, hovering) => !insideBar(p) && overlays.hitTest(p, hovering, surface ? TOUCH_PAD_DP : 0),
+    // The floating window has nothing to scroll: a finger that moves on the cat carries it (and a flick throws it).
+    touchDragOnMove: surface !== null,
     onSimEvents: deliverSimEvents,
     now: clock,
     timers: { setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (h) => window.clearTimeout(h as number) },
@@ -238,12 +245,18 @@ function boot(): void {
     tracker,
     activity,
     perception: null,
+    // The floating cat walks the floor and climbs the screen's own edges (screenEdgeSurfaces.ts); the
+    // in-app cat and the browser page have no surfaces at all.
+    surfaces: surface ? createScreenEdgeProvider(display) : null,
     display,
     overlays,
     catStore,
     logger: log.child('host'),
     getSettings: () => settings,
-    cursorFallback: () => router.cursor,
+    // The floating cat sees a pointer only while one is on its own window (a press or a mouse hover) or
+    // as a fresh hint from a touch inside GizeCat's own app window; a touch that ended is not a pointer
+    // left standing there (Android shows an app nothing outside its own windows).
+    cursorFallback: () => (surface ? (router.pressed || router.hovering ? router.cursor : surface.cursorHint()) : router.cursor),
     clock,
     onStatusChange: () => {
       if (host) recorder?.noteState(host.state);
@@ -271,6 +284,8 @@ function boot(): void {
       if (save && floatingUi?.state.running) controlPort?.send('settingsChanged');
     }
     refreshUi();
+    // A change from the sheet shows in the panel's controls too (and the other way round).
+    androidPanel?.refresh();
     return r;
   }
 
@@ -310,6 +325,7 @@ function boot(): void {
         storage.saveSettings(settings);
         if (floatingUi?.state.running) controlPort?.send('settingsChanged');
         refreshUi();
+        androidPanel?.refresh();
       },
       onStartOver: startOver,
       host: mode,
@@ -361,6 +377,7 @@ function boot(): void {
       }
       refreshUi();
       settingsPanel?.refresh();
+      androidPanel?.refresh();
       return true;
     }
     const previous = sim.serialize();
@@ -546,32 +563,29 @@ function boot(): void {
     router.attach(document as unknown as RouterTarget);
   }
 
-  // ---- the app screen's floating-cat controls (Android app only)
-  const floatingEls = {
-    start: byId('btn-float', HTMLButtonElement),
-    pause: byId('btn-f-pause', HTMLButtonElement),
-    hide: byId('btn-f-hide', HTMLButtonElement),
-    stop: byId('btn-f-stop', HTMLButtonElement),
-    ask: document.getElementById('floating-ask'),
-    askText: document.getElementById('floating-ask-text'),
-    askOpen: byId('floating-ask-open', HTMLButtonElement),
-    askLater: byId('floating-ask-later', HTMLButtonElement),
-    status: document.getElementById('floating-status'),
-  };
-  if (controlPort && floatingEls.start && floatingEls.pause && floatingEls.hide && floatingEls.stop && floatingEls.ask && floatingEls.askText && floatingEls.askOpen && floatingEls.askLater && floatingEls.status) {
+  // ---- the Android app's home panel and its floating-cat controls (Android app only)
+  if (controlPort && settingsPanel) {
     const control = controlPort;
-    floatingUi = createFloatingUi({
-      els: {
-        start: floatingEls.start,
-        pause: floatingEls.pause,
-        hide: floatingEls.hide,
-        stop: floatingEls.stop,
-        ask: floatingEls.ask,
-        askText: floatingEls.askText,
-        askOpen: floatingEls.askOpen,
-        askLater: floatingEls.askLater,
-        status: floatingEls.status,
+    const sheet = settingsPanel;
+    const panelUi = createAndroidPanel({
+      getSettings: () => settings,
+      apply: (patch, save) => applyPatch(patch, save),
+      onCustomize: () => {
+        router.cancel();
+        sheet.open();
       },
+      onStage: () => panelUi.close(),
+      version: __APP_VERSION__,
+      onOpenChange: (open) => {
+        router.cancel();
+        // The in-app cat steps aside while the panel covers it (and stays parked while the cat floats).
+        catHost.setHidden(open || (floatingUi?.state.running ?? false));
+      },
+    });
+    androidPanel = panelUi;
+    document.body.append(panelUi.root);
+    floatingUi = createFloatingUi({
+      els: panelUi.floating,
       control,
       catName: () => settings.general.catName,
       // The floating cat starts from the stored cat: write the live one first.
@@ -591,10 +605,24 @@ function boot(): void {
         }
       },
     });
-    control.onState((s) => floatingUi?.update(s));
+    control.onState((s) => {
+      floatingUi?.update(s);
+      panelUi.setFloatingState(s);
+    });
+    // The toolbar's "Panel" button returns to the panel from the in-app cat.
+    const btnPanel = byId('btn-panel', HTMLButtonElement);
+    if (btnPanel) {
+      btnPanel.hidden = false;
+      btnPanel.addEventListener('click', () => {
+        router.cancel();
+        panelUi.open();
+      });
+    }
+    // The first thing the Android app shows is the panel.
+    panelUi.open();
     control.send('query');
   } else if (controlPort) {
-    log.warn('the floating cat controls are missing from the page');
+    log.warn('the Android panel could not be built: the settings sheet is missing');
   }
   if (catLoad.source === 'recovered') catStore.markDirty();
   if (!surface && document.visibilityState === 'hidden') onVisibility();

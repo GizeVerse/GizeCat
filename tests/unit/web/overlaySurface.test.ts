@@ -131,10 +131,10 @@ describe('overlay surface', () => {
 
   it('turns native touches into touch pointer events at the raw position', () => {
     const h = harness();
-    h.send({ t: 'ptr', k: 'down', id: 3, x: 500, y: 640 });
-    h.send({ t: 'ptr', k: 'move', id: 3, x: 520, y: 650 });
-    h.send({ t: 'ptr', k: 'up', id: 3, x: 520, y: 650 });
-    h.send({ t: 'ptr', k: 'cancel', id: 4, x: 1, y: 2 });
+    h.send({ t: 'ptr', k: 'down', id: 3, x: 500, y: 640, ms: 1000 });
+    h.send({ t: 'ptr', k: 'move', id: 3, x: 520, y: 650, ms: 1000 });
+    h.send({ t: 'ptr', k: 'up', id: 3, x: 520, y: 650, ms: 1000 });
+    h.send({ t: 'ptr', k: 'cancel', id: 4, x: 1, y: 2, ms: 1000 });
     const calls = h.router.handle.mock.calls.map((c) => c[0] as { type: string; pointerType: string; pointerId: number; clientX: number; clientY: number });
     expect(calls.map((e) => e.type)).toEqual(['pointerdown', 'pointermove', 'pointerup', 'pointercancel']);
     expect(calls.every((e) => e.pointerType === 'touch')).toBe(true);

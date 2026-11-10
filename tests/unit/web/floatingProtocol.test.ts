@@ -81,8 +81,8 @@ describe('overlay page -> native', () => {
   it('round-trips the three messages', () => {
     for (const m of [
       { t: 'hello', v: 1 } as const,
-      { t: 'win', x: -10.5, y: 300, w: 220, h: 240, vis: true, touch: true } as const,
-      { t: 'win', x: 0, y: 0, w: 220, h: 240, vis: true, touch: false } as const,
+      { t: 'win', x: -10.5, y: 300, w: 220, h: 240, vis: true, touch: true, tx: 20, ty: 310, tw: 100, th: 120 } as const,
+      { t: 'win', x: 0, y: 0, w: 220, h: 240, vis: true, touch: false, tx: 0, ty: 0, tw: 1, th: 1 } as const,
       { t: 'saved', ok: false } as const,
     ]) {
       expect(parseOverlayOutbound(serializeOverlayOutbound(m))).toEqual(m);
@@ -96,6 +96,28 @@ describe('overlay page -> native', () => {
     expect(parseOverlayOutbound('{"t":"win","x":0,"y":0,"w":10,"h":10,"vis":true}')).toBeNull();
     expect(parseOverlayOutbound('{"t":"win","x":0,"y":0,"w":10,"h":10,"vis":true,"touch":"yes"}')).toBeNull();
     expect(parseOverlayOutbound('{"t":"saved","ok":"yes"}')).toBeNull();
+  });
+
+  it('requires a valid touch rectangle alongside the window', () => {
+    const base = '"t":"win","x":0,"y":0,"w":10,"h":10,"vis":true,"touch":true';
+    expect(parseOverlayOutbound(`{${base},"tx":1,"ty":2,"tw":3,"th":4}`)).toEqual({ t: 'win', x: 0, y: 0, w: 10, h: 10, vis: true, touch: true, tx: 1, ty: 2, tw: 3, th: 4 });
+    expect(parseOverlayOutbound(`{${base}}`)).toBeNull();
+    expect(parseOverlayOutbound(`{${base},"tx":1,"ty":2,"tw":0,"th":4}`)).toBeNull();
+    expect(parseOverlayOutbound(`{${base},"tx":1,"ty":2,"tw":3,"th":4,"extra":1}`)).toBeNull();
+  });
+});
+
+describe('hover, leave and touch hints (native -> overlay page)', () => {
+  it('accepts hover and leave pointers with a timestamp and refuses a pointer without one', () => {
+    expect(parseOverlayInbound('{"t":"ptr","k":"hover","id":1,"x":5,"y":6,"ms":100}')).toMatchObject({ k: 'hover', ms: 100 });
+    expect(parseOverlayInbound('{"t":"ptr","k":"leave","id":1,"x":5,"y":6,"ms":100}')).toMatchObject({ k: 'leave' });
+    expect(parseOverlayInbound('{"t":"ptr","k":"down","id":1,"x":5,"y":6}')).toBeNull();
+  });
+
+  it('accepts an app-window touch hint and nothing extra on it', () => {
+    expect(parseOverlayInbound('{"t":"hint","x":10,"y":20}')).toEqual({ t: 'hint', x: 10, y: 20 });
+    expect(parseOverlayInbound('{"t":"hint","x":10,"y":20,"id":1}')).toBeNull();
+    expect(parseOverlayInbound('{"t":"hint","x":"a","y":20}')).toBeNull();
   });
 });
 

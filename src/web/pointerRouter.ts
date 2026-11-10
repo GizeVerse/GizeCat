@@ -44,6 +44,13 @@ export interface RoutedEvent {
   /** Mouse events: 0 for a click from the keyboard or assistive technology. */
   readonly detail?: number;
   readonly relatedTarget?: unknown;
+  /**
+   * The event's own time (ms, the router's clock domain), set by the floating cat's native touch
+   * forwarder: the moment the finger moved, not the moment the message arrived. Throw velocity is
+   * computed from it, so message batching in the WebView cannot distort a flick. DOM events never
+   * carry it (the router then samples now()).
+   */
+  readonly eventTimeMs?: number;
   readonly changedTouches?: ArrayLike<{ readonly identifier: number; readonly clientX: number; readonly clientY: number }>;
   preventDefault(): void;
   stopPropagation(): void;
@@ -75,6 +82,13 @@ export interface PointerRouterOptions {
   holdMs?: number;
   slopPx?: number;
   clickSuppressMs?: number;
+  /**
+   * A touch that moves farther than the slop picks the cat up at once (a drag, so a flick throws it)
+   * instead of stroking it. For the floating cat's window, where nothing scrolls and a finger that
+   * moves on the cat means "carry it". Without it (the web page and the in-app cat) moving first
+   * strokes (pets) and only a hold picks the cat up, so the page can still scroll.
+   */
+  touchDragOnMove?: boolean;
 }
 
 /** Where the router listens (the document). */
@@ -142,6 +156,8 @@ interface Press {
 
 const finite = (v: number | undefined, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 const pointOf = (e: RoutedEvent): Point => ({ x: finite(e.clientX, 0), y: finite(e.clientY, 0) });
+/** The event's own time when it carries one (the floating cat's touches), else undefined: feed() then samples now(). */
+const stampOf = (e: RoutedEvent): number | undefined => (typeof e.eventTimeMs === 'number' && Number.isFinite(e.eventTimeMs) ? e.eventTimeMs : undefined);
 const dist = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.y - b.y);
 
 function consume(e: RoutedEvent): void {
@@ -280,7 +296,7 @@ export function createPointerRouter(opts: PointerRouterOptions): PointerRouter {
     }
     consume(e);
     suppressing = true;
-    const t0 = opts.now();
+    const t0 = stampOf(e) ?? opts.now();
     if (touch) {
       press = { id, kind: 'touch', mode: 'pending', start: p, t0, last: p, button: 0, bindTouch: true };
       holdTimer = timers.setTimeout(onHold, holdMs);
@@ -318,17 +334,25 @@ export function createPointerRouter(opts: PointerRouterOptions): PointerRouter {
         case 'pending':
           if (dist(p, own.start) > slopPx) {
             clearHold();
-            own.mode = 'stroke';
-            enterHover(own.start);
-            feed('move', own.start, -1, 0);
-            feed('move', p, -1, 0);
+            if (opts.touchDragOnMove) {
+              // The finger went down on the cat and moved: carry it. The press began when the finger
+              // came down, so the recognizer sees the whole path (and a flick keeps its velocity).
+              own.mode = 'drag';
+              feed('down', own.start, 0, 1, own.t0);
+              feed('move', p, -1, 1, stampOf(e));
+            } else {
+              own.mode = 'stroke';
+              enterHover(own.start);
+              feed('move', own.start, -1, 0);
+              feed('move', p, -1, 0);
+            }
           }
           break;
         case 'stroke':
           feed('move', p, -1, 0);
           break;
         case 'drag':
-          feed('move', p, -1, 1);
+          feed('move', p, -1, 1, stampOf(e));
           break;
       }
       notify();
@@ -375,14 +399,14 @@ export function createPointerRouter(opts: PointerRouterOptions): PointerRouter {
       case 'pending':
         clearHold();
         feed('down', own.start, 0, 1, own.t0);
-        feed('up', p, 0, 0);
+        feed('up', p, 0, 0, stampOf(e));
         break;
       case 'stroke':
         feed('move', p, -1, 0);
         leaveHover(p);
         break;
       case 'drag':
-        feed('up', p, 0, 0);
+        feed('up', p, 0, 0, stampOf(e));
         break;
     }
     finishPress();

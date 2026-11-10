@@ -4,7 +4,7 @@
 // parsing unchanged) and screen analysis and AI are forced off again (forceWebPrivacy), whatever
 // the patch said. The personality is offered only as the named presets (no custom mix on the web).
 import { RENDER_STYLES, SKINS, type RenderStyle, type SkinId } from '../shared/cat';
-import { applySettingsPatch, type Settings } from '../shared/settings';
+import { applySettingsPatch, IMPLIED_OPT_OUTS, LIVELY_BEHAVIORS, TOGGLEABLE_BEHAVIORS, type BehaviorId, type Settings } from '../shared/settings';
 import { ACTIVITY_PRESET_IDS, PRESET_BEHAVIOR_KEYS, PRESET_INTERACTION_KEYS, PRESET_VALUES, presetPatch, type ActivityPresetId } from '../shared/settingsPresets';
 import { forceWebPrivacy, webSettings } from './storage';
 
@@ -14,6 +14,23 @@ export const WEB_EDITABLE: Readonly<Record<string, readonly string[]>> = Object.
   appearance: Object.freeze(['skin', 'style', 'size', 'shadow', 'emotes']),
   sound: Object.freeze(['enabled', 'volume']),
 });
+
+/**
+ * The behaviour and interaction leaves the Android panel (androidPanel.ts) edits one by one, besides
+ * the named personalities: how fast and how lively the cat is, when it falls asleep, how much it
+ * plays with a pointer, which behaviours are switched off, and which handling it accepts. Each is a
+ * carried setting (profileTransfer.ts), so it is stored and survives a reload; `interaction.enabled`
+ * is a per-device accessibility choice and is not offered.
+ */
+export const WEB_TUNING = Object.freeze({
+  behavior: Object.freeze(['movementSpeed', 'autonomy', 'cursorPlay', 'sleepAfterIdleMinutes', 'disabledBehaviors', 'disabledExtras']),
+  interaction: Object.freeze(['petting', 'dragging', 'throwing']),
+});
+
+/** Movement speed (BehaviorSchema: 0.5 to 2), the 0..1 levels (autonomy, cursor play) and the idle sleep (1 to 120 minutes). */
+export const MOVEMENT_RANGE = Object.freeze({ min: 0.5, max: 2, step: 0.05 });
+export const LEVEL_RANGE = Object.freeze({ min: 0, max: 1, step: 0.05 });
+export const SLEEP_RANGE = Object.freeze({ min: 1, max: 120, step: 1 });
 
 /** Size slider bounds (AppearanceSchema: 0.5 to 2.5) and step. */
 export const SIZE_RANGE = Object.freeze({ min: 0.5, max: 2.5, step: 0.05 });
@@ -34,7 +51,14 @@ export type WebField =
   | { field: 'emotes'; value: boolean }
   | { field: 'soundEnabled'; value: boolean }
   | { field: 'volume'; value: number }
-  | { field: 'preset'; value: ActivityPresetId };
+  | { field: 'preset'; value: ActivityPresetId }
+  | { field: 'movementSpeed'; value: number }
+  | { field: 'autonomy'; value: number }
+  | { field: 'cursorPlay'; value: number }
+  | { field: 'sleepMinutes'; value: number }
+  | { field: 'petting' | 'dragging' | 'throwing'; value: boolean }
+  /** One behaviour on or off, given the current settings (the opt-out lists are replaced whole). */
+  | { field: 'behaviorToggle'; id: BehaviorId; enabled: boolean; current: Settings };
 
 /** Rounds a slider value to its step (so 1.2000000000000002 never reaches the schema). */
 export function snap(value: number, range: { min: number; max: number; step: number }): number {
@@ -68,9 +92,52 @@ export function patchFor(change: WebField): WebPatch | null {
       return typeof change.value === 'number' && Number.isFinite(change.value) ? { sound: { volume: snap(change.value, VOLUME_RANGE) } } : null;
     case 'preset':
       return (ACTIVITY_PRESET_IDS as readonly string[]).includes(change.value) ? presetPatch(change.value) : null;
+    case 'movementSpeed':
+      return typeof change.value === 'number' && Number.isFinite(change.value) ? { behavior: { movementSpeed: snap(change.value, MOVEMENT_RANGE) } } : null;
+    case 'autonomy':
+    case 'cursorPlay':
+      return typeof change.value === 'number' && Number.isFinite(change.value) ? { behavior: { [change.field]: snap(change.value, LEVEL_RANGE) } } : null;
+    case 'sleepMinutes':
+      return typeof change.value === 'number' && Number.isFinite(change.value) ? { behavior: { sleepAfterIdleMinutes: Math.round(snap(change.value, SLEEP_RANGE)) } } : null;
+    case 'petting':
+    case 'dragging':
+    case 'throwing':
+      return typeof change.value === 'boolean' ? { interaction: { [change.field]: change.value } } : null;
+    case 'behaviorToggle':
+      return behaviorTogglePatch(change.id, change.enabled, change.current);
     default:
       return null;
   }
+}
+
+const TOGGLEABLE_IDS: readonly string[] = TOGGLEABLE_BEHAVIORS;
+const LIVELY_IDS: readonly string[] = LIVELY_BEHAVIORS;
+
+/**
+ * The patch that switches one behaviour on or off by replacing the two opt-out lists (a list is
+ * always sent whole, never edited in place). A behaviour implied off by another (climbing windows
+ * implies no screen edges, IMPLIED_OPT_OUTS) is switched back on together with its parent, so a
+ * toggle always does what its label says.
+ */
+function behaviorTogglePatch(id: BehaviorId, enabled: boolean, current: Settings): WebPatch | null {
+  if (typeof enabled !== 'boolean') return null;
+  const toggleable = new Set<string>(current.behavior.disabledBehaviors);
+  const lively = new Set<string>(current.behavior.disabledExtras);
+  const apply = (name: string): boolean => {
+    const set = TOGGLEABLE_IDS.includes(name) ? toggleable : LIVELY_IDS.includes(name) ? lively : null;
+    if (!set) return false;
+    if (enabled) set.delete(name);
+    else set.add(name);
+    return true;
+  };
+  if (!apply(id)) return null;
+  if (enabled) {
+    // A child behaviour cannot run under a parent that is off: turning it on turns its parent on.
+    for (const [parent, children] of Object.entries(IMPLIED_OPT_OUTS)) {
+      if ((children as readonly string[]).includes(id)) apply(parent);
+    }
+  }
+  return { behavior: { disabledBehaviors: [...toggleable], disabledExtras: [...lively] } };
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -90,13 +157,25 @@ function isPresetPatch(patch: Record<string, unknown>): boolean {
   return PRESET_BEHAVIOR_KEYS.every((k) => b[k] === v.behavior[k]) && PRESET_INTERACTION_KEYS.every((k) => i[k] === v.interaction[k]);
 }
 
+/** A behaviour/interaction patch made only of the panel's tuning leaves (WEB_TUNING), never a personality. */
+function isTuningPatch(patch: Record<string, unknown>): boolean {
+  for (const section of ['behavior', 'interaction'] as const) {
+    if (!(section in patch)) continue;
+    const values = patch[section];
+    if (!isObject(values)) return false;
+    const allowed: readonly string[] = WEB_TUNING[section];
+    if (Object.keys(values).length === 0 || !Object.keys(values).every((k) => allowed.includes(k))) return false;
+  }
+  return true;
+}
+
 /** The reason `patch` is outside the web allow-list, or null when every leaf is allowed. */
 export function rejectNonWebPatch(patch: unknown): string | null {
   if (!isObject(patch)) return 'patch must be an object';
   const sections = Object.keys(patch);
   if (sections.length === 0) return 'empty patch';
   const hasPreset = 'behavior' in patch || 'interaction' in patch;
-  if (hasPreset && !isPresetPatch(patch)) return 'the personality can only be one of the named presets';
+  if (hasPreset && !isPresetPatch(patch) && !isTuningPatch(patch)) return 'behaviour and interaction can only be a named personality or one of the panel controls';
   for (const section of sections) {
     if (section === 'behavior' || section === 'interaction') continue;
     const allowed = WEB_EDITABLE[section];

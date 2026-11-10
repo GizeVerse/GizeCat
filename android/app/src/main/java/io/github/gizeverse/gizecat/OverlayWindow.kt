@@ -86,13 +86,19 @@ internal data class ScreenMetrics(
  * tells this class where it goes ("win" messages) and this class moves it with WindowManager, at
  * most once per frame. No reserved screen area, no full-screen window, nothing opaque.
  *
- * Touch: the window consumes every touch that lands in it (it is the cat and a small margin), reads
- * it in raw screen coordinates (a window that moves under the finger would shift window-relative
- * ones) and sends it to the page, which decides what the cat does. Touches outside the window never
- * reach it: they belong to the app underneath (FLAG_NOT_TOUCH_MODAL). Touches that land inside it
- * but not on the cat are consumed, not passed on: Android offers no input region for an app's
- * window (docs/platforms/android-overlay.md, "Touch pass-through"). While the cat is hidden, or not
- * drawn, the window is removed from the WindowManager entirely, so it cannot obstruct anything.
+ * Two windows, because Android gives an app window no input region:
+ * - the VISUAL window (the WebView; the cat and the room it draws into) is FLAG_NOT_TOUCHABLE: it
+ *   never takes a touch, so everything outside the cat's touch window reaches the app underneath.
+ *   Since Android 12 a touch passes through another app's overlay only if the overlay is at most
+ *   0.8 opaque (InputManager.getMaximumObscuringOpacityForTouch), so on Android 12+ it is drawn at
+ *   0.8, a slightly dimmer cat; below Android 12 it is opaque.
+ * - the TOUCH window (an invisible view, only the cat's footprint plus a small pad) takes the cat's
+ *   touches, reads them in raw screen coordinates (a window that moves under the finger would shift
+ *   window-relative ones) with the event's own time, and sends them to the page. It is removed while
+ *   the cat takes no touches (paused, interactions off).
+ * When the cat is hidden or not drawn both windows are removed from the WindowManager entirely.
+ * Neither is ever full screen, and nothing here works around Android's untrusted-touch protection:
+ * the 0.8 opacity is exactly what it asks for.
  *
  * Main thread only. [destroy] is final.
  */
@@ -125,10 +131,15 @@ internal class OverlayWindow(private val context: Context, private val callbacks
     private val handler = Handler(Looper.getMainLooper())
     private val assetLoader: WebViewAssetLoader by lazy { WebAssets.loader(appContext) }
 
-    private val root = OverlayRoot(ContextThemeWrapper(appContext, R.style.Theme_GizeCat))
+    /** Holds the WebView; never takes a touch. */
+    private val visualRoot = FrameLayout(ContextThemeWrapper(appContext, R.style.Theme_GizeCat))
+
+    /** An invisible view over the cat's footprint; the only thing that takes the cat's touches and hover. */
+    private val touchRoot = OverlayRoot(ContextThemeWrapper(appContext, R.style.Theme_GizeCat))
     private var webView: WebView? = null
     private var reply: JavaScriptReplyProxy? = null
-    private var attached = false
+    private var visualAttached = false
+    private var touchAttached = false
     private var destroyed = false
 
     /** The window the page last asked for (screen dp), applied on the next frame. */
@@ -138,33 +149,50 @@ internal class OverlayWindow(private val context: Context, private val callbacks
     private var lastMetrics: ScreenMetrics? = null
     private var saveDone: (() -> Unit)? = null
 
-    private class Wanted(val x: Double, val y: Double, val w: Double, val h: Double, val visible: Boolean, val touch: Boolean)
+    /** The visual window (the WebView) and the touch window, each a screen rectangle in dp, applied on the next frame. */
+    private class Rects(val x: Double, val y: Double, val w: Double, val h: Double)
 
-    private val layoutParams = WindowManager.LayoutParams(
-        1,
-        1,
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-        // Not focusable (never takes the keyboard from the app underneath), not touch-modal (touches
-        // outside the window go to the app below), laid out in physical screen coordinates so that
-        // x and y are the page's world coordinates (raw touch positions), allowed to hang over an edge.
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-        PixelFormat.TRANSLUCENT,
+    private class Wanted(val visual: Rects, val visible: Boolean, val touch: Boolean, val touchRect: Rects)
+
+    /**
+     * Window parameters shared by both windows: not focusable (never takes the keyboard from the app
+     * underneath), not touch-modal (touches outside the window go to the app below), laid out in
+     * physical screen coordinates so that x and y are the page's world coordinates (raw touch
+     * positions), allowed to hang over an edge. LEFT, not START: x is measured from the screen's left
+     * edge in every locale (START would measure from the right edge in a right-to-left language).
+     */
+    private fun newParams(extraFlags: Int, title: String): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
+            1,
+            1,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                extraFlags,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.LEFT
+            this.title = title
+            layoutInDisplayCutoutMode =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                } else {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+        }
+
+    /** The visual window: hardware accelerated for the WebView, never touchable, and at the opacity Android 12+ needs for touches to pass through it. */
+    private val visualParams = newParams(
+        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+        "GizeCat floating cat",
     ).apply {
-        // LEFT, not START: x is the page's world coordinate from the screen's left edge in every locale
-        // (START would measure from the right edge in a right-to-left language).
-        gravity = Gravity.TOP or Gravity.LEFT
-        title = "GizeCat floating cat"
-        layoutInDisplayCutoutMode =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-            } else {
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) alpha = PASS_THROUGH_ALPHA
     }
+
+    /** The touch window: an invisible view, touchable, fully opaque as a window (it has no pixels, and touches on it are consumed, never passed on). */
+    private val touchParams = newParams(0, "GizeCat floating cat (touch)")
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
@@ -177,12 +205,14 @@ internal class OverlayWindow(private val context: Context, private val callbacks
     }
 
     init {
-        root.setBackgroundColor(Color.TRANSPARENT)
-        // Obscured-touch protection: another app's overlay on top of the cat means these touches are not delivered.
-        root.filterTouchesWhenObscured = true
+        visualRoot.setBackgroundColor(Color.TRANSPARENT)
         // A picture of a cat with nothing to read: the controls are in the notification and the app.
-        root.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        root.sink = { kind, id, x, y -> sendPointer(kind, id, x, y) }
+        visualRoot.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        touchRoot.setBackgroundColor(Color.TRANSPARENT)
+        // Obscured-touch protection: another app's overlay on top of the cat means these touches are not delivered.
+        touchRoot.filterTouchesWhenObscured = true
+        touchRoot.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        touchRoot.sink = { kind, id, x, y, time -> sendPointer(kind, id, x, y, time) }
     }
 
     /** Creates the WebView and starts loading the page. The window itself appears when the page first asks for it. */
@@ -237,7 +267,7 @@ internal class OverlayWindow(private val context: Context, private val callbacks
             return false
         }
         wv.resumeTimers()
-        root.addView(wv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        visualRoot.addView(wv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         webView = wv
         reply = null
         wv.loadUrl("$SURFACE_URL&${metrics.toQuery()}")
@@ -253,7 +283,7 @@ internal class OverlayWindow(private val context: Context, private val callbacks
     }
 
     private fun dropWebView(wv: WebView) {
-        root.removeView(wv)
+        visualRoot.removeView(wv)
         wv.destroy()
         if (webView === wv) webView = null
         reply = null
@@ -284,21 +314,27 @@ internal class OverlayWindow(private val context: Context, private val callbacks
 
     private fun onWindowMessage(json: JSONObject) {
         val keys = json.keys().asSequence().toSet()
-        if (keys != setOf("t", "x", "y", "w", "h", "vis", "touch")) return
-        val x = (json.opt("x") as? Number)?.toDouble() ?: return
-        val y = (json.opt("y") as? Number)?.toDouble() ?: return
-        val w = (json.opt("w") as? Number)?.toDouble() ?: return
-        val h = (json.opt("h") as? Number)?.toDouble() ?: return
+        if (keys != setOf("t", "x", "y", "w", "h", "vis", "touch", "tx", "ty", "tw", "th")) return
+        fun number(key: String): Double? = (json.opt(key) as? Number)?.toDouble()?.takeIf { it.isFinite() }
+        val x = number("x") ?: return
+        val y = number("y") ?: return
+        val w = number("w") ?: return
+        val h = number("h") ?: return
+        val tx = number("tx") ?: return
+        val ty = number("ty") ?: return
+        val tw = number("tw") ?: return
+        val th = number("th") ?: return
         val vis = json.opt("vis") as? Boolean ?: return
         val touch = json.opt("touch") as? Boolean ?: return
-        if (!x.isFinite() || !y.isFinite() || !w.isFinite() || !h.isFinite()) return
         if (w < 1.0 || h < 1.0 || w > MAX_WINDOW_DP || h > MAX_WINDOW_DP) return
-        if (Math.abs(x) > 100_000.0 || Math.abs(y) > 100_000.0) return
-        wanted = Wanted(x, y, w, h, vis, touch)
+        // The touch window is never larger than the cat's own window.
+        if (tw < 1.0 || th < 1.0 || tw > w || th > h) return
+        if (Math.abs(x) > 100_000.0 || Math.abs(y) > 100_000.0 || Math.abs(tx) > 100_000.0 || Math.abs(ty) > 100_000.0) return
+        wanted = Wanted(Rects(x, y, w, h), vis, touch, Rects(tx, ty, tw, th))
         scheduleFrame()
     }
 
-    // ---- placing the window, at most once per frame
+    // ---- placing the windows, at most once per frame
 
     private fun scheduleFrame() {
         if (frameScheduled || destroyed) return
@@ -309,6 +345,39 @@ internal class OverlayWindow(private val context: Context, private val callbacks
         }
     }
 
+    private fun place(params: WindowManager.LayoutParams, r: Rects) {
+        val d = density
+        params.x = (r.x * d).roundToInt()
+        params.y = (r.y * d).roundToInt()
+        params.width = ceil(r.w * d - 1e-6).toInt().coerceAtLeast(1)
+        params.height = ceil(r.h * d - 1e-6).toInt().coerceAtLeast(1)
+    }
+
+    /**
+     * Adds [view] to the WindowManager, or moves it when [attached]. False when the system refused
+     * (the failure was reported through [Callbacks.onFailure]; the caller then treats the window as gone).
+     */
+    private fun show(view: View, params: WindowManager.LayoutParams, attached: Boolean): Boolean {
+        try {
+            if (attached) windowManager.updateViewLayout(view, params) else windowManager.addView(view, params)
+            return true
+        } catch (e: WindowManager.BadTokenException) {
+            callbacks.onFailure(true)
+        } catch (e: SecurityException) {
+            callbacks.onFailure(true)
+        } catch (e: IllegalStateException) {
+            // Already added by an earlier call that failed half-way: treat as attached and move on.
+            return true
+        } catch (e: IllegalArgumentException) {
+            // updateViewLayout on a view the system already removed (permission revoked, display gone).
+            callbacks.onFailure(!OverlayAccess.canDraw(appContext))
+        } catch (e: RuntimeException) {
+            // WindowManager.InvalidDisplayException and any other refusal to add the window.
+            callbacks.onFailure(!OverlayAccess.canDraw(appContext))
+        }
+        return false
+    }
+
     private fun applyWanted() {
         val w = wanted ?: return
         if (destroyed) return
@@ -316,53 +385,40 @@ internal class OverlayWindow(private val context: Context, private val callbacks
             removeFromWindow()
             return
         }
-        val d = density
-        layoutParams.x = (w.x * d).roundToInt()
-        layoutParams.y = (w.y * d).roundToInt()
-        layoutParams.width = ceil(w.w * d - 1e-6).toInt().coerceAtLeast(1)
-        layoutParams.height = ceil(w.h * d - 1e-6).toInt().coerceAtLeast(1)
-        // The cat takes no touches (paused, interactions off): let them through to the app underneath.
-        // Android 12+ passes touches through another app's window only at <= 0.8 opacity, so the
-        // window is drawn at that opacity while it is click-through (a slightly dimmer cat).
-        if (w.touch) {
-            layoutParams.flags = layoutParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-            layoutParams.alpha = 1f
-        } else {
-            layoutParams.flags = layoutParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-            layoutParams.alpha = PASS_THROUGH_ALPHA
+        place(visualParams, w.visual)
+        if (!show(visualRoot, visualParams, visualAttached)) {
+            visualAttached = false
+            removeTouchWindow()
+            return
         }
+        visualAttached = true
+        if (!w.touch) {
+            // The cat takes no touches (paused, interactions off): no touch window at all, so
+            // everything under the cat reaches the app beneath.
+            removeTouchWindow()
+            return
+        }
+        place(touchParams, w.touchRect)
+        // Added after the visual window, so it sits above it and takes the cat's touches first.
+        touchAttached = show(touchRoot, touchParams, touchAttached)
+    }
+
+    private fun removeTouchWindow() {
+        if (!touchAttached) return
+        touchAttached = false
         try {
-            if (attached) {
-                windowManager.updateViewLayout(root, layoutParams)
-            } else {
-                windowManager.addView(root, layoutParams)
-                attached = true
-            }
-        } catch (e: WindowManager.BadTokenException) {
-            attached = false
-            callbacks.onFailure(true)
-        } catch (e: SecurityException) {
-            attached = false
-            callbacks.onFailure(true)
-        } catch (e: IllegalStateException) {
-            // Already added by an earlier call that failed half-way: treat as attached and move on.
-            attached = true
+            windowManager.removeViewImmediate(touchRoot)
         } catch (e: IllegalArgumentException) {
-            // updateViewLayout on a view the system already removed (permission revoked, display gone).
-            attached = false
-            callbacks.onFailure(!OverlayAccess.canDraw(appContext))
-        } catch (e: RuntimeException) {
-            // WindowManager.InvalidDisplayException and any other refusal to add the window.
-            attached = false
-            callbacks.onFailure(!OverlayAccess.canDraw(appContext))
+            // Already gone.
         }
     }
 
     private fun removeFromWindow() {
-        if (!attached) return
-        attached = false
+        removeTouchWindow()
+        if (!visualAttached) return
+        visualAttached = false
         try {
-            windowManager.removeViewImmediate(root)
+            windowManager.removeViewImmediate(visualRoot)
         } catch (e: IllegalArgumentException) {
             // Already gone.
         }
@@ -370,12 +426,27 @@ internal class OverlayWindow(private val context: Context, private val callbacks
 
     // ---- touch, to the page
 
-    private fun sendPointer(kind: String, id: Int, rawX: Float, rawY: Float) {
+    /** [timeMs] is the event's own time (MotionEvent.getEventTime, native uptime): the page orders and times the gesture by it. */
+    private fun sendPointer(kind: String, id: Int, rawX: Float, rawY: Float, timeMs: Long) {
         val proxy = reply ?: return
         val d = density
-        val text = String.format(Locale.ROOT, "{\"t\":\"ptr\",\"k\":\"%s\",\"id\":%d,\"x\":%.2f,\"y\":%.2f}", kind, id, rawX / d, rawY / d)
+        val text = String.format(Locale.ROOT, "{\"t\":\"ptr\",\"k\":\"%s\",\"id\":%d,\"x\":%.2f,\"y\":%.2f,\"ms\":%d}", kind, id, rawX / d, rawY / d, timeMs)
         try {
             proxy.postMessage(text)
+        } catch (e: RuntimeException) {
+            // The page is being replaced.
+        }
+    }
+
+    /**
+     * A touch inside GizeCat's OWN app window (screen dp), offered to the cat as something to look at.
+     * Android shows an app no touch outside its own windows, so this is the only "pointer" besides the
+     * cat's own that the cat can ever get (docs/platforms/android-overlay.md, "What the cat can see").
+     */
+    fun sendHint(xDp: Float, yDp: Float) {
+        val proxy = reply ?: return
+        try {
+            proxy.postMessage(String.format(Locale.ROOT, "{\"t\":\"hint\",\"x\":%.2f,\"y\":%.2f}", xDp, yDp))
         } catch (e: RuntimeException) {
             // The page is being replaced.
         }
@@ -509,9 +580,14 @@ internal class OverlayWindow(private val context: Context, private val callbacks
         }
     }
 
-    /** The window's content: takes every touch in the window and hands it to [sink] in raw screen coordinates. */
+    /**
+     * The touch window's content: takes every touch and every mouse hover in the window and hands it to
+     * [sink] in raw screen coordinates with the event's own time (MotionEvent.getEventTime).
+     * Hover reaches an app only while a mouse, trackpad or stylus pointer is over one of its windows,
+     * so this is the only pointer movement the cat can ever see.
+     */
     private class OverlayRoot(context: Context) : FrameLayout(context) {
-        var sink: (kind: String, id: Int, rawX: Float, rawY: Float) -> Unit = { _, _, _, _ -> }
+        var sink: (kind: String, id: Int, rawX: Float, rawY: Float, timeMs: Long) -> Unit = { _, _, _, _, _ -> }
         private var active = -1
 
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
@@ -520,33 +596,41 @@ internal class OverlayWindow(private val context: Context, private val callbacks
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     active = ev.getPointerId(0)
-                    sink("down", active, ev.getRawX(0), ev.getRawY(0))
+                    sink("down", active, ev.getRawX(0), ev.getRawY(0), ev.eventTime)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val i = ev.findPointerIndex(active)
-                    if (i >= 0) sink("move", active, ev.getRawX(i), ev.getRawY(i))
+                    if (i >= 0) sink("move", active, ev.getRawX(i), ev.getRawY(i), ev.eventTime)
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
                     // The finger the cat follows lifted while another stays: that is the release.
                     if (ev.getPointerId(ev.actionIndex) == active) {
-                        sink("up", active, ev.getRawX(ev.actionIndex), ev.getRawY(ev.actionIndex))
+                        sink("up", active, ev.getRawX(ev.actionIndex), ev.getRawY(ev.actionIndex), ev.eventTime)
                         active = -1
                     }
                 }
                 MotionEvent.ACTION_UP -> {
                     if (active >= 0) {
                         val i = ev.findPointerIndex(active).takeIf { it >= 0 } ?: 0
-                        sink("up", active, ev.getRawX(i), ev.getRawY(i))
+                        sink("up", active, ev.getRawX(i), ev.getRawY(i), ev.eventTime)
                     }
                     active = -1
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     if (active >= 0) {
                         val i = ev.findPointerIndex(active).takeIf { it >= 0 } ?: 0
-                        sink("cancel", active, ev.getRawX(i), ev.getRawY(i))
+                        sink("cancel", active, ev.getRawX(i), ev.getRawY(i), ev.eventTime)
                     }
                     active = -1
                 }
+            }
+            return true
+        }
+
+        override fun onHoverEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> sink("hover", 0, ev.getRawX(0), ev.getRawY(0), ev.eventTime)
+                MotionEvent.ACTION_HOVER_EXIT -> sink("leave", 0, ev.getRawX(0), ev.getRawY(0), ev.eventTime)
             }
             return true
         }

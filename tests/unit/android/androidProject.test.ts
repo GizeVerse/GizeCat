@@ -249,7 +249,7 @@ describe('Android back and lifecycle', () => {
 });
 
 describe('Android floating cat (1.4.1)', () => {
-  it('draws one small transparent application-overlay window: not focusable, not touch-modal, never full screen', () => {
+  it('draws small transparent application-overlay windows (a visual one and a tight touch one): not focusable, not touch-modal, never full screen', () => {
     expect(overlayWindow).toContain('WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY');
     expect(overlayWindow).toContain('WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE');
     expect(overlayWindow).toContain('WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL');
@@ -261,21 +261,28 @@ describe('Android floating cat (1.4.1)', () => {
     }
     // LEFT, not START: x is measured from the screen's left edge in every locale.
     expect(overlayWindow).toContain('gravity = Gravity.TOP or Gravity.LEFT');
-    // While the cat takes no touches the window lets them through, at the opacity Android 12+ requires.
+    // 1.4.2: two windows. The VISUAL one (the WebView) is never touchable and, on Android 12+, sits at the
+    // opacity that lets touches pass through it; the TOUCH one is an invisible, tight rectangle that
+    // exists only while the cat takes touches.
     expect(overlayWindow).toContain('PASS_THROUGH_ALPHA = 0.8f');
-    expect(overlayWindow).toContain('layoutParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE');
-    expect(overlayWindow).toContain('layoutParams.alpha = PASS_THROUGH_ALPHA');
+    expect(overlayWindow).toMatch(/visualParams = newParams\(\s*WindowManager\.LayoutParams\.FLAG_HARDWARE_ACCELERATED or WindowManager\.LayoutParams\.FLAG_NOT_TOUCHABLE/);
+    expect(overlayWindow).toContain('alpha = PASS_THROUGH_ALPHA');
+    expect(overlayWindow).toContain('touchParams = newParams(0,');
+    expect(overlayWindow).toContain('removeViewImmediate(touchRoot)');
     // The window's size comes from the page and is bounded (a dp ceiling), never the display's size.
     expect(overlayWindow).toContain('MAX_WINDOW_DP');
     expect(overlayWindow).toMatch(/if \(w < 1\.0 \|\| h < 1\.0 \|\| w > MAX_WINDOW_DP \|\| h > MAX_WINDOW_DP\) return/);
     // Hidden or not drawn: the window leaves the WindowManager, so it cannot obstruct anything.
-    expect(overlayWindow).toContain('windowManager.removeViewImmediate(root)');
-    expect(overlayWindow).toContain('filterTouchesWhenObscured = true');
+    expect(overlayWindow).toContain('windowManager.removeViewImmediate(visualRoot)');
+    expect(overlayWindow).toContain('touchRoot.filterTouchesWhenObscured = true');
   });
 
   it('takes raw touches natively and reads no screen content', () => {
     expect(overlayWindow).toContain('override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true');
     expect(overlayWindow).toContain('ev.getRawX(');
+    // 1.4.2: the gesture's own event times travel with every pointer (throw velocity), and a mouse or trackpad pointer over the touch window is forwarded as hover.
+    expect(overlayWindow).toContain('ev.eventTime');
+    expect(overlayWindow).toContain('override fun onHoverEvent(ev: MotionEvent)');
     for (const banned of ['MediaProjection', 'ImageReader', 'AccessibilityService', 'PixelCopy', 'drawToBitmap', 'getDrawingCache', 'UsageStatsManager', 'ActivityManager']) {
       expect(allKotlin).not.toContain(banned);
     }
@@ -433,7 +440,7 @@ describe('Android Gradle build', () => {
     const props = read('android', 'version.properties')
       .split(/\r?\n/)
       .filter((l) => l.trim() && !l.trim().startsWith('#'));
-    expect(props).toEqual(['versionName=1.4.1', 'versionCode=10402']);
+    expect(props).toEqual(['versionName=1.4.2', 'versionCode=10403']);
     // Above the earlier trial APKs (10400 for 1.4.0, 10401 for 1.4.0-overlay.1), so it installs over them.
     expect(Number(props[1]?.split('=')[1])).toBeGreaterThan(10401);
     const buildWebApp = read('scripts', 'build-web-app.mjs');

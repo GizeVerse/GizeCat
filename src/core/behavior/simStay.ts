@@ -854,7 +854,7 @@ export abstract class SimStay extends SimDrives {
       const span = clearSpanAt(band, foot);
       const grip = span ? Math.max(w.yTop, span.y0 + this.bl) : foot;
       const clear = span !== undefined && foot - grip >= EDGE_MIN_FULL_BH * bh;
-      const peek = !clear || side === 'left';
+      const peek = !clear || (side === 'left' && this.env?.edgeFullBothSides !== true);
       if (peek && !peekOk) continue;
       if (!this.edgeCursorClear(w.x, peek)) continue;
       // Preferences of §6.1(b): full climbs before peeks; the left edge under a maximized window.
@@ -898,7 +898,9 @@ export abstract class SimStay extends SimDrives {
     a.target = { x: t.point.x, y: t.gripY };
     const holdMs = t.peek ? range(this.random, EDGE_PEEK_HOLD_MS[0], EDGE_PEEK_HOLD_MS[1]) : range(this.random, EDGE_HOLD_MS[0], EDGE_HOLD_MS[1]);
     this.edgeVisit = { target: t, act: a, startedAt: this.now, mountedAt: null, holdMs, holdFrom: null, holdUntil: null, leaving: null, side: t.side };
-    this.nextEdgeAt = this.now + range(this.random, EDGE_COOLDOWN_MS[0], EDGE_COOLDOWN_MS[1]);
+    const scale = this.env?.edgeCooldownScale;
+    const cooldownScale = typeof scale === 'number' && Number.isFinite(scale) ? Math.min(1, Math.max(0.05, scale)) : 1;
+    this.nextEdgeAt = this.now + range(this.random, EDGE_COOLDOWN_MS[0], EDGE_COOLDOWN_MS[1]) * cooldownScale;
     if (t.peek) this.edgePeeks.push(this.now);
   }
 

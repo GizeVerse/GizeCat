@@ -51,6 +51,26 @@ export function windowRectFor(bounds: Rect, appearance: Pick<Settings['appearanc
   return { x: snap(bounds.x - BODY_MARGIN_SIDE_DIP * k), y: snap(bounds.y - top * k), width: up(size.width), height: up(size.height) };
 }
 
+/** Pad around the cat's footprint that still counts as the cat for a finger, dp: the touch window and the press hit test share it. */
+export const TOUCH_PAD_DP = 12;
+
+/**
+ * The TOUCH window's rectangle (world dp): the cat's footprint plus [TOUCH_PAD_DP] on every side, snapped to
+ * whole device pixels like the visual window. This is the only window that takes touches; it is
+ * far smaller than the visual one, so the transparent room around the cat passes touches on.
+ */
+export function touchRectFor(bounds: Rect, density: number): Rect {
+  const d = Number.isFinite(density) && density > 0 ? density : 1;
+  const snap = (v: number): number => Math.round(v * d) / d;
+  const up = (v: number): number => Math.ceil(v * d - 1e-6) / d;
+  const x = snap(bounds.x - TOUCH_PAD_DP);
+  const y = snap(bounds.y - TOUCH_PAD_DP);
+  return { x, y, width: up(bounds.width + 2 * TOUCH_PAD_DP), height: up(bounds.height + 2 * TOUCH_PAD_DP) };
+}
+
+/** A touch hint (a touch inside GizeCat's own app window) is something to look at for this long, ms. */
+export const HINT_TTL_MS = 1800;
+
 /** The bridge the surface talks through (floatingBridges.ts connects it to window.gizecatOverlay). */
 export interface OverlayPort {
   post(message: OverlayOutbound): void;
@@ -80,22 +100,33 @@ export interface OverlaySurface {
   onPresence(out: SimOutput | null): void;
   /** Starts listening to native and says hello. Call once the cat runs. */
   connect(targets: OverlayTargets): () => void;
+  /**
+   * Where the cat may look or run to, or null: the last touch inside GizeCat's OWN app window (native's
+   * `hint`), while it is fresh. The page offers it to the sim as the "pointer". It is never a touch
+   * outside GizeCat: Android does not let an app see those.
+   */
+  cursorHint(): Point | null;
 }
 
 const NOOP_EVENT = { preventDefault() {}, stopPropagation() {} } as const;
 
-/** One native touch as the pointer event the router reads. */
-function pointerEvent(kind: PointerKind, id: number, p: Point): RoutedEvent {
-  const base = { ...NOOP_EVENT, pointerId: id, pointerType: 'touch', clientX: p.x, clientY: p.y, button: 0 };
+/** One native pointer event as the pointer event the router reads. `eventTimeMs` is already in the page's clock domain. */
+function pointerEvent(kind: PointerKind, id: number, p: Point, eventTimeMs: number): RoutedEvent {
+  const touch = { ...NOOP_EVENT, pointerId: id, pointerType: 'touch', clientX: p.x, clientY: p.y, button: 0, eventTimeMs };
   switch (kind) {
     case 'down':
-      return { ...base, type: 'pointerdown', buttons: 1 };
+      return { ...touch, type: 'pointerdown', buttons: 1 };
     case 'move':
-      return { ...base, type: 'pointermove', buttons: 1 };
+      return { ...touch, type: 'pointermove', buttons: 1 };
     case 'up':
-      return { ...base, type: 'pointerup', buttons: 0 };
+      return { ...touch, type: 'pointerup', buttons: 0 };
     case 'cancel':
-      return { ...base, type: 'pointercancel', buttons: 0 };
+      return { ...touch, type: 'pointercancel', buttons: 0 };
+    // A mouse or trackpad pointer over the cat's window with no button: it strokes (pets) the cat like a hover.
+    case 'hover':
+      return { ...touch, pointerType: 'mouse', type: 'pointermove', buttons: 0 };
+    case 'leave':
+      return { ...touch, pointerType: 'mouse', type: 'pointerout', buttons: 0, relatedTarget: null };
   }
 }
 
@@ -105,18 +136,45 @@ export function createOverlaySurface(
   getAppearance: () => Pick<Settings['appearance'], 'size' | 'emotes'>,
   /** The cat takes touches right now (not paused, interactions on, ...); false lets native pass touches through. */
   touchable: () => boolean = () => true,
+  /** The page's clock (ms, performance.now): the domain the router and the recognizer work in. */
+  now: () => number = () => performance.now(),
 ): OverlaySurface {
   const display = createOverlayDisplayService(initial);
-  let lastWin: { x: number; y: number; w: number; h: number; vis: boolean; touch: boolean } | null = null;
+  type Win = { x: number; y: number; w: number; h: number; vis: boolean; touch: boolean; tx: number; ty: number; tw: number; th: number };
+  let lastWin: Win | null = null;
+  let hint: { x: number; y: number; at: number } | null = null;
+  /**
+   * Native event times (its uptime clock) to the page's clock: the smallest `now() - eventTime` seen,
+   * i.e. the delivery with the least queueing, so the offset converges on the true clock difference and
+   * a queued batch of moves keeps the finger's own spacing (a flick keeps its speed).
+   */
+  let skew = Number.POSITIVE_INFINITY;
+  const pageTime = (ms: number): number => {
+    const d = now() - ms;
+    if (d < skew) skew = d;
+    return ms + skew;
+  };
 
-  function report(rect: Rect | null): void {
+  function report(rect: Rect | null, touchRect: Rect | null): void {
     const size = windowSizeDip(getAppearance());
     const touch = touchable();
-    const next = rect
-      ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height, vis: true, touch }
-      : // Not drawn: keep the last place and size, so native can park the window there, hidden.
-        { x: lastWin?.x ?? 0, y: lastWin?.y ?? 0, w: lastWin?.w ?? Math.ceil(size.width), h: lastWin?.h ?? Math.ceil(size.height), vis: false, touch };
-    if (lastWin && lastWin.x === next.x && lastWin.y === next.y && lastWin.w === next.w && lastWin.h === next.h && lastWin.vis === next.vis && lastWin.touch === next.touch) return;
+    const next: Win =
+      rect && touchRect
+        ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height, vis: true, touch, tx: touchRect.x, ty: touchRect.y, tw: touchRect.width, th: touchRect.height }
+        : // Not drawn: keep the last places and sizes, so native can park the windows there, hidden.
+          {
+            x: lastWin?.x ?? 0,
+            y: lastWin?.y ?? 0,
+            w: lastWin?.w ?? Math.ceil(size.width),
+            h: lastWin?.h ?? Math.ceil(size.height),
+            vis: false,
+            touch,
+            tx: lastWin?.tx ?? 0,
+            ty: lastWin?.ty ?? 0,
+            tw: lastWin?.tw ?? 1,
+            th: lastWin?.th ?? 1,
+          };
+    if (lastWin && (Object.keys(next) as (keyof Win)[]).every((k) => lastWin?.[k] === next[k])) return;
     lastWin = next;
     port.post({ t: 'win', ...next });
   }
@@ -134,23 +192,36 @@ export function createOverlaySurface(
     display,
     onPresence(out) {
       if (!out) {
-        report(null);
+        report(null, null);
         return;
       }
       const rect = windowRectFor(out.boundsPx, getAppearance(), display.metrics.density);
       // Before the renderer's mapping reads it: the cat is then drawn at the same spot of the window every frame.
       display.setOrigin({ x: rect.x, y: rect.y });
-      report(rect);
+      report(rect, touchRectFor(out.boundsPx, display.metrics.density));
+    },
+    cursorHint() {
+      if (!hint) return null;
+      if (now() - hint.at > HINT_TTL_MS) {
+        hint = null;
+        return null;
+      }
+      return { x: hint.x, y: hint.y };
     },
     connect(targets) {
       // A press that native lost (the window was removed, the service stopped) must not leave the cat held.
       const off = port.onMessage((m) => {
         switch (m.t) {
           case 'metrics':
-            display.update(m.metrics);
+            // A rotation or a resized display moves the world under an active press: end it cleanly
+            // (a held cat is dropped where it is) instead of feeding it coordinates of another layout.
+            if (display.update(m.metrics)) targets.router.cancel();
             return;
           case 'ptr':
-            targets.router.handle(pointerEvent(m.k, m.id, { x: m.x, y: m.y }));
+            targets.router.handle(pointerEvent(m.k, m.id, { x: m.x, y: m.y }, pageTime(m.ms)));
+            return;
+          case 'hint':
+            hint = { x: m.x, y: m.y, at: now() };
             return;
           case 'cmd':
             runCommand(m.c, targets, port);

@@ -11,7 +11,7 @@ import { fakeEvent, manualTime } from './helpers';
 const CAT = { x: 100, y: 500, width: 100, height: 80 };
 const onCat = (p: Point): boolean => p.x >= CAT.x && p.x < CAT.x + CAT.width && p.y >= CAT.y && p.y < CAT.y + CAT.height;
 
-function setup(hit: (p: Point) => boolean = onCat) {
+function setup(hit: (p: Point) => boolean = onCat, extra: { touchDragOnMove?: boolean } = {}) {
   const time = manualTime(1000);
   const fed: GesturePointerEvent[] = [];
   const real = createGestureRecognizer();
@@ -29,7 +29,7 @@ function setup(hit: (p: Point) => boolean = onCat) {
     reset: () => real.reset(),
   };
   const sim: SimEvent[] = [];
-  const router = createPointerRouter({ gestures, hitTest: hit, onSimEvents: (evs) => sim.push(...evs), now: time.now, timers: time.timers });
+  const router = createPointerRouter({ gestures, hitTest: hit, onSimEvents: (evs) => sim.push(...evs), now: time.now, timers: time.timers, ...extra });
   const send = (type: string, init: Partial<RoutedEvent> = {}) => {
     const e = fakeEvent(type, init);
     router.handle(e);
@@ -265,6 +265,47 @@ describe('web pointer router: touch translation', () => {
     expect(v.y).toBeLessThan(-1000);
     expect(h.router.touchMode).toBeNull();
     expect(h.router.dragging).toBe(false);
+  });
+
+  it('Android mode (touchDragOnMove): a touch that moves right away picks the cat up, and a fast release throws at the gesture speed', () => {
+    const h = setup(onCat, { touchDragOnMove: true });
+    h.touch.down(150, 540, 11);
+    h.touch.start(150, 540);
+    expect(h.router.touchMode).toBe('pending');
+    // No hold: the first move past the slop starts the drag at once.
+    h.time.advance(20);
+    h.send('pointermove', { pointerType: 'touch', pointerId: 11, clientX: 150, clientY: 500, button: -1, buttons: 1, eventTimeMs: 1040 });
+    expect(h.router.touchMode).toBe('drag');
+    expect(h.kinds()[0]).toBe('down');
+    expect(h.types()).not.toContain('pointer.hoverStart');
+    let y = 500;
+    let ms = 1040;
+    for (let i = 0; i < 5; i++) {
+      y -= 40;
+      ms += 16;
+      h.send('pointermove', { pointerType: 'touch', pointerId: 11, clientX: 150, clientY: y, button: -1, buttons: 1, eventTimeMs: ms });
+    }
+    expect(h.types()).toContain('pointer.dragStart');
+    // The page is busy: the release is DELIVERED late, but it carries the time it happened. The throw must use that.
+    h.time.advance(500);
+    h.send('pointerup', { pointerType: 'touch', pointerId: 11, clientX: 150, clientY: y - 40, button: 0, buttons: 0, eventTimeMs: ms + 16 });
+    const end = h.sim.find((e) => e.type === 'pointer.dragEnd');
+    const v = end && end.type === 'pointer.dragEnd' ? end.velocity : { x: 0, y: 0 };
+    expect(v.y).toBeLessThan(-1000);
+    expect(h.router.touchMode).toBeNull();
+  });
+
+  it('Android mode: a tap and a hold still behave as before (a still touch is a tap, never a stroke or drag)', () => {
+    const h = setup(onCat, { touchDragOnMove: true });
+    h.touch.down(150, 540);
+    h.touch.start(150, 540);
+    h.time.advance(60);
+    h.touch.up(150, 540);
+    h.touch.end();
+    h.time.advance(TOUCH_HOLD_MS * 2);
+    expect(h.types()).toContain('pointer.tap');
+    expect(h.types()).not.toContain('pointer.dragStart');
+    expect(h.types()).not.toContain('pointer.hoverStart');
   });
 
   it('a hold released without moving is a tap within the tap time, nothing after it', () => {

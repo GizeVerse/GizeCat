@@ -787,55 +787,255 @@ html.doc body {
   overflow-wrap: anywhere;
 }
 
-/* ---- the floating cat (Android app only: these elements stay `hidden` everywhere else) */
-.floating-status {
+/* ---- the Android app's home panel (androidPanel.ts). Fixed over the in-app cat, scrolls by itself, theme
+   variables only (light and dark), 48 px touch targets, padded by the safe area. Phones: one column;
+   from 720 px: two. */
+.panel {
   position: fixed;
-  left: max(0.75rem, env(safe-area-inset-left));
-  right: max(0.75rem, env(safe-area-inset-right));
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
-  z-index: 24;
+  inset: 0;
+  z-index: 30;
   box-sizing: border-box;
-  max-width: 34rem;
-  margin: 0;
-  padding: 0.6rem 0.85rem;
-  border: 1px solid var(--sheet-line);
-  border-radius: 0.6rem;
-  background: var(--sheet-bg);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: calc(env(safe-area-inset-top, 0px) + 1rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom, 0px) + 1.5rem) max(1rem, env(safe-area-inset-left));
+  background: var(--bg);
   color: var(--fg);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  max-width: 62rem;
+  margin: 0 auto 1rem;
+}
+
+.panel-logo {
+  flex: none;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.8rem;
+}
+
+.panel-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-title h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.2;
+}
+
+.panel-title p {
+  margin: 0;
+  color: var(--muted);
   font-size: 0.95rem;
 }
 
-.floating-ask {
-  position: fixed;
-  left: max(0.75rem, env(safe-area-inset-left));
-  right: max(0.75rem, env(safe-area-inset-right));
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
-  z-index: 26;
-  box-sizing: border-box;
-  max-width: 34rem;
-  max-height: 70vh;
-  overflow-y: auto;
-  padding: 0.9rem 1rem;
+.chip {
+  flex: none;
+  padding: 0.3rem 0.8rem;
   border: 1px solid var(--sheet-line);
-  border-radius: 0.8rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
   background: var(--sheet-bg);
-  color: var(--fg);
+  color: var(--muted);
 }
 
-.floating-ask h2 {
-  margin: 0 0 0.4rem;
+.chip.chip-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.chip.chip-idle {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.panel-grid {
+  display: grid;
+  gap: 0.9rem;
+  max-width: 62rem;
+  margin: 0 auto;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 720px) {
+  .panel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .pcard.hero {
+    grid-column: 1 / -1;
+  }
+}
+
+.pcard {
+  box-sizing: border-box;
+  padding: 1rem 1.1rem 1.1rem;
+  border: 1px solid var(--sheet-line);
+  border-radius: 1rem;
+  background: var(--sheet-bg);
+}
+
+.pcard h2 {
+  margin: 0 0 0.6rem;
   font-size: 1.1rem;
 }
 
-.floating-ask p {
+.pcard h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+
+.pcard p {
   margin: 0.4rem 0;
 }
 
-.floating-ask .actions {
+.pcard .lead {
+  font-size: 1.02rem;
+}
+
+.pcard .field {
+  margin: 0.75rem 0;
+}
+
+.pcard .field input[type='text'] {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.7rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--button-border);
+  border-radius: 0.6rem;
+}
+
+.pcard .field input[type='range'] {
+  width: 100%;
+  min-height: 2.75rem;
+}
+
+.panel-row {
+  min-height: 3rem;
+  gap: 0.75rem;
+}
+
+.panel-row .row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.panel-row .row-desc {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.8rem 0;
+}
+
+.hero-actions button {
+  min-height: 3rem;
+}
+
+button.primary.big {
+  flex: 1 1 14rem;
+  min-height: 3.4rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+button.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.panel-status {
+  margin: 0.4rem 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--sheet-line);
+  font-size: 0.95rem;
+}
+
+.panel-ask {
+  margin: 0.8rem 0;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.8rem;
+  background: var(--bg);
+}
+
+.panel-ask .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-top: 0.75rem;
+  margin-top: 0.7rem;
+}
+
+.perm-list {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+
+.perm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2.5rem;
+  padding: 0 0.1rem;
+  border-top: 1px solid var(--sheet-line);
+}
+
+.row-state {
+  font-weight: 600;
+  font-size: 0.92rem;
+  text-align: right;
+}
+
+.row-state.ok {
+  color: var(--accent);
+}
+
+.row-state.needed {
+  color: var(--danger);
+}
+
+.row-state.optional {
+  color: var(--muted);
+}
+
+.panel-foot {
+  max-width: 62rem;
+  margin: 1rem auto 0;
+}
+
+.panel-foot .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+/* While the panel is up, the in-app cat's toolbar is behind it. */
+html.gizecat-panel-open .bar {
+  visibility: hidden;
 }
 
 /* While the cat floats over other apps the app's own cat is parked: no canvas, no cat buttons. */
@@ -857,10 +1057,15 @@ html.gizecat-overlay body {
 html.gizecat-overlay .bar,
 html.gizecat-overlay #boot,
 html.gizecat-overlay #settings,
-html.gizecat-overlay .floating-status,
-html.gizecat-overlay .floating-ask,
+html.gizecat-overlay .panel,
 html.gizecat-overlay .visually-hidden,
 html.gizecat-overlay .noscript,
 html.gizecat-overlay body::before {
   display: none !important;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pcard {
+    transition: border-color 0.15s ease;
+  }
 }
