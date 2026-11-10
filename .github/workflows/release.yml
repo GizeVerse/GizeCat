@@ -4,9 +4,11 @@ name: release-artifacts
 # and nothing below has been observed to pass or fail on a hosted runner. A person must check its
 # first real run step by step, and inspect every file it produces, before any of them is shared.
 #
-# GitHub rule: a workflow_dispatch workflow can only be started once its file is on the repository's
-# default branch. main (v1.3.0) does not have this file yet, and the owner decides when the
-# candidate reaches main. Until then nobody can start this workflow.
+# GitHub rule: a workflow_dispatch workflow can only be started once a file of that name is on the
+# repository's default branch. main (v1.3.0) already has an older release.yml, so this workflow can
+# be started from the candidate branch, on whatever has been pushed to it. It has not been started.
+# The other three new workflows (macos-packages.yml, android-release.yml, pages.yml) are not on main
+# and cannot be started until they reach it. The owner decides when the candidate reaches main.
 #
 # Manual only (workflow_dispatch): no push, pull_request, schedule, release or workflow_run trigger,
 # and agents never start it. It builds packages and uploads them as workflow artifacts. It contains

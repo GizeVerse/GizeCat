@@ -11,7 +11,7 @@ The manual GitHub workflows that build, sign and attach GizeCat 1.4.0 packages, 
 | Developer ID signing and notarization (macOS) | REQUIRES_OWNER_CREDENTIALS |
 | Authenticode signing (Windows) | REQUIRES_OWNER_CREDENTIALS |
 | Release signing (Android) | REQUIRES_OWNER_CREDENTIALS |
-| Publishing the web app on GitHub Pages | REQUIRES_OWNER_CREDENTIALS (repository setting) |
+| Publishing the web app on GitHub Pages | REQUIRES_OWNER_CREDENTIALS (the repository's Pages source is already set; `pages.yml` must reach `main` and be run; nothing is deployed) |
 | Signing with a key held only on a hardware token or cloud HSM (Windows) | NOT_IMPLEMENTED |
 
 Status words: [docs/platforms/README.md](README.md#status-vocabulary-for-140). A build is not a test: a package these workflows produce is COMPILED_OR_PACKAGED at most, and says nothing about whether the app runs.
@@ -52,13 +52,13 @@ Each workflow has `permissions: contents: read` by default. Only the job that ne
 - electron-builder 26 has no automatic ad-hoc fallback: with no identity it leaves the app unsigned, and Apple Silicon Macs refuse unsigned code. So the job asks for ad-hoc signing explicitly.
 - The hardened runtime is off on this path because library validation rejects an ad-hoc signed app's frameworks.
 - The files are not notarized. macOS blocks them until the user allows them.
-- Files: `GizeCat-<version>-mac-<arch>-adhoc.dmg` and `.zip`, `SHA256SUMS-mac-adhoc.txt`. The `-adhoc` suffix keeps them from being confused with notarized files.
+- Files: `GizeCat-<version>-mac-<arch>-adhoc-macrunner.dmg` and `.zip` (`<arch>` is `x64`, `arm64` or `universal`), `SHA256SUMS-mac-adhoc.txt`. `-adhoc` keeps them from being confused with notarized files. `-macrunner` keeps them from being confused with the `GizeCat-<version>-mac-<arch>-adhoc.zip` files the Linux routes build, which have a different signer and different bytes.
 
 **`developer-id` needs the owner's secrets** and runs in the GitHub Environment `macos-signing`. It produces Developer ID signed, hardened, notarized and stapled apps.
 
 - Files: `GizeCat-<version>-mac-<arch>.dmg` and `.zip`, `SHA256SUMS-mac.txt`.
 - A guard step fails the job before the build when a secret is missing, or when either notarization set is partial, even if the other set is complete. If both sets are complete, the API key set is used.
-- `-c.forceCodeSigning=true` stops the build if the certificate is not a usable Developer ID Application identity.
+- `-c.forceCodeSigning=true` stops the build only when electron-builder finds no signing identity at all. It does not check the certificate's type: in app-builder-lib 26.18.1 a `.p12` holding another identity, such as Apple Development, can be picked and used for signing. The job then stops later, inside the same packaging step, when Apple refuses to notarize the app. So check that the `.p12` you upload holds the Developer ID Application certificate.
 - After packaging, the job reads each app's signature, hardened-runtime flag and Team ID, and runs `spctl` and `stapler validate` on the app bundles.
 - DMG containers stay unsigned, as electron-builder's documentation advises for notarized builds. The job also notarizes and staples each DMG, but that step does not fail the run: a DMG Apple or `stapler` refuses gives a warning, and the notarized apps inside are unaffected.
 
@@ -71,8 +71,8 @@ Each workflow has `permissions: contents: read` by default. Only the job that ne
 
 Both jobs use Node 24 and Temurin 21, install the SDK packages `platforms;android-36` and `build-tools;36.0.0`, and run `node scripts/android-gradle.mjs :app:assembleRelease :app:bundleRelease`. That script builds the production web bundle first. Gradle's own static `lintVital` check is part of these tasks.
 
-- **`unsigned`** needs no secrets. Files: `GizeCat-<version>-android-unsigned.apk` and `.aab`, `SHA256SUMS-android.txt`. An unsigned APK cannot be installed, and an unsigned AAB cannot be uploaded to Google Play.
-- **`release-signed`** needs the owner's secrets and runs in the GitHub Environment `android-signing`. The keystore is decoded to a file under `$RUNNER_TEMP`, passed to Gradle as `ANDROID_KEYSTORE_FILE` with `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`, and removed at the end of the job. Files: `GizeCat-<version>-android.apk` and `.aab`, `SHA256SUMS-android.txt`. The job reads the APK's and the AAB's signature afterwards (`apksigner verify`, `jarsigner -verify`).
+- **`unsigned`** needs no secrets. Files: `GizeCat-<version>-android-unsigned.apk` and `.aab`, `SHA256SUMS-android.txt` (attached to a draft as `SHA256SUMS-android-unsigned.txt`). An unsigned APK cannot be installed, and an unsigned AAB cannot be uploaded to Google Play.
+- **`release-signed`** needs the owner's secrets and runs in the GitHub Environment `android-signing`. The keystore is decoded to a file under `$RUNNER_TEMP`, passed to Gradle as `ANDROID_KEYSTORE_FILE` with `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`, and removed at the end of the job. Files: `GizeCat-<version>-android.apk` and `.aab`, `SHA256SUMS-android.txt` (attached to a draft as `SHA256SUMS-android-signed.txt`). The job reads the APK's and the AAB's signature afterwards (`apksigner verify`, `jarsigner -verify`).
 
 The workflow does not publish to any store. The key itself is covered in [android-signing.md](android-signing.md).
 
@@ -95,6 +95,8 @@ The Linux job is unchanged: it builds an unsigned AppImage and tar.gz and upload
 
 No inputs and no secrets. It runs `node scripts/build.mjs --web-only` and deploys `out/web` to the repository's GitHub Pages project site, in the `github-pages` environment.
 
+GitHub Pages is already configured for the GitHub Actions source (done 2026-11-08 through the API). Nothing has been deployed.
+
 The site is served under the `/GizeCat/` subpath of the project-site address. The bundle uses relative URLs only (`index.html`, the manifest's `start_url` and `scope`, `sw.js` with scope `./`), so it needs no base-path setting. The real address is the one the deploy job prints.
 
 The result is a **public website**. A project site shares its origin with the other Pages sites of the same account or organization (shared `localStorage` and caches); a custom domain owned by you avoids that.
@@ -110,7 +112,7 @@ The optional `draft_release_tag` input works the same in `macos-packages.yml`, `
 - Files are added with `gh release upload` without `--clobber`. If an asset with the same name is already on the draft, the upload fails and nothing is replaced. Delete that asset from the draft first if you want to replace it.
 - The job that attaches runs after the build, holds no signing secret, and is the only job with write access to the repository.
 
-The per-workflow checksum files (`SHA256SUMS-mac-adhoc.txt`, `SHA256SUMS-mac.txt`, `SHA256SUMS-android.txt`, `SHA256SUMS-windows.txt`) cover only that workflow's files. The install guides point users to the release's single `SHA256SUMS.txt`, which `npm run release:sums` writes ([how](building-and-packaging.md#release-checksums)). After stapling or signing, generate it from the files that are actually on the release.
+The per-workflow checksum files (`SHA256SUMS-mac-adhoc.txt`, `SHA256SUMS-mac.txt`, `SHA256SUMS-windows.txt`, and on a draft `SHA256SUMS-android-unsigned.txt` or `SHA256SUMS-android-signed.txt`) cover only that workflow's files. The install guides point users to the release's single `SHA256SUMS.txt`, which `npm run release:sums` writes ([how](building-and-packaging.md#release-checksums)). After stapling or signing, generate it from the files that are actually on the release.
 
 ## Secrets
 
@@ -187,8 +189,8 @@ The certificate and keystore files themselves must stay outside the repository. 
 
 ## What the owner does, in order
 
-1. **Decide when the workflow files reach `main`.** Until they do, nothing here can be started (see [the default-branch rule](#the-default-branch-rule)). Pushing to `main` also triggers `ci.yml`.
-2. **For the web app:** decide that it may be public. Then, once only, set **Settings**, **Pages**, **Build and deployment**, **Source: GitHub Actions**.
+1. **Decide when the workflow files reach `main`.** Until they do, `macos-packages.yml`, `android-release.yml` and `pages.yml` cannot be started; `release.yml` already can (see [the default-branch rule](#the-default-branch-rule)). Pushing to `main` also triggers `ci.yml`.
+2. **For the web app:** decide that it may be public. GitHub Pages is already configured for the GitHub Actions source (done 2026-11-08 through the API; nothing deployed), so the only Pages steps left are: bring `pages.yml` to `main`, then run it.
 3. **For each signing path you want:** create the environment, the required reviewer and the secrets, as above. Skip this for unsigned and ad-hoc builds.
 4. **If files should go on a draft release:** make sure the draft exists with the tag you will enter.
 5. **Start a workflow:** the repository's **Actions** tab, the workflow's name, **Run workflow**, pick the branch, fill in the inputs, **Run workflow**. Start with the paths that need no secrets.
@@ -201,6 +203,6 @@ The certificate and keystore files themselves must stay outside the repository. 
 
 - No workflow here has run, so runner image details (preinstalled tools, the Android SDK path) are assumptions until the first run.
 - Ad-hoc macOS packages are not notarized. They are for trials by people who accept allowing them manually, not for general distribution.
-- A universal build needs a macOS runner; the Linux container route makes ad-hoc zips for x64 and arm64 only.
+- A universal build needs a macOS runner. The two Linux routes make ad-hoc zips for x64 and arm64 only: the Docker route (`npm run package:mac:adhoc-docker`, a container) and the WSL route (`npm run package:mac:adhoc-wsl`, a disposable WSL 2 distro on a Windows PC).
 - The ARM64 Windows installer can only be checked statically on an x64 runner. Installing it needs a Windows on Arm PC or VM.
 - `installer-check.yml` is a separate manual workflow that really installs and uninstalls on a hosted runner. It is not part of this release automation.

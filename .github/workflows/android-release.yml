@@ -32,7 +32,9 @@ name: android-release
 #   environment (android/app/build.gradle.kts); it stops on a partial set and never prints a value.
 #
 # Optional input draft_release_tag: job attach-to-draft adds the files to an existing DRAFT release
-# (gh release upload). It refuses a release that is not a draft and never replaces an asset.
+# (gh release upload). It refuses a release that is not a draft and never replaces an asset. There
+# SHA256SUMS-android.txt is attached as SHA256SUMS-android-unsigned.txt or
+# SHA256SUMS-android-signed.txt, so both paths can be attached to the same draft.
 #
 # A package that builds and signs is not evidence that the app runs on a device. The app has never
 # run on an Android device or emulator.
@@ -217,6 +219,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.draft_release_tag }}
+          SIGNING: ${{ inputs.signing }}
         run: |
           set -euo pipefail
           if ! [[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._/+-]*$ ]]; then
@@ -231,6 +234,15 @@ jobs:
             echo "::error::refused: the release $TAG is not a draft, and this workflow never changes a published release"
             exit 1
           fi
+          # scripts/android-gradle.mjs always writes SHA256SUMS-android.txt. The two paths can attach
+          # to the same draft, so the attached copy is named after the path that built it.
+          case "$SIGNING" in
+            unsigned) sums_name=SHA256SUMS-android-unsigned.txt ;;
+            release-signed) sums_name=SHA256SUMS-android-signed.txt ;;
+            *) echo "::error::unexpected signing input"; exit 1 ;;
+          esac
+          [ -s to-attach/SHA256SUMS-android.txt ] || { echo "::error::SHA256SUMS-android.txt is missing from the downloaded files"; exit 1; }
+          mv to-attach/SHA256SUMS-android.txt "to-attach/$sums_name"
           ls -la to-attach
           # Without --clobber: an asset that already has this name makes the upload fail.
           gh release upload "$TAG" to-attach/*

@@ -92,7 +92,8 @@ linux:
 #   for x64 and arm64 only and re-signs ad hoc (GizeCat-<v>-mac-<arch>-adhoc.zip).
 # - Signing and notarization: REQUIRES_OWNER_CREDENTIALS (Developer ID Application certificate,
 #   App Store Connect API key or Apple ID). `notarize` is deliberately unset: electron-builder 26
-#   then notarizes only after a successful Developer ID signing, and only when a complete env set
+#   then notarizes after it has signed with an identity (it does not check that the identity is a
+#   Developer ID Application certificate; Apple rejects other kinds), and only when a complete env set
 #   exists (APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, or APPLE_ID +
 #   APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID, or APPLE_KEYCHAIN_PROFILE). With none it logs
 #   "skipped macOS notarization"; a partial set fails the build. A build without an identity

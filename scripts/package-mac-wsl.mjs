@@ -5,14 +5,23 @@
 // Linux; DMG and universal builds need a real Mac (.github/workflows/macos-packages.yml).
 //
 // It imports its own uniquely named distro from the official Ubuntu WSL root filesystem
-// (sha256-checked against Ubuntu's SHA256SUMS), runs scripts/docker/mac-adhoc-build.sh there on a
-// `git archive` of the committed HEAD, copies the results to release/<version>/mac/, and ALWAYS
-// unregisters the distro afterwards. It never touches any other WSL distro or the Docker engine.
+// (sha256-checked against Ubuntu's SHA256SUMS), runs HEAD's scripts/docker/mac-adhoc-build.sh there
+// on a `git archive` of the committed HEAD and copies the results to release/<version>/mac/.
+// It never touches any other WSL distro or the Docker engine.
 // Nothing built here is run: a build is not a test.
+//
+// The distro is unregistered on any normal or failed completion, but NOT if this process is killed
+// (Ctrl+C, a dying shell, a reboot): that distro stays registered, and may keep building until it
+// is removed. Its name is printed at the start and saved as distro-name.txt in the stage folder;
+// `wsl --list --quiet` shows it and the next run reports it without removing it. Remove it with:
+//   wsl --unregister gizecat-mac-build-<number>
+// If that step fails inside a run, the script says so, keeps the stage (it holds the distro's disk)
+// and exits non-zero even when the build succeeded.
 //
 // Usage (under the machine lock on a shared PC):
 //   node scripts/with-lock.mjs mac-wsl -- node scripts/package-mac-wsl.mjs [--allow-dirty] [--keep-stage]
-// --allow-dirty builds HEAD even when the working tree has uncommitted changes (they are NOT included).
+// --allow-dirty builds HEAD even when the working tree has uncommitted changes. They are NOT
+// included: the source and the build script both come from HEAD.
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -78,6 +87,12 @@ const cacheDir = path.join(os.tmpdir(), 'gizecat-wsl-cache');
 fs.mkdirSync(cacheDir, { recursive: true });
 console.log(`package-mac-wsl: GizeCat ${version} at ${commit}; distro ${name}; stage ${stage}`);
 
+// A distro left by an earlier run is reported and never removed. wsl.exe may print UTF-16 or UTF-8.
+const registered = String(wsl(['--list', '--quiet']).stdout ?? '').replace(/\0/g, '');
+for (const left of new Set(registered.match(/gizecat-mac-build-\d+/g) ?? [])) {
+  console.error(`package-mac-wsl: WARNING: distro ${left} is still registered from an earlier run (killed, or still running). This run leaves it alone. Remove it with: wsl --unregister ${left}`);
+}
+
 // 1. The official root filesystem, checked against Ubuntu's published sums.
 const sums = await (await fetch(`${ROOTFS_BASE}/SHA256SUMS`)).text();
 const line = sums.split('\n').find((l) => l.endsWith(ROOTFS_NAME));
@@ -95,7 +110,10 @@ console.log(`package-mac-wsl: root filesystem sha256 ${expected} (matches Ubuntu
 // 2. Inputs: the committed source, the build script and a bootstrap for this distro.
 const tar = spawnSync('git', ['archive', '--format=tar', '-o', path.join(stage, 'src.tar'), 'HEAD'], { cwd: root, windowsHide: true });
 if (tar.status !== 0) fail('git archive failed');
-fs.copyFileSync(path.join(root, 'scripts', 'docker', 'mac-adhoc-build.sh'), path.join(stage, 'mac-adhoc-build.sh'));
+// The committed build script, as raw blob bytes (LF), so --allow-dirty cannot change what builds.
+const buildScript = spawnSync('git', ['show', 'HEAD:scripts/docker/mac-adhoc-build.sh'], { cwd: root, windowsHide: true });
+if (buildScript.status !== 0) fail('git show HEAD:scripts/docker/mac-adhoc-build.sh failed');
+fs.writeFileSync(path.join(stage, 'mac-adhoc-build.sh'), buildScript.stdout);
 const winStage = toWslPath(stage);
 const bootstrap = `#!/usr/bin/env bash
 set -euo pipefail
@@ -115,10 +133,13 @@ cp /stage/out/* "${winStage}/out/"
 `;
 fs.writeFileSync(path.join(stage, 'bootstrap.sh'), bootstrap, { mode: 0o755 });
 
-// 3. One distro, ours only; always unregistered.
+// 3. One distro, ours only; unregistered on any normal or failed completion, not if we are killed.
+// Its name goes on disk before --import, so a killed run still leaves it next to the stage's files.
 let status = 1;
+let unregisterFailed = false;
 const distroDir = path.join(stage, 'distro');
 fs.mkdirSync(distroDir);
+fs.writeFileSync(path.join(stage, 'distro-name.txt'), `${name}\n`);
 const imported = wsl(['--import', name, distroDir, rootfs, '--version', '2'], { stdio: 'inherit' });
 if (imported.status !== 0) fail('wsl --import failed');
 try {
@@ -129,6 +150,12 @@ try {
 } finally {
   const un = wsl(['--unregister', name], { encoding: 'utf16le' });
   console.log(`package-mac-wsl: unregister ${name}: exit ${String(un.status)}`);
+  if (un.status !== 0) {
+    unregisterFailed = true;
+    const detail = String(un.stderr || un.stdout || un.error?.message || '').replace(/\0/g, '').trim();
+    console.error(`package-mac-wsl: ERROR: could not unregister ${name} (exit ${String(un.status)}): ${detail}`);
+    console.error(`package-mac-wsl: ERROR: ${name} is STILL REGISTERED and its disk is in ${distroDir}. The stage is kept. Remove it with: wsl --unregister ${name}`);
+  }
 }
 if (status !== 0) {
   console.error(`package-mac-wsl: the build exited with ${status}; the stage is kept for inspection: ${stage}`);
@@ -146,6 +173,11 @@ for (const l of fs.readFileSync(path.join(dest, 'SHA256SUMS.txt'), 'utf8').split
   const got = sha256File(path.join(dest, file));
   if (got !== hash) fail(`${file}: checksum mismatch after the copy`);
   console.log(`package-mac-wsl: ${file} ${fs.statSync(path.join(dest, file)).size} bytes, sha256 ${hash}`);
+}
+if (unregisterFailed) {
+  console.error(`package-mac-wsl: ERROR: the zips are in release/${version}/mac/, but ${name} is still registered. Remove it with: wsl --unregister ${name}`);
+  console.error(`package-mac-wsl: ERROR: then delete the stage: ${stage}`);
+  process.exit(1);
 }
 if (!keepStage) fs.rmSync(stage, { recursive: true, force: true });
 console.log(`package-mac-wsl: done -> release/${version}/mac/`);

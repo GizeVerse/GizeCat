@@ -16,8 +16,10 @@ name: macos-packages
 #
 # Two paths (input `signing`):
 # - adhoc (default, no secrets): DMG and zip for x64, arm64 and universal, ad-hoc signed and NOT
-#   notarized, named GizeCat-<version>-mac-<arch>-adhoc.dmg/.zip so they cannot be confused with
-#   notarized files. Ad-hoc signing is explicit (`-c.mac.identity=-`): electron-builder 26 has no
+#   notarized, named GizeCat-<version>-mac-<arch>-adhoc-macrunner.dmg/.zip so they cannot be
+#   confused with notarized files or with the Linux routes' GizeCat-<version>-mac-<arch>-adhoc.zip
+#   (rcodesign signature, different bytes, scripts/docker/mac-adhoc-build.sh).
+#   Ad-hoc signing is explicit (`-c.mac.identity=-`): electron-builder 26 has no
 #   automatic ad-hoc fallback (app-builder-lib scheme.json, mac.identity), and Apple Silicon only
 #   starts validly signed code. The hardened runtime is off on this path, because library
 #   validation rejects an ad-hoc signed app's frameworks. macOS still blocks these files until the
@@ -32,9 +34,10 @@ name: macos-packages
 #   and exactly one complete notarization set:
 #     APPLE_API_KEY_P8_BASE64, APPLE_API_KEY_ID, APPLE_API_ISSUER   (App Store Connect API key; preferred)
 #     APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID          (alternative)
-#   electron-builder 26 reads CSC_LINK and CSC_KEY_PASSWORD, and notarizes only after a successful
-#   Developer ID signing and only with a complete set (a partial set is an error in
-#   app-builder-lib/out/mac/MacTargetHelper.js getNotarizeOptions). The step below passes it one set.
+#   electron-builder 26 reads CSC_LINK and CSC_KEY_PASSWORD. It notarizes right after signing, with
+#   whichever identity it found (it does not require a Developer ID one), and only with a complete
+#   set (a partial set is an error in app-builder-lib/out/mac/MacTargetHelper.js getNotarizeOptions).
+#   The step below passes it one set.
 #
 # Optional input draft_release_tag: job attach-to-draft adds the files to an existing DRAFT release
 # (gh release upload). It refuses a release that is not a draft and never replaces an asset.
@@ -99,7 +102,7 @@ jobs:
           npx electron-builder --mac dmg zip $archs --publish never \
             -c.mac.identity=- \
             -c.mac.hardenedRuntime=false \
-            '-c.mac.artifactName=GizeCat-${version}-mac-${arch}-adhoc.${ext}'
+            '-c.mac.artifactName=GizeCat-${version}-mac-${arch}-adhoc-macrunner.${ext}'
       - name: Check the ad-hoc signatures (reads the files, runs nothing)
         env:
           UNIVERSAL: ${{ inputs.universal }}
@@ -131,16 +134,16 @@ jobs:
           if [ "$UNIVERSAL" = "true" ]; then archs="$archs universal"; fi
           for arch in $archs; do
             for ext in dmg zip; do
-              [ -f "GizeCat-$VERSION-mac-$arch-adhoc.$ext" ] || { echo "::error::missing GizeCat-$VERSION-mac-$arch-adhoc.$ext"; exit 1; }
+              [ -f "GizeCat-$VERSION-mac-$arch-adhoc-macrunner.$ext" ] || { echo "::error::missing GizeCat-$VERSION-mac-$arch-adhoc-macrunner.$ext"; exit 1; }
             done
           done
-          shasum -a 256 GizeCat-*-adhoc.dmg GizeCat-*-adhoc.zip | tee SHA256SUMS-mac-adhoc.txt
+          shasum -a 256 GizeCat-*-adhoc-macrunner.dmg GizeCat-*-adhoc-macrunner.zip | tee SHA256SUMS-mac-adhoc.txt
       - uses: actions/upload-artifact@v4
         with:
           name: GizeCat-${{ steps.meta.outputs.version }}-mac-adhoc
           path: |
-            release/GizeCat-*-adhoc.dmg
-            release/GizeCat-*-adhoc.zip
+            release/GizeCat-*-adhoc-macrunner.dmg
+            release/GizeCat-*-adhoc-macrunner.zip
             release/SHA256SUMS-mac-adhoc.txt
           if-no-files-found: error
           retention-days: 14
@@ -213,8 +216,11 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Build
         run: node scripts/build.mjs
-      # forceCodeSigning: a certificate that is not a Developer ID Application identity stops the
-      # build here instead of producing an unsigned package.
+      # forceCodeSigning stops the build here only when electron-builder finds no signing identity at
+      # all, instead of producing an unsigned package. It does not check the certificate's type: in
+      # app-builder-lib 26.18.1 (macCodeSign.js _findIdentity) a non-Developer-ID identity such as
+      # "Apple Development" can be picked and used, and this step then stops only when Apple refuses
+      # to notarize it.
       - name: Package, sign and notarize (DMG and zip, not published)
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}

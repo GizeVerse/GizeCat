@@ -14,9 +14,9 @@ name: web-pages
 # "./"), so it needs no base-path setting. The real address is the one the deploy job prints.
 #
 # OWNER APPROVAL REQUIRED. Manual only (workflow_dispatch): no push, pull_request, schedule, release
-# or workflow_run trigger, and agents never start it. It contains no test step. One-time setting
-# before the first run: Settings > Pages > Build and deployment > Source: GitHub Actions. The owner
-# first decides that the web app may be public at all. A project site shares its origin with every
+# or workflow_run trigger, and agents never start it. It contains no test step. The repository's
+# Pages source is already set to GitHub Actions (2026-11-08, through the API; nothing deployed). The
+# owner first decides that the web app may be public at all. A project site shares its origin with every
 # other Pages site of the same account or organization (shared localStorage and caches); an
 # owner-provided custom domain avoids that. The build uses no secrets and signs nothing.
 #

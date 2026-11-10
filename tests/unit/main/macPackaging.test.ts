@@ -73,8 +73,8 @@ describe('.github/workflows/macos-packages.yml (D12)', () => {
   const wf = read('.github', 'workflows', 'macos-packages.yml');
   const on = /^on:\n([\s\S]*?)^\S/m.exec(wf)?.[1] ?? '';
 
-  it('is manual only and marked UNEXECUTED', () => {
-    expect(wf).toMatch(/^# UNEXECUTED when written/m);
+  it('is manual only and marked as never started', () => {
+    expect(wf).toMatch(/^# NEVER STARTED/m);
     expect(on).toMatch(/^ {2}workflow_dispatch:/m);
     expect(on).not.toMatch(/^ {2}(push|pull_request|pull_request_target|schedule|workflow_run|release):/m);
     expect(wf).toMatch(/^permissions:\n {2}contents: read/m);
@@ -85,7 +85,11 @@ describe('.github/workflows/macos-packages.yml (D12)', () => {
     expect(wf).not.toMatch(/--publish (always|onTag|onTagOrDraft)/);
     expect((wf.match(/--publish never/g) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(wf).toMatch(/if: always\(\)\n\s+run: rm -f "\$RUNNER_TEMP\/AuthKey\.p8"/);
-    expect(wf).not.toMatch(/gh release|softprops\/action-gh-release/);
+    // The only release access: an optional job that uploads to an existing DRAFT (checked first),
+    // never creating, editing, deleting or replacing anything.
+    expect(wf).not.toMatch(/softprops\/action-gh-release|gh release (create|edit|delete)|--clobber/);
+    expect(wf).toMatch(/gh release view "\$TAG" --json isDraft/);
+    expect(wf.indexOf('gh release view "$TAG" --json isDraft')).toBeLessThan(wf.indexOf('gh release upload "$TAG"'));
   });
 });
 
