@@ -2,9 +2,9 @@
 
 GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is the first public release; earlier versions were built and tested locally but not published.
 
-## 1.4.2 (Android interaction, edge movement and panel; CANDIDATE, unpublished)
+## 1.4.2 (Android Floating Desktop Pet; stable Android release, 2026-11-10)
 
-**An Android-only candidate: not tagged, not published.** Windows, macOS and the desktop/web version (`package.json`, 1.4.0) are not touched. Android 1.4.2, versionCode 10403 (`android/version.properties`), same application id and the same debug-signing identity as 1.4.1, so it installs over it. **Nothing in 1.4.2 has run on a device, an emulator or a simulator; no test was executed.** A build and a type-check are not tests.
+**An Android-only stable release** ([v1.4.2](https://github.com/GizeVerse/GizeCat/releases/tag/v1.4.2), tag at commit `fb0c920`; first published as a pre-release and promoted to stable and latest the same day with the same APK). Windows, macOS and the desktop/web version (`package.json`, 1.4.0) are not touched. Android 1.4.2, versionCode 10403 (`android/version.properties`), same application id and the same debug-signing identity as 1.4.1, so it installs over it. **The owner used this exact APK on one physical Android phone and reports that overlay visibility, dragging and throwing, screen-edge movement and climbing, touch interaction, interacting with apps underneath, rotation and landscape, the control panel, and app switching with persistence all worked.** That is one phone, owner-reported: other phones and tablets are not individually verified, and no automated test, emulator or simulator was used. The APK is still signed with the Android Debug certificate (not a Google Play package) and Play Protect may warn; static review is not proof of safety.
 
 Prompted by the owner's real-phone report on 1.4.1 (overlay, landscape, rotation and taps worked; drag and throw did not, a small area around the cat ate touches, the cat never walked the screen edges, the panel was poor, and Play Protect blocked the install).
 

@@ -12,9 +12,11 @@ On a desktop, everything except the cat's own body stays clickable. On a tablet,
 
 ## Get it on your device
 
-**Current release: 1.3.0, for Windows x64** ([Releases](https://github.com/GizeVerse/GizeCat/releases), [how to install](#download-and-install-windows-1011)). It stays the current release until the owner publishes 1.4.0.
+**Android phones and tablets: GizeCat 1.4.2**, the latest release on GitHub ([release page](https://github.com/GizeVerse/GizeCat/releases/tag/v1.4.2), [how to install](#download-and-install-android-phones-and-tablets)). It is an **Android-only** release: the cat floats over your launcher and other apps. The owner has used it on one physical Android phone; other models are untested. The APK is signed with the Android Debug certificate, is not a Google Play package, and Play Protect may show a warning.
 
-**1.4.0 is a release candidate. It is not published, and nothing in 1.4.0 has run on any device.** The table shows where each device stands. A build is not a test.
+**Windows: 1.3.0, for Windows x64** ([Releases](https://github.com/GizeVerse/GizeCat/releases), [how to install](#download-and-install-windows-1011)). It stays the current Windows release. The 1.4.0 Preview installers (x64 and ARM64) are on the [v1.4.0 pre-release](https://github.com/GizeVerse/GizeCat/releases/tag/v1.4.0); 1.4.2 does not update any Windows or macOS binary.
+
+**The 1.4.0 Preview (Windows, macOS, iPad) was published only as a pre-release, and nothing in it has been run on a device by its builders.** The table shows where each device stands. A build is not a test.
 
 | Device | 1.4.0 candidate | Status | Signing | Guide |
 |---|---|---|---|---|
@@ -23,7 +25,7 @@ On a desktop, everything except the cat's own body stays clickable. On a tablet,
 | macOS Intel | `GizeCat-1.4.0-mac-x64-adhoc.zip` | COMPILED_OR_PACKAGED; statically inspected; never run on a Mac | Ad-hoc signed, **not notarized**: macOS blocks it until you allow it. Developer ID and notarization: REQUIRES_OWNER_CREDENTIALS | [macOS](docs/platforms/macos.md) |
 | macOS Apple Silicon | `GizeCat-1.4.0-mac-arm64-adhoc.zip` | COMPILED_OR_PACKAGED; statically inspected; never run on a Mac | Ad-hoc signed, **not notarized**, as above | [macOS](docs/platforms/macos.md) |
 | iPad | The web app, added to the Home Screen from Safari. Expected address `https://gizeverse.github.io/GizeCat/`, **not deployed**. | Web bundle COMPILED_OR_PACKAGED; never run on an iPad; hosting REQUIRES_OWNER_CREDENTIALS | A web app is not signed. No App Store app (NOT_IMPLEMENTED) | [iPad](docs/platforms/ipados.md) |
-| Android tablets | The Android app (APK), or the same web app from Chrome once it is hosted | COMPILED_OR_PACKAGED; never run on a device or emulator | Release APK and AAB **unsigned until the owner's key exists, and an unsigned APK cannot be installed** (REQUIRES_OWNER_CREDENTIALS). A debug-signed trial APK is for sideload trials only | [Android](docs/platforms/android.md) |
+| Android phones and tablets | **1.4.2** (stable): `GizeCat-1.4.2-android-trial-debugsigned.apk` from the [v1.4.2 release](https://github.com/GizeVerse/GizeCat/releases/tag/v1.4.2) | The owner used it on **one physical Android phone** (overlay, drag and throw, edge climbing, touch, rotation, panel, app switching). Other phones and tablets: not verified | Signed with the **Android Debug certificate**: not a Google Play package, Play Protect may warn. A production-signed release APK and AAB need the owner's key (REQUIRES_OWNER_CREDENTIALS) | [Android](docs/platforms/android.md), [floating cat](docs/platforms/android-overlay.md) |
 
 What the status words mean, and the status of every file: [docs/platforms/](docs/platforms/README.md). If something does not work: [troubleshooting](docs/platforms/troubleshooting.md). GizeCat has no listing in any app store.
 
@@ -53,9 +55,22 @@ The installer, shortcuts and Apps entry are still named **Desktop Cat**. They ar
 
 You can also build it yourself; see [Build, run, test](#build-run-test).
 
+## Download and install (Android phones and tablets)
+
+**GizeCat 1.4.2** is on the [v1.4.2 release page](https://github.com/GizeVerse/GizeCat/releases/tag/v1.4.2): `GizeCat-1.4.2-android-trial-debugsigned.apk` and `SHA256SUMS.txt` (the APK's SHA-256 is `9b2158d81be485b4ef24f0f5cba091f142ed83045a861065a650a195a78bf536`). Needs Android 10 or later.
+
+1. Download the APK and check its SHA-256 against `SHA256SUMS.txt`.
+2. Open it on your device and allow "Install unknown apps" for the app you opened it from. It installs as **GizeCat (trial)** and updates the 1.4.1 and 1.4.0 trial APKs in place, keeping your cat.
+3. Open GizeCat and tap **Start floating cat**. The app first explains the **Display over other apps** permission and opens Android's own settings page only when you tap **Open Android settings**; you turn it on yourself, and can turn it off any time. On Android 13 and later it asks once to show a small notification (Pause, Hide, Stop); declining changes nothing else.
+4. The cat now floats over other apps. It never starts by itself, not even after a reboot, and the app works without the permission.
+
+**Please read:** the APK is signed with the **Android Debug certificate**, so it is **not a production Google Play package**, and **Google Play Protect may show a warning**. Do not turn Play Protect off on our account; install only if you trust this source. A static review found nothing unusual ([report](docs/platforms/android-play-protect.md)), but that does not prove the app is safe. Limits: the cat looks slightly dimmer on Android 12 and later, a small area around the cat takes touches, there is no global cursor tracking, and movement is the floor and side edges with no ceiling pose.
+
+The owner has confirmed this feature set on **one physical Android phone**. Tablets and other manufacturers' phones may behave differently (vendor battery managers and overlay rules in particular). **Please report what works and what does not** through [GitHub Issues](https://github.com/GizeVerse/GizeCat/issues): your device model, Android version and what you saw. Details, grant and revoke steps, uninstall: [docs/platforms/android-overlay.md](docs/platforms/android-overlay.md).
+
 ## Platforms
 
-**Windows 10/11 is the only supported platform.** Other platforms have code for them, but nothing outside Windows is a supported release until it has run on real hardware. Each capability's status is in the **[capability matrix](docs/gizeverse/capability-matrix.md)** (generated from code). The 1.4.0 candidate's status per target and per artifact is in **[docs/platforms/](docs/platforms/README.md)**.
+**Windows 10/11 and, from 1.4.2, Android phones and tablets are the supported platforms.** For Android the owner has confirmed the feature set on one physical phone; that is not a claim that every Android model works. Other platforms have code for them, but are not supported releases until they have run on real hardware. Each capability's status is in the **[capability matrix](docs/gizeverse/capability-matrix.md)** (generated from code). The 1.4.0 candidate's status per target and per artifact is in **[docs/platforms/](docs/platforms/README.md)**.
 
 | Platform | What exists | What has actually run |
 |---|---|---|
@@ -66,7 +81,7 @@ You can also build it yourself; see [Build, run, test](#build-run-test).
 | Linux, Wayland session | No overlay, on purpose: Wayland gives apps no way to stay on top and pass clicks through safely. Tray and Settings only. | Blocked by the platform |
 | macOS (Intel, Apple Silicon) | 1.4.0 candidate: the desktop app on the screen floor (no window climbing), a menu-bar icon, a Dock switch, an opt-in "Open at login", no permission prompts. Ad-hoc signed, not notarized zips exist for both architectures, built in a disposable WSL 2 distro on the Windows build PC. DMG and universal builds need a Mac: the manual workflow's `adhoc` job makes them without secrets, and its `developer-id` job makes signed and notarized builds with the owner's Apple credentials. It has never been started. | Implemented and packaged; **never run on a Mac** ([guide](docs/platforms/macos.md), [report](docs/gizeverse/04-macos.md)) |
 | iPad | 1.4.0 candidate: the installable web app (Safari → Share → Add to Home Screen), prepared for a GitHub project site that is not deployed. No App Store app; the cat lives inside its own window, because iPadOS lets no app draw over other apps. | **Never run on an iPad** or in Safari ([guide](docs/platforms/ipados.md)) |
-| Android tablets | 1.4.0 candidate: a native app with no internet permission, and the web app installed from Chrome. The cat lives inside its own window; the native app can also float it over other apps (1.4.1, opt-in: four permissions, only for that; [guide](docs/platforms/android-overlay.md)). Release builds are unsigned until the owner's key exists; the signing pipeline is ready and has never run. | Compiled and packaged; **never run on a device or emulator** ([guide](docs/platforms/android.md), [why no click-through overlay](docs/gizeverse/08-mobile-boundaries.md)) |
+| Android phones and tablets | A native app with no internet permission, and the web app installed from Chrome. **1.4.2 floats the cat over other apps** (opt-in: four permissions, only for that): it walks the bottom and side edges, and you can touch, drag and throw it ([guide](docs/platforms/android-overlay.md)). The APK is Android-Debug signed, not a Play package. | **The owner used 1.4.2 on one physical Android phone** and reports the floating-cat checklist worked. Other models, tablets and vendor battery or overlay rules: not individually verified ([guide](docs/platforms/android.md), [limits of Android overlays](docs/gizeverse/08-mobile-boundaries.md)) |
 
 ## Privacy and AI vision
 
@@ -138,7 +153,7 @@ Design and review: [ADR 0004](docs/adr/0004-gizeverse-platform.md). Reports: [do
 - Multiple skins per cat at once, localisation beyond English.
 - Auto-update: not implemented.
 - Code signing: no build is signed with a publisher's key yet. For 1.4.0, the signing paths for Windows, macOS (Developer ID and notarization) and Android exist in manual workflows that have never been started, and they need the owner's credentials ([release automation](docs/platforms/release-automation.md)). Google Play and public web hosting also need the owner.
-- The cat over other apps on iPad or Android: not possible on iPadOS, and ruled out on Android by its touch rules ([why](docs/gizeverse/08-mobile-boundaries.md)).
+- The cat over other apps on iPad: not possible (iPadOS has no cross-application overlay). On Android it floats since 1.4.1/1.4.2, with limits: a small area around it takes touches, no global cursor tracking, no ceiling pose ([why](docs/gizeverse/08-mobile-boundaries.md), [guide](docs/platforms/android-overlay.md)).
 
 ## Build, run, test
 
@@ -178,7 +193,8 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 | GizeVerse foundation (2026-11-06): Windows 11, same machine | verify full (3790 unit/integration tests, 30 Playwright tests against the real app), REAL lively scenarios (window, throws, covered support, hunt, screen edge), builder-config equivalence, packaged smoke | pass, see [docs/gizeverse/03-windows-regression.md](docs/gizeverse/03-windows-regression.md) |
 | Web host: Windows 11, Chrome 156, Edge 156 | 25 Playwright tests (drawing, click routing, petting, drag, persistence, no network, no key listeners), plus the same under desktop Chrome Pixel 7 emulation | pass (REAL in the browsers; phone layout SIMULATED), see [docs/gizeverse/07-web-host.md](docs/gizeverse/07-web-host.md) |
 | Linux: Debian 12 container (Docker), Node 24.21, Electron 44.9.3 under Xvfb | typecheck, lint, 3755 unit tests, build, AppImage + tar.gz, overlay policy (no compositor / compositor / compositor dies), X-server click routing, packaged start with the sandbox, `--no-sandbox` refusal | pass; a 1x1 px non-click-through spot at the overlay origin (SIMULATED desktop), see [docs/gizeverse/05-linux.md](docs/gizeverse/05-linux.md) |
-| macOS, iOS, Android devices, real Linux desktops | not run | **not tested**, see [docs/gizeverse/02-verification.md](docs/gizeverse/02-verification.md#needs-hardware-or-accounts) |
+| Android 1.4.2: one physical Android phone, used by the owner | The owner installed the APK and went through a real-device checklist: overlay above other apps, dragging and throwing, screen-edge movement and climbing, touch, interacting with apps underneath, rotation and landscape, the control panel, app switching and persistence | **owner-reported: all items worked.** No automated test, emulator or simulator was used; other Android models and tablets not verified |
+| macOS, iOS, other Android devices, real Linux desktops | not run | **not tested**, see [docs/gizeverse/02-verification.md](docs/gizeverse/02-verification.md#needs-hardware-or-accounts) |
 | Windows 11 Home 10.0.26200, x64, one 1920×1200 display at 125 %, auto-hide bottom taskbar, Edge 156, Chrome 155 | v1.1: typecheck, lint, 2834 unit/integration tests, 30 Playwright E2E tests against the real app (28 passed + 2 environment skips in the final run, all 30 passed earlier), silent install with startup registration/repair/Task-Manager-disable/upgrade/uninstall checks, a real 1.0 → 1.1 upgrade with settings migration, taskbar/z-order probe with control, UI Automation probe with own Edge/Chrome instances, packaged smoke, resource benchmark | all pass — see [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
 | Same machine, v1.2.0 | typecheck, lint, 3645 unit/integration tests, 30 default Playwright tests against the real app, REAL scenarios with own windows (window, Edge 156 and Chrome 155 tab-strip stays through ordinary geometry updates, hunting, throws, screen edge beside a maximized window, covered support, sound), the **packaged** build going up by itself, packaged smoke, fuses, resource benchmark, behaviour band matrix (SIMULATED) | pass, with the narrow misses and open items in [docs/TEST_REPORT.md](docs/TEST_REPORT.md) |
 | Installing 1.2.0 over a running 1.1.1, the cat on a real Windows Terminal strip, File Explorer tab strips (ship off) | not run | **not observed** |
@@ -191,7 +207,7 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 
 ## Documentation
 
-[Platforms and install guides (1.4.0 candidate)](docs/platforms/README.md) · [Troubleshooting by device](docs/platforms/troubleshooting.md) · [Take your cat to another device](docs/platforms/profile-transfer.md) · [Release automation](docs/platforms/release-automation.md) · [GizeVerse platform (ADR 0004)](docs/adr/0004-gizeverse-platform.md) · [Capability matrix](docs/gizeverse/capability-matrix.md) · [GizeVerse reports](docs/gizeverse/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Roadmap](ROADMAP.md) · [Architecture decision record](docs/adr/0001-architecture.md) · [User guide](docs/USER_GUIDE.md) · [Privacy](docs/PRIVACY.md) · [Threat model](docs/THREAT_MODEL.md) · [AI setup](docs/AI_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Test report](docs/TEST_REPORT.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Example settings](docs/settings.example.json) · [Research notes](docs/research/)
+[Android floating cat](docs/platforms/android-overlay.md) · [Android Play Protect review](docs/platforms/android-play-protect.md) · [Platforms and install guides](docs/platforms/README.md) · [Troubleshooting by device](docs/platforms/troubleshooting.md) · [Take your cat to another device](docs/platforms/profile-transfer.md) · [Release automation](docs/platforms/release-automation.md) · [GizeVerse platform (ADR 0004)](docs/adr/0004-gizeverse-platform.md) · [Capability matrix](docs/gizeverse/capability-matrix.md) · [GizeVerse reports](docs/gizeverse/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Roadmap](ROADMAP.md) · [Architecture decision record](docs/adr/0001-architecture.md) · [User guide](docs/USER_GUIDE.md) · [Privacy](docs/PRIVACY.md) · [Threat model](docs/THREAT_MODEL.md) · [AI setup](docs/AI_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Test report](docs/TEST_REPORT.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Example settings](docs/settings.example.json) · [Research notes](docs/research/)
 
 ## License
 

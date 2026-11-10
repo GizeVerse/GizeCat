@@ -2,7 +2,7 @@
 
 GizeCat on an Android tablet can float over the launcher and other apps, like the desktop cat. This page is the design, the permissions, the limits and the install steps. Status words: [README.md](README.md#status-vocabulary-for-140).
 
-**Nothing on this page has run.** The code compiles and is packaged; it has never run on a device, an emulator or a simulator, and no test was executed for it. Every behaviour below is what the code is written to do (THEORETICALLY_COMPATIBLE_NOT_EXECUTED), not what was seen.
+**What has and has not run.** The owner installed GizeCat 1.4.2 (the [stable release](https://github.com/GizeVerse/GizeCat/releases/tag/v1.4.2)) on **one physical Android phone** and reports that the floating cat worked: overlay above other apps, dragging and throwing, screen-edge movement and climbing, touch interaction, using apps underneath, rotation and landscape, the control panel, and switching apps with the cat staying as it was. That is an owner report about one phone; the maintainers ran no test, emulator or simulator, and **tablets and other manufacturers' phones are not individually verified** (vendor battery managers and overlay rules may differ). The status rows below that say "never run" or THEORETICALLY_COMPATIBLE_NOT_EXECUTED describe what was executed by the build tooling; read them together with this report. The slight opacity reduction on Android 12+ was accepted by the owner as a minor platform limit.
 
 | Item | Status |
 |---|---|
