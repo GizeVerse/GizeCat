@@ -1,6 +1,15 @@
 # Signing the GizeCat Android app (owner procedure)
 
-Only the owner does this. **No release key exists yet**, and no agent or script creates one, handles one or asks for one. Everything in angle brackets is a placeholder for your own value. Never paste a password or keystore into a chat, an issue, a commit or a log.
+Only the owner does this. **No release key exists yet.** On 2026-11-10 these were checked, by name only, without reading any value:
+- no `android/keystore.properties`;
+- no `%USERPROFILE%\.gizecat-keys`;
+- none of the four `ANDROID_*` signing variables set;
+- no key file tracked in git;
+- no `android-signing` environment or secret on GitHub.
+
+The only keystore on the build machine is the Android SDK's own `~/.android/debug.keystore`, which signs the trial APK and never a release.
+
+No agent creates, handles or asks for a release key. [`scripts/android-create-upload-key.ps1`](../../scripts/android-create-upload-key.ps1) is a tool for you to run yourself (section 3). Everything in angle brackets is a placeholder for your own value. Never paste a password or keystore into a chat, an issue, a commit or a log.
 
 Statuses use the 1.4.0 vocabulary in [README.md](README.md#status-vocabulary-for-140).
 
@@ -47,7 +56,21 @@ For option B the two outputs need different keys, so build them in two runs, set
 
 You need `keytool`, which comes with Android Studio's JDK. keytool asks for the password and for your name and organisation; these go into the certificate, so use details you are willing to publish. **Do not pass a password on the command line**: it would stay in your shell history.
 
-Windows PowerShell:
+**The script (Windows, recommended).** It runs the same keytool command, then exports the public certificate and writes the public facts (alias, path, SHA-256 and SHA-1 fingerprints) next to the keystore:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\android-create-upload-key.ps1
+```
+
+- keytool asks for the password itself; the script never sees, stores or prints it.
+- It refuses to run if the keystore already exists, so an existing key is never replaced or rotated.
+- It refuses a target folder inside the repository.
+- Output, all in `%USERPROFILE%\.gizecat-keys`:
+  - `gizecat-upload.jks`: secret;
+  - `gizecat-upload-upload-cert.pem`: public, for Play;
+  - `gizecat-upload-README.txt`: public facts.
+
+**By hand.** Windows PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.gizecat-keys"
@@ -158,7 +181,18 @@ The manual workflow `.github/workflows/android-release.yml` has never been start
 
 `ANDROID_KEYSTORE_FILE` is **not** a secret: the job decodes `ANDROID_KEYSTORE_BASE64` to a file under the runner's temp folder, sets this variable to its path, and deletes the file at the end.
 
-Set them on the environment, with `--env android-signing`. Do not set them repository-wide: a repository secret would reach the job without the reviewer gate. Without a value on the command line, `gh` prompts and nothing lands in your history:
+Optional, recommended: the environment **variable** (not a secret) `ANDROID_EXPECTED_CERT_SHA256` holds your upload certificate's SHA-256 fingerprint, as 64 hex characters (colons allowed). The script's README file prints it in this form. With it set, the workflow refuses outputs signed by any other certificate:
+
+```powershell
+gh variable set ANDROID_EXPECTED_CERT_SHA256 --repo GizeVerse/GizeCat --env android-signing --body <SHA256_HEX>
+```
+
+Whether or not it is set, the workflow refuses:
+- an APK or AAB signed with the Android debug certificate;
+- an AAB that `jarsigner` does not report as verified;
+- an APK and AAB signed by different certificates.
+
+Set the secrets on the environment, with `--env android-signing`. Do not set them repository-wide: a repository secret would reach the job without the reviewer gate. Without a value on the command line, `gh` prompts and nothing lands in your history:
 
 ```powershell
 [Convert]::ToBase64String([IO.File]::ReadAllBytes('<KEYSTORE_PATH>')) | gh secret set ANDROID_KEYSTORE_BASE64 --repo GizeVerse/GizeCat --env android-signing
@@ -175,6 +209,16 @@ On macOS or Linux, the first line is `base64 < <KEYSTORE_PATH> | tr -d '\n' | gh
 ## 8. Play App Signing
 
 Google Play requires Play App Signing for new apps. Your key is the **upload key**: it proves an upload came from you, and Google signs what users install.
+
+| | Upload key | App signing key |
+|---|---|---|
+| What it signs | The AAB you upload to Play | The APKs Play delivers to devices |
+| Who holds it | You (this procedure) | Google, in its key management service; with option B also you, as the original |
+| If it is lost | Request an upload key reset in the Play Console (section 9); users are not affected | Google keeps it. With option B, losing *your* copy only matters for APKs outside Play |
+| If it leaks | Reset it in the Play Console. To publish with it, an attacker would also need access to your Play Console account | Updates could be forged for users. Under option A only Google holds it |
+| In this repository | Never. In CI only as the `android-signing` environment's secrets | Never |
+
+**Validity and renewal.** Android signing certificates are not renewed. An app keeps its signing certificate for life, and Android accepts an update only from the same certificate. Google Play requires the certificate to be valid beyond 22 October 2033, so the key is made valid for 10000 days (about 27 years). This project does not rotate keys: APK Signature Scheme v3 rotation exists, but nothing here uses it. Upload keys are replaced only through Google's reset procedure.
 
 1. Sign in to the [Play Console](https://play.google.com/console/) and create the app. The application id is fixed at the first upload and can never change: `io.github.gizeverse.gizecat`.
 2. Create a release on a track (start with internal testing).

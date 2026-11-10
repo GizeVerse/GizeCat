@@ -174,9 +174,13 @@ jobs:
       - name: Remove the keystore file
         if: always()
         run: rm -f "$RUNNER_TEMP/gizecat-upload.keystore"
+      # Refuses an unsigned or debug-signed output, an APK and AAB signed by different certificates,
+      # and (when the environment variable ANDROID_EXPECTED_CERT_SHA256 holds the upload certificate's
+      # SHA-256, 64 hex characters, public) any other certificate. Certificate fingerprints are public.
       - name: Check the expected files and their signatures (reads the files, runs nothing)
         env:
           VERSION: ${{ steps.meta.outputs.version }}
+          ANDROID_EXPECTED_CERT_SHA256: ${{ vars.ANDROID_EXPECTED_CERT_SHA256 }}
         run: |
           set -euo pipefail
           dir="release/$VERSION/android"
@@ -184,10 +188,25 @@ jobs:
           for name in "GizeCat-$VERSION-android.apk" "GizeCat-$VERSION-android.aab" SHA256SUMS-android.txt; do
             [ -s "$dir/$name" ] || { echo "::error::missing $dir/$name"; exit 1; }
           done
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$dir/GizeCat-$VERSION-android.apk"
-          report="$(jarsigner -verify "$dir/GizeCat-$VERSION-android.aab")"
-          echo "$report"
-          if grep -q 'jar is unsigned' <<<"$report"; then echo "::error::the AAB is unsigned"; exit 1; fi
+          apk_report="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$dir/GizeCat-$VERSION-android.apk")"
+          echo "$apk_report"
+          if grep -q 'CN=Android Debug' <<<"$apk_report"; then echo "::error::the APK is signed with the Android debug certificate"; exit 1; fi
+          apk_sha="$(sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' <<<"$apk_report" | tr -d ' :' | tr 'A-F' 'a-f')"
+          [ -n "$apk_sha" ] || { echo "::error::apksigner printed no signer certificate digest"; exit 1; }
+          if [ "$(grep -c '^Signer #[0-9]* certificate SHA-256 digest' <<<"$apk_report")" != 1 ]; then echo "::error::the APK has more than one signer"; exit 1; fi
+          aab_report="$(jarsigner -verify "$dir/GizeCat-$VERSION-android.aab")"
+          echo "$aab_report"
+          grep -q '^jar verified\.' <<<"$aab_report" || { echo "::error::jarsigner did not verify the AAB"; exit 1; }
+          aab_cert="$(keytool -printcert -jarfile "$dir/GizeCat-$VERSION-android.aab")"
+          echo "$aab_cert"
+          if grep -q 'CN=Android Debug' <<<"$aab_cert"; then echo "::error::the AAB is signed with the Android debug certificate"; exit 1; fi
+          aab_sha="$(sed -n 's/^[[:space:]]*SHA256: *//p' <<<"$aab_cert" | head -n 1 | tr -d ' :' | tr 'A-F' 'a-f')"
+          [ "$aab_sha" = "$apk_sha" ] || { echo "::error::the APK ($apk_sha) and the AAB (${aab_sha:-none}) are signed by different certificates"; exit 1; }
+          if [ -n "$ANDROID_EXPECTED_CERT_SHA256" ]; then
+            expected="$(tr -d ' :' <<<"$ANDROID_EXPECTED_CERT_SHA256" | tr 'A-F' 'a-f')"
+            [ "$apk_sha" = "$expected" ] || { echo "::error::signed with certificate $apk_sha, expected $expected"; exit 1; }
+          fi
+          echo "signer certificate SHA-256: $apk_sha"
           cat "$dir/SHA256SUMS-android.txt"
       - uses: actions/upload-artifact@v4
         with:
