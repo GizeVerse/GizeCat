@@ -37,8 +37,9 @@ import java.io.ByteArrayInputStream
  *   release or trial builds, no addJavascriptInterface;
  * - the only native bridge is [FileBridge]: the system file picker for `<input type=file>` and a
  *   save-to-file message, both through the Storage Access Framework (no storage permission);
- * - Back runs one fixed script, [CLOSE_TOP_DIALOG_JS], that closes the page's open `<dialog>` (the
- *   settings sheet); no page data is ever put into a script.
+ * - on the cat's page, Back runs one fixed script, [CLOSE_TOP_DIALOG_JS], that closes the page's
+ *   open `<dialog>` (the settings sheet), and no page data is ever put into a script; on any other
+ *   page of ours (the notices) Back returns to the cat and runs no script.
  */
 class MainActivity : Activity() {
     companion object {
@@ -286,16 +287,26 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Back closes the page's open dialog (the settings sheet) when there is one. Otherwise the cat
-     * stays alive in the background instead of the Activity finishing, as Android 12+ does for
-     * launcher roots by default. A second Back before the page has answered (a busy page) leaves
-     * at once.
+     * On a page other than the cat's (the notices, which unloaded the cat page by navigating) Back
+     * returns to the cat, through the history or, when there is none, the start page. On the cat's
+     * page it closes the open dialog (the settings sheet) when there is one. Otherwise the cat stays
+     * alive in the background instead of the Activity finishing, as Android 12+ does for launcher
+     * roots by default. A second Back before the page has answered (a busy page) leaves at once.
+     *
+     * The history is never consulted on the cat's page: after a notices page's own "Back to
+     * GizeCat" link it still holds that page, so Back would reopen the notices instead of leaving.
      */
     private fun onBack() {
         val wv = webView
         if (wv == null || backQuery != 0) {
             backQuery = 0
             moveTaskToBack(true)
+            return
+        }
+        // Null before the first page commits, which counts as the cat's page.
+        val path = wv.url?.let { Uri.parse(it).path }
+        if (path != null && path != "${ASSET_PATH}index.html") {
+            if (wv.canGoBack()) wv.goBack() else wv.loadUrl(START_URL)
             return
         }
         val id = ++backQueries

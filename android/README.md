@@ -48,7 +48,9 @@ against this project by `tests/unit/android/androidProject.test.ts`.
   reclaim again. Only crashes count, not renderers the system killed for memory: after 3 crashes
   within 60 s a static message is shown instead, and reopening the app (the launcher icon,
   Recents, or switching back) clears the count and tries again.
-- **Back:** the app first asks the page to close its open dialog (the settings sheet, which also
+- **Back:** on a page other than the cat's (the notices pages), Back returns to the cat, through the
+  WebView's history or, when it has none, by loading the start page, and runs no script. On the
+  cat's page the app first asks the page to close its open dialog (the settings sheet, which also
   holds the profile-import preview; nothing is applied), by running one fixed script with
   `evaluateJavascript` that never carries page or native data. The sheet updates exactly as for
   Escape. With no dialog open, Back moves the app to the background instead of closing it, as
@@ -106,6 +108,12 @@ folder. It runs `scripts/build-web-app.mjs` first, which rebuilds `out/web` and 
 is: `GizeCat-<version>-android.apk/.aab` is signed with the release key,
 `GizeCat-<version>-android-unsigned.apk/.aab` is unsigned, and
 `GizeCat-<version>-android-trial-debugsigned.apk` is the trial.
+
+What is copied follows the tasks you asked for (`assembleRelease`, `bundleRelease`, `assembleTrial`),
+so a run Gradle found up to date still copies its outputs, and a requested output that is missing
+stops the script with an error. Copying a release APK or AAB first removes both the signed and the
+unsigned copy of that kind from the folder, so the two never sit side by side in one checksum file.
+Other Gradle tasks copy nothing.
 
 | Output | Command | Gradle output |
 | --- | --- | --- |

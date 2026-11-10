@@ -17,6 +17,11 @@
 //   GizeCat-<version>-android-unsigned.apk/.aab   no release key was configured
 //   GizeCat-<version>-android-trial-debugsigned.apk   the trial build, signed with the SDK debug key
 //
+// What gets collected follows the tasks requested (assembleRelease, bundleRelease, assembleTrial),
+// so a run Gradle found UP-TO-DATE still collects, and a requested output that is missing stops
+// with an error. Collecting a release APK or AAB first removes both the signed and the unsigned copy
+// of that kind, so the folder never holds an old build of one signing state beside a new one.
+//
 // JAVA_HOME: the environment's, if it holds a JDK 17+; otherwise Android Studio's bundled JBR.
 // ANDROID_HOME: the environment's ANDROID_HOME or ANDROID_SDK_ROOT; otherwise the Android Studio
 // default SDK folder. The SDK needs platforms/android-36.
@@ -34,6 +39,10 @@ const argv = process.argv.slice(2);
 const noWeb = argv.includes('--no-web');
 const noCollect = argv.includes('--no-collect');
 const gradleArgs = argv.filter((a) => a !== '--no-web' && a !== '--no-collect');
+// The tasks this run asks for: options and the value of -x are not, and a dry run builds nothing.
+const tasks = gradleArgs.filter((a, i) => !a.startsWith('-') && !['-x', '--exclude-task'].includes(gradleArgs[i - 1]));
+const dryRun = gradleArgs.includes('--dry-run') || gradleArgs.includes('-m');
+const asked = (task) => !dryRun && tasks.some((t) => t === task || t.endsWith(`:${task}`));
 
 function fail(message) {
   console.error(`android-gradle: ${message}`);
@@ -96,7 +105,6 @@ console.log(`android-gradle: JAVA_HOME=${javaHome}`);
 console.log(`android-gradle: ANDROID_HOME=${androidHome}`);
 console.log(`android-gradle: gradlew ${args.join(' ')}`);
 
-const startedAt = Date.now();
 // On Windows gradlew.bat needs a shell; pass one pre-quoted command line (as scripts/with-lock.mjs does).
 const quote = (s) => (/^[\w@%+=:,./\\-]+$/.test(s) ? s : `"${s.replace(/"/g, '\\"')}"`);
 const child = win
@@ -108,8 +116,9 @@ child.on('close', (code, signal) => {
     console.error(`android-gradle: Gradle failed (${code ?? signal})`);
     process.exit(code || 1);
   }
-  report();
-  if (!noCollect) collect();
+  const outputs = requestedOutputs();
+  report(outputs);
+  if (!noCollect) collect(outputs);
 });
 
 /**
@@ -137,37 +146,83 @@ function hasJarSignature(file) {
   return false;
 }
 
-/**
- * Build outputs this run produced (newer than its start), with the release/<version>/android name
- * for each. The name reports the output, not the configuration: Gradle calls an unsigned APK
- * app-release-unsigned.apk, while an AAB is app-release.aab either way, so its signature is read.
- */
-function freshOutputs() {
-  const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
-  const out = path.join(androidDir, 'app', 'build', 'outputs');
-  const aab = path.join(out, 'bundle', 'release', 'app-release.aab');
-  const aabSigned = fs.existsSync(aab) && hasJarSignature(aab);
-  const known = [
-    [path.join(out, 'apk', 'release', 'app-release-unsigned.apk'), `GizeCat-${version}-android-unsigned.apk`],
-    [path.join(out, 'apk', 'release', 'app-release.apk'), `GizeCat-${version}-android.apk`],
-    [aab, `GizeCat-${version}-android${aabSigned ? '' : '-unsigned'}.aab`],
-    [path.join(out, 'apk', 'trial', 'app-trial.apk'), `GizeCat-${version}-android-trial-debugsigned.apk`],
-  ];
-  return { version, files: known.filter(([f]) => fs.existsSync(f) && fs.statSync(f).mtimeMs >= startedAt - 1000) };
+/** Stops the script when a requested output is not there; otherwise returns its path. */
+function requireOutput(file) {
+  if (!fs.existsSync(file)) fail(`Gradle succeeded but ${path.relative(root, file)} is missing`);
+  return file;
 }
 
-function report() {
-  for (const [file, name] of freshOutputs().files) {
-    console.log(`android-gradle: built ${path.relative(root, file)} (${fs.statSync(file).size} bytes): ${name}`);
+/** The file name Gradle recorded for the APK in `dir`: an older signed or unsigned sibling can still be there. */
+function recordedApkName(dir) {
+  const metadata = requireOutput(path.join(dir, 'output-metadata.json'));
+  let name;
+  try {
+    name = JSON.parse(fs.readFileSync(metadata, 'utf8')).elements?.[0]?.outputFile;
+  } catch (e) {
+    fail(`cannot read ${path.relative(root, metadata)}: ${e.message}`);
+  }
+  if (typeof name !== 'string') fail(`${path.relative(root, metadata)} names no output file`);
+  return name;
+}
+
+/**
+ * The outputs of the tasks this run asked for, with the release/<version>/android name of each and
+ * the names it replaces there. Decided from the tasks, so a run Gradle found UP-TO-DATE yields them
+ * too; a requested output that is missing stops the script before release/ is touched. The name
+ * reports the output, not the configuration: Gradle calls an unsigned APK app-release-unsigned.apk,
+ * while an AAB is app-release.aab either way, so its signature is read. The trial replaces nothing
+ * but its own file, so a trial built after a release leaves the release APK alone.
+ */
+function requestedOutputs() {
+  const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  const out = path.join(androidDir, 'app', 'build', 'outputs');
+  const files = [];
+  if (asked('assembleRelease')) {
+    const dir = path.join(out, 'apk', 'release');
+    const apkNames = {
+      'app-release-unsigned.apk': `GizeCat-${version}-android-unsigned.apk`,
+      'app-release.apk': `GizeCat-${version}-android.apk`,
+    };
+    const built = recordedApkName(dir);
+    if (!Object.hasOwn(apkNames, built)) fail(`unexpected release APK name in output-metadata.json: ${built}`);
+    files.push({ file: requireOutput(path.join(dir, built)), name: apkNames[built], replaces: Object.values(apkNames) });
+  }
+  if (asked('bundleRelease')) {
+    const aab = requireOutput(path.join(out, 'bundle', 'release', 'app-release.aab'));
+    const aabSigned = hasJarSignature(aab);
+    files.push({
+      file: aab,
+      name: `GizeCat-${version}-android${aabSigned ? '' : '-unsigned'}.aab`,
+      replaces: [`GizeCat-${version}-android.aab`, `GizeCat-${version}-android-unsigned.aab`],
+    });
+  }
+  if (asked('assembleTrial')) {
+    files.push({
+      file: requireOutput(path.join(out, 'apk', 'trial', 'app-trial.apk')),
+      name: `GizeCat-${version}-android-trial-debugsigned.apk`,
+      replaces: [],
+    });
+  }
+  return { version, files };
+}
+
+function report({ files }) {
+  for (const { file, name } of files) {
+    console.log(`android-gradle: output ${path.relative(root, file)} (${fs.statSync(file).size} bytes): ${name}`);
   }
 }
 
-function collect() {
-  const { version, files } = freshOutputs();
-  if (files.length === 0) return;
+function collect({ version, files }) {
+  if (files.length === 0) {
+    console.log('android-gradle: nothing to collect: no assembleRelease, bundleRelease or assembleTrial task was requested');
+    return;
+  }
   const dest = path.join(root, 'release', version, 'android');
   fs.mkdirSync(dest, { recursive: true });
-  for (const [file, name] of files) fs.copyFileSync(file, path.join(dest, name));
+  for (const { file, name, replaces } of files) {
+    for (const old of replaces) fs.rmSync(path.join(dest, old), { force: true });
+    fs.copyFileSync(file, path.join(dest, name));
+  }
   const prefix = `GizeCat-${version}-android`;
   const lines = fs
     .readdirSync(dest)
@@ -175,5 +230,5 @@ function collect() {
     .sort()
     .map((n) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(dest, n))).digest('hex')}  ${n}`);
   fs.writeFileSync(path.join(dest, 'SHA256SUMS-android.txt'), `${lines.join('\n')}\n`);
-  console.log(`android-gradle: copied ${files.map(([, n]) => n).join(', ')} to release/${version}/android (SHA256SUMS-android.txt updated)`);
+  console.log(`android-gradle: copied ${files.map(({ name }) => name).join(', ')} to release/${version}/android (SHA256SUMS-android.txt updated)`);
 }

@@ -159,6 +159,18 @@ describe('Android back and lifecycle', () => {
     expect(activity).not.toMatch(/\bfinish\(\)/);
   });
 
+  it('returns to the cat on Back from any other page, and never reads the history on the cat page', () => {
+    const onBack = /private fun onBack\(\) \{([\s\S]*?)\n {4}\}/.exec(activity)?.[1] ?? '';
+    // WebView.getUrl() is null before the first commit, so it is not parsed unguarded.
+    expect(onBack).toContain('val path = wv.url?.let { Uri.parse(it).path }');
+    expect(onBack).toMatch(/if \(path != null && path != "\$\{ASSET_PATH\}index\.html"\) \{\s*if \(wv\.canGoBack\(\)\) wv\.goBack\(\) else wv\.loadUrl\(START_URL\)\s*return\s*\}/);
+    // Only inside that branch: after the page's own "Back to GizeCat" link the cat page has history.
+    expect(onBack.match(/canGoBack\(\)/g)).toHaveLength(1);
+    const branch = onBack.indexOf('wv.canGoBack()');
+    expect(branch).toBeGreaterThan(onBack.indexOf('if (wv == null || backQuery != 0) {'));
+    expect(branch).toBeLessThan(onBack.indexOf('wv.evaluateJavascript('));
+  });
+
   it('counts only renderer crashes, recreates the WebView only in front, and retries when reopened', () => {
     const gone = /override fun onRenderProcessGone\([^)]*\): Boolean \{([\s\S]*?)\n {8}\}/.exec(activity)?.[1] ?? '';
     expect(gone).toContain('if (detail?.didCrash() == true) {');
@@ -332,6 +344,35 @@ describe('Android repository hygiene', () => {
     expect(script).not.toMatch(/ANDROID_KEY(STORE)?_(FILE|PASSWORD|ALIAS)/);
     const scripts = (JSON.parse(read('package.json')) as { scripts: Record<string, string> }).scripts;
     expect(scripts['android:release']).toBe('node scripts/with-lock.mjs android -- node scripts/android-gradle.mjs :app:assembleRelease :app:bundleRelease');
+  });
+
+  it('collects what the tasks asked for, by Gradle\'s own record, never by file time', () => {
+    const script = read('scripts', 'android-gradle.mjs');
+    // An UP-TO-DATE run writes nothing, so timestamps would collect nothing and still exit 0.
+    expect(script).not.toMatch(/mtime|startedAt/);
+    for (const task of ['assembleRelease', 'bundleRelease', 'assembleTrial']) expect(script).toContain(`asked('${task}')`);
+    // Options and the value of -x are not tasks, and a dry run builds nothing to collect.
+    expect(script).toContain("['-x', '--exclude-task'].includes(gradleArgs[i - 1])");
+    expect(script).toContain("gradleArgs.includes('--dry-run')");
+    // The release APK's current name, since the other signing state's file can linger beside it.
+    expect(script).toContain("path.join(dir, 'output-metadata.json')");
+    expect(script).toContain('.elements?.[0]?.outputFile');
+    // A requested output that is missing is an error, raised before release/ is touched.
+    expect(script).toMatch(/if \(!fs\.existsSync\(file\)\) fail\(/);
+    expect(script).toMatch(/const outputs = requestedOutputs\(\);\s*report\(outputs\);\s*if \(!noCollect\) collect\(outputs\);/);
+  });
+
+  it('never leaves a signed and an unsigned copy of one kind in the release folder', () => {
+    const script = read('scripts', 'android-gradle.mjs');
+    // By source output, not extension: the trial is an APK too and must leave the release APK alone.
+    expect(script).toContain('replaces: Object.values(apkNames)');
+    expect(script).toContain('replaces: [`GizeCat-${version}-android.aab`, `GizeCat-${version}-android-unsigned.aab`]');
+    expect(script).toMatch(/name: `GizeCat-\$\{version\}-android-trial-debugsigned\.apk`,\s*replaces: \[\],/);
+    // Removed before the copy, and both before the checksums are written.
+    const removed = script.indexOf('fs.rmSync(path.join(dest, old)');
+    expect(removed).toBeGreaterThan(-1);
+    expect(removed).toBeLessThan(script.indexOf('fs.copyFileSync(file, path.join(dest, name))'));
+    expect(script.indexOf('fs.copyFileSync(file, path.join(dest, name))')).toBeLessThan(script.indexOf("path.join(dest, 'SHA256SUMS-android.txt')"));
   });
 
   it('documents the signing procedure and the store material with no filled-in value', () => {
