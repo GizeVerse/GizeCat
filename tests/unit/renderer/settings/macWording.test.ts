@@ -7,9 +7,9 @@ import { declaredRuntime, type CapabilityId, type PlatformId, type RuntimeCapabi
 import { defaultSettings } from '../../../../src/shared/settings';
 import { GLYPH, GLYPH_TEXT, type GlyphName } from '../../../../src/renderer/settings/dom';
 import { displayAccelerator, formatShortcut } from '../../../../src/renderer/settings/format';
-import { behaviorRowOffered, FINE_TUNE_SLIDERS } from '../../../../src/renderer/settings/pages/behavior';
+import { behaviorPageNotes, behaviorRowOffered, FINE_TUNE_SLIDERS, fineTuneDesc, settingRowOffered } from '../../../../src/renderer/settings/pages/behavior';
 import { shortcutFieldText, startupStateDesc } from '../../../../src/renderer/settings/pages/general';
-import { processRowText } from '../../../../src/renderer/settings/pages/privacy';
+import { processRowText, visualModeDesc } from '../../../../src/renderer/settings/pages/privacy';
 import { welcomePlatformText } from '../../../../src/renderer/settings/pages/welcome';
 import { bannerModel, consentModel, type PrivacyViewInput } from '../../../../src/renderer/settings/privacyView';
 import { deviceWords, S } from '../../../../src/renderer/settings/strings';
@@ -118,6 +118,17 @@ describe('General and Welcome', () => {
     expect(t.privacyPoints.join(' ')).toMatch(/this Mac/);
     expect(t.privacyPoints.join(' ')).not.toMatch(/\bPC\b/);
   });
+
+  it('says only what the app can know where windows are not tracked and typing is not inferred', () => {
+    for (const wording of ['mac', 'elsewhere'] as const) {
+      const points = welcomePlatformText(wording).privacyPoints;
+      expect(points).toHaveLength(S.welcome.privacyPoints.length);
+      expect(points[0]).toBe(S.welcome.privacyPoints[0]);
+      expect(points[1]).toBe(S.welcome.privacyPointFloorOnly);
+      expect(points.join(' ')).not.toMatch(/knows where windows|tell that you are typing/);
+    }
+    expect(S.welcome.privacyPoints[1]).toBe('It knows where windows are and whether you are active. It can tell that you are typing, but never what you type.');
+  });
 });
 
 describe('Privacy on macOS', () => {
@@ -148,6 +159,17 @@ describe('Privacy on macOS', () => {
     expect(consentModel('ai', settings, 'mac').points.join(' ')).toMatch(/your Mac/);
   });
 
+  it('says what "Off" knows on each platform', () => {
+    expect(visualModeDesc('off', 'windows')).toBe(S.privacy.modes.off.desc);
+    expect(S.privacy.modes.off.desc).toBe('The cat only knows where windows are. It never looks at their contents.');
+    for (const wording of ['mac', 'elsewhere'] as const) {
+      expect(visualModeDesc('off', wording)).toBe(S.privacy.modeOffDescFloorOnly);
+      expect(visualModeDesc('off', wording)).not.toMatch(/only knows where windows/);
+    }
+    expect(visualModeDesc('local-stats', 'mac')).toMatch(/this Mac/);
+    expect(visualModeDesc('local-stats', 'windows')).toBe(S.privacy.modes['local-stats'].desc);
+  });
+
   it('says the program list does nothing where main reports analysis unavailable', () => {
     expect(processRowText(status(null))).toEqual({ hint: V.processHint, placeholder: S.privacy.processesPlaceholder });
     expect(processRowText(status('win32', { perception: { available: false, reason: 'x' } }))).toEqual({ hint: V.processHint, placeholder: S.privacy.processesPlaceholder });
@@ -160,9 +182,13 @@ describe('Privacy on macOS', () => {
 
 describe('Behaviour rows off Windows', () => {
   const gone = { available: false, reason: 'n/a' };
+  const here = { available: true, reason: null };
+  const WINDOW_ROWS = ['inspectWindows', 'perchOnWindows', 'climbWindows', 'screenEdges', 'taskbarPlay', 'tabStrips', 'explorerTabs', 'terminalTabs', 'tabReactions', 'surfaceHops'] as const;
+  const NEEDS_INPUT = ['behavior.stayLength', 'behavior.activitySensitivity', 'behavior.reactToWindows', 'behavior.reactToTyping'] as const;
+  const nothing = { windowSurfaces: gone, taskbarSurfaces: gone, tabStrips: gone, perception: gone };
 
   it('offers every row on Windows, whatever main reports, and without a platform report', () => {
-    for (const id of ['taskbarPlay', 'tabStrips', 'explorerTabs', 'terminalTabs', 'tabReactions', 'surfaceHops'] as const) {
+    for (const id of WINDOW_ROWS) {
       expect(behaviorRowOffered(id, status(null))).toBe(true);
       expect(behaviorRowOffered(id, status('win32', { taskbarSurfaces: gone, tabStrips: gone, windowSurfaces: gone }))).toBe(true);
     }
@@ -170,8 +196,44 @@ describe('Behaviour rows off Windows', () => {
 
   it('leaves out the rows that name what macOS does not have', () => {
     const mac = status('darwin', { taskbarSurfaces: gone, tabStrips: gone, windowSurfaces: gone });
-    for (const id of ['taskbarPlay', 'tabStrips', 'explorerTabs', 'terminalTabs', 'tabReactions', 'surfaceHops'] as const) expect(behaviorRowOffered(id, mac)).toBe(false);
-    for (const id of ['chaseCursor', 'grooming', 'pounce', 'slips'] as const) expect(behaviorRowOffered(id, mac)).toBe(true);
+    for (const id of WINDOW_ROWS) expect(behaviorRowOffered(id, mac)).toBe(false);
+    for (const id of ['chaseCursor', 'pawAtCursor', 'seekAttention', 'zoomies', 'grooming', 'pounce', 'hissing', 'tailChase', 'slips'] as const) expect(behaviorRowOffered(id, mac)).toBe(true);
+  });
+
+  it('keeps every setting row on Windows, whatever main reports, and without a platform report', () => {
+    for (const id of NEEDS_INPUT) {
+      expect(settingRowOffered(id, status(null))).toBe(true);
+      expect(settingRowOffered(id, status('win32', nothing))).toBe(true);
+    }
+  });
+
+  it('leaves out the settings that have nothing to act on where the cat is floor-only', () => {
+    for (const platform of ['darwin', 'linux-x11'] as const) {
+      for (const id of NEEDS_INPUT) expect(settingRowOffered(id, status(platform, nothing))).toBe(false);
+      for (const id of ['behavior.exploration', 'behavior.sleepAfterIdleMinutes', 'behavior.allowMultiMonitor'] as const) expect(settingRowOffered(id, status(platform, nothing))).toBe(true);
+    }
+  });
+
+  it('follows what main reports, and keeps Activity sensitivity while one of its inputs exists', () => {
+    expect(settingRowOffered('behavior.reactToWindows', status('darwin', { windowSurfaces: here }))).toBe(true);
+    expect(settingRowOffered('behavior.activitySensitivity', status('darwin', { ...nothing, perception: here }))).toBe(true);
+    expect(settingRowOffered('behavior.reactToTyping', status('darwin', { windowSurfaces: here, perception: here }))).toBe(false);
+  });
+
+  it('keeps the Fine-tune summary on Windows and drops the stays slider from it elsewhere', () => {
+    expect(fineTuneDesc(status(null))).toBe(S.behavior.fineTuneDesc);
+    expect(fineTuneDesc(status('win32', nothing))).toBe(S.behavior.fineTuneDesc);
+    expect(fineTuneDesc(status('darwin', nothing))).toBe(S.behavior.fineTuneDescFloorOnly);
+    expect(S.behavior.fineTuneDescFloorOnly).not.toMatch(/stays/);
+  });
+
+  it('keeps both notes on Windows, and gives neither window advice nor hidden rows on the floor', () => {
+    const windows = [S.behavior.maximizedNote, S.behavior.extrasPointer];
+    expect(behaviorPageNotes(status(null))).toEqual(windows);
+    expect(behaviorPageNotes(status('win32', nothing))).toEqual(windows);
+    expect(behaviorPageNotes(status('darwin', nothing))).toEqual([S.behavior.extrasPointerFloorOnly]);
+    expect(S.behavior.extrasPointerFloorOnly).not.toMatch(/screen edges|windows/);
+    expect(S.behavior.extrasPointerFloorOnly).toMatch(/Fine-tune/);
   });
 
   it('keeps the taskbar in the mischief text on Windows only', () => {

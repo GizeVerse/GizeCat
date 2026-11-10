@@ -65,8 +65,12 @@ export const PERSONALITY_FIELD_IDS: readonly FieldId[] = [
   fieldId('behavior', 'disabledExtras'),
 ];
 
-/** Rows that name something only the Windows shell has (File Explorer, Windows Terminal, the taskbar, its browser tab strips). */
+/** Rows that need what only Windows reports today: other apps' windows, or its shell (File Explorer, Windows Terminal, the taskbar, its browser tab strips). */
 const ROW_NEEDS: Readonly<Partial<Record<ToggleableBehavior | LivelyBehavior, CapabilityId>>> = {
+  inspectWindows: 'windowSurfaces',
+  perchOnWindows: 'windowSurfaces',
+  climbWindows: 'windowSurfaces',
+  screenEdges: 'windowSurfaces',
   taskbarPlay: 'taskbarSurfaces',
   surfaceHops: 'windowSurfaces',
   tabStrips: 'tabStrips',
@@ -76,16 +80,54 @@ const ROW_NEEDS: Readonly<Partial<Record<ToggleableBehavior | LivelyBehavior, Ca
 };
 
 /**
+ * Settings with a row of their own that act only on these inputs (any one is enough). An empty list
+ * means no capability reports the input: typing is inferred only from Windows' GetLastInputInfo, and
+ * activityIdle, which macOS and Linux do have, says nothing about it.
+ */
+const SETTING_NEEDS: Readonly<Partial<Record<FieldId, readonly CapabilityId[]>>> = {
+  'behavior.stayLength': ['windowSurfaces', 'tabStrips'],
+  'behavior.activitySensitivity': ['windowSurfaces', 'taskbarSurfaces', 'perception'],
+  'behavior.reactToWindows': ['windowSurfaces'],
+  'behavior.reactToTyping': [],
+};
+
+/** True on Windows and without a platform report; elsewhere when main reports at least one of these available. */
+function anyCapabilityOffered(anyOf: readonly CapabilityId[], status: Pick<AppStatus, 'platform'>): boolean {
+  const platform = status.platform;
+  if (!platform || platform.id === 'win32') return true;
+  return anyOf.some((id) => {
+    const cap = platform.capabilities[id] as RuntimeCapability | undefined;
+    return !cap || cap.available;
+  });
+}
+
+/**
  * Whether a behaviour row is offered (1.4.0). Off Windows, a row that depends on something main
  * reports unavailable is left out: it would have no effect and names things that platform does not
  * have. On Windows (and without a platform report) every row stays, as before.
  */
 export function behaviorRowOffered(id: ToggleableBehavior | LivelyBehavior, status: Pick<AppStatus, 'platform'>): boolean {
-  const platform = status.platform;
   const needs = ROW_NEEDS[id];
-  if (!platform || platform.id === 'win32' || needs === undefined) return true;
-  const cap = platform.capabilities[needs] as RuntimeCapability | undefined;
-  return !cap || cap.available;
+  return needs === undefined || anyCapabilityOffered([needs], status);
+}
+
+/** The same rule for a slider or switch bound to its own setting. The value stays stored and preset-governed. */
+export function settingRowOffered(id: FieldId, status: Pick<AppStatus, 'platform'>): boolean {
+  const needs = SETTING_NEEDS[id];
+  return needs === undefined || anyCapabilityOffered(needs, status);
+}
+
+/** The summary of "Fine-tune" names the stays slider only where it is offered. */
+export function fineTuneDesc(status: Pick<AppStatus, 'platform'>): string {
+  return settingRowOffered(fieldId('behavior', 'stayLength'), status) ? B.fineTuneDesc : B.fineTuneDescFloorOnly;
+}
+
+/**
+ * The notes under the Behaviour rows (1.4.0). Where the cat cannot use windows, advice about
+ * maximized windows does not apply, and the pointer to Fine-tune names only rows that are offered.
+ */
+export function behaviorPageNotes(status: Pick<AppStatus, 'platform'>): readonly string[] {
+  return behaviorRowOffered('climbWindows', status) ? [B.maximizedNote, B.extrasPointer] : [B.extrasPointerFloorOnly];
 }
 
 /** The v2 switch that must be on for a v1.2 behaviour to be offered, if any. */
@@ -188,18 +230,19 @@ function presetSelector(ctx: PageContext): HTMLElement {
 }
 
 function fineTune(ctx: PageContext): HTMLElement {
+  const status = ctx.store.view.status;
   const summary = h('summary', { class: 'row fine-tune-summary' }, [
     icon('equalizer', 'row-icon'),
-    h('span', { class: 'row-text' }, [h('span', { class: 'row-title', text: B.fineTuneTitle }), h('span', { class: 'row-desc', text: B.fineTuneDesc })]),
+    h('span', { class: 'row-text' }, [h('span', { class: 'row-title', text: B.fineTuneTitle }), h('span', { class: 'row-desc', text: fineTuneDesc(status) })]),
     icon('chevronDown', 'fine-tune-chevron'),
   ]);
   const extras = h('div', { class: 'fine-tune-extras' }, [h('h3', { class: 'fine-tune-heading', text: B.groupExtras }), h('p', { class: 'group-desc', text: B.groupExtrasDesc })]);
   return h('details', { class: 'fine-tune' }, [
     summary,
     h('div', { class: 'group-rows fine-tune-rows' }, [
-      ...FINE_TUNE_SLIDERS.map((s) => s.build(ctx).parts.row),
+      ...FINE_TUNE_SLIDERS.filter((s) => settingRowOffered(s.id, status)).map((s) => s.build(ctx).parts.row),
       extras,
-      ...LIVELY_IDS.filter((id) => behaviorRowOffered(id, ctx.store.view.status)).map((id) => extraToggle(ctx, id)),
+      ...LIVELY_IDS.filter((id) => behaviorRowOffered(id, status)).map((id) => extraToggle(ctx, id)),
     ]),
   ]);
 }
@@ -219,12 +262,14 @@ export function fullscreenRowNote(status: Pick<AppStatus, 'platform'>): string |
 }
 
 export function behaviorPage(ctx: PageContext): PageView {
-  const personality = [presetSelector(ctx), ...PERSONALITY_SLIDERS.map((s) => s.build(ctx).parts.row), fineTune(ctx)];
+  const status = ctx.store.view.status;
+  const offered = (key: FieldKey<'behavior'>): boolean => settingRowOffered(fieldId('behavior', key), status);
+  const personality =[presetSelector(ctx), ...PERSONALITY_SLIDERS.map((s) => s.build(ctx).parts.row), fineTune(ctx)];
   const habits = [
     sliderRow(ctx, F.movementSpeed, { title: B.speedTitle, desc: B.speedDesc, icon: 'behavior' }),
     sliderRow(ctx, F.chaseDuration, { title: B.chaseTitle, desc: B.chaseDesc, icon: 'stopwatch' }),
     sliderRow(ctx, F.attentionSeeking, { title: B.attentionTitle, desc: B.attentionDesc, icon: 'message' }),
-    sliderRow(ctx, F.activitySensitivity, { title: B.sensitivityTitle, desc: B.sensitivityDesc, icon: 'window' }),
+    ...(offered('activitySensitivity') ? [sliderRow(ctx, F.activitySensitivity, { title: B.sensitivityTitle, desc: B.sensitivityDesc, icon: 'window' })] : []),
     sliderRow(ctx, F.sleepAfterIdleMinutes, { title: B.sleepTitle, desc: B.sleepDesc, icon: 'moon' }),
   ];
   const fullscreen = segmentedRow(
@@ -244,18 +289,17 @@ export function behaviorPage(ctx: PageContext): PageView {
   ctx.store.subscribe(syncFullscreenNote);
   const awareness = [
     toggleRow(ctx, 'behavior', 'allowMultiMonitor', { title: B.multiMonitorTitle, desc: B.multiMonitorDesc, icon: 'monitor' }).parts.row,
-    toggleRow(ctx, 'behavior', 'reactToTyping', { title: B.typingTitle, desc: B.typingDesc, icon: 'keyboard' }).parts.row,
-    toggleRow(ctx, 'behavior', 'reactToWindows', { title: B.windowsTitle, desc: B.windowsDesc, icon: 'window' }).parts.row,
+    ...(offered('reactToTyping') ? [toggleRow(ctx, 'behavior', 'reactToTyping', { title: B.typingTitle, desc: B.typingDesc, icon: 'keyboard' }).parts.row] : []),
+    ...(offered('reactToWindows') ? [toggleRow(ctx, 'behavior', 'reactToWindows', { title: B.windowsTitle, desc: B.windowsDesc, icon: 'window' }).parts.row] : []),
     fullscreen.row,
   ];
   const element = page(B.title, [
     group(B.groupPersonality, personality, B.groupPersonalityDesc),
     group(B.groupActivity, habits.map((s) => s.parts.row)),
     group(B.groupAwareness, awareness),
-    group(B.groupBehaviors, BEHAVIOR_IDS.filter((b) => behaviorRowOffered(b, ctx.store.view.status)).map((b) => behaviorToggle(ctx, b)), B.groupBehaviorsDesc),
-    // Right under the window-climbing and tab-strip toggles, which end the list.
-    h('p', { class: 'page-note' }, [icon('info'), h('span', { text: B.maximizedNote })]),
-    h('p', { class: 'page-note' }, [icon('info'), h('span', { text: B.extrasPointer })]),
+    group(B.groupBehaviors, BEHAVIOR_IDS.filter((b) => behaviorRowOffered(b, status)).map((b) => behaviorToggle(ctx, b)), B.groupBehaviorsDesc),
+    // Right under the window-climbing and tab-strip toggles, which end the list where they are offered.
+    ...behaviorPageNotes(status).map((note) => h('p', { class: 'page-note' }, [icon('info'), h('span', { text: note })])),
   ]);
   return { id: 'behavior', title: B.title, element, onShow: syncFullscreenNote };
 }

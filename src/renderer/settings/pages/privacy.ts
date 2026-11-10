@@ -63,6 +63,11 @@ function banner(ctx: PageContext): HTMLElement {
   return el;
 }
 
+/** A mode's description in this platform's words (1.4.0). Off Windows, "Off" cannot say the cat knows where windows are. */
+export function visualModeDesc(mode: VisualMode, wording: PlatformWording): string {
+  return deviceWords(mode === 'off' && wording !== 'windows' ? P.modeOffDescFloorOnly : P.modes[mode].desc, wording);
+}
+
 function modeChooser(ctx: PageContext, wording: PlatformWording): HTMLElement[] {
   const parts = row({ title: P.modeLabel, stacked: true, hideTitle: true });
   const container = h('div', { class: 'option-cards', 'aria-labelledby': parts.titleId });
@@ -71,7 +76,7 @@ function modeChooser(ctx: PageContext, wording: PlatformWording): HTMLElement[] 
     value: mode,
     el: h('button', { type: 'button', class: `option-card option-${mode}` }, [
       h('span', { class: 'radio-dot', 'aria-hidden': 'true' }),
-      h('span', { class: 'option-text' }, [h('span', { class: 'option-title', text: P.modes[mode].title }), h('span', { class: 'option-desc', text: deviceWords(P.modes[mode].desc, wording) })]),
+      h('span', { class: 'option-text' }, [h('span', { class: 'option-title', text: P.modes[mode].title }), h('span', { class: 'option-desc', text: visualModeDesc(mode, wording) })]),
     ]),
   }));
   container.append(...items.map((i) => i.el));

@@ -7,10 +7,14 @@ import { deviceWords, platformWording, S, type PlatformWording } from '../string
 
 const W = S.welcome;
 const CONTROL_ICONS: readonly GlyphName[] = ['touch', 'mouse', 'heart', 'more', 'pin'];
+/** Index in W.privacyPoints of the point about what the app knows. */
+const KNOWS_POINT = 1;
 
 /**
  * The platform-specific parts of Welcome (1.4.0). Windows keeps its text; elsewhere the cat keeps to
- * the floor, and the tray entry and the privacy points use that platform's words.
+ * the floor, and the tray entry and the privacy points use that platform's words. The point about
+ * what the app knows is replaced there: it does not track windows or infer typing. Order and length
+ * stay, because the page shows the first point separately.
  */
 export function welcomePlatformText(wording: PlatformWording): {
   intro: (name: string) => string;
@@ -21,7 +25,7 @@ export function welcomePlatformText(wording: PlatformWording): {
   return {
     intro: W.introFloorOnly,
     controls: [...W.controls.slice(0, -1), wording === 'mac' ? W.controlTrayMac : W.controlTrayElsewhere],
-    privacyPoints: W.privacyPoints.map((p) => deviceWords(p, wording)),
+    privacyPoints: W.privacyPoints.map((p, i) => deviceWords(i === KNOWS_POINT ? W.privacyPointFloorOnly : p, wording)),
   };
 }
 

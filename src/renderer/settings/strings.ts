@@ -191,6 +191,8 @@ export const S = {
       'It knows where windows are and whether you are active. It can tell that you are typing, but never what you type.',
       'Nothing leaves this PC unless you turn on AI vision. Cloud providers and other computers also need your separate "Allow cloud" permission.',
     ],
+    /** 1.4.0: privacyPoints[1] off Windows, where windows are not tracked and typing is not inferred. */
+    privacyPointFloorOnly: 'It knows whether you are active, but not where your windows are or when you are typing.',
     start: 'Start',
     openPrivacy: 'Open Privacy settings',
     started: 'All set. Enjoy your cat!',
@@ -336,6 +338,8 @@ export const S = {
     workDesc: 'How close to the pointer and the window you are using it will play, never while you type or click. 0: it plays away from your work.',
     fineTuneTitle: 'Fine-tune',
     fineTuneDesc: 'Exploring, heights, mischief, stays and reactions, and the newer behaviours one by one.',
+    /** 1.4.0: where there is nothing to stay on, the "stays" slider is left out. */
+    fineTuneDescFloorOnly: 'Exploring, heights, mischief and reactions, and the newer behaviours one by one.',
     exploringTitle: 'Exploring',
     exploringDesc: 'How much it explores window tops, tab strips, screen edges and corners. 0: explores rarely and stays close by.',
     heightsTitle: 'Heights and climbing',
@@ -363,6 +367,8 @@ export const S = {
     } satisfies Record<LivelyBehavior, { title: string; desc: string }>,
     extraNeeds: (parent: string) => `Turn on “${parent}” first.`,
     extrasPointer: 'Newer behaviours (pouncing, screen edges, jumps between windows, hissing and more) are under Personality › Fine-tune.',
+    /** 1.4.0: where the cat keeps to the floor, the screen-edge and window-jump rows are left out. */
+    extrasPointerFloorOnly: 'Newer behaviours (pouncing, hissing and more) are under Personality › Fine-tune.',
     groupActivity: 'Habits',
     groupAwareness: 'Awareness',
     groupBehaviors: 'Things your cat does',
@@ -452,6 +458,8 @@ export const S = {
       'local-stats': { title: 'Local statistics', desc: 'Brightness, colour and movement numbers from tiny images. No AI, all on this PC.' },
       ai: { title: 'AI vision', desc: 'An AI model gives a one-line description so the cat can react. Set up a provider on the AI page.' },
     } satisfies Record<Settings['perception']['visualMode'], { title: string; desc: string }>,
+    /** 1.4.0: modes.off off Windows, where window positions are not read. */
+    modeOffDescFloorOnly: 'The cat never looks at your screen, and it does not know where your windows are.',
     modeLabel: 'Screen analysis mode',
     consentGiven: (when: string) => `You agreed ${when}.`,
     revoke: 'Revoke consent and turn off',
