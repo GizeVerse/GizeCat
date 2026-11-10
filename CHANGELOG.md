@@ -2,6 +2,26 @@
 
 GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is the first public release; earlier versions were built and tested locally but not published.
 
+## 1.4.2 (Android interaction, edge movement and panel; CANDIDATE, unpublished)
+
+**An Android-only candidate: not tagged, not published.** Windows, macOS and the desktop/web version (`package.json`, 1.4.0) are not touched. Android 1.4.2, versionCode 10403 (`android/version.properties`), same application id and the same debug-signing identity as 1.4.1, so it installs over it. **Nothing in 1.4.2 has run on a device, an emulator or a simulator; no test was executed.** A build and a type-check are not tests.
+
+Prompted by the owner's real-phone report on 1.4.1 (overlay, landscape, rotation and taps worked; drag and throw did not, a small area around the cat ate touches, the cat never walked the screen edges, the panel was poor, and Play Protect blocked the install).
+
+### Fixed
+- **Dragging and throwing** (static diagnosis, [details](docs/platforms/android-overlay.md#why-141s-drag-and-throw-failed-static-diagnosis-142)): a touch that moved before a 350 ms still hold was read as petting, so a finger could not pick the cat up; the target was the exact footprint; and throw speed was measured from event arrival times. In the Android overlay a touch that moves now drags at once, the hit area is padded, and the gesture's own `MotionEvent` times travel to the page. The desktop and browser input paths are unchanged.
+- **The touch dead zone**: the 172 × 196 dp window no longer takes touches. The cat is drawn in a non-touchable window (0.8 opacity on Android 12+, Android's pass-through rule) and a tight invisible touch window (cat + 12 dp) takes touches, and exists only while the cat takes any. Android has no input region, so that small area still consumes touches (BLOCKED_BY_PLATFORM to remove).
+
+### Added
+- **Screen-edge walking**: the cat climbs the left and right edges and meets the corners, using the shared v1.2 screen-edge engine through a new surface provider (`src/web/screenEdgeSurfaces.ts`); new optional host fields are inert on Windows. No ceiling pose; other apps' windows are not surfaces.
+- **Interaction hunting from legitimate sources only**: touches on the cat, mouse/trackpad hover over it, and position hints from GizeCat's own app window. Android does not allow observing other apps' touches or pointer; no AccessibilityService, capture or listener was added.
+- **A new Android home panel** (`src/web/androidPanel.ts`): status, start/stop, pause, hide, permission checklist, cat name and size, movement and behavior settings, interaction and edge switches; two columns from 720 px; the floating cat is independent of it.
+- **Play Protect review** ([report](docs/platforms/android-play-protect.md)): static findings, appeal evidence and a distribution recommendation. No appeal was filed.
+
+### Not done
+- No test, emulator, simulator or device run; no publish, no tag, no appeal. No permission was added.
+- The cause of the Play Protect block is unknown; nothing says the debug signature alone caused it, and no signature or store release is promised to be warning-free.
+
 ## 1.4.1 (Android-focused Preview)
 
 **An Android-only update.** Windows and macOS are **not** updated: the Windows installers stay the 1.4.0 Preview files, macOS and iPadOS are not part of it, and `package.json` (the desktop and web version) stays 1.4.0. The Android app has its own version, 1.4.1 (`android/version.properties`, versionCode 10402). The APK is a **debug-signed preview**, not a production release and not a Google Play build. **Nothing in 1.4.1 has run on a device, an emulator or a simulator.** A build is not a test.

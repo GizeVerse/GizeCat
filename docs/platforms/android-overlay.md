@@ -1,4 +1,4 @@
-# The floating cat on Android (1.4.1)
+# The floating cat on Android (1.4.1, interaction update 1.4.2)
 
 GizeCat on an Android tablet can float over the launcher and other apps, like the desktop cat. This page is the design, the permissions, the limits and the install steps. Status words: [README.md](README.md#status-vocabulary-for-140).
 
@@ -9,14 +9,17 @@ GizeCat on an Android tablet can float over the launcher and other apps, like th
 | A foreground service with a transparent overlay window that follows the cat | IMPLEMENTED; COMPILED_OR_PACKAGED; runtime THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
 | The shared cat engine, renderer and gestures inside that window | IMPLEMENTED (the same bundle as the app); never run in an overlay window |
 | Permission onboarding ("Display over other apps"), notification controls | IMPLEMENTED; never run |
-| Click-through everywhere except the cat | BLOCKED_BY_PLATFORM (Android has no input region for an app window): see [Touch](#touch-and-pass-through) |
+| Touches only where the cat is (1.4.2: a tight touch window, not a 172 × 196 dp one) | IMPLEMENTED; COMPILED_OR_PACKAGED; never run. A small area (the cat + 12 dp) still takes touches: BLOCKED_BY_PLATFORM to make it zero, see [Touch](#touch-and-pass-through) |
+| Dragging and throwing with a finger (1.4.2 fix) | IMPLEMENTED; never run |
+| Walking along the screen's left and right edges and corners (1.4.2) | IMPLEMENTED; never run. The top edge is reached by the climb; no ceiling pose |
+| Interaction hunting from legitimate sources only (1.4.2) | IMPLEMENTED; never run. See [Interaction hunting](#interaction-hunting-142) |
 | The cat walking on other apps' windows | BLOCKED_BY_PLATFORM (other apps are not visible to an app) |
 | A production-signed build, Google Play listing | REQUIRES_OWNER_CREDENTIALS |
 
 ## What it does
 
-- **Start Floating Cat** (the app's toolbar button, **Float over apps**) puts the cat in a small transparent window above everything else. The cat walks along the bottom of the screen, above the navigation bar, plays, sleeps and reacts exactly as in the app. It does not reserve any screen area or split the screen.
-- You can **touch, pet, pick up, drag and throw** it. Drop it anywhere on the screen; it falls to the floor. The same gestures as the app and the desktop: tap, stroke, press-and-hold then drag, flick to throw.
+- **Start Floating Cat** (the app's toolbar button, **Float over apps**) puts the cat in a small transparent window above everything else. The cat walks along the bottom of the screen, above the navigation bar, and (1.4.2) climbs the left and right edges now and then, plays, sleeps and reacts exactly as in the app. It does not reserve any screen area or split the screen.
+- You can **touch, pet, pick up, drag and throw** it. Drop it anywhere on the screen; it falls to the floor. The same gestures as the app and the desktop: tap, then (1.4.2) **touch and drag at once** to pick it up, and flick to throw; a still press-and-hold still picks it up too.
 - **Pause** freezes the cat where it stands. **Hide** removes it from the screen until you show it. **Stop** ends the floating cat and puts it back in the app. **Settings** (the notification's body, or the app) opens the usual settings sheet; changes apply to the floating cat at once.
 - The controls are on the app screen and in the service's notification (Pause or Resume, Hide or Show, Stop; tapping the notification opens the settings).
 - The app remains fully usable without the permission: the cat lives inside the app exactly as before.
@@ -26,10 +29,10 @@ GizeCat on an Android tablet can float over the launcher and other apps, like th
 One cat, one engine, two surfaces:
 
 1. `FloatingCatService` (a foreground service, declared `specialUse`) owns one `OverlayWindow`. It checks `Settings.canDrawOverlays()` before it creates anything, shows a minimal notification and stops itself when the permission goes away.
-2. `OverlayWindow` adds one `TYPE_APPLICATION_OVERLAY` window through `WindowManager`. Inside it is a WebView that loads **the same web bundle as the app** (`index.html?surface=overlay`), so the cat's simulation, renderer, animation, physics and gesture recognizer are the shared ones, unchanged. The page's background is transparent; the window is `PixelFormat.TRANSLUCENT`, not focusable, not touch-modal, laid out in physical screen coordinates.
-3. **The window is only as big as the cat and the room it draws into**: the footprint plus 44 dp at each side, 60 dp above (84 dp with emotes on) and 48 dp below, times the cat's size setting. About 172 × 196 dp at the default settings (size 100 %, emotes on; 172 × 172 dp with emotes off); no screen area is reserved and nothing is opaque.
+2. `OverlayWindow` adds `TYPE_APPLICATION_OVERLAY` windows through `WindowManager` (1.4.2: a **visual** window and a **touch** window, below). Inside it is a WebView that loads **the same web bundle as the app** (`index.html?surface=overlay`), so the cat's simulation, renderer, animation, physics and gesture recognizer are the shared ones, unchanged. The page's background is transparent; the window is `PixelFormat.TRANSLUCENT`, not focusable, not touch-modal, laid out in physical screen coordinates.
+3. **The visual window is only as big as the cat and the room it draws into**: the footprint plus 44 dp at each side, 60 dp above (84 dp with emotes on) and 48 dp below, times the cat's size setting. About 172 × 196 dp at the default settings (size 100 %, emotes on; 172 × 172 dp with emotes off); no screen area is reserved and nothing is opaque. **1.4.2:** that window is `FLAG_NOT_TOUCHABLE` and never takes a touch. A second, invisible **touch window** covers only the cat's footprint plus 12 dp and is the only thing that takes touches; it exists only while the cat takes touches (not paused, interactions on, visible).
 4. The cat's world is the **whole physical screen** in dp, minus the system bars and the display cutout (native sends the screen size and insets). Each frame the page works out where the cat is and tells native the window rectangle it needs (snapped to whole device pixels); native moves the window with `updateViewLayout`, at most once per frame. Inside the window the cat is drawn at the same place every frame, so a window that lags a frame behind never makes it jitter against its own pixels. The window is removed from the WindowManager whenever the cat is hidden or not drawn.
-5. Touches inside the window are read **natively in raw screen coordinates** and sent to the page, which feeds them to the same pointer router and gesture recognizer. Raw coordinates matter: a window that moves under the finger would shift window-relative coordinates mid-drag.
+5. Touches inside the touch window are read **natively in raw screen coordinates**, with the event's own time (`MotionEvent.eventTime`) and, for a mouse or trackpad pointer over it, hover and leave, and sent to the page, which feeds them to the same pointer router and gesture recognizer. Raw coordinates matter: a window that moves under the finger would shift window-relative coordinates mid-drag.
 6. Two small native bridges (JSON strings, `addWebMessageListener`, the app's own origin only): `gizecatOverlay` in the floating window (screen metrics, touches and commands to the page; the window rectangle and acknowledgements back) and `gizecatFloating` in the app (start, stop, pause, hide and permission steps). No message carries a cat, a setting or a file. The cat and its settings stay in the page's storage; native only says "save now" and "settings changed". The page also tells native when the cat takes no touches (paused, interactions off), and the window then lets touches through.
 7. While the cat floats, **the app's own page parks its cat** (hidden, no more saving) so there is one cat. When the floating cat stops, the service first has the page save the cat (a bounded 0.8 s wait), and the app page reloads from that stored cat.
 
@@ -82,12 +85,35 @@ Do not assume Google Play accepts the overlay. Policy and forms change; read the
 
 What is and is not possible, stated plainly:
 
-- **Outside the window, touches go to the app underneath, untouched.** The window is `FLAG_NOT_TOUCH_MODAL`, and it is only about 172 × 196 dp at the default settings around the cat. Everything outside it behaves as if the cat were not there.
-- **Inside the window, every touch belongs to the cat's window**, including the transparent margin around the cat (about 44 dp at the sides, 48–84 dp above and below). Android offers an app window **no input region**, so a button of another app under that margin cannot be pressed. This is a platform limit, not a bug to be fixed with a workaround.
+- **Outside the cat's touch window, touches go to the app underneath, untouched.** Since 1.4.2 the visual window (the 172 × 196 dp one) is `FLAG_NOT_TOUCHABLE`, so the owner-reported dead zone around the cat is gone. Only the invisible touch window, the cat's footprint plus 12 dp on each side (re-placed every frame, removed while the cat takes no touches), consumes touches.
+- **Exact remaining limit:** inside that touch window every touch belongs to the cat. Android offers an app window **no input region** (no way to say "touchable only where pixels are opaque"), so a button of another app under those few dp cannot be pressed. This is a platform limit, not a bug to be fixed with a workaround; no AccessibilityService and no unsafe bypass of Android's untrusted-touch protections is used.
 - **Android 12 and later obscured-touch rule:** touches that pass **through** another app's overlay window to a third app are blocked unless the overlay is at most 80 % opaque (`InputManager.getMaximumObscuringOpacityForTouch()`). The cat's window is only about 172 × 196 dp, never a full-screen touch-passing window, and **while the cat takes touches nobody relies on pass-through**. It also sets `filterTouchesWhenObscured`, so when another app's overlay is on top of the cat, the cat is not touched through it.
-- **While paused, or with interactions turned off in Settings** (the cat takes no touches), the page tells native, which makes the window `FLAG_NOT_TOUCHABLE` so touches reach the app underneath, and draws it at 0.8 opacity because Android 12+ passes touches on only at that opacity or less. The cat then looks about 20 % dimmer. This pass-through is written to Android's documented rule and **has never been tried on a device**. **Hidden,** the window is removed entirely and obstructs nothing.
+- **Android 12+ and the visual window:** touches pass through a non-touchable overlay window only at opacity 0.8 or less, so the visual window is drawn at 0.8 on Android 12 and later, always (not only while paused). The cat looks about 20 % dimmer than in the app. That is the price of not having a dead zone. While paused or with interactions off, the touch window is removed and nothing takes a touch. This pass-through is written to Android's documented rule and **has never been tried on a device**. **Hidden,** the window is removed entirely and obstructs nothing.
 - **Apps that block overlays:** some screens (Android's permission dialogs, some banking and security apps, any window with `FLAG_SECURE` or `setHideOverlayWindows`) hide or refuse overlays or block touches while an overlay is above them. The cat then disappears or the screen asks you to close it. Hide the cat from the notification when that happens.
 - **System bars, keyboard, lock screen:** the overlay is below the status bar and navigation bar, can sit under the on-screen keyboard's layer and never shows on the secure lock screen. The cat's floor is the top of the navigation bar.
+
+## Interaction hunting (1.4.2)
+
+On Windows the cat can follow the global cursor. Android's event model does not allow that: a touch belongs to the window it lands on, and no app can observe touches or pointer movement in other apps. Nothing here claims otherwise. The cat's "interaction target" is fed from **only these legitimate sources**:
+
+1. **Touches received by the cat's own touch window** (the finger on or next to the cat).
+2. **A mouse or trackpad pointer over the cat's touch window** (hover and leave, which Android delivers to the window under the pointer).
+3. **Touches inside GizeCat's own app window** while it is open (the app forwards a position-only hint; it contains no view or content data).
+
+A hint is used only while fresh (about 1.8 s) and is never kept as a standing pointer. No AccessibilityService, screen capture, hidden input hook, notification listener, root or privileged API is used, and no permission was added. The cat's play-with-cursor setting (`cursorPlay`) governs how it reacts, exactly as on the desktop.
+
+## The app's home panel (1.4.2)
+
+The Android app opens on a control panel (`src/web/androidPanel.ts`): a GizeVerse/GizeCat header with a status chip, a large **Start/Stop floating cat** with **Pause/Resume** and **Hide/Show**, the permission checklist with the one-tap steps (Display over apps, notifications, each marked needed, optional or ok), the cat's name, coat and size, personality presets, movement speed, autonomy, sleep timing, and the edge-walking and interaction-hunting switches, interaction (petting, dragging, throwing, play with touch) and edge-walking switches. It is one column on a phone and two from 720 px. The floating cat runs in the service, independent of this screen: opening or closing the panel never resets the cat. Setting changes apply to the floating cat at once.
+
+## Why 1.4.1's drag and throw failed (static diagnosis, 1.4.2)
+
+Traced through the code, **not reproduced on a device**:
+
+- A touch that moved before a 350 ms still hold was classified as a *stroke* (petting), and only a still hold could start a drag, so "touch and drag" never picked the cat up. On a phone the finger rarely stays still for a third of a second. 1.4.2 starts the drag at the first move past the slop in the Android overlay (`touchDragOnMove`); the desktop and browser routers are unchanged.
+- The touch target was the cat's exact footprint, so a slightly-off touch missed it. 1.4.2 pads the hit area.
+- Pointer events reached the page late (native to page), so release velocity was computed from arrival times, not the gesture's times, and a throw looked like a click. 1.4.2 sends `MotionEvent.eventTime` and the page uses it, mapped to its own clock.
+- Pointer IDs, raw coordinates, density and window repositioning (which moves the window but not the world) checked out: the drag position stays in world coordinates, so moving the window mid-drag does not move the cat.
 
 ## Lifecycle
 
@@ -108,7 +134,7 @@ What is and is not possible, stated plainly:
 
 ## Battery and CPU
 
-- One small window and one WebView; no full-screen layer. The window moves at most once per display frame.
+- One small visual window with one WebView, plus (1.4.2) a tiny touch window while the cat takes touches; no full-screen layer. Both move at most once per display frame.
 - While **paused**, **hidden** or with the **screen off**, the engine runs its slow tick (a hidden cat ticks about four times a second, a suspended one slower), and the renderer is not drawing.
 - The notification is low-importance and silent. There is no wake lock, no alarm, no job and no boot receiver.
 - Not measured: battery drain was never measured on a device (UNVERIFIED).
@@ -156,7 +182,7 @@ While the cat floats, Android requires a notification (it is the foreground serv
 - **Never run.** Not on a device, an emulator or a simulator. Whether the overlay window appears, the WebView renders transparently in it, the touch forwarding feels right, the window follows the cat smoothly and the controls work is unknown (UNVERIFIED). Likely first problems: a WebView that does not stay transparent on some devices, a window position that lags the cat, vendor battery managers ending the service, and screens that block overlays.
 - **Latency:** the window follows the cat once per frame through two process hops (page, native); on slow devices the cat may visibly lag its own movement. Not measured.
 - **Some secondary animation is reduced.** The renderer derives the tail's inertia and the held cat's swing from how far the cat moved inside its canvas since the last frame. In the floating window the cat stays at the same place inside the window (the window moves instead), so those two effects are absent there: the tail does not trail behind a walking cat, and a cat being carried does not swing. The behaviour, poses, walk cycle and every state are the shared ones. Restoring the two effects would mean passing the real motion to the renderer through the shared render snapshot (the desktop code path); that was left out of this preview on purpose, to leave Windows untouched.
-- **The floor is the screen bottom.** Other apps' windows are invisible to an app, so the cat cannot walk on them. It can be dragged and thrown anywhere on the screen and falls back.
+- **The floor is the screen bottom, with the side edges (1.4.2).** Other apps' windows are invisible to an app, so the cat cannot walk on them. It climbs the left and right edges every 30–60 s or so and comes back down; the corners are where floor and wall meet. There is no ceiling pose: the top edge is reached by the climb only. It can be dragged and thrown anywhere on the screen and falls back.
 - **One display:** the cat lives on the default display. Secondary displays are not supported.
 - **Sound** (off by default) needs the page to be allowed to start audio without a tap; not verified.
 - **Accessibility:** the floating window is hidden from screen readers on purpose (a picture with nothing to read); the controls are in the notification and the app, which TalkBack can use.
