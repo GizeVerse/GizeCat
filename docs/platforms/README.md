@@ -14,7 +14,11 @@ Pages:
 - [privacy-and-permissions.md](privacy-and-permissions.md): what each version may access, stores and sends.
 - [building-and-packaging.md](building-and-packaging.md): how to build each artifact.
 - [release-automation.md](release-automation.md): the manual GitHub workflows, their secrets and the owner's steps.
+- [signing-overview.md](signing-overview.md): where signing stands on every platform, and each artifact's exact signing status.
+- [windows-signing.md](windows-signing.md): Authenticode for the Windows installers (SignPath, or your own certificate).
+- [macos-signing.md](macos-signing.md): Developer ID signing, notarization and stapling.
 - [android-signing.md](android-signing.md): the owner's procedure for the Android release key.
+- [release-owner-actions.md](release-owner-actions.md): everything only the owner can do, in order.
 
 ## One character, four device families
 
@@ -86,7 +90,7 @@ These statuses describe the candidate build. **1.4.0 is not published**, so a fi
 |---|---|---|---|
 | `Desktop-Cat-Setup-1.4.0-x64.exe` | Windows 10/11 on x64 PCs | The Windows release run into `release/1.4.0/windows` on an x64 Windows PC ([steps](building-and-packaging.md#windows-x64-and-arm64)) | COMPILED_OR_PACKAGED. Unsigned. Not installed or run for 1.4.0. |
 | `Desktop-Cat-Setup-1.4.0-arm64.exe` | Windows 11 on Arm PCs | The same run (cross-built), then a static payload check | COMPILED_OR_PACKAGED. Unsigned. Runtime THEORETICALLY_COMPATIBLE_NOT_EXECUTED. |
-| The same two installers, Authenticode signed | Windows PCs | The manual `release.yml` workflow, job `windows-signed`, with `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` in the `windows-signing` environment | REQUIRES_OWNER_CREDENTIALS. Never started. |
+| The same two installers, Authenticode signed | Windows PCs | The manual `release.yml` workflow with `windows_signing: signpath` (SignPath, `windows-signing` environment), or `scripts/sign-windows.ps1` with your own token or cloud-HSM certificate ([Windows signing](windows-signing.md)) | REQUIRES_OWNER_CREDENTIALS. Never started. |
 | `GizeCat-1.4.0-mac-x64-adhoc.zip` | Intel Macs, testing | A disposable WSL 2 distro on the Windows build PC (`npm run package:mac:adhoc-wsl`), ad-hoc signed, then a static payload check | COMPILED_OR_PACKAGED. Not notarized. Never run. |
 | `GizeCat-1.4.0-mac-arm64-adhoc.zip` | Apple Silicon Macs, testing | The same run | COMPILED_OR_PACKAGED. Not notarized. Never run. |
 | `GizeCat-1.4.0-mac-<x64, arm64, universal>-adhoc-macrunner.dmg` and `.zip` | Macs, testing | The manual `macos-packages.yml` workflow on a Mac runner, job `adhoc`, no secrets | THEORETICALLY_COMPATIBLE_NOT_EXECUTED. Never started. Not notarized. |

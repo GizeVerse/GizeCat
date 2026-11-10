@@ -46,7 +46,11 @@ A release run into a versioned folder, step by step:
 
 `scripts/install-test.ps1` and `scripts/upgrade-test.ps1` take `-Arch x64|arm64` (default: the PC's own arch) and `-Installer <path>`. Without `-Installer` they look for exactly `Desktop-Cat-Setup-<version>-<arch>.exe` in `release\`, `release\<version>\` and `release\<version>\windows\`, and refuse when there is none or more than one copy. They install the app and touch the startup entry: **run them only on a disposable Windows user or VM, never on a PC where GizeCat is really used.** The ARM64 installer can only be install-tested on a Windows on Arm PC or VM.
 
-Code signing needs the owner's certificate: REQUIRES_OWNER_CREDENTIALS. electron-builder reads `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`. In CI, the manual `release.yml` workflow has a job `windows-signed` that takes both from the `windows-signing` environment; it has never been started. It needs an exportable `.pfx`: keys held only on a hardware token or cloud HSM are NOT_IMPLEMENTED ([release automation](release-automation.md)).
+Code signing needs the owner's credentials: REQUIRES_OWNER_CREDENTIALS.
+- In CI, the manual `release.yml` workflow signs through SignPath (`windows_signing: signpath`, `windows-signing` environment).
+- On your own computer, `scripts/sign-windows.ps1` signs with a token or cloud-HSM certificate from the Windows certificate store. Mode `SignExisting` signs copies of these installers; mode `Rebuild` rebuilds them with every executable signed.
+- `electron-builder.yml` fixes SHA-256 and an RFC 3161 timestamp for any signing run. Without a certificate, those settings change nothing.
+- Neither path has run ([Windows signing](windows-signing.md)).
 
 ## macOS (Intel, Apple Silicon, universal)
 

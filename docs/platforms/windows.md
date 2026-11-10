@@ -64,7 +64,7 @@ What it does not do:
 | Item | Status |
 |---|---|
 | Unsigned installers, x64 and ARM64 | COMPILED_OR_PACKAGED. SmartScreen warns, and Smart App Control may block them |
-| Code-signed installers (fewer SmartScreen warnings; Smart App Control) | REQUIRES_OWNER_CREDENTIALS (a code-signing certificate). The path exists: the manual `release.yml` workflow, job `windows-signed`, with `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` in the `windows-signing` environment. It has never been started ([release automation](release-automation.md)) |
+| Code-signed installers (fewer SmartScreen warnings; Smart App Control) | REQUIRES_OWNER_CREDENTIALS (SignPath acceptance or a code-signing certificate). Two paths exist, never run: the manual `release.yml` workflow with `windows_signing: signpath`, and `scripts/sign-windows.ps1` for a token or cloud-HSM certificate ([Windows signing](windows-signing.md)). Signing does not by itself remove SmartScreen warnings |
 | Signing with a key held only on a hardware token or cloud HSM | NOT_IMPLEMENTED |
 | Microsoft Store listing | NOT_IMPLEMENTED |
 
