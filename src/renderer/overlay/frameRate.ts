@@ -8,6 +8,12 @@ import type { AnimClip, BehaviorState } from '../../shared/cat';
 export const FULL_RATE_MS = 0;
 export const CALM_FRAME_MS = 1000 / 30;
 export const QUIET_FRAME_MS = 50;
+/**
+ * A deeply sleeping cat only breathes, very slowly (the animator's period is ~5.7 s): its quiet rate
+ * falls from QUIET_FRAME_MS (sleepDepth 0) to this (sleepDepth 1). Kept under the animator's
+ * 100 ms layer-dt cap so the slower frames never slow the breathing down.
+ */
+export const DEEP_QUIET_FRAME_MS = 90;
 /** rAF timestamps jitter: a frame this close to its due time is drawn. */
 export const FRAME_SLACK_MS = 4;
 /** Full rate is kept this long after the last fast motion, so short pauses do not flip the rate. */
@@ -43,6 +49,9 @@ const FULL_RATE_CLIPS: ReadonlySet<AnimClip> = new Set<AnimClip>([
   'swat',
   'hiss',
   'tailChase',
+  // Living Companion: the shake-off and the ~7.5 Hz scratch are too quick for the calm rate.
+  'scratch',
+  'shake',
 ]);
 const FULL_RATE_STATES: ReadonlySet<BehaviorState> = new Set<BehaviorState>(['held', 'jumping', 'falling', 'landing']);
 
@@ -61,6 +70,14 @@ export interface FrameMotion {
   poseSpeed: number;
   /** Asleep and still except for breathing. */
   quiet: boolean;
+  /** Living Companion: 0..1 sleep depth of the snapshot; absent = 0 (today's quiet rate). */
+  sleepDepth?: number;
+}
+
+/** The quiet frame interval for a sleep depth (0..1; anything else counts as 0). */
+export function quietIntervalMs(sleepDepth: number | undefined): number {
+  const d = sleepDepth !== undefined && Number.isFinite(sleepDepth) ? Math.min(1, Math.max(0, sleepDepth)) : 0;
+  return QUIET_FRAME_MS + (DEEP_QUIET_FRAME_MS - QUIET_FRAME_MS) * d;
 }
 
 export function isFastMotion(m: FrameMotion): boolean {
@@ -72,7 +89,7 @@ export function isFastMotion(m: FrameMotion): boolean {
 /** Minimum frame interval (ms) for the motion, given the time since motion was last fast. */
 export function frameIntervalMs(m: FrameMotion, sinceFastMs: number): number {
   if (isFastMotion(m) || sinceFastMs < FAST_HOLD_MS) return FULL_RATE_MS;
-  return m.quiet ? QUIET_FRAME_MS : CALM_FRAME_MS;
+  return m.quiet ? quietIntervalMs(m.sleepDepth) : CALM_FRAME_MS;
 }
 
 /**

@@ -31,6 +31,13 @@ export interface InterpSample {
   simTime: number;
   /** True on the first sample after a discontinuity (snap/teleport). */
   snapped: boolean;
+  /**
+   * Living Companion: the snapshot after `state` and the 0..1 position between them, set only when
+   * the render time lies between two snapshots (world-event props interpolate by id across them).
+   * Absent or null: no later snapshot to blend with.
+   */
+  next?: CatRenderState | null;
+  k?: number;
 }
 
 function finiteState(s: CatRenderState): boolean {
@@ -125,6 +132,8 @@ export class SnapshotInterpolator {
     let chosen = a;
     let x = a.x;
     let y = a.y;
+    let next: CatRenderState | null = null;
+    let nextK = 0;
     if (tr >= a.t) {
       let found = false;
       for (let i = 1; i < this.count; i++) {
@@ -137,6 +146,8 @@ export class SnapshotInterpolator {
           x = a.x + (b.x - a.x) * k;
           y = a.y + (b.y - a.y) * k;
           chosen = a;
+          next = b;
+          nextK = Math.min(1, Math.max(0, k));
           found = true;
           break;
         }
@@ -155,6 +166,8 @@ export class SnapshotInterpolator {
     out.state = chosen;
     out.simTime = tr;
     out.snapped = snapped;
+    out.next = next;
+    out.k = nextK;
     return true;
   }
 }

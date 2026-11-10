@@ -158,6 +158,7 @@ export class CatScene {
       (r !== undefined && r !== null && r.at !== this.reactionAt);
     m.poseSpeed = this.poseSpeed;
     m.quiet = this.isQuiet && next.state === 'sleeping';
+    m.sleepDepth = next.sleepDepth;
     return frameIntervalMs(m, this.clock - this.lastFastAt);
   }
 
@@ -227,6 +228,9 @@ export class CatScene {
         jumpKind: s.jumpKind ?? null,
         impact: s.impact,
         balance: s.balance,
+        mood: s.mood,
+        sleepDepth: s.sleepDepth,
+        reducedMotion: s.reducedMotion === true,
       },
       input.simTime,
       dt,
@@ -274,6 +278,7 @@ export class CatScene {
     mo.transition = this.transitioning;
     mo.poseSpeed = this.poseSpeed;
     mo.quiet = this.isQuiet;
+    mo.sleepDepth = s.sleepDepth;
     if (isFastMotion(mo)) this.lastFastAt = this.clock;
   }
 

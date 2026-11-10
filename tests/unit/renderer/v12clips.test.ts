@@ -30,7 +30,9 @@ import { createPose, LEG_POSE_KEYS, POSE_KEYS, type Pose } from '../../../src/re
 import { applyMatX, applyMatY, Rig } from '../../../src/renderer/overlay/cat/rig';
 import { CatScene } from '../../../src/renderer/overlay/scene';
 
-const V12_CLIPS = ANIM_CLIPS.slice(ANIM_CLIPS.indexOf('climb') + 1);
+// The 14 clips of v1.2: those between 'climb' and the Living Companion clips (scratch, shake, confused),
+// which livingCompanion.test.ts covers.
+const V12_CLIPS = ANIM_CLIPS.slice(ANIM_CLIPS.indexOf('climb') + 1, ANIM_CLIPS.indexOf('scratch'));
 /** The placeholders the contract step (C1) gave the new clips; each must now be drawn differently. */
 const C1_PLACEHOLDER: Readonly<Record<string, AnimClip>> = {
   stalk: 'walk',

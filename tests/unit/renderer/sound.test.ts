@@ -213,6 +213,40 @@ describe('sound player', () => {
     }
   });
 
+  it("the world's cues (squeak, rumble, chime, splash) are short, soft and never louder than the cat's own loudest", () => {
+    /** Highest level any gain stage of the cue reaches, apart from the final output gain (which carries the user's volume). */
+    const peak = (kind: SoundCue): number => {
+      const r = rig();
+      r.player.play(cue(kind, 1000), 1000);
+      const a = r.fake();
+      return Math.max(...a.gains.filter((g) => !g.outs.includes(a.destination)).map((g) => g.gain.peak()));
+    };
+    const world: SoundCue[] = ['squeak', 'rumble', 'chime', 'splash'];
+    const own = SOUND_CUES.filter((k) => !world.includes(k));
+    const loudestOwn = Math.max(...own.map(peak));
+    for (const kind of world) {
+      expect(peak(kind), kind).toBeLessThanOrEqual(0.6);
+      expect(peak(kind), kind).toBeLessThanOrEqual(loudestOwn);
+      expect(CUE_DURATION_S[kind], kind).toBeLessThanOrEqual(1);
+      expect(CUE_DURATION_S[kind], kind).toBeGreaterThan(0.1);
+    }
+    // The rumble is the one to be careful with: low and gentle, never a sudden jolt.
+    expect(CUE_DURATION_S.rumble).toBeLessThanOrEqual(0.9);
+    expect(peak('rumble')).toBeLessThanOrEqual(0.55);
+  });
+
+  it('every cue of the world set has a synthesized voice that sounds when played (the context gets sources)', () => {
+    for (const kind of ['squeak', 'rumble', 'chime', 'splash'] as const) {
+      const r = rig();
+      r.player.play(cue(kind, 1000, 1), 1000);
+      expect(r.fake().sources.length, kind).toBeGreaterThanOrEqual(1);
+      // The output stage is the one gain wired to the speakers and sits at volume * master (<= 0.35).
+      const a = r.fake();
+      const out = a.gains.find((g) => g.outs.includes(a.destination))!;
+      expect(out.gain.value, kind).toBeLessThanOrEqual(0.35 + 1e-12);
+    }
+  });
+
   it('applies the volume (absent = 0.4) and stays silent at 0', () => {
     const peakOut = (volume?: number): number => {
       const r = rig();

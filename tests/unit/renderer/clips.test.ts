@@ -76,7 +76,7 @@ describe('animation clips', () => {
   it('looping clips keep moving (not frozen)', () => {
     const a = createPose();
     const b = createPose();
-    for (const clip of ['walk', 'run', 'annoyed', 'groom', 'pawAt', 'rollOver', 'crouch', 'climb'] as const) {
+    for (const clip of ['walk', 'run', 'annoyed', 'groom', 'pawAt', 'rollOver', 'crouch', 'climb', 'scratch', 'confused'] as const) {
       sampleClip(clip, ctxFor(1.0), a);
       sampleClip(clip, ctxFor(1.37), b);
       const moved = POSE_KEYS.some((k) => Math.abs(a[k] - b[k]) > 1e-3);

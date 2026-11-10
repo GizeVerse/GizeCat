@@ -36,7 +36,17 @@ export interface ClipContext {
   jumpKind?: JumpKind | null;
   impact?: number;
   balance?: number;
+  /**
+   * Living Companion: the user asked for reduced motion. The shaking and hopping parts of a clip
+   * (shake-off, scratching, the startle hop) keep their shape at REDUCED_MOTION_AMP of the amplitude;
+   * absent or false = the full motion.
+   */
+  reducedMotion?: boolean;
 }
+
+/** Amplitude of the shaking and hopping parts of a clip under reduced motion. */
+export const REDUCED_MOTION_AMP = 0.4;
+const motionOf = (c: ClipContext): number => (c.reducedMotion === true ? REDUCED_MOTION_AMP : 1);
 
 /** Hint values as the clips read them (absent or broken -> the contract's defaults). */
 const impactOf = (c: ClipContext): number => (c.impact !== undefined && Number.isFinite(c.impact) ? clamp01(c.impact) : 0.5);
@@ -56,6 +66,8 @@ export const ONE_SHOT_DURATION_S: Readonly<Partial<Record<AnimClip, number>>> = 
   swat: 0.45,
   hiss: 1.2,
   stretch: 1.6,
+  // Living Companion
+  shake: 1.1,
 };
 
 /**
@@ -438,10 +450,10 @@ function clipWake(p: Pose, c: ClipContext): void {
   // Final shake: head and ears flap quickly.
   const shake = pulse(t, 1.12, 1.2, 1.45, 1.58);
   if (shake > 0) {
-    const w = Math.sin(TAU * 7.5 * (t - 1.12));
+    const w = Math.sin(TAU * 7.5 * (t - 1.12)) * motionOf(c);
     p.headRot += 0.22 * w * shake;
     p.headX += 0.8 * w * shake;
-    p.offX += 0.7 * Math.sin(TAU * 7.5 * (t - 1.12) + 1.3) * shake;
+    p.offX += 0.7 * Math.sin(TAU * 7.5 * (t - 1.12) + 1.3) * shake * motionOf(c);
     p.earBR += 0.35 * w * shake;
     p.earFR -= 0.35 * w * shake;
     p.eyeOpen = Math.min(p.eyeOpen, 1 - 0.85 * shake);
@@ -672,8 +684,8 @@ function clipStartle(p: Pose, c: ClipContext): void {
   p.bodyY = lerp(-23, -25.5, k);
   p.bodyLen = lerp(1, 1.04, k);
   p.bodyH = lerp(1, 0.92, k);
-  p.offY = -9 * hop;
-  p.offX = -5 * sseg(t, 0.05, 0.4);
+  p.offY = -9 * hop * motionOf(c);
+  p.offX = -5 * sseg(t, 0.05, 0.4) * motionOf(c);
   p.sqY = 1 - 0.08 * landSq;
   p.sqX = 1 + 0.05 * landSq;
   p.headX = lerp(21, 23.5, k);
@@ -1455,7 +1467,7 @@ function clipLandRecover(p: Pose, c: ClipContext): void {
   // Shake it off.
   const shake = pulse(t, 0.04, 0.1, 0.32, 0.4);
   if (shake > 0) {
-    const w = Math.sin(TAU * 8 * (t - 0.04));
+    const w = Math.sin(TAU * 8 * (t - 0.04)) * motionOf(c);
     p.headRot += 0.24 * w * shake;
     p.headX += 0.8 * w * shake;
     p.earBR += 0.4 * w * shake;
@@ -1463,7 +1475,7 @@ function clipLandRecover(p: Pose, c: ClipContext): void {
     p.earBF += 0.2 * shake;
     p.earFF += 0.2 * shake;
     p.eyeOpen = Math.min(p.eyeOpen, 1 - 0.85 * shake);
-    p.offX += 0.6 * Math.sin(TAU * 8 * (t - 0.04) + 1.3) * shake;
+    p.offX += 0.6 * Math.sin(TAU * 8 * (t - 0.04) + 1.3) * shake * motionOf(c);
   }
   // Look back over the shoulder, then forward and away.
   const back = pulse(t, 0.38, 0.48, 0.56, 0.64);
@@ -1753,6 +1765,103 @@ function clipEdgeSit(p: Pose, c: ClipContext): void {
   setFoot(p, LEG_FF, 6, 0, 0);
 }
 
+// ---------------------------------------------------------------------------
+// Living Companion clips
+
+/**
+ * Scratch: sitting, the near hind leg scratching behind the ear. The head dips back and down to meet
+ * the paw (a hind leg cannot reach a sitting cat's ear), the leg rubs at ~7.5 Hz, then it lowers again.
+ * Everything is back at the sit pose at the loop point, so the loop never pops.
+ */
+export const SCRATCH_PERIOD_S = 2.4;
+
+function clipScratch(p: Pose, c: ClipContext): void {
+  sitPose(p);
+  const t = wrap01(c.t / SCRATCH_PERIOD_S) * SCRATCH_PERIOD_S;
+  const m = motionOf(c);
+  const raise = pulse(t, 0, 0.35, 2.05, 2.4);
+  const rub = pulse(t, 0.3, 0.5, 1.95, 2.1) * m;
+  const f = TAU * 7.5 * t;
+  // Head: down and back towards the leg, nodding a little with each stroke.
+  p.headX += -3 * raise + 0.5 * rub * Math.sin(f + 2);
+  p.headY += 7 * raise;
+  p.headRot += -0.1 * raise + 0.04 * rub * Math.sin(f + 0.8);
+  p.bodyX -= 0.8 * raise;
+  // Paw: behind the jaw of the lowered head, rubbing in small circles.
+  const fx = p.headX - 5 + 1.6 * rub * Math.sin(f);
+  const fy = p.headY + 8.5 + 1.2 * rub * Math.sin(f + 1.5);
+  setFoot(p, LEG_BN, lerp(1, fx, raise), lerp(0, fy, raise), 0.4 * raise);
+  p.eyeOpen = lerp(1, 0.35, raise);
+  p.eyeHappy = 0.5 * rub;
+  p.earFR += 0.35 * raise + 0.12 * rub * Math.sin(f + 0.5);
+  p.earFF += 0.2 * raise;
+  p.blinkOK = raise > 0.1 ? 0 : 1;
+  p.lookW = 1 - 0.9 * raise;
+}
+
+/**
+ * Shake-off (~1.1 s, one-shot, standing): a fast damped shudder of body, head and ears with a tail
+ * whip, the fur puffing and the eyes squeezed shut, then it settles into the standing pose (the
+ * envelope reaches exactly 0 at the end, so the held last pose is the stand pose).
+ */
+function clipShake(p: Pose, c: ClipContext): void {
+  standPose(p);
+  const t = c.t;
+  const m = motionOf(c);
+  const env = sseg(t, 0, 0.08) * Math.exp(-3 * Math.max(0, t - 0.1)) * (1 - sseg(t, 0.8, 1.1));
+  const amp = env * m;
+  const f = TAU * 9 * t;
+  const w = Math.sin(f + 0.9);
+  // Body: a lateral shudder, a squash that beats at twice the rate, a little crouch to brace.
+  p.offX += 1.3 * amp * Math.sin(f + 0.4);
+  p.rot += 0.03 * amp * Math.sin(f);
+  p.sqX = 1 + 0.025 * amp * Math.sin(2 * f);
+  p.sqY = 1 - 0.02 * amp * Math.sin(2 * f);
+  p.bodyY += 1.5 * sseg(t, 0, 0.1) * (1 - sseg(t, 0.8, 1.1));
+  // Head and ears flap hardest.
+  p.headRot += 0.3 * amp * w;
+  p.headX += 0.9 * amp * w;
+  p.earBR += 0.45 * amp * Math.sin(f + 1.6);
+  p.earFR -= 0.45 * amp * Math.sin(f + 1.6);
+  p.earBF += 0.25 * env;
+  p.earFF += 0.25 * env;
+  p.eyeOpen = 1 - 0.8 * env;
+  p.blinkOK = env > 0.02 ? 0 : 1;
+  // Tail: a slower whip, puffed and loose.
+  p.tailBase += 0.45 * amp * Math.sin(TAU * 4.5 * t);
+  p.tailCurl += 0.8 * amp * Math.sin(TAU * 4.5 * t + 0.8);
+  p.tailPuff = 0.5 * env;
+  p.tailStiff = lerp(0.55, 0.3, env);
+  p.lookW = 1 - env;
+}
+
+/**
+ * Confused: sitting, the head tilting slowly from side to side, one ear up and the other out, the
+ * pupils wandering, one slow blink per loop.
+ */
+export const CONFUSED_PERIOD_S = 4;
+
+function clipConfused(p: Pose, c: ClipContext): void {
+  sitPose(p);
+  const t = wrap01(c.t / CONFUSED_PERIOD_S) * CONFUSED_PERIOD_S;
+  // Two tilts per loop (period 2 s), so the loop closes on itself.
+  const tilt = Math.sin((TAU * t) / (CONFUSED_PERIOD_S / 2));
+  p.headRot += 0.2 * tilt;
+  p.headX += 0.6 * tilt;
+  p.bodyX -= 0.4 * tilt;
+  p.faceTurn += 0.1 * tilt;
+  p.earFR = -0.28;
+  p.earBR = 0.2;
+  p.pupilX += 0.25 * Math.sin((TAU * t) / (CONFUSED_PERIOD_S / 2) + 1);
+  p.pupilY -= 0.12;
+  p.pupilSize = 0.7;
+  const blink = pulse(t, 2.7, 2.95, 3.05, 3.35);
+  p.eyeOpen = 1 - 0.95 * blink;
+  p.blinkOK = blink > 0.05 ? 0 : 1;
+  p.tailCurl += 0.15 * Math.sin((TAU * t) / CONFUSED_PERIOD_S + 1);
+  p.lookW = 0.2;
+}
+
 type ClipFn = (p: Pose, c: ClipContext) => void;
 
 const CLIPS: Readonly<Record<AnimClip, ClipFn>> = {
@@ -1793,6 +1902,10 @@ const CLIPS: Readonly<Record<AnimClip, ClipFn>> = {
   balance: clipBalance,
   tailChase: clipTailChase,
   edgeSit: clipEdgeSit,
+  // Living Companion
+  scratch: clipScratch,
+  shake: clipShake,
+  confused: clipConfused,
 };
 
 /** Samples `clip` at the context's phase into `out`. One-shot clips hold their last pose. */
@@ -1855,7 +1968,7 @@ export function crossFadeMs(from: AnimClip | null, to: AnimClip, movementSpeed =
   // cat up keeps the held fade below, which the mover's scruff settle is timed to.
   if (from === 'climb' && to !== 'held') return quickClip(to) ? CLIMB_QUICK_FADE_MS : CLIMB_OFF_FADE_MS / wallTimeScale(movementSpeed);
   if (to === 'climb' && from !== 'held') return CLIMB_FADE_MS / wallTimeScale(movementSpeed);
-  if (to === 'startle' || to === 'land' || to === 'jump') return 150;
+  if (to === 'startle' || to === 'land' || to === 'jump' || to === 'shake') return 150;
   // v1.2 quick clips: a strike, a hiss, a pounce or a hard landing must not lag behind the event.
   if (to === 'pounce' || to === 'impact' || to === 'swat' || to === 'hiss') return 140;
   if (to === 'fall' || from === 'land' || from === 'impact') return 170;
@@ -1890,6 +2003,10 @@ export function loopPeriodS(anyClip: AnimClip): number | null {
       return TAIL_CHASE_REV_S;
     case 'edgeSit':
       return EDGE_SIT_PERIOD_S;
+    case 'scratch':
+      return SCRATCH_PERIOD_S;
+    case 'confused':
+      return CONFUSED_PERIOD_S;
     default:
       return null;
   }

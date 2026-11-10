@@ -31,6 +31,11 @@ export const CUE_DURATION_S: Readonly<Record<SoundCue, number>> = {
   hiss: 0.9,
   growl: 0.95,
   thud: 0.2,
+  // Living Companion: the world's cues (a mouse, a rumble of thunder, a sparkle, a splash).
+  squeak: 0.2,
+  rumble: 0.85,
+  chime: 1,
+  splash: 0.6,
 };
 
 // The slice of Web Audio this player uses (the real AudioContext satisfies it; tests use a fake).
@@ -380,6 +385,82 @@ function synth(a: AudioContextLike, kind: SoundCue, out: GainNodeLike, t0: numbe
       env.gain.setValueAtTime(0, t0);
       env.gain.linearRampToValueAtTime(1, t0 + 0.008);
       env.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      break;
+    }
+    // The world's cues. All are quieter than the cat's own loudest (peak envelope <= 0.55, against 1),
+    // with a soft attack, so none of them can startle.
+    case 'squeak': {
+      // A tiny mouse squeak: two quick rising peeps.
+      const o = osc(a, 'sine', 1900, t0, dur);
+      o.frequency.exponentialRampToValueAtTime(2700, t0 + 0.07);
+      o.frequency.setValueAtTime(2100, t0 + 0.11);
+      o.frequency.exponentialRampToValueAtTime(2900, t0 + 0.18);
+      o.connect(env);
+      env.gain.setValueAtTime(0, t0);
+      env.gain.linearRampToValueAtTime(0.4, t0 + 0.015);
+      env.gain.linearRampToValueAtTime(0, t0 + 0.08);
+      env.gain.linearRampToValueAtTime(0.35, t0 + 0.125);
+      env.gain.linearRampToValueAtTime(0, t0 + dur);
+      break;
+    }
+    case 'rumble': {
+      // Distant thunder: low-passed noise under a deep sine, swelling and fading slowly.
+      const n = noiseSource(a, noise(), t0, dur);
+      const lp = filter(a, 'lowpass', 140, 0.8, t0);
+      lp.frequency.linearRampToValueAtTime(80, t0 + dur);
+      n.connect(lp);
+      lp.connect(env);
+      const o = osc(a, 'sine', 62, t0, dur);
+      o.frequency.linearRampToValueAtTime(48, t0 + dur);
+      const tone = a.createGain();
+      tone.gain.value = 0.5;
+      o.connect(tone);
+      tone.connect(env);
+      envelope(env, t0, 0.25, dur - 0.65, 0.4, 0.55);
+      break;
+    }
+    case 'chime': {
+      // Two soft bell notes, a fifth apart, each with its own quick decay.
+      const notes: ReadonlyArray<readonly [number, number]> = [
+        [880, 0],
+        [1320, 0.14],
+      ];
+      for (const [freq, at] of notes) {
+        const o = osc(a, 'sine', freq, t0 + at, dur - at);
+        const g = a.createGain();
+        g.gain.setValueAtTime(0, t0 + at);
+        g.gain.linearRampToValueAtTime(0.45, t0 + at + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+        o.connect(g);
+        g.connect(env);
+      }
+      break;
+    }
+    case 'splash': {
+      // A small splash: a burst of band-passed noise sweeping down, then two bubbles blooping up.
+      const n = noiseSource(a, noise(), t0, dur);
+      const bp = filter(a, 'bandpass', 1800, 0.9, t0);
+      bp.frequency.exponentialRampToValueAtTime(600, t0 + dur);
+      n.connect(bp);
+      bp.connect(env);
+      env.gain.setValueAtTime(0, t0);
+      env.gain.linearRampToValueAtTime(0.5, t0 + 0.02);
+      env.gain.exponentialRampToValueAtTime(0.001, t0 + 0.4);
+      env.gain.linearRampToValueAtTime(0, t0 + dur);
+      const bubbles: ReadonlyArray<readonly [number, number]> = [
+        [320, 0.18],
+        [420, 0.3],
+      ];
+      for (const [freq, at] of bubbles) {
+        const o = osc(a, 'sine', freq, t0 + at, 0.14);
+        o.frequency.exponentialRampToValueAtTime(freq * 2, t0 + at + 0.12);
+        const g = a.createGain();
+        g.gain.setValueAtTime(0, t0 + at);
+        g.gain.linearRampToValueAtTime(0.3, t0 + at + 0.02);
+        g.gain.linearRampToValueAtTime(0, t0 + at + 0.14);
+        o.connect(g);
+        g.connect(out);
+      }
       break;
     }
   }

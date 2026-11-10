@@ -3,6 +3,8 @@
 // look-at, one-off reactions, mood on tail/ears/pupils, purr vibration, pendulum
 // swing while held).
 import type { AnimClip, CatReaction, CatReactionKind, JumpKind } from '../../../shared/cat';
+import { CLIP_META } from '../../../shared/animationCatalog';
+import { MOODS, type Mood } from '../../../shared/companion';
 import { climbEngagement, crossFadeMs, gaitHz, isGait, isWallManoeuvre, sampleClip, wallTimeScale, type ClipContext } from './clips';
 import { clamp, clamp01, damp, easeOut, lerp, noise1, pulse, smooth, sseg, TAU } from './math';
 import { blendPose, copyPose, createPose, sanitizePose, type Pose } from './pose';
@@ -33,6 +35,14 @@ export interface AnimInput {
   jumpKind?: JumpKind | null;
   impact?: number;
   balance?: number;
+  /**
+   * Living Companion (all optional; absent = exactly the rendering without them): the temporary
+   * mood tuning ears, tail, pupils and lids on top of the clip, the 0..1 depth of the sleep (slower,
+   * shallower breathing and a more settled posture) and the user's reduced-motion choice.
+   */
+  mood?: Mood;
+  sleepDepth?: number;
+  reducedMotion?: boolean;
 }
 
 /** Length (s at animation speed 1) of each reaction layer. */
@@ -74,7 +84,46 @@ const TAIL_AUTHORED: ReadonlySet<AnimClip> = new Set<AnimClip>([
   'stretch',
   'balance',
   'tailChase',
+  // Living Companion
+  'shake',
 ]);
+
+/**
+ * Mood layers (Living Companion): rate (1/s) at which each mood's weight rises and falls. Every
+ * weight is eased, so a mood never pops in or out; a startle comes in quickly and leaves slowly,
+ * the sleepy and relaxed looks drift.
+ */
+const MOOD_RATE: Readonly<Record<Mood, { readonly up: number; readonly down: number }>> = {
+  happy: { up: 2.5, down: 1.5 },
+  curious: { up: 3, down: 2 },
+  sleepy: { up: 1.2, down: 1.2 },
+  startled: { up: 8, down: 2.5 },
+  scared: { up: 4, down: 1.5 },
+  excited: { up: 3, down: 2 },
+  relaxed: { up: 1.2, down: 1.2 },
+  confused: { up: 3, down: 2 },
+};
+/** A mood weight below this counts as gone (the layer then costs nothing and leaves no residue). */
+const MOOD_EPS = 1e-3;
+/** The tail of an authored clip takes only this share of a mood's tail motion. */
+const MOOD_TAIL_AUTHORED = 0.35;
+/** Rate (1/s) at which the deep-sleep and reduced-motion switches ease in and out. */
+const DEPTH_RATE = 1.2;
+const REDUCE_RATE = 4;
+/** Reduced motion: the tail's swing is low-passed at this rate (1/s) and blended this far towards the result. */
+const REDUCED_TAIL_RATE = 1;
+const REDUCED_TAIL_BLEND = 0.7;
+/** Reduced motion: how much slower the procedural layers (tail sway, purr tremor) run, and how far the hop and the sideways shudder are damped. */
+const REDUCED_LAYER_SLOWDOWN = 0.4;
+const REDUCED_HOP_DAMP = 0.5;
+const REDUCED_SHUDDER_DAMP = 0.6;
+/** Reduced motion: a spin (turnX swinging 1 .. -1) shrinks to 1 .. 0.5, never edge-on and never a mirror flash. */
+const REDUCED_SPIN_DAMP = 0.75;
+/** Deep sleep (at full depth): breathing is this much slower and shallower, and the body this much more settled. */
+const DEEP_BREATH_SLOWER = 0.5;
+const DEEP_BREATH_SHALLOWER = 0.35;
+/** A sleepy cat's blinks take this much longer (at full weight). */
+const SLEEPY_BLINK_SLOWER = 1.1;
 
 const MAX_LAYER_DT_S = 0.1;
 /** Rate (1/s) at which the climb clip follows speed changes (start/stop on the wall without a pop). */
@@ -122,6 +171,16 @@ export class CatAnimator {
   private time = 0;
   private sleepK = 0;
   private breathPhase = 0;
+
+  /** Eased weight of each mood (indexed like MOODS), whether any is above MOOD_EPS, and the eased deep-sleep and reduced-motion switches. */
+  private readonly moodW = new Float64Array(MOODS.length);
+  private moodAny = false;
+  private depthK = 0;
+  private reduceK = 0;
+  /** Reduced motion: the low-passed tail keys (valid while the switch is on). */
+  private tailBaseLP = 0;
+  private tailCurlLP = 0;
+  private tailLPValid = false;
 
   private blinkTimer: number;
   private blinkAge = -1;
@@ -203,7 +262,8 @@ export class CatAnimator {
   update(input: AnimInput, simTimeMs: number, dtMs: number, motionX: number, motionY = 0): Pose {
     const dt = clamp(Number.isFinite(dtMs) ? dtMs / 1000 : 0, 0, MAX_LAYER_DT_S);
     const animSpeed = clamp(Number.isFinite(input.animSpeed) ? input.animSpeed : 1, 0.1, 3);
-    this.time += dt * animSpeed;
+    this.stepSwitches(input, dt);
+    this.time += dt * animSpeed * (1 - REDUCED_LAYER_SLOWDOWN * this.reduceK);
     const speed = Number.isFinite(input.speed) ? Math.max(0, input.speed) : 0;
 
     if (input.clip !== this.clip || input.clipStartedAt !== this.clipStart) {
@@ -267,6 +327,7 @@ export class CatAnimator {
     c.jumpKind = input.jumpKind ?? null;
     c.impact = input.impact;
     c.balance = input.balance;
+    c.reducedMotion = input.reducedMotion === true;
 
     sampleClip(input.clip, c, this.clipPose);
     sanitizePose(this.clipPose);
@@ -279,12 +340,15 @@ export class CatAnimator {
 
     const p = copyPose(this.pose, this.base);
     this.applyBreathing(p, input.sleeping, dt);
+    this.applySleepDepth(p);
     this.applyLook(p, c, dt);
     this.applyBlink(p, dt);
     this.applyEarTwitch(p, input.sleeping, c.arousal, dt);
     this.noteReaction(input.reaction, simTimeMs, animSpeed);
     this.applyReactions(p, simTimeMs, animSpeed);
     this.applyMood(p, input.clip, c.arousal, c.contentment);
+    this.applyMoodLayers(p, input.clip);
+    this.applyReducedMotion(p, dt);
     this.applyPurr(p);
     this.applySwing(p, input.clip, motionX, dt);
     if (this.offWallS < OFF_WALL_SHADOW_S[1]) p.shadow *= sseg(this.offWallS, OFF_WALL_SHADOW_S[0], OFF_WALL_SHADOW_S[1]);
@@ -292,11 +356,41 @@ export class CatAnimator {
     return p;
   }
 
+  /** Eases the mood weights, the deep-sleep depth and the reduced-motion switch towards this frame's input. */
+  private stepSwitches(input: AnimInput, dt: number): void {
+    const mood = typeof input.mood === 'string' ? (MOODS as readonly string[]).indexOf(input.mood) : -1;
+    let any = false;
+    for (let i = 0; i < MOODS.length; i++) {
+      const rate = MOOD_RATE[MOODS[i] as Mood];
+      const target = i === mood ? 1 : 0;
+      const w = damp(this.moodW[i]!, target, target > this.moodW[i]! ? rate.up : rate.down, dt);
+      this.moodW[i] = w < MOOD_EPS ? 0 : w;
+      if (w >= MOOD_EPS) any = true;
+    }
+    this.moodAny = any;
+    const depth = input.sleeping && Number.isFinite(input.sleepDepth) ? clamp01(input.sleepDepth as number) : 0;
+    this.depthK = damp(this.depthK, depth, DEPTH_RATE, dt);
+    if (this.depthK < MOOD_EPS) this.depthK = 0;
+    this.reduceK = damp(this.reduceK, input.reducedMotion === true ? 1 : 0, REDUCE_RATE, dt);
+    if (this.reduceK < MOOD_EPS) this.reduceK = 0;
+  }
+
+  /** Weight (0..1, eased) of a mood. */
+  private mood(m: Mood): number {
+    return this.moodW[(MOODS as readonly string[]).indexOf(m)] ?? 0;
+  }
+
+  /** How deep the sleep is right now: the eased depth, only as far as the cat has settled into sleeping. */
+  private get deep(): number {
+    return this.depthK * this.sleepK;
+  }
+
   private applyBreathing(p: Pose, sleeping: boolean, dt: number): void {
     this.sleepK = damp(this.sleepK, sleeping ? 1 : 0, 2, dt);
-    const period = lerp(2.5, 3.8, this.sleepK);
+    const deep = this.deep;
+    const period = lerp(2.5, 3.8, this.sleepK) * (1 + DEEP_BREATH_SLOWER * deep);
     this.breathPhase = (this.breathPhase + (dt * TAU) / period) % TAU;
-    const amp = lerp(0.022, 0.06, this.sleepK) * clamp(p.breath, 0, 2);
+    const amp = lerp(0.022, 0.06, this.sleepK) * (1 - DEEP_BREATH_SHALLOWER * deep) * clamp(p.breath, 0, 2);
     const b = amp * Math.sin(this.breathPhase);
     p.bodyY -= b * TORSO_T * p.bodyH;
     p.bodyH *= 1 + b;
@@ -360,7 +454,8 @@ export class CatAnimator {
       }
       return;
     }
-    this.blinkAge += dt;
+    // A sleepy cat's blink is slow: the lids take longer to close and to open again.
+    this.blinkAge += dt / (1 + SLEEPY_BLINK_SLOWER * this.mood('sleepy'));
     const end = this.blinkDouble ? 0.44 : 0.2;
     if (this.blinkAge >= end || !allowed) {
       this.blinkAge = -1;
@@ -377,7 +472,8 @@ export class CatAnimator {
       if (this.earTimer <= 0) {
         this.earAge = 0;
         this.earWhich = this.random() < 0.5 ? 0 : 1;
-        const base = sleeping ? 7 : 3.5;
+        // A deep sleeper hardly stirs: twice the pause at full depth.
+        const base = (sleeping ? 7 : 3.5) * (1 + this.deep);
         this.earTimer = base * (1 - 0.5 * arousal) + this.random() * base * 1.6;
       }
       return;
@@ -464,6 +560,149 @@ export class CatAnimator {
     p.earFR -= 0.1 * arousal * w;
     p.earBR -= 0.08 * arousal * w;
     p.pupilSize = clamp01(p.pupilSize + 0.3 * arousal);
+  }
+
+  /**
+   * Deep sleep: the body settles. Lower and rounder, the head resting nearer the ground, the ears
+   * drooping a touch. The belly stays on the ground (the lower torso edge is kept where it was).
+   */
+  private applySleepDepth(p: Pose): void {
+    const d = this.deep;
+    if (d <= 0) return;
+    p.bodyH *= 1 - 0.04 * d;
+    p.bodyLen *= 1 - 0.03 * d;
+    p.bodyY += 0.4 * d;
+    p.curl = Math.min(1, p.curl + 0.05 * d);
+    p.headY += 1.5 * d;
+    p.headRot -= 0.05 * d;
+    p.earBR += 0.05 * d;
+    p.earFR += 0.05 * d;
+  }
+
+  /**
+   * The mood layers: small additive tweaks on top of the clip, each scaled by its eased weight (so
+   * none pops) and the tail ones by how authored the clip's tail is. No mood = nothing touched.
+   * Ears are clamped afterwards to the ranges draw.ts expects.
+   */
+  private applyMoodLayers(p: Pose, clip: AnimClip): void {
+    if (!this.moodAny) return;
+    const t = this.time;
+    const tw = TAIL_AUTHORED.has(clip) ? MOOD_TAIL_AUTHORED : 1;
+    // Crouch and head-drop biases only make sense for a cat on its feet or sitting.
+    const posture = CLIP_META[clip]?.posture;
+    const grounded = posture === 'stand' || posture === 'sit' ? 1 : 0;
+
+    const happy = this.mood('happy');
+    if (happy > 0) {
+      // Tail up, soft eyes.
+      p.tailBase += 0.22 * tw * happy;
+      p.tailCurl += 0.12 * tw * happy;
+      p.eyeSquint += 0.12 * happy;
+      p.eyeOpen *= 1 - 0.08 * happy;
+      p.blush = Math.min(1, p.blush + 0.2 * happy);
+    }
+    const curious = this.mood('curious');
+    if (curious > 0) {
+      // Ears forward, the head tipped a little, alternately to either side.
+      p.earFR -= 0.12 * curious;
+      p.earBR -= 0.1 * curious;
+      p.headRot += 0.06 * curious * Math.sin(TAU * 0.13 * t);
+      p.pupilSize = clamp01(p.pupilSize + 0.08 * curious);
+    }
+    const sleepy = this.mood('sleepy');
+    if (sleepy > 0) {
+      // Heavy lids, drooping ears and head, a slow tail.
+      p.eyeOpen *= 1 - 0.4 * sleepy;
+      p.eyeSquint += 0.1 * sleepy;
+      p.earBR += 0.06 * sleepy;
+      p.earFR += 0.06 * sleepy;
+      p.headY += 1.2 * sleepy * grounded;
+      p.headRot -= 0.04 * sleepy;
+      p.tailCurl -= 0.1 * tw * sleepy;
+    }
+    const startled = this.mood('startled');
+    if (startled > 0) {
+      // Ears flat for a moment, pupils wide.
+      p.earBF += 0.45 * startled;
+      p.earFF += 0.45 * startled;
+      p.earBR += 0.15 * startled;
+      p.earFR += 0.15 * startled;
+      p.pupilSize = clamp01(p.pupilSize + 0.28 * startled);
+    }
+    const scared = this.mood('scared');
+    if (scared > 0) {
+      // Ears back, tail low and puffed, a crouch bias, wide pupils.
+      p.earBR += 0.35 * scared;
+      p.earFR += 0.3 * scared;
+      p.earBF += 0.3 * scared;
+      p.earFF += 0.3 * scared;
+      p.tailBase -= 0.5 * tw * scared;
+      p.tailCurl -= 0.3 * tw * scared;
+      p.tailPuff = clamp01(p.tailPuff + 0.35 * scared);
+      p.bodyY += 1.5 * scared * grounded;
+      p.headY += 3 * scared * grounded;
+      p.headX -= 1 * scared * grounded;
+      p.pupilSize = clamp01(p.pupilSize + 0.25 * scared);
+    }
+    const excited = this.mood('excited');
+    if (excited > 0) {
+      // Wide pupils and a faster, higher tail.
+      p.pupilSize = clamp01(p.pupilSize + 0.25 * excited);
+      p.tailBase += 0.15 * tw * excited;
+      p.tailCurl += 0.35 * tw * excited * Math.sin(TAU * 3.4 * t);
+      p.earFR -= 0.08 * excited;
+    }
+    const relaxed = this.mood('relaxed');
+    if (relaxed > 0) {
+      // Half-closed eyes, a slow tail.
+      p.eyeOpen *= 1 - 0.42 * relaxed;
+      p.eyeSquint += 0.08 * relaxed;
+      p.blush = Math.min(1, p.blush + 0.15 * relaxed);
+      p.earBR += 0.05 * relaxed;
+      p.tailCurl += 0.1 * tw * relaxed * Math.sin(TAU * 0.2 * t);
+    }
+    const confused = this.mood('confused');
+    if (confused > 0) {
+      // One ear up, the other out, the head tilting slowly, the pupils wandering.
+      p.earFR -= 0.25 * confused;
+      p.earBR += 0.12 * confused;
+      p.headRot += 0.08 * confused * Math.sin(TAU * 0.35 * t);
+      p.pupilX += 0.1 * confused * Math.sin(TAU * 0.35 * t + 1);
+    }
+
+    p.earBR = clamp(p.earBR, -0.6, EAR_BACK_LIMIT);
+    p.earFR = clamp(p.earFR, -0.6, EAR_BACK_LIMIT);
+    p.earBF = clamp01(p.earBF);
+    p.earFF = clamp01(p.earFF);
+    p.eyeSquint = clamp01(p.eyeSquint);
+    p.eyeOpen = clamp01(p.eyeOpen);
+  }
+
+  /**
+   * Reduced motion: the tail's swing is damped (its keys blend towards their own low-passed value, so
+   * the carriage stays and the lashing goes), the hop and the sideways shudder shrink, and a spinning
+   * cat never turns edge-on. Eased in and out, so toggling it never pops.
+   */
+  private applyReducedMotion(p: Pose, dt: number): void {
+    const k = this.reduceK;
+    if (k <= 0) {
+      this.tailLPValid = false;
+      return;
+    }
+    if (!this.tailLPValid) {
+      this.tailBaseLP = p.tailBase;
+      this.tailCurlLP = p.tailCurl;
+      this.tailLPValid = true;
+    } else {
+      this.tailBaseLP = damp(this.tailBaseLP, p.tailBase, REDUCED_TAIL_RATE, dt);
+      this.tailCurlLP = damp(this.tailCurlLP, p.tailCurl, REDUCED_TAIL_RATE, dt);
+    }
+    const blend = REDUCED_TAIL_BLEND * k;
+    p.tailBase = lerp(p.tailBase, this.tailBaseLP, blend);
+    p.tailCurl = lerp(p.tailCurl, this.tailCurlLP, blend);
+    p.offX *= 1 - REDUCED_SHUDDER_DAMP * k;
+    if (p.offY < 0) p.offY *= 1 - REDUCED_HOP_DAMP * k;
+    p.turnX = lerp(p.turnX, 1, REDUCED_SPIN_DAMP * k);
   }
 
   private applyPurr(p: Pose): void {
