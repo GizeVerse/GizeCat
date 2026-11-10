@@ -260,7 +260,7 @@ export abstract class SimSalience extends SimReactions {
     const habituation = this.surfaceHabit.register(`taskbar:${surfaceId}`, this.now);
     if (!this.reactions.take('taskbarReact', this.now, TASKBAR_REACT_GAP_MS)) return;
     const m = this.mover;
-    const t = this.cat.traits;
+    const t = this.traits;
     const st = this.cat.stats;
     const dist = this.ledgeDistanceBl(tb);
     const r = surfaceRelevance({
@@ -320,7 +320,7 @@ export abstract class SimSalience extends SimReactions {
     const s = a.state;
     if (PHYSICAL_STATES.has(s) || ASLEEP_STATES.has(s)) return;
     this.react('earFlick');
-    const t = this.cat.traits;
+    const t = this.traits;
     const st = this.cat.stats;
     if (this.typing || !(CALM_STATES.has(s) || s === 'walking') || st.energy < 0.4) return;
     if (!chance(this.random, 0.5 * t.playfulness * st.energy) || !this.reactions.take('taskbarHopOff', this.now, 60_000)) return;
@@ -440,7 +440,7 @@ export abstract class SimSalience extends SimReactions {
     const r = this.windowRelevanceFor(rect, 'unknown', excluded, false, 'move');
     // A private window being moved gets a glance at most.
     const calm = CALM_STATES.has(this.act.state) && !excluded;
-    if (r >= 0.2 && calm && !this.typing && chance(this.random, 0.5 * this.cat.traits.curiosity) && this.reactions.take('follow', this.now, 30_000)) {
+    if (r >= 0.2 && calm && !this.typing && chance(this.random, 0.5 * this.traits.curiosity) && this.reactions.take('follow', this.now, 30_000)) {
       if (this.request('walking', 'stimulus', { variant: 'follow', windowId: id, target: rectCenter(rect) }) === 'ok') return;
     }
     if (r >= 0.08) this.setGlance(rectCenter(rect), 2000);
@@ -495,7 +495,7 @@ export abstract class SimSalience extends SimReactions {
       speedDip,
       distBodyLengths: dist,
       cursorPlay: this.settings.behavior.cursorPlay,
-      playfulness: this.cat.traits.playfulness,
+      playfulness: this.traits.playfulness,
       energy: this.cat.stats.energy,
       acceptance: this.cat.memory.preferences.cursorPlayAcceptance,
       habituation: this.habit.register('flick', this.now),
@@ -514,7 +514,7 @@ export abstract class SimSalience extends SimReactions {
     const s = this.act.state;
     if (ASLEEP_STATES.has(s) || PHYSICAL_STATES.has(s)) return;
     if (events.includes('bigChange')) {
-      if (this.reactions.ready('bigChange', this.now) && chance(this.random, (1 - this.cat.traits.confidence) * 0.6 * sens)) {
+      if (this.reactions.ready('bigChange', this.now) && chance(this.random, (1 - this.traits.confidence) * 0.6 * sens)) {
         this.reactions.set('bigChange', this.now, 10 * 60_000);
         if (this.request('startled', 'stimulus', { target: isFinitePoint(changeCenter) ? changeCenter : null }) === 'ok') return;
       }
@@ -533,7 +533,7 @@ export abstract class SimSalience extends SimReactions {
     // A compact new thing appeared: a curious cat may go and have a look; otherwise a head tilt.
     if (events.includes('newElement') && isFinitePoint(changeCenter) && this.reactions.ready('newElement', this.now)) {
       this.reactions.set('newElement', this.now, 45_000);
-      const go = CALM_STATES.has(s) && !this.typing && chance(this.random, (0.2 + 0.5 * this.cat.traits.curiosity) * sens);
+      const go = CALM_STATES.has(s) && !this.typing && chance(this.random, (0.2 + 0.5 * this.traits.curiosity) * sens);
       if (go && this.request('curious', 'stimulus', { target: changeCenter }) === 'ok') return;
       if (!ACTIVE_STATES.has(s)) {
         this.setGlance(changeCenter, 1800);
@@ -543,7 +543,7 @@ export abstract class SimSalience extends SimReactions {
     }
     if (events.includes('motion') && CALM_STATES.has(s) && isFiniteRect(region) && chance(this.random, 0.4 * sens) && this.reactions.take('motion', this.now, 60_000)) {
       const target = isFinitePoint(changeCenter) ? changeCenter : rectCenter(region);
-      if (chance(this.random, 0.3 * this.cat.traits.curiosity) && !this.typing) this.request('curious', 'stimulus', { target });
+      if (chance(this.random, 0.3 * this.traits.curiosity) && !this.typing) this.request('curious', 'stimulus', { target });
       else if (s !== 'watchingUser') this.request('watchingUser', 'stimulus');
       else this.setGlance(target, 2000);
     }
@@ -647,7 +647,7 @@ export abstract class SimSalience extends SimReactions {
    */
   commandIgnoreChance(): number {
     const st = this.cat.stats;
-    const t = this.cat.traits;
+    const t = this.traits;
     const lowBond = clamp((0.35 - st.bond) / 0.35, 0, 1);
     const independence = (1 - t.affection) * (0.5 + 0.5 * t.confidence);
     // Asleep makes it likelier, but not the short nap every launch starts with.
@@ -671,7 +671,7 @@ export abstract class SimSalience extends SimReactions {
       category,
       excluded,
       novel,
-      curiosity: this.cat.traits.curiosity,
+      curiosity: this.traits.curiosity,
       sensitivity: this.settings.behavior.activitySensitivity,
       habituation: this.habit.register(kind, this.now),
       typing: this.typing,

@@ -41,7 +41,7 @@ export abstract class SimUtility extends SimSalience {
     const noTrips = this.tripsExhausted() || this.now < this.tripSettleUntil;
     const media = shown !== null && (shown.category === 'video' || shown.category === 'game' || shown.category === 'media');
     return {
-      traits: this.cat.traits,
+      traits: this.traits,
       stats: this.cat.stats,
       attentionAcceptance: this.cat.memory.preferences.attentionAcceptance,
       hotspotResting: this.hotspotInZone() && (env.cursorIdleMs ?? 0) >= 1000,

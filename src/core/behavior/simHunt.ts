@@ -219,7 +219,7 @@ export abstract class SimHunt extends SimStay {
     const cursorInFg = this.cursorInForeground(p);
     // The press hold only holds the start back: interest keeps building while the button is up, so a hand that
     // comes to rest near the cat is hunted when the hold ends. Typing is never prey.
-    d.huntDrive = stepHuntDrive(d.huntDrive, gate === 'typing' || gateIn.buttonDown ? 0 : qHat, huntGain(H, this.cat.traits.playfulness, d.playNeed), huntBaseline(H), dtS, gateIn.pettingZone);
+    d.huntDrive = stepHuntDrive(d.huntDrive, gate === 'typing' || gateIn.buttonDown ? 0 : qHat, huntGain(H, this.traits.playfulness, d.playNeed), huntBaseline(H), dtS, gateIn.pettingZone);
     this.huntThetaNow = huntThreshold(H, d.mischief, b.workDisruption, cursorInFg) + (this.quietContext() ? QUIET_CONTEXT_THETA : 0);
     // The cursor resting in the petting zone (not one passing through it) ends a running hunt.
     this.pettingZoneEvals = gate === 'petting' ? this.pettingZoneEvals + 1 : 0;
@@ -240,7 +240,7 @@ export abstract class SimHunt extends SimStay {
       return;
     }
     if (this.huntStartable()) this.startHunt();
-    else this.checkMischiefSwat(p);
+    else if (!this.laserModeOn()) this.checkMischiefSwat(p);
   }
 
   /** Video or fast app switching in front (ADR 0003 §1.4 C_c: every active candidate damped). */
@@ -269,6 +269,10 @@ export abstract class SimHunt extends SimStay {
     if (!this.huntReady()) return false;
     const a = this.act;
     if (a.cause === 'command' || a.cause === 'interaction') return false;
+    // A world event holds the body (it is never prey-hunting while it watches a mouse or runs from a wave).
+    if (a.variant === 'event') return false;
+    // Laser Mode: the cursor is a light, never prey (no hunt, no pounce, no catch).
+    if (this.laserModeOn() || a.variant === 'laser') return false;
     return activityClassOf(a.state, a.variant) === 'calm' && a.state !== 'chasingCursor';
   }
 
@@ -629,13 +633,13 @@ export abstract class SimHunt extends SimStay {
     const cur = this.cursorInfo();
     const prev = this.prevCursorDistBl;
     this.prevCursorDistBl = cur ? cur.distBodyLengths : null;
-    if (!cur || prev === null || this.dt <= 0 || this.mode !== 'normal' || this.typing) return;
+    if (!cur || prev === null || this.dt <= 0 || this.mode !== 'normal' || this.typing || this.laserModeOn()) return;
     const closing = ((prev - cur.distBodyLengths) * 1000) / this.dt;
     if (cur.distBodyLengths > 2 || closing < PLAY_RETREAT_APPROACH_BL_S || !cur.reachable) return;
     const a = this.act;
     if (!(a.state === 'idle' || a.state === 'watchingCursor' || (a.state === 'walking' && a.variant === 'wander'))) return;
     const st = this.cat.stats;
-    const t = this.cat.traits;
+    const t = this.traits;
     const cursorPlay = clamp(this.settings.behavior.cursorPlay, 0, 1);
     if (this.disabled.has('chaseCursor') || !(cursorPlay > 0) || t.playfulness < 0.5 || st.energy < 0.5 || st.annoyance > 0.3 || st.fear > 0.2) return;
     // v1.2: never while the raw typing gate holds, and not while wary (the slink rule decides then).
@@ -662,7 +666,7 @@ export abstract class SimHunt extends SimStay {
       return;
     }
     this.mover.faceToward(cur.point.x, this.now);
-    if (a.phase === 'main' && a.variant !== 'chatter' && cur.distBodyLengths < 3 && cur.speedDip > 200 && this.perSecond(0.3 * this.cat.traits.playfulness)) this.phase(a, 'crouch', 900);
+    if (a.phase === 'main' && a.variant !== 'chatter' && cur.distBodyLengths < 3 && cur.speedDip > 200 && this.perSecond(0.3 * this.traits.playfulness)) this.phase(a, 'crouch', 900);
     else if (a.phase === 'crouch' && this.phaseElapsed(a)) this.phase(a, 'main');
   }
 

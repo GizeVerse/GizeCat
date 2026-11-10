@@ -131,6 +131,15 @@ describe('clip mapping', () => {
     expect(clipFor('seekingAttention', 'meow', still)).toBe('meow');
     expect(clipFor('beingPetted', 'main', still)).toBe('petted');
     expect(clipFor('grooming', 'main', still)).toBe('groom');
+    // Living Companion body care and the laser body (simLaser.ts).
+    expect(clipFor('grooming', 'paw', still)).toBe('groom');
+    expect(clipFor('grooming', 'scratch', still)).toBe('scratch');
+    expect(clipFor('grooming', 'shake', still)).toBe('shake');
+    expect(clipFor('fallingAsleep', 'sit', still)).toBe('sit');
+    expect(clipFor('fallingAsleep', 'stretch', still)).toBe('stretch');
+    expect(clipFor('walking', 'sit', still)).toBe('sit');
+    expect(clipFor('walking', 'pawAt', still)).toBe('pawAt');
+    expect(clipFor('walking', 'loaf', still)).toBe('loaf');
     expect(clipFor('jumping', 'crouch', still)).toBe('crouch');
     expect(clipFor('jumping', 'air', { ...still, vy: -50 })).toBe('jump');
     expect(clipFor('jumping', 'air', { ...still, vy: 50 })).toBe('fall');

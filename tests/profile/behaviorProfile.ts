@@ -253,6 +253,9 @@ export function runProfile(sc: ProfileScenario): RunResult {
     surfaceDiagnostics: () => publicSim.surfaceDiagnostics(),
     surfaceDebugLines: () => publicSim.surfaceDebugLines(),
     behaviorProfile: () => publicSim.behaviorProfile(),
+    companionStatus: () => publicSim.companionStatus(),
+    journal: () => publicSim.journal(),
+    clearJournal: () => publicSim.clearJournal(),
   };
 
   const u = new User(

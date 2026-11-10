@@ -73,7 +73,12 @@ export type Variant =
   | 'playfulReaction'
   | 'avoid'
   /** walking: the slow, low retreat (slink rule, startled jump). */
-  | 'slink';
+  | 'slink'
+  // ---- Living Companion: a world event's invitation carried out by the cat's body (simCompanion.ts) ----
+  /** idle, walking, playing, resting, hiding: the body is held by a running world event and released when it ends. */
+  | 'event'
+  /** walking: Laser Mode, the cat follows the cursor-as-light and holds off short of it (simLaser.ts); never a hunt. */
+  | 'laser';
 
 export interface Candidate {
   state: BehaviorState;

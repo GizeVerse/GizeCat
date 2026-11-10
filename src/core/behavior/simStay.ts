@@ -158,7 +158,7 @@ export abstract class SimStay extends SimDrives {
       const prev = this.prevAttach;
       const arrivedBy: ArrivalRoute = arrivalRouteOf(prev, this.fallReason ?? this.lastFlightReason);
       // The stay intent, drawn once (ADR 0003 §2.1; Activity is not in it).
-      const t = this.cat.traits;
+      const t = this.traits;
       const intent = drawStayIntent(this.random, {
         stayLength: clamp(Number.isFinite(this.settings.behavior.stayLength) ? this.settings.behavior.stayLength : 0.5, 0, 1),
         laziness: t.laziness,
@@ -265,7 +265,7 @@ export abstract class SimStay extends SimDrives {
   protected leaveForRoom(): FollowUp | null {
     const st = this.stay;
     if (!st || st.leaving !== null || !this.onStay()) return null;
-    const t = this.cat.traits;
+    const t = this.traits;
     const safe = this.mover.leaveOptions().filter((o) => !o.emergency && (o.impact === null || o.dropDip <= this.safeDipNow));
     const choice = chooseLeave(this.random, safe, { heights: this.settings.behavior.heights, confidence: t.confidence, laziness: t.laziness, exploreNeed: this.cat.drives.exploreNeed, typing: this.typingRaw, disabled: this.disabled }, this.leaveHistory);
     if (!choice) return null;
@@ -280,7 +280,7 @@ export abstract class SimStay extends SimDrives {
    * runs it. `lonely`: the stay is cut short for company (§2.4), so the walk ends in asking for attention.
    */
   protected leaveStay(st: StayTrack, lonely = false): boolean {
-    const t = this.cat.traits;
+    const t = this.traits;
     const rescue = this.mover.emergencyLeaveOption();
     // The ways listed keep failing on a stay that should be over by now: the safety net (ADR 0003 §2.3).
     const netted = st.failedLeaves >= LEAVE_FAILURES_FOR_EMERGENCY && (st.overdue || this.now - st.since >= STAY_HARD_CAP_MS) ? rescue : null;
@@ -624,7 +624,7 @@ export abstract class SimStay extends SimDrives {
 
   /** Time for the urge to grow from 0 to 1, ms: personality-aware, within 3-8 min. */
   protected urgeTauMs(): number {
-    const t = this.cat.traits;
+    const t = this.traits;
     const c = (v: number): number => (Number.isFinite(v) ? clamp(v, 0, 1) : 0.5);
     const minutes = (5.5 * (0.75 + 0.5 * c(t.laziness))) / (0.7 + 0.4 * c(t.curiosity) + 0.2 * c(t.playfulness));
     return clamp(minutes, 3, 8) * 60_000;
@@ -950,7 +950,7 @@ export abstract class SimStay extends SimDrives {
   /** Off the wall: climbing down (`down`), else the leave options there (climb down, or a wall jump). */
   protected edgeLeave(v: EdgeVisit, down: boolean): void {
     const m = this.mover;
-    const t = this.cat.traits;
+    const t = this.traits;
     const opts = m.leaveOptions();
     let pick = opts.find((o) => o.kind === 'climbDown') ?? null;
     if (!down && this.subAllowed('screenEdgeWallJump')) {

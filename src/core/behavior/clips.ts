@@ -44,29 +44,37 @@ export type Phase =
   | 'tailChase'
   /** Walking: the low retreat gait; running: the flat-out dash. */
   | 'slink'
-  | 'sprint';
+  | 'sprint'
+  // ---- Living Companion body care (simLaser.ts) ----
+  /** Grooming: the hind-leg scratch and the full-body shake-off. */
+  | 'scratch'
+  | 'shake'
+  /** Grooming: washing a paw (drawn with the groom clip). */
+  | 'paw';
 
 type ClipRef = AnimClip | 'locomotion' | 'airborne' | 'stalkGait' | 'slinkGait' | 'sprintGait';
 
 export const CLIP_MAP: Readonly<Record<BehaviorState, Partial<Record<Phase, ClipRef>> & { main: ClipRef }>> = {
   sleeping: { main: 'sleep' },
   wakingUp: { main: 'wake', stretch: 'wake', settle: 'sit' },
-  fallingAsleep: { main: 'yawn', yawn: 'yawn', loaf: 'loaf', sleep: 'sleep' },
+  // 'sit' and 'stretch' lead into the yawn (a small settling sequence before sleep, simLaser.ts).
+  fallingAsleep: { main: 'yawn', yawn: 'yawn', loaf: 'loaf', sleep: 'sleep', sit: 'sit', stretch: 'stretch' },
   idle: { main: 'sit', stand: 'stand', sit: 'sit', meow: 'meow', stretch: 'stretch' },
-  walking: { main: 'locomotion', approach: 'locomotion', arrived: 'stand', crouch: 'crouch', slink: 'slinkGait' },
-  running: { main: 'locomotion', approach: 'locomotion', arrived: 'stand', sprint: 'sprintGait' },
+  // 'stalk' and 'sprint' are the world-event body's gaits (a sneak up on a prop, a dash away from a wave).
+  walking: { main: 'locomotion', approach: 'locomotion', arrived: 'stand', crouch: 'crouch', slink: 'slinkGait', stalk: 'stalkGait', sprint: 'sprintGait', sit: 'sit', pawAt: 'pawAt', loaf: 'loaf' },
+  running:{ main: 'locomotion', approach: 'locomotion', arrived: 'stand', sprint: 'sprintGait' },
   chasingCursor: { main: 'locomotion', approach: 'locomotion', stalk: 'stalkGait', pawAt: 'pawAt', look: 'sit', notice: 'crouch', crouch: 'crouch', bat: 'pawAt', swat: 'swat' },
   watchingCursor: { main: 'sit', crouch: 'crouch', loaf: 'loaf' },
   curious: { main: 'sit', approach: 'locomotion', look: 'sit' },
   inspectingWindow: { main: 'sit', approach: 'locomotion', look: 'sit', loaf: 'loaf' },
   watchingUser: { main: 'sit', approach: 'locomotion', sit: 'sit', loaf: 'loaf' },
-  playing: { main: 'crouch', crouch: 'crouch', pawAt: 'pawAt', rollOver: 'rollOver', zoomies: 'locomotion', hop: 'crouch', sit: 'sit', tailChase: 'tailChase' },
+  playing: { main: 'crouch', crouch: 'crouch', pawAt: 'pawAt', rollOver: 'rollOver', zoomies: 'locomotion', hop: 'crouch', sit: 'sit', tailChase: 'tailChase', swat: 'swat' },
   beingPetted: { main: 'petted' },
   startled: { main: 'startle' },
   annoyed: { main: 'annoyed', hiss: 'hiss', grumpy: 'grumpy', swat: 'swat' },
   seekingAttention: { main: 'sit', approach: 'locomotion', meow: 'meow', wait: 'sit' },
   resting: { main: 'loaf', loaf: 'loaf', sit: 'sit' },
-  grooming: { main: 'groom' },
+  grooming: { main: 'groom', paw: 'groom', scratch: 'scratch', shake: 'shake' },
   hiding: { main: 'hide', flee: 'locomotion', hide: 'hide' },
   held: { main: 'held' },
   jumping: { main: 'crouch', crouch: 'crouch', air: 'airborne' },

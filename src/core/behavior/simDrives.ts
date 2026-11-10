@@ -46,7 +46,8 @@ export abstract class SimDrives extends SimCore {
 
   /** Effective sleepiness now. */
   protected zEffNow(): number {
-    return zEff(this.cat.drives.sleepiness, this.cat.stats.energy);
+    // A chosen personality leans toward rest (restFactor) or away from it; exactly 1 for 'auto'.
+    return Math.min(1, zEff(this.cat.drives.sleepiness, this.cat.stats.energy) * this.restFactor);
   }
 
   protected stepDrivesOnce(ms: number): void {
@@ -69,7 +70,7 @@ export abstract class SimDrives extends SimCore {
         zoomies: s === 'playing' && (a.variant === 'zoomies' || a.variant === 'tailChase'),
         inspecting: s === 'curious' || s === 'inspectingWindow',
         opportunity: this.exploreOpportunity(),
-        traits: this.cat.traits,
+        traits: this.traits,
         stats: this.cat.stats,
         autonomy: unit(b.autonomy, 0.6),
         exploration: unit(b.exploration, 0.6),
@@ -117,8 +118,9 @@ export abstract class SimDrives extends SimCore {
     const nothingToClimb = fg?.maximized === true || this.nothingWithinReach();
     return {
       autonomy: unit(b.autonomy, 0.6),
-      energy: this.cat.stats.energy,
-      energyLevel: this.cat.traits.energyLevel,
+      // Calm personalities have fewer bursts of sudden activity (liveliness is exactly 1 for 'auto').
+      energy: this.cat.stats.energy * this.liveliness,
+      energyLevel: this.traits.energyLevel,
       playNeed: d.playNeed,
       // A need that nothing around can satisfy saturates and must not make the cat restless (B1c).
       exploreNeed: nothingToClimb ? 0 : d.exploreNeed,

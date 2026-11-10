@@ -75,8 +75,8 @@ export abstract class SimReactions extends SimHunt {
       return away ? { state: 'walking', init: { variant: 'slink', target: away, then: back } } : back;
     }
     const fear = this.cat.stats.fear;
-    if (fear > 0.45 && this.cat.traits.confidence < 0.6) return { state: 'hiding', init: { variant: 'flee' } };
-    if (a.target && chance(this.random, this.cat.traits.curiosity)) return { state: 'curious', init: { target: a.target } };
+    if (fear > 0.45 && this.traits.confidence < 0.6) return { state: 'hiding', init: { variant: 'flee' } };
+    if (a.target && chance(this.random, this.traits.curiosity)) return { state: 'curious', init: { target: a.target } };
     if (this.cursorInfo()) return { state: 'watchingCursor', init: {} };
     return { state: 'idle', init: {} };
   }
@@ -116,7 +116,7 @@ export abstract class SimReactions extends SimHunt {
    */
   protected rollThrowReaction(info: LandingInfo, trigger: 'throw' | 'roughDrag', speedDip: number): FollowUp {
     const d = this.cat.drives;
-    const t = this.cat.traits;
+    const t = this.traits;
     const st = this.cat.stats;
     const m = this.mover;
     const raw = severityOf(speedDip, info.impact);
@@ -135,7 +135,8 @@ export abstract class SimReactions extends SimHunt {
       bond: st.bond,
       recentStartles: clamp(this.startleTimes.length / 3, 0, 1),
       intensity: this.settings.interaction.reactionIntensity,
-      startleSensitivity: t.startleSensitivity,
+      // The chosen personality's startleScale (1 for 'auto') scales how jumpy it is, within the 0..1 the weights expect.
+      startleSensitivity: Math.min(1, Math.max(0, t.startleSensitivity * this.knobs.startleScale)),
       playfulness: t.playfulness,
       playNeed: d.playNeed,
       littleRoom,
@@ -155,7 +156,7 @@ export abstract class SimReactions extends SimHunt {
   protected reactionFollowUp(kind: ThrowReactionKind): FollowUp {
     const d = this.cat.drives;
     const st = this.cat.stats;
-    const t = this.cat.traits;
+    const t = this.traits;
     const cursor = this.env?.cursor ? { x: this.env.cursor.x, y: this.env.cursor.y } : null;
     switch (kind) {
       case 'shrug':
@@ -360,7 +361,7 @@ export abstract class SimReactions extends SimHunt {
         a.dwellMs = impactMs + a.counter;
         if (!thrown && !info.forced && this.mode === 'normal') {
           addStat(this.cat.stats, 'energy', -0.01);
-          if (this.cat.traits.confidence <= 0.7) addFear(this.cat.stats, this.cat.traits, 0.05);
+          if (this.traits.confidence <= 0.7) addFear(this.cat.stats, this.traits, 0.05);
         }
       }
     }
@@ -394,7 +395,7 @@ export abstract class SimReactions extends SimHunt {
     }
     // A hard impact from a high drop: a surprise (fear as a mild start), not a fright.
     if (reason === 'drop' && info.impact === 'hard') {
-      addFear(this.cat.stats, this.cat.traits, 0.15);
+      addFear(this.cat.stats, this.traits, 0.15);
       a.then = { state: 'startled', init: { variant: 'jolt', dwellMs: 800 } };
       return;
     }
@@ -475,7 +476,7 @@ export abstract class SimReactions extends SimHunt {
     const st = Number.isFinite(strength) ? clamp(strength, 0, 1) : 0.5;
     const irritated = this.irritatedByPetting();
     // Stroking a reacting or irritated cat does not soothe it (it irritates it further, below).
-    if (!irritated) applyPet(this.cat.stats, this.cat.traits, st);
+    if (!irritated) applyPet(this.cat.stats, this.traits, st);
     // v1.2 drives (ADR 0003 §1.2): a stroke satisfies the social need (never the play need); gentle
     // strokes soothe wariness, fear and irritability; frantic ones, or strokes right after a throw,
     // irritate a little (at most +0.1 per bout).
@@ -542,7 +543,7 @@ export abstract class SimReactions extends SimHunt {
       if (this.petTimes.filter((t) => t > this.now - 6000).length >= 3) this.request('beingPetted', 'interaction');
       return;
     }
-    const limit = 30 * (0.5 + this.cat.traits.affection);
+    const limit = 30 * (0.5 + this.traits.affection);
     if (this.petTimes.length > limit) {
       addStat(this.cat.stats, 'annoyance', 0.15);
       this.petTimes = [];
@@ -606,7 +607,7 @@ export abstract class SimReactions extends SimHunt {
       this.request('wakingUp', 'interaction');
       return;
     }
-    const playful = this.cat.stats.energy > 0.3 && !this.typing && chance(this.random, 0.4 + 0.5 * this.cat.traits.playfulness);
+    const playful = this.cat.stats.energy > 0.3 && !this.typing && chance(this.random, 0.4 + 0.5 * this.traits.playfulness);
     if (this.mode === 'normal' && playful && this.mover.grounded && this.request('playing', 'interaction', { variant: 'hop' }) === 'ok') return;
     this.setGlance(at, 1500);
     this.emotes.show(chance(this.random, 0.5) ? 'sparkle' : 'note', this.now, true);

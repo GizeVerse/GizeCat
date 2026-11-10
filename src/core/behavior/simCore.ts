@@ -4,6 +4,7 @@
 // models they use live in drives.ts, utility.ts, rhythm.ts, stay.ts, hunt.ts, reactions.ts,
 // salience.ts and watchdog.ts. Pure TypeScript; time, randomness and the environment are injected.
 import type { AnimClip, BehaviorState, CatReaction, CatReactionKind, CatSoundCue, SoundCue } from '../../shared/cat';
+import { WORLD_SOUND_CUES } from '../../shared/cat';
 import type {
   ArrivalRoute,
   BailOutKind,
@@ -23,7 +24,7 @@ import type {
 import { activityClassOf } from '../../shared/behaviorProfile';
 import type { SubBehavior } from '../../shared/behaviorGates';
 import { subBehaviorAllowed } from '../../shared/behaviorGates';
-import type { PersistedCat } from '../../shared/catState';
+import type { PersistedCat, Traits } from '../../shared/catState';
 import type { Point, Rect } from '../../shared/geometry';
 import type { WindowInfo } from '../../shared/world';
 import { clamp, isFiniteRect } from '../../shared/geometry';
@@ -47,6 +48,8 @@ import type { MemoryDetail } from './memory';
 import { bumpCounter, rankedSpots, remember } from './memory';
 import { migrateCatState } from './migrate';
 import { newPersistedCat } from './personality';
+import type { PersonalityKnobs } from './personalityProfiles';
+import { NEUTRAL_KNOBS } from './personalityProfiles';
 import { BehaviorProfileRecorder } from './profile';
 import type { Random } from './random';
 import { chance, range, safeRandom } from './random';
@@ -380,6 +383,14 @@ export const isFinitePoint = (p: Point | null | undefined): p is Point => !!p &&
 
 export abstract class SimCore {
   protected cat: PersistedCat;
+  /**
+   * Living Companion: the traits a chosen personality acts on (profile traits plus a little drift,
+   * personalityProfiles.ts effectiveTraits), or null for 'auto', where the born traits in `cat.traits`
+   * are used untouched. `cat.traits` itself is never overwritten: it is what is persisted and exported.
+   */
+  protected effTraits: Traits | null = null;
+  /** The knobs of the chosen personality; NEUTRAL_KNOBS for 'auto', so those cats behave exactly as before. */
+  protected knobs: PersonalityKnobs = NEUTRAL_KNOBS;
   protected settings: Settings;
   /** Switched-off behaviours: disabledBehaviorSet (both lists, the implied opt-outs). */
   protected disabled: ReadonlySet<BehaviorId>;
@@ -634,6 +645,24 @@ export abstract class SimCore {
 
   // ---- helpers ------------------------------------------------------------------
 
+  /** The traits every decision reads: the chosen personality's, else the cat's own (see effTraits). */
+  protected get traits(): Traits {
+    return this.effTraits ?? this.cat.traits;
+  }
+
+  /**
+   * Resting preference of the chosen personality as a multiplier (0.75 restless .. 1.25 sofa); exactly 1
+   * for 'auto', so the product of a value and this is bit-identical to the value.
+   */
+  protected get restFactor(): number {
+    return 1 + (this.knobs.restBias - 0.5) * 0.5;
+  }
+
+  /** Calmness of the chosen personality as a multiplier on sudden activity (0.7 calm .. 1.3 sharp); exactly 1 for 'auto'. */
+  protected get liveliness(): number {
+    return 1 - (this.knobs.calmness - 0.5) * 0.6;
+  }
+
   protected wall(): number {
     try {
       const w = this.wallClock();
@@ -650,7 +679,7 @@ export abstract class SimCore {
 
   protected moverConfig(): MoverConfig {
     const b = this.settings.behavior;
-    const t = this.cat.traits;
+    const t = this.traits;
     const limits = jumpDownLimitsFor(b.heights, t.confidence, this.cat.stats.energy);
     this.safeDipNow = limits.safeDip;
     return {
@@ -686,7 +715,7 @@ export abstract class SimCore {
   /** The jump-down limits follow the energy (ADR 0003 §6.3): re-sent when H_safe moved noticeably. */
   protected syncJumpLimits(): void {
     const b = this.settings.behavior;
-    const limits = jumpDownLimitsFor(b.heights, this.cat.traits.confidence, this.cat.stats.energy);
+    const limits = jumpDownLimitsFor(b.heights, this.traits.confidence, this.cat.stats.energy);
     if (Math.abs(limits.safeDip - this.safeDipNow) < 20) return;
     if (this.mover.setConfig(this.moverConfig())) this.snapNext = true;
   }
@@ -974,11 +1003,16 @@ export abstract class SimCore {
     return { x: m.x - m.bodyWidth / 2, y: m.y - m.bodyHeight, width: m.bodyWidth, height: m.bodyHeight };
   }
 
-  /** Queues a one-off sound for this tick's output (only while sounds are on; at most one per SOUND_MIN_GAP_MS). */
+  /**
+   * Queues a one-off sound for this tick's output (only while sounds are on, and its category is: the
+   * cat's own cues need sound.cat, the world's need sound.world; at most one per SOUND_MIN_GAP_MS). A
+   * sleeping cat makes no sound, but the world's thunder still rumbles.
+   */
   protected playSound(kind: SoundCue): void {
     const s = this.settings.sound;
-    if (!s.enabled || this.mode !== 'normal' || this.now - this.lastSoundAt < SOUND_MIN_GAP_MS) return;
-    if (kind !== 'purr' && ASLEEP_STATES.has(this.act.state)) return;
+    const world = WORLD_SOUND_CUES.has(kind);
+    if (!s.enabled || (world ? !s.world : !s.cat) || this.mode !== 'normal' || this.now - this.lastSoundAt < SOUND_MIN_GAP_MS) return;
+    if (!world && kind !== 'purr' && ASLEEP_STATES.has(this.act.state)) return;
     this.lastSoundAt = this.now;
     this.sound = { kind, at: this.now, volume: Number.isFinite(s.volume) ? clamp(s.volume, 0, 1) : 0.4 };
   }
@@ -1526,7 +1560,7 @@ export abstract class SimCore {
     if (!this.subAllowed('slip')) return;
     const m = this.mover;
     const risk = clamp(m.nextLegRisk, 0, 1);
-    const conf = clamp(this.cat.traits.confidence, 0, 1);
+    const conf = clamp(this.traits.confidence, 0, 1);
     const tired = 1 - clamp(this.cat.stats.energy, 0, 1);
     // The ADR's base 0.03 measured below B10's floor (0.2-0.3 /h at ~10-20 take-offs/h, SIMULATED), and fewer take-offs
     // may slip since landings on a floor do not (review RES-4): the band wins.
@@ -1632,7 +1666,9 @@ export abstract class SimCore {
   }
 
   protected currentSleepiness(): number {
-    return sleepiness({ stats: this.cat.stats, traits: this.cat.traits, localHour: this.env?.localHour ?? 12, darkBias: this.darkBias(), awakeMs: this.now - this.awakeSince });
+    const z = sleepiness({ stats: this.cat.stats, traits: this.traits, localHour: this.env?.localHour ?? 12, darkBias: this.darkBias(), awakeMs: this.now - this.awakeSince });
+    // restFactor is exactly 1 for 'auto': the product is the value itself.
+    return Math.min(1, z * this.restFactor);
   }
 
   /**
@@ -1647,6 +1683,16 @@ export abstract class SimCore {
 
   protected darkBias(): number {
     return this.now < this.darkUntil ? 1 : 0;
+  }
+
+  /** Laser Mode is on (the user asked for it): the cursor is a light for the cat, never prey (simLaser.ts). */
+  protected laserModeOn(): boolean {
+    return this.env?.laserMode === true;
+  }
+
+  /** Reduced motion, from the setting or the host's own preference (reducedMotion.ts holds the policy). */
+  protected reducedNow(): boolean {
+    return this.settings.companion.reducedMotion || this.env?.reducedMotion === true;
   }
 
   protected cursorInfo(): { point: Point; speedDip: number; distBodyLengths: number; reachable: boolean } | null {

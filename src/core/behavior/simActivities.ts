@@ -13,6 +13,15 @@ import { SimUtility } from './simUtility';
 import { ATTENTION_QUIET_MS, SURPRISE_COOLDOWN_MS, LANDING_MS, NAP_COOLDOWN_MS, NAP_DWELL_MUL, TRAVEL_TIMEOUT_MS, CLIMB_TIMEOUT_MS } from './simCore';
 
 export abstract class SimActivities extends SimUtility {
+  /** The point a world event shows the cat to look at (simCompanion.ts keeps it current every tick the event holds the body). */
+  protected eventLook: Point | null = null;
+
+  /** Implemented by the Living Companion layer: a world event holds the body (walking), keeps it still (idle, playing, resting), or let go of it. */
+  protected abstract updEventWalk(a: Activity): void;
+  protected abstract updEventStill(a: Activity): void;
+  /** True when the activity was a world event's body that no event holds any more, and it has been released this tick. */
+  protected abstract releaseStaleEventBody(a: Activity): boolean;
+
   // ---- activities -----------------------------------------------------------------
 
   protected override enterActivity(a: Activity): void {
@@ -30,6 +39,11 @@ export abstract class SimActivities extends SimUtility {
         this.phase(a, 'yawn', a.quick ? 350 : 1200);
         break;
       case 'idle':
+        // A world event holds the body (simCompanion.ts): no random draw, the event picks the pose each tick.
+        if (a.variant === 'event') {
+          this.phase(a, 'sit');
+          break;
+        }
         if (a.variant === 'stretch') {
           this.phase(a, 'stretch', 1600);
           a.dwellMs = Math.max(a.dwellMs, 2600);
@@ -120,7 +134,7 @@ export abstract class SimActivities extends SimUtility {
         this.playSound(a.variant === 'greet' ? 'trill' : 'meow');
         break;
       case 'resting':
-        this.phase(a, chance(this.random, 0.7) ? 'loaf' : 'sit');
+        this.phase(a, a.variant === 'event' ? 'loaf' : chance(this.random, 0.7) ? 'loaf' : 'sit');
         break;
       case 'hiding':
         this.enterHiding(a);
@@ -201,6 +215,8 @@ export abstract class SimActivities extends SimUtility {
 
   protected updateActivity(): void {
     const a = this.act;
+    // A world event's body that no event holds any more is released here, before its handler runs.
+    if (a.variant === 'event' && !a.done && this.releaseStaleEventBody(a)) return;
     switch (a.state) {
       case 'sleeping':
         return this.updSleeping(a);
@@ -215,6 +231,7 @@ export abstract class SimActivities extends SimUtility {
         else if (a.phase === 'loaf' && this.phaseElapsed(a)) this.finish({ state: 'sleeping', init: { variant: a.variant } });
         return;
       case 'idle':
+        if (a.variant === 'event') return this.updEventStill(a);
         if (this.pending) this.finish();
         else if (a.phase === 'stretch' && this.phaseElapsed(a)) this.phase(a, 'sit');
         else if (a.phase === 'stand' && this.now - a.phaseAt > 2500) this.phase(a, 'sit');
@@ -249,6 +266,7 @@ export abstract class SimActivities extends SimUtility {
         return this.updSeekAttention(a);
       case 'resting':
       case 'grooming':
+        if (a.variant === 'event') return this.updEventStill(a);
         this.stop();
         return;
       case 'hiding':
@@ -299,6 +317,7 @@ export abstract class SimActivities extends SimUtility {
 
   protected updMove(a: Activity): void {
     const env = this.env;
+    if (a.variant === 'event') return this.updEventWalk(a);
     if (a.variant === 'follow') {
       const rect = a.windowId ? this.windowRect(a.windowId, true) : null;
       if (!rect || this.now - a.startedAt > 6000) {
@@ -428,6 +447,9 @@ export abstract class SimActivities extends SimUtility {
 
   protected enterPlaying(a: Activity): void {
     switch (a.variant) {
+      case 'event':
+        this.phase(a, 'crouch');
+        return;
       case 'rollOver':
         this.phase(a, 'rollOver', range(this.random, 2500, 5000));
         return;
@@ -449,6 +471,8 @@ export abstract class SimActivities extends SimUtility {
 
   protected updPlaying(a: Activity): void {
     switch (a.variant) {
+      case 'event':
+        return this.updEventStill(a);
       case 'hop':
         this.stop();
         if (a.phase === 'hop') {
@@ -545,6 +569,8 @@ export abstract class SimActivities extends SimUtility {
     const a = this.act;
     const env = this.env;
     if (!env) return null;
+    // A cat held by a world event looks at what the event shows it (a hiding cat keeps an eye on the cursor).
+    if (a.variant === 'event' && a.state !== 'hiding') return this.eventLook;
     const cursor = env.cursor && Number.isFinite(env.cursor.x) && Number.isFinite(env.cursor.y) ? { x: env.cursor.x, y: env.cursor.y } : null;
     const shown = this.watchableForeground();
     const fg = shown ? rectCenter(shown.rect) : null;
