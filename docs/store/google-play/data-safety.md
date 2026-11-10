@@ -36,6 +36,7 @@ Why the app has no way to transmit (the Android items are pinned by `tests/unit/
 
 - **Device-to-device transfer.** On Android 12 and later, when the user moves to a new device with Android's own transfer, the system can copy the app's WebView storage so the cat comes along. Android does this at the user's direction; the app sends nothing, and it never reaches the developer.
 - **Uninstalling.** `hasFragileUserData` makes Android offer to keep the app's data on uninstall. Otherwise, uninstalling or clearing the app's data deletes the cat. Settings, **Start over with a new cat**, also deletes it. There is no server copy to delete, because none exists.
+- **The floating cat (preview 2).** Its window reads only touches that land inside it, to move the cat; nothing is stored or sent, and it reads nothing from other apps (no screen capture, no accessibility service, no usage access). The answers above do not change, but the permission declarations in [permissions.md](permissions.md) are new work for the owner.
 - **Web content.** Google asks for declarations when an app controls the content of its WebView. GizeCat does control it, and that content sends nothing, so the answer does not change.
 - **Status.** All of this is from reading the code and the build configuration. Nothing has run on a device, and no network capture has been made (THEORETICALLY_COMPATIBLE_NOT_EXECUTED).
 

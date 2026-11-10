@@ -6,7 +6,12 @@ the APK's assets, so the cat, its simulation, renderer and gesture rules are the
 The page recognises the Android host by its origin and skips the service worker there.
 
 Not Capacitor, by design (decision D1 of the 1.4.0 design pass): no npm dependencies, two AndroidX
-libraries, zero permissions, no JavaScript interface object.
+libraries, no JavaScript interface object. **1.4.0 preview 2 adds an optional floating cat**: a
+foreground service (`FloatingCatService`) with one small transparent overlay window
+(`OverlayWindow`) that runs the same web bundle (`index.html?surface=overlay`) and follows the cat
+over other apps. It needs four permissions, only for it, and the app is fully usable without them.
+Design, permissions, touch limits and install steps: [docs/platforms/android-overlay.md](../docs/platforms/android-overlay.md).
+It has compiled and packaged; it has never run on a device or emulator.
 
 ## Frozen identifiers
 
@@ -21,12 +26,14 @@ against this project by `tests/unit/android/androidProject.test.ts`.
 
 ## What the app does and does not do
 
-- **Permissions: none.** No `INTERNET`, so Android itself forbids network access. That is the third
+- **Permissions: four, all for the optional floating cat** (`SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`,
+  `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`), requested only when the user taps Float over
+  apps. No `INTERNET`, so Android itself forbids network access. That is the third
   layer, after the page's CSP (`connect-src 'none'`) and the native layer, which answers every request
-  outside `https://appassets.androidplatform.net/assets/` with an empty 404. There is no storage
-  permission either: files go through the Storage Access Framework, which needs none. No overlay
-  over other apps, no foreground service. The androidx.core receiver permission is removed from
-  the merged manifest.
+  outside `https://appassets.androidplatform.net/assets/` with an empty 404 (in the floating window
+  too). There is no storage permission either: files go through the Storage Access Framework, which
+  needs none. No accessibility service, no screen capture, no boot receiver. The androidx.core
+  receiver permission is removed from the merged manifest.
 - **WebView settings:** JavaScript and DOM storage on. File and content URL access, geolocation,
   automatic or multiple windows, zoom and media autoplay off. Mixed content is never allowed.
   WebView usage metrics are opted out. DevTools exist only in debuggable (developer `debug`) builds.
@@ -40,8 +47,10 @@ against this project by `tests/unit/android/androidProject.test.ts`.
   so they keep the live page. A night-mode, dock, language or font-scale change recreates the
   Activity on purpose, and the cat comes back from localStorage. Edge to edge, with the page padded
   to the safe area. The system bars use the page colours.
-- **No background work:** no service, foreground service, alarm, job, wake lock or
-  battery-optimisation request. Out of sight the WebView is paused and its timers stop.
+- **No background work except the user-started floating cat:** one foreground service
+  (`FloatingCatService`) that never starts by itself or restarts; no alarm, job, wake lock or
+  battery-optimisation request. Out of sight the app's WebView is paused and its timers stop (except
+  while the floating cat runs: the timers are process-wide).
 - **Lifecycle:** backgrounding pauses the WebView, so the page sees `visibilitychange: hidden`,
   saves the cat and naps. A lost renderer is replaced, at once while the app is in front and
   otherwise when it comes back, so a backgrounded app never starts a renderer the system would
@@ -61,8 +70,11 @@ against this project by `tests/unit/android/androidProject.test.ts`.
 
 ## Native file bridge (profile export and import)
 
-This is the only bridge between the page and Android
-(`app/src/main/java/io/github/gizeverse/gizecat/FileBridge.kt`). It is deliberately narrow.
+This is the bridge for files (`app/src/main/java/io/github/gizeverse/gizecat/FileBridge.kt`, the
+page global `gizecatNative`). It is deliberately narrow, like the other two, which belong to the
+floating cat: `gizecatFloating` (`FloatingBridge.kt`: a fixed set of operations from the app screen)
+and `gizecatOverlay` (`OverlayWindow.kt`, only inside the floating window). Each is one web message
+listener for the exact app origin, main frame only, with strict JSON shapes.
 
 1. **Import:** an `<input type="file">` in the page opens the system file picker
    (`ACTION_OPEN_DOCUMENT`, JSON and plain-text documents, one file). The user picks the file; the
@@ -132,6 +144,14 @@ last for that process only):
 & { $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'; $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"; android\gradlew.bat -p android --no-daemon :app:assembleRelease }
 ```
 
+**Preview builds.** `node scripts/with-lock.mjs android -- node scripts/android-gradle.mjs :app:assembleRelease
+:app:bundleRelease :app:assembleTrial --preview=1` builds a preview: `versionName` becomes
+`<version>-overlay.1`, the trial's `versionCode` becomes the release's plus 1 (so it installs over an
+earlier trial APK of the same key; the release `versionCode` is left alone, so a real release is never
+older than a preview), and the outputs go to `release/<version>-overlay.1/android/` with names
+carrying `overlay.1` and their own `SHA256SUMS-android.txt`. They never enter, replace or delete a
+file of `release/<version>/android/`.
+
 Version: `versionName` comes from `package.json`. `versionCode` = MAJOR×10000 + MINOR×100 + PATCH,
 so 1.4.0 gives 10400. The build fails if MINOR or PATCH reaches 100. The outputs carry no version
 control information (`vcsInfo { include = false }`), so the build machine's git state is not in them.
@@ -178,8 +198,9 @@ for sideloaded apps apply on certified devices; ADB installs are exempt.
 
 ## Status
 
-The project compiles and packages with Gradle on Windows (`:app:assembleTrial`, 1.4.0, with AGP's
-lint-vital check reporting no issues; `:app:assembleRelease`, unsigned, after the signing changes).
+The project compiles and packages with Gradle on Windows (`:app:assembleRelease`, `:app:bundleRelease`
+and `:app:assembleTrial` for preview 2, `--preview=1`, with AGP's lint-vital check passing; the
+release outputs unsigned).
 No release key exists, so the signed paths and the partial-key errors have never run. The app has
 never run on a device or emulator, so every runtime behaviour described above is
 THEORETICALLY_COMPATIBLE_NOT_EXECUTED until it runs on a real tablet.

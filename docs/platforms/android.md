@@ -2,7 +2,7 @@
 
 There are two ways to run GizeCat on an Android tablet: the **native app**, new in 1.4.0, and the **web app** installed from Chrome. Both show the same cat from the same web bundle. **Neither has run on an Android device or emulator.** The app was compiled and packaged with Gradle; that is all. Statuses use the 1.4.0 vocabulary in [README.md](README.md#status-vocabulary-for-140).
 
-In both, the cat lives **inside its own window**. A desktop-style overlay that lets touches through everywhere except the cat is ruled out by Android's touch rules: since Android 12, touches pass through another app's overlay only when it is at most 80 % opaque (BLOCKED_BY_PLATFORM). An optional overlay that would need the "Display over other apps" permission is NOT_IMPLEMENTED.
+By default the cat lives **inside its own window**. The native app can also **float over other apps** (1.4.0 preview 2, opt-in): a foreground service draws the cat in a small transparent window that follows it, behind Android's "Display over other apps" permission. That is IMPLEMENTED and compiled, and has **never run on a device**: the design, the permissions, the touch limits and the install steps are in [android-overlay.md](android-overlay.md). The web app (Chrome) cannot draw over other apps (BLOCKED_BY_PLATFORM). A desktop-style overlay that lets touches through everywhere except the cat is ruled out by Android's touch rules: Android gives an app window no input region, and since Android 12 touches pass through another app's overlay only when it is at most 80 % opaque (BLOCKED_BY_PLATFORM); the floating cat's window is therefore only the cat and a small margin, and touches in that margin are consumed.
 
 ## The native app
 
@@ -38,11 +38,14 @@ If something goes wrong: [troubleshooting](troubleshooting.md#android-tablets).
 
 ### Permissions
 
-**None.** The app's manifest requests no permission, so Android shows no permission prompt and lists none for it.
+**Four, all for the optional floating cat** ([why and what if missing](android-overlay.md#permissions-declared-in-the-manifest)). The app is fully usable without any of them being granted, and nothing asks for them until you tap **Float over apps**.
+- `SYSTEM_ALERT_WINDOW` ("Display over other apps"): never granted by the install. The app explains it, then opens Android's own settings page only when you ask; you turn it on there.
+- `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_SPECIAL_USE`: the service that keeps the cat on screen while other apps are in front.
+- `POST_NOTIFICATIONS` (Android 13+): shows the service's notification with Pause, Hide and Stop. Asked once, on the first start.
 - No internet permission, so Android itself forbids network access.
 - No storage permission. Profile files go through the system's own file picker and "save as" screen, at the place you choose.
-- No "Display over other apps", no foreground service, no location, camera or microphone. The WebView denies every web permission request.
-- No background work: no service, alarm, job, wake lock or battery-optimisation request.
+- No location, camera, microphone, accessibility, screen capture or boot receiver. The WebView denies every web permission request.
+- No background work except the floating cat's own foreground service, which only you start and which never restarts by itself: no alarm, job, wake lock or battery-optimisation request.
 
 ### What works and what does not
 
@@ -56,7 +59,7 @@ What exists in code (THEORETICALLY_COMPATIBLE_NOT_EXECUTED for every item; built
 - A third-party notices page, under Settings → About. From that page, Android's Back sends the app to the background; use its **Back to GizeCat** link.
 
 What it does not do:
-- Draw over other apps (see the top of this page).
+- Draw over other apps, unless you start the floating cat in the native app (see the top of this page); the web app never does.
 - Back up the cat to the cloud. Cloud backup is off by design (NOT_IMPLEMENTED).
 - Open links to other apps or websites. Navigation never leaves the app's own pages.
 - Show a cat on an outdated Android System WebView: the page says "GizeCat has not started" instead. Update Android System WebView from Google Play ([steps](troubleshooting.md#the-android-system-webview-is-too-old)).
@@ -94,7 +97,7 @@ The same web app as on the iPad ([ipados.md](ipados.md)), installed from Chrome.
 | Google Play listing | REQUIRES_OWNER_CREDENTIALS (developer account, data-safety form, privacy policy address, content rating). No listing exists |
 | Developer verification for sideloading | REQUIRES_OWNER_CREDENTIALS |
 | Trial APK | COMPILED_OR_PACKAGED; debug-signed; sideload trials only |
-| Overlay over other apps | Click-through: BLOCKED_BY_PLATFORM. Optional permission-based: NOT_IMPLEMENTED |
+| Floating cat over other apps (native app, preview 2) | IMPLEMENTED; COMPILED_OR_PACKAGED; runtime THEORETICALLY_COMPATIBLE_NOT_EXECUTED ([android-overlay.md](android-overlay.md)). Exact click-through: BLOCKED_BY_PLATFORM |
 | Licences page inside the app | IMPLEMENTED (Settings → About; a static page generated from [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md)); never run on a device |
 | Full privacy policy text inside the app | NOT_IMPLEMENTED (Settings has a short Privacy section) |
 

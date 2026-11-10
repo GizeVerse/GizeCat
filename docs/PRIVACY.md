@@ -102,7 +102,8 @@ The ARM64 installer is the same app with the ARM64 build of its native library. 
 
 ### The Android app
 
-- **No permissions at all.** No internet permission, so Android blocks every network request. No storage, overlay, location, camera or microphone permission. Every web permission request in the WebView is denied.
+- **Four permissions, only for the optional floating cat (1.4.0 preview 2),** and only when you start it: "Display over other apps" (you turn it on yourself, in Android's own settings page), a foreground service with a small private, silent notification, and on Android 13 and later the notification permission (asked once; declining changes nothing else). The floating cat is a small transparent window that only draws the cat. It cannot see what is under it: no screen capture, no accessibility service, no usage access, no window titles. It reads only touches that land inside its own window, to move the cat; nothing about them is stored or sent. It never starts by itself, not even after a reboot. Without these permissions the cat lives inside the app. ([Details](platforms/android-overlay.md).)
+- **No internet permission,** so Android blocks every network request. No storage, location, camera or microphone permission. Every web permission request in the WebView is denied.
 - **No network:** three layers (no internet permission; a native layer that answers every request outside the app's own files with an empty "not found"; CSP `connect-src 'none'`).
 - **No telemetry:** WebView usage metrics are opted out.
 - **Data:** the cat and its settings live in the WebView's storage inside the app's private storage, with the same two keys as the web app. Nothing syncs.

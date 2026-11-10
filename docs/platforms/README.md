@@ -17,6 +17,7 @@ Pages:
 - [signing-overview.md](signing-overview.md): where signing stands on every platform, and each artifact's exact signing status.
 - [windows-signing.md](windows-signing.md): Authenticode for the Windows installers (SignPath, or your own certificate).
 - [macos-signing.md](macos-signing.md): Developer ID signing, notarization and stapling.
+- [android-overlay.md](android-overlay.md): the floating cat over other apps on Android (1.4.0 preview 2): design, permissions, touch limits, install.
 - [android-signing.md](android-signing.md): the owner's procedure for the Android release key.
 - [release-owner-actions.md](release-owner-actions.md): everything only the owner can do, in order.
 
@@ -29,22 +30,22 @@ It is the same cat everywhere. Every version runs the same behaviour simulation 
 | Windows PCs | `Desktop-Cat-Setup-1.4.0-x64.exe` or `Desktop-Cat-Setup-1.4.0-arm64.exe` | The desktop app: a transparent, click-through overlay over your desktop |
 | Macs | `Desktop Cat.app` from `GizeCat-1.4.0-mac-x64-adhoc.zip` or `GizeCat-1.4.0-mac-arm64-adhoc.zip` (ad-hoc signed, not notarized), or from a notarized DMG or zip once the owner has built one | The same desktop app, following macOS conventions (menu bar, Dock) |
 | iPads | The GizeCat web app, added to the Home Screen from Safari, once it is hosted | The cat inside its own app window |
-| Android tablets | The GizeCat Android app once it is signed, the debug-signed trial APK for sideload trials, or the web app from Chrome once it is hosted | The cat inside its own app window |
+| Android tablets | The GizeCat Android app once it is signed, the debug-signed trial APK for sideload trials, or the web app from Chrome once it is hosted | The cat inside its own app window; in the native app, optionally floating over other apps |
 
 ## What differs, and why
 
 | Topic | Windows | macOS | iPad | Android tablet |
 |---|---|---|---|---|
-| Over other apps | Yes: a transparent overlay; only the cat takes clicks | Yes: the same overlay as a floating panel | No. iPadOS has no API for it (BLOCKED_BY_PLATFORM) | No. A click-through overlay is ruled out by Android's touch rules (BLOCKED_BY_PLATFORM); an optional permission-based overlay is NOT_IMPLEMENTED |
-| Where the cat walks | Floor, window tops and sides, the auto-hiding taskbar, Edge and Chrome tab strips | The floor of each screen only | The floor of the app window | The floor of the app window |
+| Over other apps | Yes: a transparent overlay; only the cat takes clicks | Yes: the same overlay as a floating panel | No. iPadOS has no API for it (BLOCKED_BY_PLATFORM) | Opt-in, from preview 2: a small transparent window that follows the cat, behind "Display over other apps" (IMPLEMENTED, never run; [guide](android-overlay.md)). Exact click-through is BLOCKED_BY_PLATFORM: touches in the window's margin around the cat are consumed |
+| Where the cat walks | Floor, window tops and sides, the auto-hiding taskbar, Edge and Chrome tab strips | The floor of each screen only | The floor of the app window | The floor of the app window, or of the whole screen with the floating cat |
 | Input | Mouse | Mouse or trackpad | Touch | Touch |
 | Starts at sign-in | On by default (a one-time notice says so; you can turn it off) | Off by default; you can turn on "Open at login" | Not applicable | Not applicable |
 | Screen analysis and AI vision | Optional, off by default | Not available (fails closed; no permission is requested) | Not available | Not available |
-| Permissions it asks for | None (per-user install, no administrator rights) | None | None | None |
+| Permissions it asks for | None (per-user install, no administrator rights) | None | None | None, unless you start the floating cat: then "Display over other apps", a foreground-service notification (Android 13+: notification permission) |
 | Where the cat is stored | `%APPDATA%\Desktop Cat` | `~/Library/Application Support/Desktop Cat` | The web app's storage on the iPad | The app's private storage, or Chrome's storage |
 | Updates | Install the new version over the old one | Replace the app | The host updates the files. The new version downloads in the background; close the app and open it again to start it | Install the new APK, or the web app updates as on the iPad |
 
-**Why the cat climbs windows only on Windows.** On Windows, window positions, the taskbar and browser tab strips come from Win32 and UI Automation, and that code ran on hardware for 1.1 to 1.3. On macOS the only permission-free source of other windows' positions needs native code that has never run on a Mac, so 1.4.0 keeps the cat on the floor. Tablets show the cat inside its own window, so there are no other windows to climb.
+**Why the cat climbs windows only on Windows.** On Windows, window positions, the taskbar and browser tab strips come from Win32 and UI Automation, and that code ran on hardware for 1.1 to 1.3. On macOS the only permission-free source of other windows' positions needs native code that has never run on a Mac, so 1.4.0 keeps the cat on the floor. Tablets show the cat inside its own window, so there are no other windows to climb; even the Android floating cat cannot see other apps' windows, so it walks only on the screen floor.
 
 **Why tablets get the web app.** The web app is the same character code as the desktop app, it needs no permissions, and it is the only route that this project can build without store accounts. The Android app wraps that same web bundle with a hardened WebView and no permissions ([decision record](../gizeverse/14-android-app.md)). A native iPad app was evaluated and is not justified now: it would add nothing the web app cannot do, and an App Store release needs the owner's Apple Developer Program enrollment ([ipados.md](ipados.md)).
 
@@ -73,7 +74,7 @@ The per-feature [capability matrix](../gizeverse/capability-matrix.md) uses an o
 | macOS Apple Silicon (arm64) | IMPLEMENTED | COMPILED_OR_PACKAGED: ad-hoc zip, statically inspected only | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Ad-hoc signed, not notarized. Developer ID and notarization: REQUIRES_OWNER_CREDENTIALS | IMPLEMENTED |
 | macOS universal | IMPLEMENTED (configuration) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED (it can only be built on a Mac) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS | IMPLEMENTED |
 | iPadOS web app (Safari, Home Screen) | IMPLEMENTED | COMPILED_OR_PACKAGED (static web bundle) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Public HTTPS hosting: REQUIRES_OWNER_CREDENTIALS (expected address `https://gizeverse.github.io/GizeCat/`, not deployed). App Store app: NOT_IMPLEMENTED | BLOCKED_BY_PLATFORM |
-| Android tablet app | IMPLEMENTED | COMPILED_OR_PACKAGED (trial APK; release APK and AAB unsigned) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (release key, Google Play, developer verification). The signing pipeline is IMPLEMENTED and has never run | Click-through overlay: BLOCKED_BY_PLATFORM. Optional permission-based overlay: NOT_IMPLEMENTED |
+| Android tablet app | IMPLEMENTED | COMPILED_OR_PACKAGED (trial APK; release APK and AAB unsigned) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (release key, Google Play, developer verification). The signing pipeline is IMPLEMENTED and has never run | Floating cat over other apps (native app, opt-in, preview 2): IMPLEMENTED, COMPILED_OR_PACKAGED, runtime THEORETICALLY_COMPATIBLE_NOT_EXECUTED ([guide](android-overlay.md)). Exact click-through: BLOCKED_BY_PLATFORM |
 | Android tablet web app (Chrome) | IMPLEMENTED | COMPILED_OR_PACKAGED (same web bundle) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Public HTTPS hosting: REQUIRES_OWNER_CREDENTIALS (same expected address, not deployed) | BLOCKED_BY_PLATFORM |
 
 Two Windows details: the x64 build on Windows 11 on Arm runs under emulation (THEORETICALLY_COMPATIBLE_NOT_EXECUTED), and the x64 build cannot run on Windows 10 on Arm, which has no x64 emulation (BLOCKED_BY_PLATFORM).
