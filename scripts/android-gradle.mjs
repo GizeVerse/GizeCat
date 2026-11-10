@@ -4,10 +4,12 @@
 // production web bundle into the app (scripts/build-web-app.mjs). Heavy: run it under
 // scripts/with-lock.mjs on a shared machine (the npm scripts android:apk/aab/trial do).
 //
-// Usage: node scripts/android-gradle.mjs <gradle tasks and options...> [--no-web] [--no-collect]
+// Usage: node scripts/android-gradle.mjs <gradle tasks and options...> [--no-web] [--no-collect] [--preview=N]
 //   --no-web      skip build-web-app (android/app/src/main/assets must already hold the bundle)
 //   --no-collect  leave the outputs in android/app/build/outputs instead of also copying them to
 //                 release/<version>/android/ with SHA256SUMS-android.txt
+//   --preview=N   a preview build: versionName <version>-overlay.N, and the outputs go to
+//                 release/<version>-overlay.N/android/ (never into the release folder)
 // Examples: node scripts/android-gradle.mjs :app:assembleRelease
 //           node scripts/android-gradle.mjs :app:bundleRelease :app:assembleTrial
 //
@@ -38,7 +40,20 @@ const win = process.platform === 'win32';
 const argv = process.argv.slice(2);
 const noWeb = argv.includes('--no-web');
 const noCollect = argv.includes('--no-collect');
-const gradleArgs = argv.filter((a) => a !== '--no-web' && a !== '--no-collect');
+// --preview=N (1..99): a preview build (docs/platforms/android-overlay.md). Gradle gets
+// -PgizecatPreview=N (versionName "<version>-overlay.N"), and the outputs are collected into
+// release/<version>-overlay.N/android under names carrying that label, so a preview can never
+// replace, or be mistaken for, a file of the release folder release/<version>/android.
+const previewArg = argv.find((a) => a.startsWith('--preview='));
+const preview = previewArg === undefined ? null : /^--preview=(\d{1,2})$/.exec(previewArg)?.[1] ?? null;
+if (previewArg !== undefined && (preview === null || Number(preview) < 1)) {
+  console.error('android-gradle: --preview must be --preview=N with N from 1 to 99');
+  process.exit(1);
+}
+const gradleArgs = [
+  ...argv.filter((a) => a !== '--no-web' && a !== '--no-collect' && !a.startsWith('--preview=')),
+  ...(preview === null ? [] : [`-PgizecatPreview=${Number(preview)}`]),
+];
 // The tasks this run asks for: options and the value of -x are not, and a dry run builds nothing.
 const tasks = gradleArgs.filter((a, i) => !a.startsWith('-') && !['-x', '--exclude-task'].includes(gradleArgs[i - 1]));
 const dryRun = gradleArgs.includes('--dry-run') || gradleArgs.includes('-m');
@@ -174,7 +189,9 @@ function recordedApkName(dir) {
  * but its own file, so a trial built after a release leaves the release APK alone.
  */
 function requestedOutputs() {
-  const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  const baseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  // A preview is its own label everywhere below: names, folder and checksum prefix.
+  const version = preview === null ? baseVersion : `${baseVersion}-overlay.${Number(preview)}`;
   const out = path.join(androidDir, 'app', 'build', 'outputs');
   const files = [];
   if (asked('assembleRelease')) {

@@ -35,11 +35,14 @@ import java.io.ByteArrayInputStream
  *   permission, so the OS forbids network access anyway);
  * - no file:// or content:// loading, no geolocation, no new windows, no zoom, no DevTools in
  *   release or trial builds, no addJavascriptInterface;
- * - the only native bridge is [FileBridge]: the system file picker for `<input type=file>` and a
- *   save-to-file message, both through the Storage Access Framework (no storage permission);
- * - on the cat's page, Back runs one fixed script, [CLOSE_TOP_DIALOG_JS], that closes the page's
- *   open `<dialog>` (the settings sheet), and no page data is ever put into a script; on any other
- *   page of ours (the notices) Back returns to the cat and runs no script.
+ * - the page's native bridges are two narrow web message listeners: [FileBridge] (the system file
+ *   picker for `<input type=file>` and a save-to-file message, both through the Storage Access
+ *   Framework, no storage permission) and [FloatingBridge] (start, stop, pause and hide the floating
+ *   cat, preview 2). The floating cat's own window has a third, `gizecatOverlay`, in [OverlayWindow];
+ * - Back runs one fixed script, [CLOSE_TOP_DIALOG_JS], that closes the page's open `<dialog>` (the
+ *   settings sheet), and the notification's "open settings" runs one more fixed script,
+ *   [OPEN_SETTINGS_JS]; no page data is ever put into a script. On any other page of ours (the
+ *   notices) Back returns to the cat and runs no script.
  */
 class MainActivity : Activity() {
     companion object {
@@ -59,6 +62,12 @@ class MainActivity : Activity() {
         private const val MAX_LOSSES = 3
         private const val LOSS_WINDOW_MS = 60_000L
 
+        /** The floating cat's notification opens the app on its settings: an Intent extra, never data from the page. */
+        const val EXTRA_OPEN_SETTINGS = "io.github.gizeverse.gizecat.OPEN_SETTINGS"
+
+        /** Opens the settings sheet by pressing its own button. A fixed constant: no data is ever interpolated into it. */
+        const val OPEN_SETTINGS_JS = "(function(){var b=document.getElementById('btn-settings');if(b)b.click();})()"
+
         /**
          * Back, asked of the page first: closes the topmost open `<dialog>` (the app has one, the
          * settings sheet, which also holds the profile-import preview) and answers whether it did.
@@ -74,7 +83,12 @@ class MainActivity : Activity() {
 
     private lateinit var root: FrameLayout
     private lateinit var fileBridge: FileBridge
+    private lateinit var floatingBridge: FloatingBridge
     private var webView: WebView? = null
+
+    /** The notification asked for the settings sheet; it opens once the cat's page has loaded. */
+    private var openSettingsPending = false
+    private var pageReady = false
 
     /** Elapsed-realtime stamps of renderer crashes (not system kills) within [LOSS_WINDOW_MS]. */
     private val renderCrashes = ArrayDeque<Long>()
@@ -113,6 +127,11 @@ class MainActivity : Activity() {
             isAppearanceLightNavigationBars = !night
         }
         fileBridge = FileBridge(this)
+        floatingBridge = FloatingBridge(this)
+        // Only for a fresh launch from the notification: a recreation (night mode, language, font size)
+        // or a restore would re-deliver the same Intent and open the sheet again.
+        openSettingsPending = savedInstanceState == null && intent?.getBooleanExtra(EXTRA_OPEN_SETTINGS, false) == true
+        intent?.removeExtra(EXTRA_OPEN_SETTINGS)
         attachWebView()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Android 13+ (the manifest opts in to predictive back): Back arrives here, never in
@@ -153,6 +172,8 @@ class MainActivity : Activity() {
         wv.webChromeClient = fileBridge.chromeClient
         // Before loadUrl, so the page's first load already has the bridge object.
         fileBridge.attach(wv)
+        floatingBridge.attach(wv)
+        pageReady = false
         // pauseTimers() in onStop is process-wide and outlives the WebView it was called on, so a
         // WebView created after a loss would otherwise start with its JavaScript timers paused.
         // attachWebView only runs from onCreate or while the Activity is resumed.
@@ -166,6 +187,7 @@ class MainActivity : Activity() {
 
     private fun detachWebView(view: WebView) {
         fileBridge.detach(view)
+        floatingBridge.detach(view)
         (view.parent as? ViewGroup)?.removeView(view)
         view.destroy()
         if (webView === view) {
@@ -218,6 +240,14 @@ class MainActivity : Activity() {
         /** Navigation never leaves our own pages, and no link ever opens another app. */
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = !isOwn(request?.url)
 
+        override fun onPageFinished(view: WebView?, url: String?) {
+            if (view !== webView) return
+            val path = url?.let { Uri.parse(it).path }
+            if (path != "${ASSET_PATH}index.html") return
+            pageReady = true
+            openSettingsIfReady()
+        }
+
         /**
          * Only a crash (detail.didCrash(), API 26+) counts toward [MAX_LOSSES]. A renderer the system
          * killed to reclaim memory, usually while the app is in the background, is not the page's
@@ -246,6 +276,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        FloatingState.appStarted = true
         onReopened()
         webView?.resumeTimers()
     }
@@ -254,6 +285,20 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         onReopened()
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)) {
+            intent.removeExtra(EXTRA_OPEN_SETTINGS)
+            openSettingsPending = true
+            openSettingsIfReady()
+        }
+    }
+
+    /** Presses the page's own Settings button once, when the notification asked for it and the page is up. */
+    private fun openSettingsIfReady() {
+        val wv = webView ?: return
+        if (!openSettingsPending || !pageReady) return
+        openSettingsPending = false
+        wv.evaluateJavascript(OPEN_SETTINGS_JS, null)
     }
 
     override fun onResume() {
@@ -261,6 +306,17 @@ class MainActivity : Activity() {
         resumed = true
         reattachIfPending()
         webView?.onResume()
+        // The overlay permission or the notification setting may have changed while the app was away.
+        floatingBridge.onResume()
+    }
+
+    /** The Android 13+ notification dialog closed: the page re-reads whether notifications can be shown. */
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == FloatingBridge.REQUEST_NOTIFICATIONS) {
+            floatingBridge.pushState()
+            FloatingState.refresh()
+        }
     }
 
     /** The page sees visibilityState "hidden", saves the cat synchronously and naps. */
@@ -271,7 +327,10 @@ class MainActivity : Activity() {
     }
 
     override fun onStop() {
-        webView?.pauseTimers()
+        FloatingState.appStarted = false
+        // pauseTimers() is process-wide: while the cat floats over other apps it would freeze the
+        // floating window's JavaScript too. The service pauses them itself when it stops (OverlayWindow.destroy).
+        if (!FloatingState.running) webView?.pauseTimers()
         super.onStop()
     }
 

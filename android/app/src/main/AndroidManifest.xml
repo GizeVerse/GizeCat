@@ -1,11 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  GizeCat for Android tablets (android/README.md).
-  No permissions at all: no INTERNET (the OS itself forbids network access), no storage permission
-  (the Storage Access Framework needs none), no overlay, no foreground service.
+  GizeCat for Android tablets (android/README.md). Every permission below serves the floating cat
+  (1.4.0 preview 2) and nothing else; the app is fully usable without any of them being granted:
+  - SYSTEM_ALERT_WINDOW ("Display over other apps"): draws the cat in a small transparent window
+    above other apps. A special permission: it is never granted by the install; the user turns it on
+    in Android's own settings page, which the app opens only when asked to
+    (docs/platforms/android-overlay.md, "Permissions").
+  - FOREGROUND_SERVICE and FOREGROUND_SERVICE_SPECIAL_USE: the service that keeps the cat alive while
+    other apps are in front (Android 14 needs a declared type; the type and its subtype are below).
+  - POST_NOTIFICATIONS (Android 13+): shows the service's notification with its Pause, Hide and Stop
+    buttons. Asked once, and only when the floating cat is first started; declining changes nothing
+    else (the same buttons are on the app screen).
+  Still absent: INTERNET (the OS itself forbids network access), storage permissions (the Storage
+  Access Framework needs none), RECEIVE_BOOT_COMPLETED (the cat never starts by itself),
+  accessibility, and screen capture or reading.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
@@ -53,5 +69,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          The floating cat's foreground service (FloatingCatService.kt). Not exported: only the app's
+          own screen and its own notification buttons (explicit intents) can reach it. specialUse,
+          because no predefined type fits "keeps a transparent pet window over other apps alive";
+          the subtype below is what Google Play's foreground-service declaration asks for.
+        -->
+        <service
+            android:name=".FloatingCatService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user's floating desktop-pet cat window displayed over other apps while it is running. Started and stopped only by the user." />
+        </service>
     </application>
 </manifest>

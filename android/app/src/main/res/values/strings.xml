@@ -3,4 +3,16 @@
     <string name="app_name">GizeCat</string>
     <string name="webview_unavailable">GizeCat needs Android System WebView. Update or enable it, then open GizeCat again.</string>
     <string name="renderer_failed">GizeCat stopped drawing several times. Close the app and open it again.</string>
+
+    <!-- The floating cat's notification (a foreground service must show one). Minimal, with the controls. -->
+    <string name="floating_channel_name">Floating cat</string>
+    <string name="floating_channel_description">Shown while your cat floats over other apps. Use its buttons to pause, hide or stop the cat.</string>
+    <string name="floating_notification_running">Your cat is floating over your apps. Tap to open the settings.</string>
+    <string name="floating_notification_paused">Your cat is paused where it stands.</string>
+    <string name="floating_notification_hidden">Your cat is hidden.</string>
+    <string name="floating_action_pause">Pause</string>
+    <string name="floating_action_resume">Resume</string>
+    <string name="floating_action_hide">Hide</string>
+    <string name="floating_action_show">Show</string>
+    <string name="floating_action_stop">Stop</string>
 </resources>

@@ -18,6 +18,15 @@ val (appMajor, appMinor, appPatch) = versionParts
 require(appMinor < 100 && appPatch < 100) { "versionCode needs MINOR and PATCH below 100, got $appVersion" }
 val appVersionCode: Int = appMajor * 10000 + appMinor * 100 + appPatch
 
+// Preview builds (docs/platforms/android-overlay.md): -PgizecatPreview=N (1..99) names a build that
+// is not the release, so it can never be mistaken for it: versionName gets "-overlay.N" (every build
+// type), and the sideload TRIAL build's versionCode becomes appVersionCode + N, so it installs as an
+// update over an earlier trial APK of the same version (same applicationId, same debug key). The
+// release build's versionCode is left alone: a real release must never be older than a preview.
+val previewNumber: Int? = providers.gradleProperty("gizecatPreview").orNull?.let { raw ->
+    raw.toIntOrNull()?.takeIf { it in 1..99 } ?: error("-PgizecatPreview must be a whole number from 1 to 99, got \"$raw\"")
+}
+
 // Release signing (owner procedure: docs/platforms/android-signing.md). The first source that holds
 // anything wins:
 //   1. The environment, for CI: the four variables below. A blank value counts as unset, because a
@@ -72,6 +81,7 @@ android {
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersion
+        versionNameSuffix = previewNumber?.let { "-overlay.$it" } ?: ""
     }
 
     signingConfigs {
@@ -113,6 +123,13 @@ android {
 
     dependenciesInfo {
         includeInApk = false
+    }
+}
+
+// The trial build of a preview installs over an earlier trial APK (see previewNumber above).
+androidComponents {
+    onVariants(selector().withBuildType("trial")) { variant ->
+        previewNumber?.let { n -> variant.outputs.forEach { it.versionCode.set(appVersionCode + n) } }
     }
 }
 

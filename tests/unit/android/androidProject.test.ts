@@ -1,7 +1,8 @@
 // The Android app (android/, guide in android/README.md), checked statically: no Gradle, no device.
-// These pins keep the 1.4.0 design's privacy and security choices from drifting: no permissions,
-// no cloud backup, a WebView that loads nothing but the app's own bundle, one narrow file bridge,
-// no DevTools outside developer builds, and the frozen identifiers in src/shared/identity.ts.
+// These pins keep the 1.4.0 design's privacy and security choices from drifting: only the four
+// permissions the floating cat needs (1.4.0 preview 2, docs/platforms/android-overlay.md), no cloud
+// backup, a WebView that loads nothing but the app's own bundle, narrow native bridges, no DevTools
+// outside developer builds, and the frozen identifiers in src/shared/identity.ts.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,6 +23,12 @@ const manifest = stripXml(read('android', 'app', 'src', 'main', 'AndroidManifest
 const activity = stripCode(read(...KOTLIN_DIR, 'MainActivity.kt'));
 const bridge = stripCode(read(...KOTLIN_DIR, 'FileBridge.kt'));
 const kotlin = `${activity}\n${bridge}`;
+// The floating cat (1.4.0 preview 2).
+const overlayWindow = stripCode(read(...KOTLIN_DIR, 'OverlayWindow.kt'));
+const floatingService = stripCode(read(...KOTLIN_DIR, 'FloatingCatService.kt'));
+const floatingBridge = stripCode(read(...KOTLIN_DIR, 'FloatingBridge.kt'));
+const floatingState = stripCode(read(...KOTLIN_DIR, 'FloatingState.kt'));
+const allKotlin = `${kotlin}\n${overlayWindow}\n${floatingService}\n${floatingBridge}\n${floatingState}`;
 const gradle = stripCode(read('android', 'app', 'build.gradle.kts'));
 
 /** The string literal assigned to `name` in Kotlin source (`const val NAME = "..."` or `name = "..."`). */
@@ -32,11 +39,32 @@ function literal(src: string, name: string): string {
 }
 
 describe('Android manifest', () => {
-  it('requests no permission: every uses-permission is a tools:node="remove" of a library one', () => {
-    const uses = manifest.match(/<uses-permission\b[^>]*>/g) ?? [];
-    for (const u of uses) expect(u).toContain('tools:node="remove"');
-    expect(manifest).not.toMatch(/android\.permission\./);
-    for (const p of ['INTERNET', 'SYSTEM_ALERT_WINDOW', 'FOREGROUND_SERVICE', 'READ_EXTERNAL_STORAGE', 'WRITE_EXTERNAL_STORAGE', 'MANAGE_EXTERNAL_STORAGE', 'ACCESS_NETWORK_STATE']) {
+  it('requests exactly the four permissions of the floating cat, and nothing else', () => {
+    // Everything else in the manifest's uses-permission list is a tools:node="remove" of a library one.
+    const uses = (manifest.match(/<uses-permission\b[^>]*>/g) ?? []).filter((u) => !u.includes('tools:node="remove"'));
+    const names = uses.map((u) => /android:name="([^"]+)"/.exec(u)?.[1] ?? '').sort();
+    expect(names).toEqual([
+      'android.permission.FOREGROUND_SERVICE',
+      'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+      'android.permission.POST_NOTIFICATIONS',
+      'android.permission.SYSTEM_ALERT_WINDOW',
+    ]);
+    for (const p of [
+      'INTERNET',
+      'READ_EXTERNAL_STORAGE',
+      'WRITE_EXTERNAL_STORAGE',
+      'MANAGE_EXTERNAL_STORAGE',
+      'ACCESS_NETWORK_STATE',
+      'RECEIVE_BOOT_COMPLETED',
+      'WAKE_LOCK',
+      'BIND_ACCESSIBILITY_SERVICE',
+      'CAMERA',
+      'RECORD_AUDIO',
+      'READ_PHONE_STATE',
+      'PACKAGE_USAGE_STATS',
+      'QUERY_ALL_PACKAGES',
+      'REQUEST_INSTALL_PACKAGES',
+    ]) {
       expect(manifest).not.toContain(p);
     }
   });
@@ -69,17 +97,38 @@ describe('Android manifest', () => {
     for (const c of ['uiMode', 'locale', 'layoutDirection', 'fontScale']) expect(changes).not.toContain(c);
   });
 
-  it('does no background work: no service, alarm, job, wake lock or battery-optimisation request', () => {
+  it('does background work only in the user-started floating service: no alarm, job, wake lock, boot start or battery-optimisation request', () => {
     expect(manifest).not.toContain('IGNORE_BATTERY_OPTIMIZATIONS');
     expect(manifest).not.toContain('WAKE_LOCK');
-    for (const banned of ['AlarmManager', 'JobScheduler', 'WorkManager', 'startService', 'startForegroundService', 'bindService', 'PowerManager', 'WakeLock', 'ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS']) {
-      expect(kotlin).not.toContain(banned);
+    expect(manifest).not.toContain('BOOT_COMPLETED');
+    for (const banned of [
+      'AlarmManager',
+      'JobScheduler',
+      'WorkManager',
+      'bindService',
+      'WakeLock',
+      'ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+      'AccessibilityService',
+      'MediaProjection',
+      'BOOT_COMPLETED',
+      'UsageStatsManager',
+      'ACTION_INSTALL_PACKAGE',
+    ]) {
+      expect(allKotlin).not.toContain(banned);
     }
+    // The service never restarts itself: after a reboot or a kill the cat is off until the user starts it.
+    expect(floatingService).toContain('return START_NOT_STICKY');
+    expect(floatingService).not.toContain('START_STICKY');
+    // The Activity itself still starts no service; only the bridge does, on the user's tap.
+    expect(kotlin).not.toMatch(/startService|startForegroundService/);
   });
 
-  it('opts out of WebView metrics and declares no other exported component', () => {
+  it('opts out of WebView metrics and declares one non-exported service and no other exported component', () => {
     expect(manifest).toMatch(/android:name="android\.webkit\.WebView\.MetricsOptOut"\s+android:value="true"/);
-    expect(manifest).not.toMatch(/<(provider|service|receiver)\b/);
+    expect(manifest).not.toMatch(/<(provider|receiver)\b/);
+    expect(manifest.match(/<service\b/g)).toHaveLength(1);
+    expect(manifest).toMatch(/<service\s+android:name="\.FloatingCatService"\s+android:exported="false"\s+android:foregroundServiceType="specialUse">/);
+    expect(manifest).toContain('android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE');
     expect(manifest.match(/android:exported="true"/g)).toHaveLength(1);
   });
 });
@@ -129,11 +178,16 @@ describe('Android WebView host', () => {
     expect(kotlin).not.toMatch(/\bstartActivity\(/);
   });
 
-  it('runs exactly one script, a fixed constant that closes the open dialog for Back', () => {
-    // The only evaluateJavascript call, with the constant: never a string built from page or native data.
-    expect(kotlin.match(/evaluateJavascript\(/g)).toHaveLength(1);
+  it('runs exactly two scripts, both fixed constants: one closes the open dialog for Back, one opens the settings sheet', () => {
+    // The only evaluateJavascript calls, with constants: never a string built from page or native data.
+    expect(allKotlin.match(/evaluateJavascript\(/g)).toHaveLength(2);
     expect(activity).toContain('wv.evaluateJavascript(CLOSE_TOP_DIALOG_JS) { result ->');
+    expect(activity).toContain('wv.evaluateJavascript(OPEN_SETTINGS_JS, null)');
     expect(bridge).not.toContain('evaluateJavascript');
+    const openDecl = /const val OPEN_SETTINGS_JS = "([^"\n]*)"/.exec(activity)?.[1] ?? '';
+    expect(openDecl).not.toContain('$');
+    expect(openDecl).toContain("document.getElementById('btn-settings')");
+    expect(openDecl).toContain('b.click()');
     const decl = /const val CLOSE_TOP_DIALOG_JS =\s*((?:"[^"\n]*"\s*\+?\s*)+)/.exec(activity)?.[1];
     expect(decl, 'CLOSE_TOP_DIALOG_JS must be string literals only').toBeDefined();
     const script = [...(decl ?? '').matchAll(/"([^"\n]*)"/g)].map((m) => m[1] ?? '').join('');
@@ -187,10 +241,128 @@ describe('Android back and lifecycle', () => {
     expect(activity).toMatch(/override fun onPause\(\) \{\s*resumed = false/);
     // Reopening (launcher, Recents, returning from another app) clears the crashes and retries.
     expect(activity).toMatch(/fun onReopened\(\) \{\s*renderCrashes\.clear\(\)\s*if \(webView == null\) reattachPending = true/);
-    expect(activity).toMatch(/override fun onStart\(\) \{\s*super\.onStart\(\)\s*onReopened\(\)/);
+    expect(activity).toMatch(/override fun onStart\(\) \{\s*super\.onStart\(\)\s*FloatingState\.appStarted = true\s*onReopened\(\)/);
     expect(activity).toMatch(/override fun onNewIntent\(intent: Intent\) \{\s*super\.onNewIntent\(intent\)\s*onReopened\(\)/);
     // A new WebView replaces a static message and never inherits onStop's process-wide pauseTimers().
     expect(activity).toMatch(/wv\.resumeTimers\(\)[\s\S]*?root\.removeAllViews\(\)\s*root\.addView\(wv,/);
+  });
+});
+
+describe('Android floating cat (1.4.0 preview 2)', () => {
+  it('draws one small transparent application-overlay window: not focusable, not touch-modal, never full screen', () => {
+    expect(overlayWindow).toContain('WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY');
+    expect(overlayWindow).toContain('WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE');
+    expect(overlayWindow).toContain('WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL');
+    expect(overlayWindow).toContain('PixelFormat.TRANSLUCENT');
+    expect(overlayWindow).toContain('Color.TRANSPARENT');
+    // No full-screen or screen-reserving window, and no deprecated overlay type.
+    for (const banned of ['FLAG_FULLSCREEN', 'TYPE_SYSTEM_ALERT', 'TYPE_PHONE', 'TYPE_TOAST', 'TYPE_SYSTEM_OVERLAY', 'MATCH_PARENT, WindowManager']) {
+      expect(overlayWindow).not.toContain(banned);
+    }
+    // LEFT, not START: x is measured from the screen's left edge in every locale.
+    expect(overlayWindow).toContain('gravity = Gravity.TOP or Gravity.LEFT');
+    // While the cat takes no touches the window lets them through, at the opacity Android 12+ requires.
+    expect(overlayWindow).toContain('PASS_THROUGH_ALPHA = 0.8f');
+    expect(overlayWindow).toContain('layoutParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE');
+    expect(overlayWindow).toContain('layoutParams.alpha = PASS_THROUGH_ALPHA');
+    // The window's size comes from the page and is bounded (a dp ceiling), never the display's size.
+    expect(overlayWindow).toContain('MAX_WINDOW_DP');
+    expect(overlayWindow).toMatch(/if \(w < 1\.0 \|\| h < 1\.0 \|\| w > MAX_WINDOW_DP \|\| h > MAX_WINDOW_DP\) return/);
+    // Hidden or not drawn: the window leaves the WindowManager, so it cannot obstruct anything.
+    expect(overlayWindow).toContain('windowManager.removeViewImmediate(root)');
+    expect(overlayWindow).toContain('filterTouchesWhenObscured = true');
+  });
+
+  it('takes raw touches natively and reads no screen content', () => {
+    expect(overlayWindow).toContain('override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true');
+    expect(overlayWindow).toContain('ev.getRawX(');
+    for (const banned of ['MediaProjection', 'ImageReader', 'AccessibilityService', 'PixelCopy', 'drawToBitmap', 'getDrawingCache', 'UsageStatsManager', 'ActivityManager']) {
+      expect(allKotlin).not.toContain(banned);
+    }
+  });
+
+  it('the overlay WebView is as locked down as the app one, with its own narrow bridge', () => {
+    for (const s of [
+      'javaScriptEnabled = true',
+      'allowFileAccess = false',
+      'allowContentAccess = false',
+      'setGeolocationEnabled(false)',
+      'javaScriptCanOpenWindowsAutomatically = false',
+      'setSupportMultipleWindows(false)',
+      'mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW',
+    ]) {
+      expect(overlayWindow).toContain(s);
+    }
+    // DevTools is a process-wide switch owned by MainActivity; the overlay never turns it on or overrides it.
+    expect(overlayWindow).not.toMatch(/setWebContentsDebuggingEnabled\(/);
+    expect(overlayWindow).toMatch(/shouldOverrideUrlLoading[^\n]*= !WebAssets\.isOwn\(request\?\.url\)/);
+    expect(overlayWindow).toContain('return WebAssets.notFound()');
+    expect(overlayWindow).toMatch(/addWebMessageListener\(\s*wv,\s*BRIDGE_NAME,\s*setOf\(MainActivity\.WEB_ORIGIN\),/);
+    expect(literal(overlayWindow, 'BRIDGE_NAME')).toBe('gizecatOverlay');
+    expect(overlayWindow).toMatch(/if \(destroyed \|\| !isMainFrame \|\| sourceOrigin\.toString\(\) != MainActivity\.WEB_ORIGIN/);
+    expect(overlayWindow).not.toContain('addJavascriptInterface');
+    expect(overlayWindow).not.toContain('evaluateJavascript');
+    // Page -> native: only hello, win and saved; native -> page: only ptr, cmd and metrics.
+    for (const t of ['"hello"', '"win"', '"saved"']) expect(overlayWindow).toContain(`${t} ->`);
+    expect(overlayWindow).toContain('setOf("t", "x", "y", "w", "h", "vis", "touch")');
+  });
+
+  it('the app-screen bridge accepts a fixed set of operations from the app origin only', () => {
+    expect(literal(floatingBridge, 'BRIDGE_NAME')).toBe('gizecatFloating');
+    expect(floatingBridge).toContain('setOf("query", "start", "stop", "pause", "resume", "hide", "show", "openOverlaySettings", "settingsChanged")');
+    expect(floatingBridge).toMatch(/addWebMessageListener\(\s*view,\s*BRIDGE_NAME,\s*setOf\(MainActivity\.WEB_ORIGIN\),/);
+    expect(floatingBridge).toMatch(/if \(!isMainFrame \|\| sourceOrigin\.toString\(\) != MainActivity\.WEB_ORIGIN/);
+    expect(floatingBridge).toContain('setOf("t", "op")');
+    expect(floatingBridge).not.toContain('evaluateJavascript');
+    // A stale button never brings the cat up: commands act only on a running service.
+    expect(floatingBridge).toMatch(/private fun command\(action: String\) \{\s*if \(!FloatingState\.running\) return/);
+  });
+
+  it('uses the official permission APIs, never opens the permission page by itself, and starts nothing without the permission', () => {
+    expect(floatingState).toContain('Settings.canDrawOverlays(context)');
+    expect(floatingState).toContain('Settings.ACTION_MANAGE_OVERLAY_PERMISSION');
+    expect(floatingState).toContain('Uri.parse("package:${activity.packageName}")');
+    // The settings page opens only from the bridge's "openOverlaySettings" operation.
+    expect(allKotlin.match(/OverlayAccess\.openSettings\(/g)).toHaveLength(1);
+    expect(floatingBridge).toMatch(/"openOverlaySettings" -> \{\s*OverlayAccess\.openSettings\(activity\)/);
+    // The service and the bridge both check, and nothing writes the permission setting.
+    expect(floatingService).toContain('if (!OverlayAccess.canDraw(this))');
+    expect(floatingBridge).toContain('if (!OverlayAccess.canDraw(activity))');
+    expect(allKotlin).not.toContain('WRITE_SETTINGS');
+    expect(allKotlin).not.toContain('pm grant');
+    // The notification permission is asked at most once, and never blocks the cat.
+    expect(floatingBridge).toContain('if (!FloatingState.canAskNotifications(activity)) return');
+    expect(floatingState).toContain('!notificationsAsked(context)');
+  });
+
+  it('runs one foreground service with a declared type, one window at a time, and stops cleanly', () => {
+    expect(floatingService).toContain('ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE');
+    expect(floatingService).toContain('if (window != null) return');
+    expect(floatingService).toContain('startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)');
+    // The foreground is entered before anything can fail or wait.
+    expect(floatingService).toMatch(/private fun startFloating\(\) \{[^}]*?enterForeground\(\)/);
+    // Revoked permission, a lost window and a crashing renderer each stop it with their own reason.
+    expect(floatingService).toContain('FloatingState.Stop.PERMISSION_REVOKED');
+    expect(floatingService).toContain('FloatingState.Stop.RENDERER_FAILED');
+    expect(floatingService).toContain('AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW');
+    // Everything it registered is released, and the cat is saved before the WebView goes.
+    expect(floatingService).toContain('unregisterReceiver(it)');
+    expect(floatingService).toContain('stopWatchingMode(it)');
+    expect(floatingService).toContain('w.requestSave(SAVE_TIMEOUT_MS)');
+    expect(floatingService).toContain('stopForeground(STOP_FOREGROUND_REMOVE)');
+    // The notification is minimal, silent and private, with the three controls.
+    expect(floatingService).toContain('.setVisibility(NotificationCompat.VISIBILITY_SECRET)');
+    expect(floatingService).toContain('.setSilent(true)');
+    expect(floatingService.match(/\.addAction\(/g)).toHaveLength(3);
+  });
+
+  it('does not pause WebView timers while the cat floats, and frees them when it stops with the app away', () => {
+    expect(activity).toMatch(/override fun onStop\(\) \{\s*FloatingState\.appStarted = false[\s\S]*?if \(!FloatingState\.running\) webView\?\.pauseTimers\(\)/);
+    expect(overlayWindow).toContain('if (!FloatingState.appStarted) wv.pauseTimers()');
+  });
+
+  it('keeps the frozen origin and origin checks of the overlay page URL', () => {
+    expect(overlayWindow).toContain('"${MainActivity.WEB_ORIGIN}/assets/index.html?surface=overlay"');
   });
 });
 
