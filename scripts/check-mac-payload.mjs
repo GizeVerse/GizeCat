@@ -1,8 +1,13 @@
 #!/usr/bin/env node
-// Static checks of an ad-hoc macOS zip (GizeCat-<version>-mac-<arch>-adhoc.zip). It reads the zip's
-// bytes only and never runs anything: this is inspection, not a test.
+// Static checks of a thin macOS zip: the ad-hoc GizeCat-<version>-mac-<arch>-adhoc.zip, or a
+// Developer ID build's GizeCat-<version>-mac-<arch>.zip. It reads the zip's bytes only and never runs
+// anything: this is inspection, not a test.
 //
-//   node scripts/check-mac-payload.mjs --arch <x64|arm64> --zip <file> [--out <report.json>]
+//   node scripts/check-mac-payload.mjs --arch <x64|arm64> --zip <file> [--expect-signature adhoc|cms] [--out <report.json>]
+//
+// --expect-signature: every checked Mach-O and the Electron framework must carry that kind of code
+// signature. "adhoc": the signature's CMS slot is empty or absent (no signer identity). "cms": a real
+// CMS signature from a certificate (it does not judge which certificate; codesign and spctl do).
 //
 // Failures (exit code 1):
 // - Missing bundle parts: Contents/MacOS/Desktop Cat, Info.plist, Resources/app.asar, the Electron
@@ -98,14 +103,44 @@ export function readMachO(buf) {
   const ncmds = buf.readUInt32LE(16);
   let p = 32;
   let signed = false;
+  let sigOff = -1;
+  let sigSize = 0;
   for (let i = 0; i < ncmds && p + 8 <= buf.length; i++) {
     const cmd = buf.readUInt32LE(p);
     const size = buf.readUInt32LE(p + 4);
-    if (cmd === 0x1d) signed = true; // LC_CODE_SIGNATURE
+    if (cmd === 0x1d) {
+      // LC_CODE_SIGNATURE: linkedit_data_command { cmd, cmdsize, dataoff, datasize }
+      signed = true;
+      sigOff = buf.readUInt32LE(p + 8);
+      sigSize = buf.readUInt32LE(p + 12);
+    }
     if (size < 8) throw new Error('bad load command');
     p += size;
   }
-  return { fat: false, cputype, arch: CPU_NAME.get(cputype) ?? `0x${cputype.toString(16)}`, signed };
+  return { fat: false, cputype, arch: CPU_NAME.get(cputype) ?? `0x${cputype.toString(16)}`, signed, signature: signatureKind(buf, sigOff, sigSize) };
+}
+
+/**
+ * The kind of a Mach-O code signature, read from its SuperBlob (big-endian): 'ad-hoc' when the CMS
+ * slot (0x10000) is absent or empty (rcodesign and `codesign -s -` write an 8-byte empty CMS blob),
+ * 'cms' when a CMS signature with certificates is present (Developer ID and other identities),
+ * null when there is no signature or it lies outside the bytes read. Reading this is inspection, not
+ * a trust decision: a 'cms' signature still has to be checked with codesign/spctl on a Mac.
+ */
+export function signatureKind(buf, off, size) {
+  if (off < 0 || off + 12 > buf.length || size < 12) return null;
+  if (buf.readUInt32BE(off) !== 0xfade0cc0) return null; // CSMAGIC_EMBEDDED_SIGNATURE
+  const count = buf.readUInt32BE(off + 8);
+  for (let i = 0; i < count; i++) {
+    const at = off + 12 + i * 8;
+    if (at + 8 > buf.length) return null;
+    const type = buf.readUInt32BE(at);
+    const blobOff = off + buf.readUInt32BE(at + 4);
+    if (type !== 0x10000) continue; // CSSLOT_SIGNATURESLOT
+    if (blobOff + 8 > buf.length) return null;
+    return buf.readUInt32BE(blobOff + 4) > 8 ? 'cms' : 'ad-hoc';
+  }
+  return 'ad-hoc';
 }
 
 /** The values of a flat, XML Info.plist as strings or nested raw text. */
@@ -147,6 +182,7 @@ export function checkMacZip(opts) {
       else {
         if (info.cputype !== CPU[opts.arch]) fail(`${n} is ${info.arch}, expected ${opts.arch}`);
         if (!info.signed) fail(`${n} has no code signature`);
+        else if (opts.expectSignature && info.signature !== opts.expectSignature) fail(`${n} has a ${String(info.signature)} signature, expected ${opts.expectSignature}`);
       }
     }
     const fw = byName.get(`${APP}/Frameworks/Electron Framework.framework/Versions/A/Electron Framework`);
@@ -198,12 +234,14 @@ export function checkMacZip(opts) {
     // Fuses in the framework (the whole binary, about 200 MB, read once).
     if (fw) {
       const bin = readZipEntry(fd, fw);
-      const info = readMachO(bin.subarray(0, 64 * 1024));
-      result.framework = { arch: info.arch, fat: info.fat, signed: info.signed, bytes: bin.length };
+      // The whole binary: its code signature sits at the end of the file.
+      const info = readMachO(bin);
+      result.framework = { arch: info.arch, fat: info.fat, signed: info.signed, signature: info.signature, bytes: bin.length };
       if (info.fat) fail('the Electron framework is a fat binary');
       else {
         if (info.cputype !== CPU[opts.arch]) fail(`the Electron framework is ${info.arch}, expected ${opts.arch}`);
         if (!info.signed) fail('the Electron framework has no code signature');
+        else if (opts.expectSignature && info.signature !== opts.expectSignature) fail(`the Electron framework has a ${String(info.signature)} signature, expected ${opts.expectSignature}`);
       }
       const r = bufferReader(bin);
       const at = scanFor(r, FUSE_SENTINEL);
@@ -227,11 +265,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const get = (k) => (a.includes(k) ? a[a.indexOf(k) + 1] : undefined);
   const arch = get('--arch');
   const zip = get('--zip');
-  if (!CPU[arch] || !zip) {
-    console.error('usage: node scripts/check-mac-payload.mjs --arch <x64|arm64> --zip <file> [--out <report.json>]');
+  const expect = get('--expect-signature');
+  const expectSignature = expect === undefined ? undefined : expect === 'adhoc' ? 'ad-hoc' : expect;
+  if (!CPU[arch] || !zip || (expectSignature !== undefined && !['ad-hoc', 'cms'].includes(expectSignature))) {
+    console.error('usage: node scripts/check-mac-payload.mjs --arch <x64|arm64> --zip <file> [--expect-signature adhoc|cms] [--out <report.json>]');
     process.exit(2);
   }
-  const res = checkMacZip({ arch, zip: path.resolve(zip) });
+  const res = checkMacZip({ arch, zip: path.resolve(zip), expectSignature });
   const text = JSON.stringify(res, null, 2);
   if (get('--out')) fs.writeFileSync(get('--out'), text);
   console.log(text);
