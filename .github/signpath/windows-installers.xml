@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration, round 2 of .github/workflows/release.yml (input windows_signing:
+  signpath). REFERENCE COPY: SignPath reads artifact configurations from the project in its web
+  application, not from this repository. Paste this into the SignPath project as a second artifact
+  configuration and give its slug to the repository variable
+  SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG (environment windows-signing). SignPath validates
+  the XML when it is saved; this file has never been submitted (docs/platforms/windows-signing.md).
+
+  The workflow uploads one GitHub artifact (a zip) with exactly the two final NSIS installers of the
+  run, built from the app folders (whose own executables round 1 signed, when round 1 is enabled).
+  Each include must match exactly one file. The uninstaller that NSIS embeds in each installer is not
+  reachable from here and stays unsigned on this route (a documented limitation). The installers'
+  version resource says ProductName "Desktop Cat" (the frozen product name) and ProductVersion
+  <version>; agree with SignPath how a product-name restriction treats it.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="Desktop-Cat-Setup-*-x64.exe" />
+      <include path="Desktop-Cat-Setup-*-arm64.exe" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>

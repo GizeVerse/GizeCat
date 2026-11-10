@@ -27,6 +27,16 @@ win:
   icon: build/icon.ico
   executableName: DesktopCat
   requestedExecutionLevel: asInvoker
+  # 1.4.0 signing readiness (docs/platforms/windows-signing.md). Used only when a certificate is
+  # configured (scripts/sign-windows.ps1 -Mode Rebuild passes certificateSha1); without one,
+  # electron-builder logs "no code signing certificate configured, signing is skipped" and these
+  # keys change nothing. SHA-256 only: electron-builder's default is a SHA-1 pass plus a SHA-256
+  # pass, and SHA-1 Authenticode is obsolete. RFC 3161 timestamp with a SHA-256 digest (/tr, /td
+  # sha256) from DigiCert's public timestamp service, electron-builder's own default made explicit.
+  # ELECTRON_BUILDER_OFFLINE=true would drop the timestamp; the signing routes refuse it.
+  signtoolOptions:
+    signingHashAlgorithms: [sha256]
+    rfc3161TimeStampServer: http://timestamp.digicert.com
   # UI Automation helper (browser tab strips), spawned from <resources>/native; absent when the
   # build machine has no csc.exe (the feature then reports itself unavailable).
   extraResources:

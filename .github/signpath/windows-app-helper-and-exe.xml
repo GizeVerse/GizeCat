@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for the OPTIONAL round 1 of .github/workflows/release.yml
+  (windows_signing: signpath), variant "helper and app executable". REFERENCE COPY: SignPath reads
+  artifact configurations from the project in its web application, not from this repository.
+  SignPath validates the XML when it is saved; this file has never been submitted
+  (docs/platforms/windows-signing.md).
+
+  Use this variant only when the signing plan allows signing DesktopCat.exe and the repository variable
+  SIGNPATH_ROUND1_FILES is "DesktopCat.exe DesktopCatUia.exe". DesktopCat.exe is Electron's prebuilt
+  executable, renamed and resource-edited by electron-builder, not compiled from this repository; the
+  SignPath Foundation terms say upstream binaries must not be signed under a Foundation subscription
+  (they may be included in signed packages). With a Foundation subscription use
+  windows-app-helper.xml instead, or no round 1 at all.
+
+  The workflow uploads one GitHub artifact (a zip) holding exactly these four files from the same run.
+  Each include must match exactly one file (SignPath's default min-matches and max-matches are 1).
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="win-unpacked/DesktopCat.exe" />
+      <include path="win-unpacked/resources/native/DesktopCatUia.exe" />
+      <include path="win-arm64-unpacked/DesktopCat.exe" />
+      <include path="win-arm64-unpacked/resources/native/DesktopCatUia.exe" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>

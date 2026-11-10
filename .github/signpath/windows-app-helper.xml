@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for the OPTIONAL round 1 of .github/workflows/release.yml
+  (windows_signing: signpath), variant "helper only", the default when round 1 is enabled
+  (SIGNPATH_ROUND1_FILES unset or "DesktopCatUia.exe"). REFERENCE COPY: SignPath reads artifact
+  configurations from the project in its web application, not from this repository. SignPath
+  validates the XML when it is saved; this file has never been submitted
+  (docs/platforms/windows-signing.md).
+
+  DesktopCatUia.exe is GizeCat's own UI Automation helper, compiled in the same workflow run from
+  native/uia-helper by scripts/build-uia-helper.mjs. As of 1.4.0 it carries no version resource
+  (ProductName empty, version 0.0.0.0): if the signing policy restricts product name or version, the
+  helper needs assembly attributes in its C# source first.
+
+  The workflow uploads one GitHub artifact (a zip) holding exactly these two files from the same run.
+  Each include must match exactly one file (SignPath's default min-matches and max-matches are 1).
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="win-unpacked/resources/native/DesktopCatUia.exe" />
+      <include path="win-arm64-unpacked/resources/native/DesktopCatUia.exe" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>

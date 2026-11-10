@@ -18,15 +18,25 @@ name: release-artifacts
 #
 # Windows has two paths (input `windows_signing`):
 # - unsigned (default, no secrets): CSC_IDENTITY_AUTO_DISCOVERY=false, unsigned NSIS installers.
-# - authenticode: signed NSIS installers. The job runs in the GitHub Environment `windows-signing`.
-#   Before the first run the owner creates that environment with a required reviewer and these
-#   secrets (a job that names a missing environment makes GitHub create it WITHOUT protection
-#   rules, so set it up first; the guard step below fails closed when one is missing):
-#     WIN_CSC_LINK          base64 of the code-signing certificate exported as .pfx
-#     WIN_CSC_KEY_PASSWORD  its export password
-#   electron-builder 26 reads both names directly (app-builder-lib/out/codeSign/windowsSignToolManager.js
-#   and winPackager.js). A certificate whose private key lives only on a hardware token or in a
-#   cloud HSM cannot be exported as .pfx, so it cannot use this path.
+# - signpath: Authenticode signing through SignPath (SignPath Foundation's free open-source
+#   programme, or a paid SignPath plan), in the GitHub Environment `windows-signing`. The keys stay
+#   in SignPath's HSM; this repository and the runner never hold a private key. Round 1 (optional)
+#   signs GizeCat's own executables inside both app folders; round 2 signs the two final NSIS
+#   installers built from them. A person approves each round in SignPath. Every signed file is
+#   verified (valid, SHA-256 digest, RFC 3161 timestamp) and compared byte for byte with the unsigned
+#   file it came from; any failure stops the job before a signed artifact exists. The unsigned inputs
+#   are kept as workflow artifacts.
+#   Before the first run the owner sets up SignPath and the environment (a job that names a missing
+#   environment makes GitHub create it WITHOUT protection rules, so create it first, with a required
+#   reviewer). Environment secret: SIGNPATH_API_TOKEN. Environment variables (not secret), required:
+#   SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG,
+#   SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG; optional: SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG
+#   (enables round 1), SIGNPATH_ROUND1_FILES (see the job), WINDOWS_SIGNER_SUBJECT (text the signer
+#   certificate subject must contain). Artifact configurations to paste into SignPath:
+#   .github/signpath/. Guide: docs/platforms/windows-signing.md.
+# The earlier .pfx path (WIN_CSC_LINK) is gone: since June 2023 a publicly trusted code-signing key
+# must live on a hardware token or in an HSM, so a new certificate cannot be exported as a .pfx.
+# A token or cloud-HSM certificate is used on the owner's machine with scripts/sign-windows.ps1.
 #
 # Optional input draft_release_tag: job attach-to-draft adds the Windows files to an existing DRAFT
 # release (gh release upload). It refuses a release that is not a draft and never replaces an asset.
@@ -38,11 +48,11 @@ on:
   workflow_dispatch:
     inputs:
       windows_signing:
-        description: 'unsigned: no secrets. authenticode: signed installers (windows-signing environment).'
+        description: 'unsigned: no secrets. signpath: Authenticode signing through SignPath (windows-signing environment, two approvals in SignPath).'
         type: choice
         options:
           - unsigned
-          - authenticode
+          - signpath
         default: unsigned
       draft_release_tag:
         description: 'Optional: attach the Windows files to the existing DRAFT release with this tag (for example v1.4.0). Empty: workflow artifacts only. A release that is not a draft is refused.'
@@ -108,31 +118,68 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  windows-signed:
-    name: Windows NSIS installers (x64, ARM64), Authenticode signed
-    if: inputs.windows_signing == 'authenticode'
+  # Authenticode signing through SignPath. Protected by the owner: the environment's required
+  # reviewer approves the run before any secret is exposed, and a SignPath approver approves each
+  # signing request. No signed file reaches the artifacts until it has been verified; a failure
+  # anywhere stops the job.
+  #
+  # Round 1 (optional; runs when SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG is set) signs GizeCat's own
+  # executables inside both app folders before the installers are made from them. Which ones:
+  # SIGNPATH_ROUND1_FILES, "DesktopCatUia.exe" (default) or "DesktopCat.exe DesktopCatUia.exe".
+  # DesktopCat.exe is Electron's prebuilt executable, renamed and edited by electron-builder; the
+  # SignPath Foundation terms do not allow signing upstream binaries, so only a plan that allows it
+  # should list it. Round 2 (always) signs the two final installers.
+  windows-signpath:
+    name: Windows NSIS installers (x64, ARM64), signed through SignPath
+    if: inputs.windows_signing == 'signpath'
     runs-on: windows-latest
-    # Protected by the owner: a required reviewer approves every run before any secret is exposed.
     environment: windows-signing
-    timeout-minutes: 60
+    # Up to two signing requests wait for a person in SignPath (up to two hours each).
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      # The SignPath connector downloads the uploaded unsigned artifacts with the job token.
+      actions: read
     steps:
+      - name: Check that the SignPath settings are complete (fails closed)
+        shell: bash
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
+          SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG }}
+          SIGNPATH_ROUND1_FILES: ${{ vars.SIGNPATH_ROUND1_FILES }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for name in SIGNPATH_API_TOKEN SIGNPATH_ORGANIZATION_ID SIGNPATH_PROJECT_SLUG SIGNPATH_SIGNING_POLICY_SLUG SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG; do
+            if [ -z "${!name}" ]; then echo "::error::$name is not set in the windows-signing environment"; failed=1; fi
+          done
+          rels=""
+          if [ -n "$SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG" ]; then
+            files="${SIGNPATH_ROUND1_FILES:-DesktopCatUia.exe}"
+            for f in $(tr ',' ' ' <<<"$files"); do
+              case "$f" in
+                DesktopCat.exe) rels="$rels;DesktopCat.exe" ;;
+                DesktopCatUia.exe) rels="$rels;resources/native/DesktopCatUia.exe" ;;
+                *) echo "::error::SIGNPATH_ROUND1_FILES lists '$f'; allowed: DesktopCat.exe, DesktopCatUia.exe"; failed=1 ;;
+              esac
+            done
+            echo "round 1: enabled for$(tr ';' ' ' <<<"$rels")"
+          elif [ -n "$SIGNPATH_ROUND1_FILES" ]; then
+            echo "::error::SIGNPATH_ROUND1_FILES is set but SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG is not"; failed=1
+          else
+            echo "round 1: off (the executables inside the installers stay unsigned)"
+          fi
+          if [ "$failed" != 0 ]; then exit 1; fi
+          echo "ROUND1_RELS=${rels#;}" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - name: Check that the signing secrets are complete (fails closed)
-        shell: bash
-        env:
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          failed=0
-          for name in WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then echo "::error::secret $name is not set in the windows-signing environment"; failed=1; fi
-          done
-          exit "$failed"
       - name: Install (no install scripts)
         run: npm ci --ignore-scripts
       # Same staging as the unsigned job (see there).
@@ -140,40 +187,189 @@ jobs:
         run: node scripts/stage-koffi-arch.mjs --arch arm64
       - name: Build
         run: node scripts/build.mjs
-      # The arch flags are required: without them electron-builder builds only the runner's arch.
-      - name: Package NSIS installers, x64 and ARM64 (signed, not published)
-        run: npx electron-builder --win nsis --x64 --arm64 --publish never
+      # The app folders only (win-unpacked, win-arm64-unpacked); the installers are made from them
+      # after the optional round 1.
+      - name: Package the app folders, x64 and ARM64 (unsigned, not published)
+        run: npx electron-builder --win dir --x64 --arm64 --publish never
         env:
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Collect the round 1 executables (unsigned)
+        if: env.ROUND1_RELS != ''
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($d in 'win-unpacked', 'win-arm64-unpacked') {
+            foreach ($rel in ($env:ROUND1_RELS -split ';')) {
+              $src = "release/$d/$rel"
+              if (-not (Test-Path -LiteralPath $src)) { throw "$src is missing (DesktopCatUia.exe needs csc.exe, .NET Framework 4.x, on the runner)" }
+              $state = (Get-AuthenticodeSignature -LiteralPath $src).Status
+              if ("$state" -ne 'NotSigned') { throw "$src is not unsigned (status $state)" }
+              $dst = "signpath/app-in/$d/$rel"
+              New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+              Copy-Item -LiteralPath $src -Destination $dst
+              '{0}  {1}/{2}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $dst).Hash.ToLowerInvariant(), $d, $rel
+            }
+          }
+      # Also the preserved unsigned copy of these executables.
+      - name: Upload round 1 input
+        if: env.ROUND1_RELS != ''
+        id: upload-app
+        uses: actions/upload-artifact@v4
+        with:
+          name: signpath-input-app-executables
+          path: signpath/app-in/
+          if-no-files-found: error
+          retention-days: 14
+      - name: SignPath round 1, app executables (waits for approval in SignPath)
+        if: env.ROUND1_RELS != ''
+        id: sign-app
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-app.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signpath/app-out
+      - name: Verify round 1 and put the signed executables into the app folders (reads the files, runs nothing)
+        if: env.ROUND1_RELS != ''
+        env:
+          WINDOWS_SIGNER_SUBJECT: ${{ vars.WINDOWS_SIGNER_SUBJECT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pairs = @(); $signed = @()
+          foreach ($d in 'win-unpacked', 'win-arm64-unpacked') {
+            foreach ($rel in ($env:ROUND1_RELS -split ';')) {
+              $out = "signpath/app-out/$d/$rel"
+              if (-not (Test-Path -LiteralPath $out)) {
+                Get-ChildItem -Recurse -File signpath/app-out | ForEach-Object { $_.FullName }
+                throw "SignPath returned no $d/$rel"
+              }
+              $pairs += "signpath/app-in/$d/$rel", $out
+              $signed += $out
+            }
+          }
+          $verifyArgs = @{ Path = $signed }
+          if ($env:WINDOWS_SIGNER_SUBJECT) { $verifyArgs.ExpectedSubject = $env:WINDOWS_SIGNER_SUBJECT }
+          ./scripts/verify-windows-signature.ps1 @verifyArgs
+          if ($LASTEXITCODE -ne 0) { throw 'round 1 signature verification failed' }
+          node scripts/compare-signed-pe.mjs @pairs
+          if ($LASTEXITCODE -ne 0) { throw 'a signed executable differs from its unsigned input outside the signature' }
+          foreach ($d in 'win-unpacked', 'win-arm64-unpacked') {
+            foreach ($rel in ($env:ROUND1_RELS -split ';')) {
+              Copy-Item -LiteralPath "signpath/app-out/$d/$rel" -Destination "release/$d/$rel" -Force
+            }
+          }
       # One step per check: a pwsh step only fails on the exit code of its last command.
       - name: Static payload check, x64 (no binary is executed)
         run: node scripts/check-win-payload.mjs --arch x64 --dir release/win-unpacked
       - name: Static payload check, ARM64 (no binary is executed)
         run: node scripts/check-win-payload.mjs --arch arm64 --dir release/win-arm64-unpacked
-      - name: Check the Authenticode signatures (reads the files, runs nothing)
+      # --prepackaged: electron-builder packs the folder as it is (no executable editing, no signing),
+      # so signed executables go into the installer unchanged. One run per architecture.
+      - name: Package the x64 NSIS installer from the app folder (not published)
+        run: npx electron-builder --win nsis --x64 --prepackaged release/win-unpacked --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Package the ARM64 NSIS installer from the app folder (not published)
+        run: npx electron-builder --win nsis --arm64 --prepackaged release/win-arm64-unpacked --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Collect the installers for round 2 (unsigned)
         run: |
-          $files = @(Get-ChildItem release/Desktop-Cat-Setup-*.exe) + @(Get-Item release/win-unpacked/DesktopCat.exe, release/win-arm64-unpacked/DesktopCat.exe)
-          if ($files.Count -ne 4) { throw "expected 2 installers and 2 app executables, found $($files.Count)" }
-          foreach ($file in $files) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            "$($file.Name): $($signature.Status), $($signature.SignerCertificate.Subject)"
-            if ($signature.Status -ne 'Valid') { throw "$($file.Name) has no valid signature: $($signature.Status)" }
-          }
-      - name: SHA-256 checksums
-        run: |
+          $ErrorActionPreference = 'Stop'
           $files = @(Get-ChildItem release/Desktop-Cat-Setup-*.exe | Sort-Object Name)
           if ($files.Count -ne 2) { throw "expected 2 installers, found $($files.Count)" }
-          $lines = $files | ForEach-Object { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Name }
-          $text = ($lines -join "`n") + "`n"
-          [IO.File]::WriteAllText("$PWD/release/SHA256SUMS-windows.txt", $text)
-          $text
+          New-Item -ItemType Directory -Force -Path signpath/installers-in | Out-Null
+          foreach ($f in $files) {
+            $state = (Get-AuthenticodeSignature -LiteralPath $f.FullName).Status
+            if ("$state" -ne 'NotSigned') { throw "$($f.Name) is not unsigned (status $state)" }
+            Copy-Item -LiteralPath $f.FullName -Destination signpath/installers-in/
+            '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLowerInvariant(), $f.Name
+          }
+          if ($env:ROUND1_RELS) {
+            $inner = @(foreach ($d in 'win-unpacked', 'win-arm64-unpacked') { foreach ($rel in ($env:ROUND1_RELS -split ';')) { "release/$d/$rel" } })
+            ./scripts/verify-windows-signature.ps1 -Path $inner
+            if ($LASTEXITCODE -ne 0) { throw 'a round 1 executable lost its signature during packaging' }
+          }
+      # Also the preserved unsigned copy of the installers.
+      - name: Upload round 2 input
+        id: upload-installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: signpath-input-installers
+          path: signpath/installers-in/
+          if-no-files-found: error
+          retention-days: 14
+      - name: SignPath round 2, installers (waits for approval in SignPath)
+        id: sign-installers
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-installers.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signpath/installers-out
+      - name: Verify round 2, checksums and provenance (reads the files, runs nothing)
+        env:
+          WINDOWS_SIGNER_SUBJECT: ${{ vars.WINDOWS_SIGNER_SUBJECT }}
+          APP_REQUEST: ${{ steps.sign-app.outputs.signing-request-id }}
+          INSTALLER_REQUEST: ${{ steps.sign-installers.outputs.signing-request-id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inputs = @(Get-ChildItem signpath/installers-in/Desktop-Cat-Setup-*.exe | Sort-Object Name)
+          $pairs = @(); $signed = @()
+          foreach ($f in $inputs) {
+            $out = "signpath/installers-out/$($f.Name)"
+            if (-not (Test-Path -LiteralPath $out)) {
+              Get-ChildItem -Recurse -File signpath/installers-out | ForEach-Object { $_.FullName }
+              throw "SignPath returned no $($f.Name)"
+            }
+            $pairs += $f.FullName, $out
+            $signed += $out
+          }
+          if ($signed.Count -ne 2) { throw "expected 2 signed installers, found $($signed.Count)" }
+          $verifyArgs = @{ Path = $signed }
+          if ($env:WINDOWS_SIGNER_SUBJECT) { $verifyArgs.ExpectedSubject = $env:WINDOWS_SIGNER_SUBJECT }
+          ./scripts/verify-windows-signature.ps1 @verifyArgs
+          if ($LASTEXITCODE -ne 0) { throw 'round 2 signature verification failed' }
+          node scripts/compare-signed-pe.mjs @pairs
+          if ($LASTEXITCODE -ne 0) { throw 'a signed installer differs from its unsigned input outside the signature' }
+          $round1 = if ($env:ROUND1_RELS) { "signed in both app folders: $($env:ROUND1_RELS -replace ';', ', ') (SignPath request $env:APP_REQUEST)" } else { 'off: the executables inside the installers are unsigned' }
+          New-Item -ItemType Directory -Force -Path final | Out-Null
+          $sums = @(); $provenance = @(
+            'GizeCat Windows installers, Authenticode signed through SignPath',
+            "repository: $env:GITHUB_REPOSITORY",
+            "commit: $env:GITHUB_SHA",
+            "workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID (attempt $env:GITHUB_RUN_ATTEMPT)",
+            "round 1, executables inside the installers: $round1",
+            "round 2, installers: SignPath request $env:INSTALLER_REQUEST",
+            'The uninstaller embedded in each installer is not signed on this route.',
+            'installer before signing -> after signing:')
+          foreach ($f in $inputs) {
+            Copy-Item -LiteralPath "signpath/installers-out/$($f.Name)" -Destination final/
+            $after = (Get-FileHash -Algorithm SHA256 -LiteralPath "final/$($f.Name)").Hash.ToLowerInvariant()
+            $before = (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLowerInvariant()
+            $sums += "$after  $($f.Name)"
+            $provenance += "  $before  ->  $after  $($f.Name)"
+          }
+          [IO.File]::WriteAllText("$PWD/final/SHA256SUMS-windows.txt", ($sums -join "`n") + "`n")
+          [IO.File]::WriteAllText("$PWD/final/signing-provenance-windows.txt", ($provenance -join "`n") + "`n")
+          Get-Content final/SHA256SUMS-windows.txt
+          Get-Content final/signing-provenance-windows.txt
       - uses: actions/upload-artifact@v4
         with:
           name: windows-nsis-installer-signed
           path: |
-            release/Desktop-Cat-Setup-*.exe
-            release/SHA256SUMS-windows.txt
+            final/Desktop-Cat-Setup-*.exe
+            final/SHA256SUMS-windows.txt
+            final/signing-provenance-windows.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -206,8 +402,8 @@ jobs:
 
   attach-to-draft:
     name: Attach the Windows files to the draft release (optional)
-    needs: [windows, windows-signed]
-    if: ${{ !cancelled() && inputs.draft_release_tag != '' && (needs.windows.result == 'success' || needs.windows-signed.result == 'success') }}
+    needs: [windows, windows-signpath]
+    if: ${{ !cancelled() && inputs.draft_release_tag != '' && (needs.windows.result == 'success' || needs.windows-signpath.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Only this job can write to the repository. It holds no signing secret.
