@@ -1,6 +1,6 @@
 // Creating a new cat: identity and randomised (seeded) personality traits.
 import type { PersistedCat, Stats, Traits } from '../../shared/catState';
-import { CAT_STATE_SCHEMA_VERSION, DrivesSchema, MemorySchema, StatsSchema } from '../../shared/catState';
+import { CAT_STATE_SCHEMA_VERSION, DrivesSchema, MemorySchema, StatsSchema, WorldMemorySchema } from '../../shared/catState';
 import type { Random } from './random';
 import { mulberry32, randomHex, safeRandom } from './random';
 
@@ -80,6 +80,7 @@ export function newPersistedCat(random: Random, nowEpochMs: number): PersistedCa
     stats: defaultStats(),
     memory,
     drives: DrivesSchema.parse({}),
+    world: WorldMemorySchema.parse({}),
     lastPosition: null,
     savedAt: now,
   };

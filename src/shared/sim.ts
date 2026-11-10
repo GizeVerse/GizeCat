@@ -9,6 +9,7 @@ import type { Settings } from './settings';
 import type { DecisionDiagnostics, NavDiagnostics, SurfaceDebugLine } from './surfaceDiagnostics';
 import type { ScreenEdgeBand, Surface, SupportSurfaceKind, TaskbarEdge } from './surfaces';
 import type { AppCategory, WindowInfo, WorldGeometry } from './world';
+import type { AnyEventId, JournalEntry, Mood, PersonalityId, RenderProp, WorldEventSnapshot } from './companion';
 
 /** Discrete stimuli delivered to the simulation since the previous tick. */
 export type SimEvent =
@@ -48,6 +49,13 @@ export type SimEvent =
   | { type: 'command.sleep' }
   | { type: 'command.wake' }
   | { type: 'command.play' }
+  /**
+   * Living Companion, session-only: hold the world-event schedule (the user paused events from the menu or
+   * panel) / let it run again. A running event winds down gracefully. Never persisted; a new session
+   * starts with events running (settings.companion.events.enabled still governs).
+   */
+  | { type: 'command.eventsPause' }
+  | { type: 'command.eventsResume' }
   | { type: 'lifecycle.quitRequested' }
   // Environment surfaces (v1.1)
   /** An auto-hide (or newly discovered) taskbar slid into view; `surfaceId` names its ledge in env.surfaces. */
@@ -126,6 +134,23 @@ export interface SimEnv {
    * Absent: unknown (no button gate beyond pointerButtonDown).
    */
   pointerButtonPresses?: number;
+  // ---- Living Companion, optional: absent means the stated default ---------------------------
+  /**
+   * Laser Mode is on (the user turned it on from the cat's menu or the panel). The cat chases the
+   * cursor position as if it were a light: it never pounces on it, never catches it and never counts
+   * it as prey ('caught'), and the opt-outs for cursor play still apply. Default false.
+   */
+  laserMode?: boolean;
+  /**
+   * The user asked for reduced motion: calmer clips (no long sprints or big jumps by choice), slower
+   * and fewer event props, no flashes. Default false.
+   */
+  reducedMotion?: boolean;
+  /**
+   * Work area of the display the cat is on that a world event may use as its stage, in the same
+   * px as the cat (floor y is its bottom). Absent: the sim derives it from the world geometry.
+   */
+  eventStage?: Rect;
 }
 
 export type SimSupport =
@@ -182,6 +207,17 @@ export interface SimOutput {
   balance?: number;
   /** One-off procedural sound (only while settings.sound.enabled); the host routes it to one overlay. */
   sound?: CatSoundCue | null;
+  // ---- Living Companion render hints, optional ----------------------------------------------
+  /** World-event props to draw (world px; at most MAX_PROPS). Absent or empty: none. */
+  props?: readonly RenderProp[];
+  /** The cat's current temporary mood (derived, never persisted). */
+  mood?: Mood;
+  /** 0..1 how deeply it sleeps (0 just dozing, 1 deep sleep); only meaningful while asleep. */
+  sleepDepth?: number;
+  /** The world event that is running, for status displays and the journal; null/absent: none. */
+  worldEvent?: WorldEventSnapshot | null;
+  /** A short event line to write in the journal this tick (the host appends it to the persisted journal; the sim also keeps it). */
+  journalEntry?: JournalEntry | null;
 }
 
 export interface CatSimOptions {
@@ -212,6 +248,15 @@ export interface CatSim {
   surfaceDebugLines(): SurfaceDebugLine[];
   /** v1.2: session behaviour profile (kinds, counts, durations; ADR 0003 §11). */
   behaviorProfile(): BehaviorProfileSnapshot;
+  /**
+   * Living Companion: the live status for the Companion page and status displays (ids and numbers
+   * only). nextEventInMs is null while an event runs, events are off or paused, or the schedule is frozen.
+   */
+  companionStatus(): { mood: Mood; event: AnyEventId | null; nextEventInMs: number | null; nearestPersonality: PersonalityId; personalityIsAuto: boolean };
+  /** Living Companion: the persisted journal, oldest first (bounded; a copy). */
+  journal(): readonly JournalEntry[];
+  /** Living Companion: clears the journal and the event history behind it (nothing else); marks the cat dirty. */
+  clearJournal(): void;
 }
 
 export type CreateCatSim = (opts: CatSimOptions) => CatSim;

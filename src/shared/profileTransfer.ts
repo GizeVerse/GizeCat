@@ -32,6 +32,7 @@ import {
   PreferencesSchema,
   StatsSchema,
   TraitsSchema,
+  WorldMemorySchema,
   type Counters,
   type Memory,
   type PersistedCat,
@@ -45,6 +46,7 @@ import { PLATFORM_IDS, type PlatformId } from './platform';
 import {
   applySettingsPatch,
   defaultSettings,
+  normalizeDisabledEvents,
   normalizeOptOutList,
   TOGGLEABLE_BEHAVIORS,
   type BehaviorId,
@@ -64,7 +66,7 @@ export const PROFILE_KIND = IDENTITY.profileKind;
  * The format this build writes. A new optional field bumps `minor` (older readers drop it); any
  * change an older reader would misread bumps `major`, and older readers then refuse the file.
  */
-export const PROFILE_FORMAT: Readonly<{ major: 1; minor: 0 }> = Object.freeze({ major: 1, minor: 0 });
+export const PROFILE_FORMAT: Readonly<{ major: 1; minor: 1 }> = Object.freeze({ major: 1, minor: 1 });
 /** The character a profile describes (CharacterDescriptor.kind; the first persisted kind). */
 export const PROFILE_CHARACTER: CharacterDescriptor['kind'] = 'cat';
 /** Hard cap on a profile file: hosts check the file size before reading, parseProfile checks again. */
@@ -160,7 +162,14 @@ export const PROFILE_FIELD_POLICY = {
   perception: 'never',
   /** Provider, endpoints, models, cloud permission (API keys are not in settings at all). */
   ai: 'never',
-  sound: { enabled: 'carry', volume: 'carry' },
+  sound: { enabled: 'carry', volume: 'carry', cat: 'carry', world: 'carry' },
+  /**
+   * Living Companion choices travel with the character: the personality, which world events it
+   * meets (and how often), calmer motion and whether it keeps a journal. The JOURNAL ITSELF does
+   * not: it is this device's diary of one cat (PROFILE_CAT_POLICY.world), so a copied cat starts a
+   * fresh one.
+   */
+  companion: { personality: 'carry', events: 'carry', reducedMotion: 'carry', journal: 'carry' },
   diagnostics: 'never',
 } as const satisfies SettingsPolicyShape;
 
@@ -180,7 +189,7 @@ export type CarriedKey<S extends CarriedSection> = KeysOfClass<S, 'carry'>;
 // Compile-time pins: the file layout below groups exactly these sections (appearance at the top,
 // the other three under `preferences`), and the profile's cat section carries only the name. A
 // policy edit that changes either fails here until the layout and parser follow.
-const _carriedSections: Readonly<Record<CarriedSection, true>> = { appearance: true, behavior: true, interaction: true, sound: true };
+const _carriedSections: Readonly<Record<CarriedSection, true>> = { appearance: true, behavior: true, interaction: true, sound: true, companion: true };
 const _catClassOnlyName: Exact<KeysOfClass<'general', 'cat'>, 'catName'> = true;
 const _catClassOnlyGeneral: Exact<SectionsWithClass<'cat'>, 'general'> = true;
 
@@ -195,6 +204,7 @@ export const PROFILE_SETTINGS_FIELDS: { readonly [S in CarriedSection]: Readonly
   behavior: keysOfClass('behavior'),
   interaction: keysOfClass('interaction'),
   sound: keysOfClass('sound'),
+  companion: keysOfClass('companion'),
 });
 
 /** Which profile part a settings section belongs to. */
@@ -204,6 +214,7 @@ export const PROFILE_SECTION_PART: Readonly<Record<'general' | CarriedSection, P
   behavior: 'preferences',
   interaction: 'preferences',
   sound: 'preferences',
+  companion: 'preferences',
 });
 
 /**
@@ -290,6 +301,8 @@ export const PROFILE_CAT_POLICY = {
   drives: 'never',
   lastPosition: 'never',
   savedAt: 'never',
+  /** Event history, counters and the journal: one device's diary of one cat; not exported, reset when another cat is adopted. */
+  world: 'never',
 } as const satisfies CatPolicyShape;
 
 type CatPolicy = typeof PROFILE_CAT_POLICY;
@@ -320,6 +333,8 @@ export interface ProfilePreferences {
   behavior: ProfileSection<'behavior'>;
   interaction: ProfileSection<'interaction'>;
   sound: ProfileSection<'sound'>;
+  /** Format 1.1: the Living Companion choices; absent (empty) in a 1.0 file. */
+  companion: ProfileSection<'companion'>;
 }
 export interface ProfileCat {
   /** Cleaned: no invisible or bidi characters, whitespace collapsed, 1..24 code units. */
@@ -459,6 +474,7 @@ export function buildProfile(settings: Settings, cat: PersistedCat, opts: BuildP
       behavior: pickPresent(settings.behavior, PROFILE_SETTINGS_FIELDS.behavior),
       interaction: pickPresent(settings.interaction, PROFILE_SETTINGS_FIELDS.interaction),
       sound: pickPresent(settings.sound, PROFILE_SETTINGS_FIELDS.sound),
+      companion: pickPresent(settings.companion, PROFILE_SETTINGS_FIELDS.companion),
     },
     memory: opts.includeMemory
       ? { counters: pickPresent(cat.memory.counters, COUNTER_KEYS), learned: pickPresent(cat.memory.preferences, LEARNED_KEYS), bond: cat.stats.bond }
@@ -483,6 +499,7 @@ export function serializeProfile(profile: GizeProfile): string {
       behavior: pickPresent(profile.preferences.behavior, PROFILE_SETTINGS_FIELDS.behavior),
       interaction: pickPresent(profile.preferences.interaction, PROFILE_SETTINGS_FIELDS.interaction),
       sound: pickPresent(profile.preferences.sound, PROFILE_SETTINGS_FIELDS.sound),
+      companion: pickPresent(profile.preferences.companion, PROFILE_SETTINGS_FIELDS.companion),
     },
   };
   if (profile.memory) {
@@ -577,7 +594,7 @@ const CatWireSchema = z.object({
   bornAt: z.number().min(0),
   traits: allowListObject(TRAIT_KEYS),
 });
-const PreferencesWireSchema = allowListObject(['behavior', 'interaction', 'sound']);
+const PreferencesWireSchema = allowListObject(['behavior', 'interaction', 'sound', 'companion']);
 const MemoryWireSchema = allowListObject(['counters', 'learned', 'bond']);
 const CountersWireSchema = allowListObject(COUNTER_KEYS);
 const LearnedWireSchema = allowListObject(LEARNED_KEYS);
@@ -586,6 +603,7 @@ const SECTION_SCHEMAS: Readonly<Record<CarriedSection, z.ZodType<AllowListed<str
   behavior: allowListObject<string>(PROFILE_SETTINGS_FIELDS.behavior),
   interaction: allowListObject<string>(PROFILE_SETTINGS_FIELDS.interaction),
   sound: allowListObject<string>(PROFILE_SETTINGS_FIELDS.sound),
+  companion: allowListObject<string>(PROFILE_SETTINGS_FIELDS.companion),
 };
 
 const EXPORTED_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
@@ -652,6 +670,7 @@ function parseV1(raw: Record<string, unknown>, minor: number): ProfileParseResul
       behavior: parseSection('behavior', prefs?.behavior, 'preferences.behavior', base, skipped),
       interaction: parseSection('interaction', prefs?.interaction, 'preferences.interaction', base, skipped),
       sound: parseSection('sound', prefs?.sound, 'preferences.sound', base, skipped),
+      companion: parseSection('companion', prefs?.companion, 'preferences.companion', base, skipped),
     },
     memory: top.data.memory === undefined || top.data.memory === null ? null : parseMemoryV1(top.data.memory, skipped),
   };
@@ -720,7 +739,28 @@ function prepareLeaf(section: CarriedSection, key: string, value: unknown): unkn
     return [...new Set((value as unknown[]).filter((v): v is string => typeof v === 'string' && known.has(v)))];
   }
   if (section === 'behavior' && key === 'disabledExtras') return Array.isArray(value) ? normalizeOptOutList(value) : undefined;
+  if (section === 'companion' && key === 'events') return companionEvents(value);
+  if (section === 'companion' && key === 'journal') return companionJournal(value);
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? value : undefined;
+}
+
+/**
+ * companion.events from a file, in the settings' own key order (the survival check compares JSON
+ * text): only its four leaves, the id list reduced to this catalogue. Undefined unless every leaf is
+ * present and of the right type (the patch check then judges the ranges).
+ */
+function companionEvents(value: unknown): Settings['companion']['events'] | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  const { enabled, rare, pace, disabled } = v;
+  if (typeof enabled !== 'boolean' || typeof rare !== 'boolean' || typeof pace !== 'number' || !Array.isArray(disabled)) return undefined;
+  return { enabled, rare, pace, disabled: normalizeDisabledEvents(disabled) };
+}
+
+function companionJournal(value: unknown): Settings['companion']['journal'] | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const { enabled } = value as Record<string, unknown>;
+  return typeof enabled === 'boolean' ? { enabled } : undefined;
 }
 
 /** Numbers present in `raw` that survive `schema` parsing unchanged; the others are skipped. */
@@ -768,7 +808,7 @@ export function profileAvailability(profile: GizeProfile): ProfileParts {
   return {
     cat: true,
     appearance: Object.keys(profile.appearance).length > 0,
-    preferences: Object.keys(p.behavior).length + Object.keys(p.interaction).length + Object.keys(p.sound).length > 0,
+    preferences: Object.keys(p.behavior).length + Object.keys(p.interaction).length + Object.keys(p.sound).length + Object.keys(p.companion).length > 0,
     memory: hasMemoryValues(profile.memory),
   };
 }
@@ -812,6 +852,8 @@ function withPrivacyFloor(incoming: ProfileSection<'behavior'>, current: Setting
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
+  // A small object leaf (companion.events, companion.journal): equal when every named leaf is.
+  if (isRecord(a) && isRecord(b)) return Object.keys(a).every((k) => sameValue(a[k], b[k])) && Object.keys(b).every((k) => Object.hasOwn(a, k));
   if (Array.isArray(a) && Array.isArray(b)) {
     if (a.length !== b.length) return false;
     const x = (a as unknown[]).map((v) => JSON.stringify(v)).sort();
@@ -822,13 +864,20 @@ function sameValue(a: unknown, b: unknown): boolean {
 }
 
 const cloneValue = (v: unknown): ProfileValue => (Array.isArray(v) ? [...(v as string[])] : (v as ProfileValue));
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** A carried leaf as a flat copy: an object leaf is deep-copied (its arrays too) so patches never share state with a profile. */
+function cloneLeaf(v: unknown): unknown {
+  if (isRecord(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, cloneLeaf(x)]));
+  return Array.isArray(v) ? [...(v as unknown[])] : v;
+}
 
 function addChanged(patch: SettingsPatch, section: CarriedSection, have: Readonly<Record<string, unknown>>, current: Settings): void {
   const now: Readonly<Record<string, unknown>> = current[section];
   const changed: Record<string, unknown> = {};
   for (const key of PROFILE_SETTINGS_FIELDS[section] as readonly string[]) {
     if (!Object.hasOwn(have, key)) continue;
-    if (!sameValue(have[key], now[key])) changed[key] = cloneValue(have[key]);
+    if (!sameValue(have[key], now[key])) changed[key] = cloneLeaf(have[key]);
   }
   if (Object.keys(changed).length > 0) (patch as Record<string, unknown>)[section] = changed;
 }
@@ -846,6 +895,7 @@ export function profileSettingsPatch(profile: GizeProfile, parts: Partial<Profil
     addChanged(patch, 'behavior', withPrivacyFloor(profile.preferences.behavior, current.behavior).behavior, current);
     addChanged(patch, 'interaction', profile.preferences.interaction, current);
     addChanged(patch, 'sound', profile.preferences.sound, current);
+    addChanged(patch, 'companion', profile.preferences.companion, current);
   }
   return patch;
 }
@@ -860,7 +910,18 @@ export function previewImport(profile: GizeProfile, settings: Settings, cat: Per
     const values = patch[section];
     if (!values) return;
     const now: Record<string, unknown> = settings[section];
-    for (const [key, to] of Object.entries(values)) changes.push({ part: PROFILE_SECTION_PART[section], target: 'settings', field: `${section}.${key}`, from: cloneValue(now[key]), to: cloneValue(to) });
+    const part = PROFILE_SECTION_PART[section];
+    for (const [key, to] of Object.entries(values)) {
+      if (isRecord(to)) {
+        // An object leaf (companion.events, companion.journal) is listed leaf by leaf, so every change is a plain value.
+        const from = isRecord(now[key]) ? now[key] : {};
+        for (const sub of Object.keys(to)) {
+          if (!sameValue(to[sub], from[sub])) changes.push({ part, target: 'settings', field: `${section}.${key}.${sub}`, from: cloneValue(from[sub]), to: cloneValue(to[sub]) });
+        }
+        continue;
+      }
+      changes.push({ part, target: 'settings', field: `${section}.${key}`, from: cloneValue(now[key]), to: cloneValue(to) });
+    }
   };
   const catChange = (part: ProfilePart, field: string, from: ProfileValue, to: ProfileValue): void => {
     if (!sameValue(from, to)) changes.push({ part, target: 'cat', field, from, to });
@@ -874,6 +935,7 @@ export function previewImport(profile: GizeProfile, settings: Settings, cat: Per
   settingsChanges('behavior');
   settingsChanges('interaction');
   settingsChanges('sound');
+  settingsChanges('companion');
   if (profile.memory) {
     const m = profile.memory;
     for (const k of COUNTER_KEYS) {
@@ -930,6 +992,8 @@ function nextCatState(current: PersistedCat, profile: GizeProfile, parts: Profil
       next.stats = StatsSchema.parse({ bond: NEW_CAT_BOND });
       next.drives = DrivesSchema.parse({});
       next.memory = MemorySchema.parse({});
+      // The journal and event history belong to the cat they were written for.
+      next.world = WorldMemorySchema.parse({});
       next.memory.lastSeenAt = clock ?? 0;
       next.memory.counters.sessions = 1;
     }

@@ -6,6 +6,7 @@ import type { BehaviorProfileSnapshot } from './behaviorProfile';
 import type { PlatformReport } from './platform';
 import type { BehaviorState, CatRenderState, HitRegion } from './cat';
 import type { CatSummary } from './catState';
+import type { AnyEventId, JournalEntry, Mood, PersonalityId } from './companion';
 import { IDENTITY } from './identity';
 import type { PerceptionStatus, SceneReport, VisualEventKind, VisualFeatures } from './perception';
 import type { ProfilePart, ProfileParts, ProfilePreview, ProfileRejectReason } from './profileTransfer';
@@ -49,6 +50,8 @@ export const IPC = {
   settingsExportProfile: 'settings:export-profile',
   settingsOpenProfile: 'settings:open-profile',
   settingsApplyProfile: 'settings:apply-profile',
+  /** Living Companion: the cat journal for the Journal page (validated in main; event ids, outcome tokens and dates only). */
+  settingsGetJournal: 'settings:get-journal',
   // main -> settings
   settingsStateChanged: 'settings:state-changed',
 } as const;
@@ -119,6 +122,17 @@ export const SETTINGS_ACTIONS = [
   'hideSurfaceOutlines',
   /** 1.4.0, macOS only: main opens System Settings › General › Login Items (a constant URL); elsewhere it fails. */
   'openLoginItemsSettings',
+  /**
+   * Living Companion. Laser Mode is session-only (off after every start, never persisted): the red
+   * dot follows the real pointer and the cat chases it without ever catching it. Event pause is also
+   * session-only: it holds the world-event schedule until resumed or restarted.
+   */
+  'startLaserMode',
+  'stopLaserMode',
+  'pauseEvents',
+  'resumeEvents',
+  /** Clears the cat journal (and the event history it was written from); nothing else. */
+  'clearJournal',
   'quit',
 ] as const;
 export type SettingsAction = (typeof SETTINGS_ACTIONS)[number];
@@ -218,10 +232,35 @@ export interface ResourceSample {
   workingSetMB: number;
 }
 
+/**
+ * What the Companion page shows live (Living Companion). Derived by main from the sim each time the view
+ * state is built; never persisted and content-free (ids and numbers only).
+ */
+export interface CompanionStatus {
+  /** The cat's temporary mood. */
+  mood: Mood;
+  /** What the cat is doing (its behaviour state). */
+  activity: BehaviorState;
+  /** The chosen personality, or the nearest profile of a cat that keeps its born traits ('auto'). */
+  personality: PersonalityId;
+  /** True when `personality` is the nearest profile of an 'auto' cat rather than the user's choice. */
+  personalityIsAuto: boolean;
+  /** The world event that is running, or null. */
+  event: AnyEventId | null;
+  /** ms until the next world event, or null when one is running, events are off or the schedule is frozen. */
+  nextEventInMs: number | null;
+  /** The user paused events for this session. */
+  eventsPaused: boolean;
+  /** Laser Mode is on. */
+  laserActive: boolean;
+}
+
 export interface SettingsViewState {
   settings: Settings;
   status: AppStatus;
   cat: CatSummary;
+  /** Living Companion live status; absent from older builds' snapshots. */
+  companion?: CompanionStatus;
   apiKeys: { anthropic: boolean; openaiCompatible: boolean };
   resources: ResourceSample[];
   versions: { app: string; electron: string; chrome: string; node: string; os: string };
@@ -286,5 +325,7 @@ export interface SettingsApi {
   openProfile(): Promise<ProfileOpenResponse>;
   /** 1.4.0: applies the chosen parts of the file behind `token` (after the user confirmed the preview). */
   applyProfile(token: string, parts: ProfileParts): Promise<ProfileApplyResponse>;
+  /** Living Companion: the journal, newest last (bounded, content-free tokens; sentences are built in the UI from src/shared/worldText.ts). */
+  getJournal(): Promise<JournalEntry[]>;
   onStateChanged(cb: (state: SettingsViewState) => void): () => void;
 }

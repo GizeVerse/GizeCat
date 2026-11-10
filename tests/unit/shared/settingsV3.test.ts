@@ -57,11 +57,12 @@ describe('activity preset reconciliation (main re-runs matchingPreset after ever
     const cur = defaultSettings();
     cur.behavior.attentionSeeking = 0.9;
     cur.behavior.disabledExtras = ['slips'];
-    cur.sound = { enabled: true, volume: 0.2 };
+    cur.sound = { enabled: true, volume: 0.2, cat: true, world: true };
     const next = patched(cur, presetPatch('mischievous'));
     expect(next.behavior.attentionSeeking).toBe(0.9);
     expect(next.behavior.disabledExtras).toEqual(['slips']);
-    expect(next.sound).toEqual({ enabled: true, volume: 0.2 });
+    expect(next.sound).toEqual({ enabled: true, volume: 0.2, cat: true, world: true });
+    expect(next.companion).toEqual(cur.companion);
     expect(next.perception).toEqual(cur.perception);
   });
 });

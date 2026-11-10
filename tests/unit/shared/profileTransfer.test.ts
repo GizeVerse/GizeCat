@@ -86,13 +86,13 @@ function parsedOk(text: string): Extract<ReturnType<typeof parseProfile>, { ok: 
 }
 
 describe('format and identity', () => {
-  it('the kind tag is the frozen IDENTITY.profileKind and the format is 1.0', () => {
+  it('the kind tag is the frozen IDENTITY.profileKind and the format is 1.1 (1.1 added the companion choices)', () => {
     expect(PROFILE_KIND).toBe(IDENTITY.profileKind);
     expect(PROFILE_KIND).toBe('gizeverse-character-profile');
-    expect(PROFILE_FORMAT).toEqual({ major: 1, minor: 0 });
+    expect(PROFILE_FORMAT).toEqual({ major: 1, minor: 1 });
     const json = JSON.parse(serializeProfile(buildProfile(defaultSettings(), makeCat(), OPTS)));
     expect(json.kind).toBe(IDENTITY.profileKind);
-    expect(json.format).toEqual({ major: 1, minor: 0 });
+    expect(json.format).toEqual({ major: 1, minor: 1 });
     expect(json.character).toBe('cat');
     expect(json.exportedAt).toBe(new Date(NOW).toISOString());
     expect(json.app).toEqual({ version: '1.4.0', host: 'win32' });
@@ -196,8 +196,9 @@ describe('the field policy is exhaustive', () => {
     expect(PROFILE_SETTINGS_FIELDS.appearance).toHaveLength(7);
     expect(PROFILE_SETTINGS_FIELDS.behavior).toHaveLength(17);
     expect(PROFILE_SETTINGS_FIELDS.interaction).toHaveLength(5);
-    expect(PROFILE_SETTINGS_FIELDS.sound).toEqual(['enabled', 'volume']);
-    expect(leaves('carry')).toHaveLength(7 + 17 + 5 + 2);
+    expect(PROFILE_SETTINGS_FIELDS.sound).toEqual(['enabled', 'volume', 'cat', 'world']);
+    expect(PROFILE_SETTINGS_FIELDS.companion).toEqual(['personality', 'events', 'reducedMotion', 'journal']);
+    expect(leaves('carry')).toHaveLength(7 + 17 + 5 + 4 + 4);
   });
 
   it('the cat policy classifies every persisted cat field: identity and traits travel, memory only as memory', () => {
@@ -566,6 +567,84 @@ describe('applying: a copy, not a sync', () => {
     expect(r.catState.catId).toBe(makeCat().catId);
     expect(r.patch).toEqual({ appearance: { skin: 'siamese', style: 'pixel' } });
     expect(r.settings.appearance.skin).toBe('siamese');
+  });
+});
+
+describe('Living Companion choices (format 1.1)', () => {
+  const choices = (): Settings =>
+    patched(defaultSettings(), {
+      companion: { personality: 'shy', reducedMotion: true, events: { pace: 1.5, rare: false, disabled: ['tinyUfo', 'thunderstorm'] }, journal: { enabled: false } },
+      sound: { cat: false, world: false },
+    });
+
+  it('personality, event choices, calmer motion, the journal switch and the sound categories travel and round-trip', () => {
+    const built = buildProfile(choices(), makeCat(), OPTS);
+    const r = parsedOk(serializeProfile(built));
+    expect(r.skipped).toEqual([]);
+    expect(r.profile).toEqual(built);
+    expect(r.profile.preferences.companion).toEqual({
+      personality: 'shy',
+      events: { enabled: true, rare: false, pace: 1.5, disabled: ['tinyUfo', 'thunderstorm'] },
+      reducedMotion: true,
+      journal: { enabled: false },
+    });
+    expect(r.profile.preferences.sound).toMatchObject({ cat: false, world: false });
+    const applied = applyProfile(r.profile, { ...NONE, preferences: true }, defaultSettings(), makeCat(), { now: NOW });
+    if (!applied.ok) throw new Error(applied.reason);
+    expect(applied.settings.companion).toEqual(choices().companion);
+    expect(applied.settings.sound.world).toBe(false);
+  });
+
+  it('a 1.0 file (no companion section) still loads: nothing to apply for the companion, nothing skipped', () => {
+    const r = parsedOk(fileWith((j) => {
+      j.format = { major: 1, minor: 0 };
+      delete j.preferences.companion;
+      delete j.preferences.sound.cat;
+      delete j.preferences.sound.world;
+    }));
+    expect(r.skipped).toEqual([]);
+    expect(r.profile.preferences.companion).toEqual({});
+    const applied = applyProfile(r.profile, { ...NONE, preferences: true }, choices(), makeCat(), { now: NOW });
+    if (!applied.ok) throw new Error(applied.reason);
+    expect(applied.settings.companion).toEqual(choices().companion);
+  });
+
+  it('bad companion values are skipped one by one (unknown event ids are stripped, a bad pace is left alone)', () => {
+    const r = parsedOk(fileWith((j) => {
+      j.preferences.companion = { personality: 'grumpy', reducedMotion: true, events: { enabled: true, rare: true, pace: 9, disabled: ['tinyUfo'] }, journal: { enabled: 'yes' } };
+    }));
+    expect(r.skipped.sort()).toEqual(['preferences.companion.events', 'preferences.companion.journal', 'preferences.companion.personality']);
+    expect(r.profile.preferences.companion).toEqual({ reducedMotion: true });
+    const stripped = parsedOk(fileWith((j) => {
+      j.preferences.companion.events = { enabled: true, rare: true, pace: 1, disabled: ['tinyUfo', 'notAnEvent', 'tinyUfo', 7] };
+    }));
+    expect(stripped.profile.preferences.companion.events?.disabled).toEqual(['tinyUfo']);
+  });
+
+  it('the preview lists object leaves leaf by leaf, as plain values', () => {
+    const preview = previewImport(buildProfile(choices(), makeCat(), OPTS), defaultSettings(), makeCat());
+    const fields = preview.changes.map((c) => c.field);
+    expect(fields).toEqual(expect.arrayContaining(['companion.personality', 'companion.reducedMotion', 'companion.events.pace', 'companion.events.rare', 'companion.events.disabled', 'companion.journal.enabled']));
+    expect(fields).not.toContain('companion.events');
+    expect(preview.changes.find((c) => c.field === 'companion.events.disabled')).toEqual({ part: 'preferences', target: 'settings', field: 'companion.events.disabled', from: [], to: ['tinyUfo', 'thunderstorm'] });
+    expect(structuredClone(preview)).toEqual(preview);
+  });
+
+  it('the journal and event history are never exported, and adopting another cat starts a fresh world', () => {
+    const world = { events: [{ id: 'tinyUfo', at: 5, outcome: 'watched' }], counts: { tinyUfo: 3 }, lastEndedAt: 5, journal: [{ id: 'tinyUfo', at: 5, outcome: 'watched' }] };
+    const local = makeCat({ world });
+    expect(local.world.journal).toHaveLength(1);
+    const text = serializeProfile(buildProfile(defaultSettings(), local, { ...OPTS, includeMemory: true }));
+    // Only the journal SWITCH travels (companion.journal.enabled); no entry, count or time does.
+    for (const word of ['watched', 'lastEndedAt', '"counts"', '"events": [', '"outcome"']) expect(text).not.toContain(word);
+    expect('world' in JSON.parse(text)).toBe(false);
+    const other = buildProfile(defaultSettings(), makeCat({ catId: 'cat-fedcba9876543210' }), OPTS);
+    const replaced = applyProfile(other, { ...NONE, cat: true }, defaultSettings(), local, { now: NOW });
+    if (!replaced.ok) throw new Error(replaced.reason);
+    expect(replaced.catState.world).toEqual({ events: [], counts: {}, lastEndedAt: 0, journal: [] });
+    const same = applyProfile(buildProfile(defaultSettings(), local, OPTS), { ...NONE, cat: true }, defaultSettings(), local, { now: NOW });
+    if (!same.ok) throw new Error(same.reason);
+    expect(same.catState.world.journal).toHaveLength(1);
   });
 });
 

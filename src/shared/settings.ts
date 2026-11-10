@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RENDER_STYLES, SKINS } from './cat';
+import { ALL_EVENT_IDS, EVENT_PACE_RANGE, PERSONALITY_IDS, type AnyEventId } from './companion';
 import { ACTIVITY_PRESET_IDS, matchingPreset, PRESET_VALUES } from './settingsPresets';
 import { DEFAULT_TOGGLE_SHORTCUT, MAX_SHORTCUT_LENGTH, parseShortcut } from './shortcut';
 
@@ -303,6 +304,56 @@ const AiSchema = z.object({
 const SoundSchema = z.object({
   enabled: field(z.boolean(), false),
   volume: field(z.number().min(0).max(1), 0.4),
+  /** Living Companion: the cat's own sounds (meow, chirp, purr, squeak...). Only matters while `enabled`. */
+  cat: field(z.boolean(), true),
+  /** Living Companion: the world's sounds (chime, rumble, splash...). Only matters while `enabled`. */
+  world: field(z.boolean(), true),
+});
+
+/**
+ * Event ids the user switched off: tolerant like the opt-out lists (a bad entry never costs the
+ * others), but only ids of THIS catalogue survive, each once, in the order given, at most one per
+ * event. Anything but an array is the empty list. Pure.
+ */
+export function normalizeDisabledEvents(items: unknown): AnyEventId[] {
+  if (!Array.isArray(items)) return [];
+  const out: AnyEventId[] = [];
+  for (const it of items as unknown[]) {
+    if (typeof it !== 'string' || !(ALL_EVENT_IDS as readonly string[]).includes(it) || out.includes(it as AnyEventId)) continue;
+    out.push(it as AnyEventId);
+    if (out.length >= ALL_EVENT_IDS.length) break;
+  }
+  return out;
+}
+
+const EventChoicesSchema = z.object({
+  /** Master switch for world events (the cat itself is unaffected). */
+  enabled: field(z.boolean(), true),
+  /** The rare pool (a separate, low-probability set). */
+  rare: field(z.boolean(), true),
+  /** How often events come: 0.5 = twice as far apart, 2 = twice as often (never closer than the floor). */
+  pace: field(z.number().min(EVENT_PACE_RANGE.min).max(EVENT_PACE_RANGE.max), EVENT_PACE_RANGE.default),
+  /** Events switched off one by one. */
+  disabled: field(z.array(z.unknown()).transform((items) => normalizeDisabledEvents(items)), []),
+});
+
+/**
+ * Living Companion: the personality the user picked, how often the world visits, calmer motion and
+ * the diary. A patch may send one leaf of `events` / `journal` (applySettingsPatch merges them).
+ */
+const CompanionSchema = z.object({
+  /** 'auto' keeps the traits the cat was born with; a name gives it that personality (the cat never changes the choice). */
+  personality: field(z.enum([...PERSONALITY_IDS, 'auto']), 'auto'),
+  events: EventChoicesSchema.prefault({}).catch(() => EventChoicesSchema.parse({})),
+  /** Calmer motion: no sudden pounces or big jumps, gentler props. Also honoured when the system asks for reduced motion. */
+  reducedMotion: field(z.boolean(), false),
+  journal: z
+    .object({
+      /** false = nothing new is written to the journal; existing entries stay until cleared. */
+      enabled: field(z.boolean(), true),
+    })
+    .prefault({})
+    .catch(() => ({ enabled: true })),
 });
 
 const DiagnosticsSchema = z.object({
@@ -321,6 +372,7 @@ export const SettingsSchema = z.object({
   perception: PerceptionSchema.prefault({}).catch(() => PerceptionSchema.parse({})),
   ai: AiSchema.prefault({}).catch(() => AiSchema.parse({})),
   sound: SoundSchema.prefault({}).catch(() => SoundSchema.parse({})),
+  companion: CompanionSchema.prefault({}).catch(() => CompanionSchema.parse({})),
   diagnostics: DiagnosticsSchema.prefault({}).catch(() => DiagnosticsSchema.parse({})),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -381,6 +433,8 @@ function withReconciledPreset(s: Settings): Settings {
   return s;
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
 export type PatchResult = { ok: true; settings: Settings } | { ok: false; error: string };
 
 /**
@@ -430,13 +484,21 @@ export function applySettingsPatch(current: Settings, patch: unknown): PatchResu
     const cur = (current as Record<string, unknown>)[section];
     if (section === 'schemaVersion' || cur === null || typeof cur !== 'object') return { ok: false, error: `unknown section: ${section}` };
     if (values === null || typeof values !== 'object' || Array.isArray(values)) return { ok: false, error: `section ${section} must be an object` };
-    for (const [k, v] of Object.entries(values as Record<string, unknown>)) touched.push([section, k, v]);
-    next[section] = { ...(cur as Record<string, unknown>), ...(values as Record<string, unknown>) };
+    const merged: Record<string, unknown> = { ...(cur as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(values as Record<string, unknown>)) {
+      touched.push([section, k, v]);
+      // A leaf that is itself a small object (companion.events, companion.journal) merges one level
+      // deep, so a patch may name one of its leaves; every other leaf is replaced whole.
+      merged[k] = isPlainObject(v) && isPlainObject(merged[k]) ? { ...merged[k], ...v } : v;
+    }
+    next[section] = merged;
   }
   const parsed = SettingsSchema.parse(next);
   for (const [section, key, value] of touched) {
     const got = (parsed as unknown as Record<string, Record<string, unknown> | undefined>)[section]?.[key];
-    if (JSON.stringify(got) !== JSON.stringify(value)) return { ok: false, error: `invalid value for ${section}.${key}` };
+    if (isPlainObject(value) && isPlainObject(got)) {
+      for (const [k, v] of Object.entries(value)) if (JSON.stringify(got[k]) !== JSON.stringify(v)) return { ok: false, error: `invalid value for ${section}.${key}.${k}` };
+    } else if (JSON.stringify(got) !== JSON.stringify(value)) return { ok: false, error: `invalid value for ${section}.${key}` };
   }
   const asked = parsed.behavior.activityPreset;
   withReconciledPreset(parsed);

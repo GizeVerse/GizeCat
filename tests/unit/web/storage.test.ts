@@ -127,8 +127,14 @@ describe('web storage: settings', () => {
     s.behavior.movementSpeed = 1.7;
     s.behavior.allowMultiMonitor = !defaultSettings().behavior.allowMultiMonitor;
     s.interaction.enabled = false;
+    s.sound.world = false;
+    s.companion.personality = 'shy';
+    s.companion.reducedMotion = true;
+    s.companion.events.pace = 1.5;
+    s.companion.events.disabled = ['tinyUfo'];
+    s.companion.journal.enabled = false;
     const stored = storedSettings(s);
-    expect(Object.keys(stored).sort()).toEqual(['appearance', 'behavior', 'general', 'interaction', 'schemaVersion', 'sound']);
+    expect(Object.keys(stored).sort()).toEqual(['appearance', 'behavior', 'companion', 'general', 'interaction', 'schemaVersion', 'sound']);
     expect(stored.general).toEqual({ catName: 'Pamuk' });
     // 1.4.0 (profile transfer): every behaviour and interaction value a profile carries is stored, so a
     // loaded profile survives a reload and exports intact; device-only values are not.
@@ -142,7 +148,9 @@ describe('web storage: settings', () => {
     const back = openWebStorage(() => mem, memoryLogger()).loadSettings();
     expect(back.general.catName).toBe('Pamuk');
     expect(back.appearance.size).toBe(1.5);
-    expect(back.sound).toEqual({ enabled: true, volume: 0.7 });
+    expect(back.sound).toEqual({ enabled: true, volume: 0.7, cat: true, world: false });
+    // The Living Companion choices survive a reload too.
+    expect(back.companion).toEqual(s.companion);
     // A custom mix (only a loaded profile makes one on the web) is kept; the preset is re-derived.
     expect(back.behavior.activityPreset).toBe('custom');
     expect(back.behavior.autonomy).toBe(0.1);

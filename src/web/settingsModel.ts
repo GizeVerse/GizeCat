@@ -4,6 +4,7 @@
 // parsing unchanged) and screen analysis and AI are forced off again (forceWebPrivacy), whatever
 // the patch said. The personality is offered only as the named presets (no custom mix on the web).
 import { RENDER_STYLES, SKINS, type RenderStyle, type SkinId } from '../shared/cat';
+import { ALL_EVENT_IDS, EVENT_PACE_RANGE, PERSONALITY_IDS, type AnyEventId, type PersonalityChoice } from '../shared/companion';
 import { applySettingsPatch, IMPLIED_OPT_OUTS, LIVELY_BEHAVIORS, TOGGLEABLE_BEHAVIORS, type BehaviorId, type Settings } from '../shared/settings';
 import { ACTIVITY_PRESET_IDS, PRESET_BEHAVIOR_KEYS, PRESET_INTERACTION_KEYS, PRESET_VALUES, presetPatch, type ActivityPresetId } from '../shared/settingsPresets';
 import { forceWebPrivacy, webSettings } from './storage';
@@ -12,7 +13,9 @@ import { forceWebPrivacy, webSettings } from './storage';
 export const WEB_EDITABLE: Readonly<Record<string, readonly string[]>> = Object.freeze({
   general: Object.freeze(['catName']),
   appearance: Object.freeze(['skin', 'style', 'size', 'shadow', 'emotes']),
-  sound: Object.freeze(['enabled', 'volume']),
+  sound: Object.freeze(['enabled', 'volume', 'cat', 'world']),
+  /** Living Companion: personality, world events, calmer motion and the journal switch. */
+  companion: Object.freeze(['personality', 'events', 'reducedMotion', 'journal']),
 });
 
 /**
@@ -31,6 +34,8 @@ export const WEB_TUNING = Object.freeze({
 export const MOVEMENT_RANGE = Object.freeze({ min: 0.5, max: 2, step: 0.05 });
 export const LEVEL_RANGE = Object.freeze({ min: 0, max: 1, step: 0.05 });
 export const SLEEP_RANGE = Object.freeze({ min: 1, max: 120, step: 1 });
+/** How often world events come (CompanionSchema: 0.5 to 2, shared EVENT_PACE_RANGE). */
+export const PACE_RANGE = Object.freeze({ min: EVENT_PACE_RANGE.min, max: EVENT_PACE_RANGE.max, step: 0.25 });
 
 /** Size slider bounds (AppearanceSchema: 0.5 to 2.5) and step. */
 export const SIZE_RANGE = Object.freeze({ min: 0.5, max: 2.5, step: 0.05 });
@@ -51,6 +56,13 @@ export type WebField =
   | { field: 'emotes'; value: boolean }
   | { field: 'soundEnabled'; value: boolean }
   | { field: 'volume'; value: number }
+  /** Living Companion sound categories (only matter while sound is on). */
+  | { field: 'soundCat' | 'soundWorld'; value: boolean }
+  | { field: 'personality'; value: PersonalityChoice }
+  | { field: 'eventsEnabled' | 'rareEvents' | 'reducedMotion' | 'journalEnabled'; value: boolean }
+  | { field: 'eventPace'; value: number }
+  /** One event on or off, given the current settings (the list is replaced whole, in catalogue order). */
+  | { field: 'eventToggle'; id: AnyEventId; enabled: boolean; current: Settings }
   | { field: 'preset'; value: ActivityPresetId }
   | { field: 'movementSpeed'; value: number }
   | { field: 'autonomy'; value: number }
@@ -90,6 +102,23 @@ export function patchFor(change: WebField): WebPatch | null {
       return typeof change.value === 'boolean' ? { sound: { enabled: change.value } } : null;
     case 'volume':
       return typeof change.value === 'number' && Number.isFinite(change.value) ? { sound: { volume: snap(change.value, VOLUME_RANGE) } } : null;
+    case 'soundCat':
+    case 'soundWorld':
+      return typeof change.value === 'boolean' ? { sound: { [change.field === 'soundCat' ? 'cat' : 'world']: change.value } } : null;
+    case 'personality':
+      return change.value === 'auto' || (PERSONALITY_IDS as readonly string[]).includes(change.value) ? { companion: { personality: change.value } } : null;
+    case 'eventsEnabled':
+      return typeof change.value === 'boolean' ? { companion: { events: { enabled: change.value } } } : null;
+    case 'rareEvents':
+      return typeof change.value === 'boolean' ? { companion: { events: { rare: change.value } } } : null;
+    case 'reducedMotion':
+      return typeof change.value === 'boolean' ? { companion: { reducedMotion: change.value } } : null;
+    case 'journalEnabled':
+      return typeof change.value === 'boolean' ? { companion: { journal: { enabled: change.value } } } : null;
+    case 'eventPace':
+      return typeof change.value === 'number' && Number.isFinite(change.value) ? { companion: { events: { pace: snap(change.value, PACE_RANGE) } } } : null;
+    case 'eventToggle':
+      return eventTogglePatch(change.id, change.enabled, change.current);
     case 'preset':
       return (ACTIVITY_PRESET_IDS as readonly string[]).includes(change.value) ? presetPatch(change.value) : null;
     case 'movementSpeed':
@@ -108,6 +137,15 @@ export function patchFor(change: WebField): WebPatch | null {
     default:
       return null;
   }
+}
+
+/** The patch that switches one world event on or off: the disabled list is sent whole, in catalogue order. */
+function eventTogglePatch(id: AnyEventId, enabled: boolean, current: Settings): WebPatch | null {
+  if (typeof enabled !== 'boolean' || !(ALL_EVENT_IDS as readonly string[]).includes(id)) return null;
+  const off = new Set<AnyEventId>(current.companion.events.disabled);
+  if (enabled) off.delete(id);
+  else off.add(id);
+  return { companion: { events: { disabled: ALL_EVENT_IDS.filter((e) => off.has(e)) } } };
 }
 
 const TOGGLEABLE_IDS: readonly string[] = TOGGLEABLE_BEHAVIORS;

@@ -1,5 +1,6 @@
 // Shared vocabulary for the single cat: behaviour states, animation clips, emotes,
 // skins and the render snapshot the main process sends to overlay renderers.
+import type { Mood, RenderProp } from './companion';
 
 /** Behaviour states of the cat's state machine (src/core/behavior). */
 export const BEHAVIOR_STATES = [
@@ -78,6 +79,10 @@ export const ANIM_CLIPS = [
   'balance', // narrow ledge or top corner: crouched stance, tail out as a counterweight, small sway (loop; `balance` scales it)
   'tailChase', // spinning after its own tail (loop)
   'edgeSit', // sitting at a ledge's edge looking down past its paws (`look` below the ledge) (loop)
+  // Living Companion: the body-care and expression clips the catalogue found missing.
+  'scratch', // sitting, hind leg scratching behind the ear (loop)
+  'shake', // standing full-body shake-off, as after getting wet (~1.1 s, one-shot)
+  'confused', // sitting, head tilting side to side, one ear up (loop)
 ] as const;
 export type AnimClip = (typeof ANIM_CLIPS)[number];
 
@@ -94,6 +99,7 @@ export const ONE_SHOT_CLIPS: ReadonlySet<AnimClip> = new Set<AnimClip>([
   'swat',
   'hiss',
   'stretch',
+  'shake',
 ]);
 
 /**
@@ -109,8 +115,14 @@ export const LANDING_IMPACTS = ['soft', 'medium', 'hard'] as const;
 export type LandingImpact = (typeof LANDING_IMPACTS)[number];
 
 /** v1.2: optional procedural sounds (ADR 0003 §10). Off unless settings.sound.enabled. */
-export const SOUND_CUES = ['meow', 'chirp', 'trill', 'purr', 'hiss', 'growl', 'thud'] as const;
+export const SOUND_CUES = ['meow', 'chirp', 'trill', 'purr', 'hiss', 'growl', 'thud', 'squeak', 'rumble', 'chime', 'splash'] as const;
 export type SoundCue = (typeof SOUND_CUES)[number];
+/**
+ * Living Companion: the cues that belong to the world (world events), not to the cat. Their own
+ * switch (settings.sound categories) so a user can keep the cat's voice and mute the world, or the
+ * reverse. Everything stays off unless settings.sound.enabled.
+ */
+export const WORLD_SOUND_CUES: ReadonlySet<SoundCue> = new Set<SoundCue>(['squeak', 'rumble', 'chime', 'splash']);
 /**
  * A one-off sound; the renderer plays it once per distinct `at` (sim time, ms) and never a cue
  * older than ~500 ms against the snapshot's `t` (a recreated overlay must not replay it).
@@ -226,6 +238,17 @@ export interface CatRenderState {
   balance?: number;
   /** v1.2: one-off sound, sent to exactly one overlay (the one holding the anchor); absent/null = none. */
   sound?: CatSoundCue | null;
+  // ---- Living Companion (all optional; absent = none / the stated default) --------------------
+  /** World-event props, overlay-local DIP; drawn behind the cat, never part of the hit region. At most MAX_PROPS. */
+  props?: readonly RenderProp[];
+  /** Temporary mood: tunes ears, tail, pupils and eyelids on top of the clip. */
+  mood?: Mood;
+  /** 0..1 sleep depth (deep sleep breathes slower and quieter); absent = 0. */
+  sleepDepth?: number;
+  /** The laser dot, overlay-local DIP, only on the overlay whose display holds the cursor; null/absent = no dot. */
+  laser?: { x: number; y: number } | null;
+  /** Reduced motion: softer pose swings, no particle-like effects, props at half speed. */
+  reducedMotion?: boolean;
 }
 
 /** Hit region reported by a renderer for its current pose, overlay-local DIP. */

@@ -119,7 +119,22 @@
   },
   "sound": {
     "enabled": false,
-    "volume": 0.4
+    "volume": 0.4,
+    "cat": true,
+    "world": true
+  },
+  "companion": {
+    "personality": "auto",
+    "events": {
+      "enabled": true,
+      "rare": true,
+      "pace": 1,
+      "disabled": []
+    },
+    "reducedMotion": false,
+    "journal": {
+      "enabled": true
+    }
   },
   "diagnostics": {
     "logLevel": "info",

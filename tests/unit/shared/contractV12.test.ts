@@ -60,7 +60,7 @@ describe('settings v3 schema', () => {
     expect(s.behavior.activityPreset).toBe('playful');
     expect(matchingPreset(s)).toBe('playful');
     expect(s.behavior.disabledExtras).toEqual([]);
-    expect(s.sound).toEqual({ enabled: false, volume: 0.4 });
+    expect(s.sound).toEqual({ enabled: false, volume: 0.4, cat: true, world: true });
     expect([...TOGGLEABLE_BEHAVIORS]).toHaveLength(10);
   });
 

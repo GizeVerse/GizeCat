@@ -73,6 +73,36 @@ describe('web settings patches', () => {
     expect(applyWebPatch(s, { sound: { volume: -1 } }).ok).toBe(false);
   });
 
+  it('offers the Living Companion choices: personality, events, pace, calmer motion, journal and the sound categories', () => {
+    const s = webSettings(null);
+    expect(patchFor({ field: 'personality', value: 'shy' })).toEqual({ companion: { personality: 'shy' } });
+    expect(patchFor({ field: 'personality', value: 'auto' })).toEqual({ companion: { personality: 'auto' } });
+    expect(patchFor({ field: 'personality', value: 'grumpy' as never })).toBeNull();
+    expect(patchFor({ field: 'eventPace', value: 1.3 })).toEqual({ companion: { events: { pace: 1.25 } } });
+    expect(patchFor({ field: 'eventPace', value: 99 })).toEqual({ companion: { events: { pace: 2 } } });
+    expect(patchFor({ field: 'eventPace', value: Number.NaN })).toBeNull();
+    expect(patchFor({ field: 'rareEvents', value: false })).toEqual({ companion: { events: { rare: false } } });
+    expect(patchFor({ field: 'journalEnabled', value: false })).toEqual({ companion: { journal: { enabled: false } } });
+    expect(patchFor({ field: 'soundWorld', value: false })).toEqual({ sound: { world: false } });
+    expect(patchFor({ field: 'soundCat', value: 'yes' as never })).toBeNull();
+    const off = patchFor({ field: 'eventToggle', id: 'tinyUfo', enabled: false, current: s });
+    expect(off).toEqual({ companion: { events: { disabled: ['tinyUfo'] } } });
+    const r = applyWebPatch(s, off);
+    expect(r.ok && r.settings.companion.events.disabled).toEqual(['tinyUfo']);
+    // The other leaves of `events` are kept: a patch may name one leaf of a small object.
+    expect(r.ok && r.settings.companion.events.pace).toBe(1);
+    const on = r.ok ? patchFor({ field: 'eventToggle', id: 'tinyUfo', enabled: true, current: r.settings }) : null;
+    expect(on).toEqual({ companion: { events: { disabled: [] } } });
+    expect(patchFor({ field: 'eventToggle', id: 'notAnEvent' as never, enabled: false, current: s })).toBeNull();
+    for (const patch of [{ companion: { personality: 'shy' } }, { companion: { reducedMotion: true } }, { sound: { cat: false } }]) {
+      expect(rejectNonWebPatch(patch), JSON.stringify(patch)).toBeNull();
+      expect(applyWebPatch(s, patch).ok, JSON.stringify(patch)).toBe(true);
+    }
+    expect(applyWebPatch(s, { companion: { personality: 'grumpy' } }).ok).toBe(false);
+    expect(applyWebPatch(s, { companion: { events: { pace: 3 } } }).ok).toBe(false);
+    expect(rejectNonWebPatch({ companion: { nothing: true } })).not.toBeNull();
+  });
+
   it('forces screen analysis and AI off on every result, and resets to the web defaults', () => {
     const s = defaultSettings();
     s.perception.visualMode = 'ai';

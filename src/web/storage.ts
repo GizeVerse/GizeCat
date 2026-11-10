@@ -110,6 +110,10 @@ export function webSettings(raw: unknown): Settings {
       s.appearance = { ...stored.appearance };
       s.sound.enabled = stored.sound.enabled;
       s.sound.volume = stored.sound.volume;
+      s.sound.cat = stored.sound.cat;
+      s.sound.world = stored.sound.world;
+      // Living Companion choices (personality, events, calmer motion, journal switch) are carried settings.
+      s.companion = { ...stored.companion, events: { ...stored.companion.events, disabled: [...stored.companion.events.disabled] }, journal: { ...stored.companion.journal } };
       const r = applySettingsPatch(s, { behavior: pickKeys(stored.behavior, STORED_BEHAVIOR_KEYS), interaction: pickKeys(stored.interaction, STORED_INTERACTION_KEYS) });
       // Refused (never expected: migrated values are valid): the defaults, Playful, stand.
       if (r.ok) s = r.settings;
@@ -131,7 +135,8 @@ export function storedSettings(s: Settings): Record<string, unknown> {
     appearance: { ...s.appearance },
     behavior,
     interaction,
-    sound: { enabled: s.sound.enabled, volume: s.sound.volume },
+    sound: { enabled: s.sound.enabled, volume: s.sound.volume, cat: s.sound.cat, world: s.sound.world },
+    companion: { ...s.companion, events: { ...s.companion.events, disabled: [...s.companion.events.disabled] }, journal: { ...s.companion.journal } },
   };
 }
 

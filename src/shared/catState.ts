@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ALL_EVENT_IDS, EVENT_HISTORY_MAX, JOURNAL_MAX, type AnyEventId, type EventHistoryEntry } from './companion';
 
 /**
  * The cat's persistent identity: personality traits, game-like need/mood variables
@@ -135,6 +136,73 @@ export const MemorySchema = z.object({
 });
 export type Memory = z.infer<typeof MemorySchema>;
 
+// ---- Living Companion world memory (additive; no schema bump) -----------------------------------
+// Event history, per-event counters and the journal. Cats saved before the Living Companion have no
+// `world` and load the empty one; a build that does not know the section drops it on its next save,
+// which only forgets the diary. Every list is checked entry by entry (one bad entry never costs the
+// others) and bounded on load; ids outside the catalogue are stripped, outcome tokens are short,
+// content-free [a-z0-9_] words (the sentence is built from id + outcome in worldText.ts).
+
+/** Largest stored per-event counter. */
+export const WORLD_COUNT_MAX = 1e6;
+/** Outcome tokens: lower-case words, digits and underscores, at most 24 characters. */
+export const OUTCOME_TOKEN_PATTERN = /^[a-z0-9_]{1,24}$/;
+/** Epoch ms are kept inside the range a Date can show. */
+const WALL_MS_MAX = 8.64e15;
+/** A hand-edited file cannot make load work scale with its size: only the tail of a list is looked at. */
+const WORLD_SCAN_MAX = 1024;
+
+const ID_SET: ReadonlySet<string> = new Set(ALL_EVENT_IDS);
+
+/** One history or journal entry from untrusted data, or null (unknown id, bad time, bad outcome token). */
+export function parseWorldEntry(raw: unknown): EventHistoryEntry | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const e = raw as Record<string, unknown>;
+  const { id, at, outcome } = e;
+  if (typeof id !== 'string' || !ID_SET.has(id)) return null;
+  if (typeof at !== 'number' || !Number.isFinite(at) || at < 0 || at > WALL_MS_MAX) return null;
+  if (typeof outcome !== 'string' || !OUTCOME_TOKEN_PATTERN.test(outcome)) return null;
+  return { id: id as AnyEventId, at, outcome };
+}
+
+/** The newest `max` valid entries of `items`, oldest first (anything but an array is the empty list). */
+export function normalizeWorldEntries(items: unknown, max: number): EventHistoryEntry[] {
+  if (!Array.isArray(items)) return [];
+  const out: EventHistoryEntry[] = [];
+  const from = Math.max(0, items.length - WORLD_SCAN_MAX);
+  for (let i = items.length - 1; i >= from && out.length < max; i--) {
+    const e = parseWorldEntry((items as unknown[])[i]);
+    if (e) out.push(e);
+  }
+  return out.reverse();
+}
+
+/** Per-event counters: known ids only, whole numbers 1..WORLD_COUNT_MAX (zero and junk are dropped). */
+export function normalizeWorldCounts(raw: unknown): Partial<Record<AnyEventId, number>> {
+  const out: Partial<Record<AnyEventId, number>> = {};
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const src = raw as Record<string, unknown>;
+  for (const id of ALL_EVENT_IDS) {
+    const v = Object.hasOwn(src, id) ? src[id] : undefined;
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    const n = Math.min(WORLD_COUNT_MAX, Math.floor(v));
+    if (n >= 1) out[id] = n;
+  }
+  return out;
+}
+
+export const WorldMemorySchema = z.object({
+  /** The last EVENT_HISTORY_MAX events that ended (repetition control), oldest first. */
+  events: z.unknown().optional().transform((v) => normalizeWorldEntries(v, EVENT_HISTORY_MAX)),
+  /** How many times each event has played. */
+  counts: z.unknown().optional().transform((v) => normalizeWorldCounts(v)),
+  /** Wall-clock ms the last event ended (0 = none yet); the schedule restarts from a fresh delay anyway. */
+  lastEndedAt: z.number().min(0).max(WALL_MS_MAX).default(0).catch(0),
+  /** The diary: meaningful moments, newest last, at most JOURNAL_MAX. */
+  journal: z.unknown().optional().transform((v) => normalizeWorldEntries(v, JOURNAL_MAX)),
+});
+export type WorldMemory = z.infer<typeof WorldMemorySchema>;
+
 export const LastPositionSchema = z.object({
   displayKey: z.string().max(64),
   xFrac: z.number().min(0).max(1),
@@ -151,6 +219,8 @@ export const PersistedCatSchema = z.object({
   memory: MemorySchema.prefault({}).catch(() => MemorySchema.parse({})),
   /** v1.2 drives; defaults for cats saved before v1.2. */
   drives: DrivesSchema.prefault({}).catch(() => DrivesSchema.parse({})),
+  /** Living Companion world memory; the empty one for every cat saved before it. */
+  world: WorldMemorySchema.prefault({}).catch(() => WorldMemorySchema.parse({})),
   lastPosition: LastPositionSchema.nullable().default(null).catch(null),
   savedAt: z.number().min(0).default(0).catch(0),
 });

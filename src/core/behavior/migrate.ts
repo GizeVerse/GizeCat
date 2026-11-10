@@ -49,5 +49,9 @@ function sanitizeTimes(cat: PersistedCat, now: number): PersistedCat {
   for (const s of cat.memory.favoriteSpots) s.lastUsedAt = cap(s.lastUsedAt);
   for (const e of cat.memory.recent) e.at = cap(e.at);
   cat.memory.recent.sort((a, b) => a.at - b.at);
+  // Living Companion world memory: same rule (no entry from the future), order kept (newest last).
+  cat.world.lastEndedAt = cap(cat.world.lastEndedAt);
+  for (const e of cat.world.events) e.at = cap(e.at);
+  for (const e of cat.world.journal) e.at = cap(e.at);
   return cat;
 }
