@@ -1,6 +1,6 @@
 # Google Play permissions: the floating cat's four
 
-The manifest declares **four permissions, all for the optional floating cat** (1.4.0 preview 2; [design](../../platforms/android-overlay.md)). That is IMPLEMENTED and pinned by `tests/unit/android/androidProject.test.ts`. The app is fully usable without any of them being granted. **Nothing here has been filed with Google Play, and Play's acceptance is not assumed**: its policies and forms change, so read the current ones before submitting (UNVERIFIED against the current Play Console).
+The manifest declares **four permissions, all for the optional floating cat** (1.4.1; [design](../../platforms/android-overlay.md)). That is IMPLEMENTED and pinned by `tests/unit/android/androidProject.test.ts`. The app is fully usable without any of them being granted. **Nothing here has been filed with Google Play, and Play's acceptance is not assumed**: its policies and forms change, so read the current ones before submitting (UNVERIFIED against the current Play Console).
 
 | Permission | Requested? | Why | Declaration to prepare |
 |---|---|---|---|

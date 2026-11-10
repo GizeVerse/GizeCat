@@ -189,7 +189,9 @@ function recordedApkName(dir) {
  * but its own file, so a trial built after a release leaves the release APK alone.
  */
 function requestedOutputs() {
-  const baseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  // The Android app's own version (android/version.properties), not package.json's desktop version.
+  const baseVersion = /^versionName=(\d+\.\d+\.\d+)\s*$/m.exec(fs.readFileSync(path.join(androidDir, 'version.properties'), 'utf8'))?.[1];
+  if (!baseVersion) fail('android/version.properties has no versionName=MAJOR.MINOR.PATCH');
   // A preview is its own label everywhere below: names, folder and checksum prefix.
   const version = preview === null ? baseVersion : `${baseVersion}-overlay.${Number(preview)}`;
   const out = path.join(androidDir, 'app', 'build', 'outputs');

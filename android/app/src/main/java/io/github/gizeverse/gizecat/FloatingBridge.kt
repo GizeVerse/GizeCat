@@ -14,7 +14,7 @@ import org.json.JSONException
 import org.json.JSONObject
 
 /**
- * The app screen's side of the floating cat (1.4.0 preview 2; the page's `window.gizecatFloating`).
+ * The app screen's side of the floating cat (1.4.1; the page's `window.gizecatFloating`).
  * The app's own WebView posts one JSON operation at a time; this class turns it into a service
  * command, and pushes the floating cat's state back (the answer to `query`, then every change, and
  * whenever the app returns to the foreground: the overlay permission may have changed in Android's

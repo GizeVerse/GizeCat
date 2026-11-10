@@ -10,7 +10,7 @@ GizeCat has no account, ads, analytics, telemetry, crash upload or update check 
 | Administrator rights | Not needed (per-user install) | Not needed | Not applicable | Not applicable | Not applicable |
 | Network permission | Not applicable | Not applicable | Not applicable | **None**: no internet permission, so Android blocks all network access | Not applicable |
 | Storage permission | Not applicable | Not applicable | Not applicable | None: files go through the system's file picker | Not applicable |
-| Draw over other apps | Not a permission on Windows | Not a permission on macOS | Impossible (BLOCKED_BY_PLATFORM) | `SYSTEM_ALERT_WINDOW`, opt-in, never granted by the install (1.4.0 preview 2; never run) | Impossible for web apps |
+| Draw over other apps | Not a permission on Windows | Not a permission on macOS | Impossible (BLOCKED_BY_PLATFORM) | `SYSTEM_ALERT_WINDOW`, opt-in, never granted by the install (1.4.1; never run) | Impossible for web apps |
 | Starts at sign-in | On by default, disclosed once, easy to turn off | Off by default; opt-in "Open at login" | No | No | No |
 | Asks the browser to keep storage | — | — | Yes, in the installed app only; no prompt | — | Yes, in the installed app only; no prompt |
 
@@ -38,7 +38,7 @@ Nothing syncs between devices. There is no server.
 
 **Shared web origin.** If the web app is hosted as a GitHub project site (`<owner>.github.io/<repository>/`), it shares its browser storage and caches with every other GitHub Pages site of the same owner. That is how the expected address, `https://gizeverse.github.io/GizeCat/`, would work; it is not deployed. GizeCat only deletes older caches of its own copy (`gizecat-shell-<scope hash>-*`). A custom domain avoids the sharing; that is an owner decision.
 
-## The Android floating cat (1.4.0 preview 2)
+## The Android floating cat (1.4.1)
 
 A foreground service draws the cat in a small transparent window above other apps ([design and limits](android-overlay.md)). It reads nothing from other apps: no screen capture, no accessibility service, no usage access, no window titles. Raw touch coordinates are read only for touches that land inside the cat's own window; they feed the cat's gesture recognizer and are not stored or sent. Its notification is silent and hidden on the lock screen. It never starts by itself (no boot receiver). IMPLEMENTED; never run on a device.
 

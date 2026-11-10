@@ -1,4 +1,4 @@
-// The app screen's controls for the floating cat (Android app only; 1.4.0 preview 2). The elements
+// The app screen's controls for the floating cat (Android app only; 1.4.1). The elements
 // live in index.html and are hidden everywhere else; this module shows them from the state native
 // pushes (floatingProtocol.ts FloatingState) and turns clicks into control operations.
 //

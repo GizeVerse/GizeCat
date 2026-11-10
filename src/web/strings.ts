@@ -67,7 +67,7 @@ export const WS = {
     volumeLabel: 'Volume',
     volumeNeedsSound: 'Turn on Cat sounds to hear it.',
   },
-  // The floating cat (Android app only, 1.4.0 preview 2; floatingUi.ts). Wording promises nothing
+  // The floating cat (Android app only, 1.4.1; floatingUi.ts). Wording promises nothing
   // that was not observed on a device.
   floating: {
     start: 'Float over apps',

@@ -6,7 +6,7 @@ the APK's assets, so the cat, its simulation, renderer and gesture rules are the
 The page recognises the Android host by its origin and skips the service worker there.
 
 Not Capacitor, by design (decision D1 of the 1.4.0 design pass): no npm dependencies, two AndroidX
-libraries, no JavaScript interface object. **1.4.0 preview 2 adds an optional floating cat**: a
+libraries, no JavaScript interface object. **1.4.1 adds an optional floating cat**: a
 foreground service (`FloatingCatService`) with one small transparent overlay window
 (`OverlayWindow`) that runs the same web bundle (`index.html?surface=overlay`) and follows the cat
 over other apps. It needs four permissions, only for it, and the app is fully usable without them.
@@ -152,9 +152,15 @@ older than a preview), and the outputs go to `release/<version>-overlay.1/androi
 carrying `overlay.1` and their own `SHA256SUMS-android.txt`. They never enter, replace or delete a
 file of `release/<version>/android/`.
 
-Version: `versionName` comes from `package.json`. `versionCode` = MAJOR×10000 + MINOR×100 + PATCH,
-so 1.4.0 gives 10400. The build fails if MINOR or PATCH reaches 100. The outputs carry no version
-control information (`vcsInfo { include = false }`), so the build machine's git state is not in them.
+Version: the Android app has **its own version**, `android/version.properties` (`versionName=1.4.1`,
+`versionCode=10402`), so an Android-only release does not claim that the unchanged Windows and macOS
+builds are new; `package.json` stays the desktop and web version (1.4.0). The build fails if the
+versionCode is below package.json's formula (MAJOR×10000 + MINOR×100 + PATCH, so 1.4.0 gives 10400;
+MINOR and PATCH must stay below 100). Never lower the versionCode or reuse a value: Android refuses
+a downgrade, and an earlier trial APK of the same signing key only updates to a higher code (10400
+was the 1.4.0 trial, 10401 the unpublished 1.4.0-overlay.1 build). The same file's versionName is
+the bundled web app's About version (`scripts/build-web-app.mjs` sets `GIZECAT_WEB_APP_VERSION` for
+that build only). The outputs carry no version control information (`vcsInfo { include = false }`), so the build machine's git state is not in them.
 
 ### Build types
 
@@ -199,7 +205,7 @@ for sideloaded apps apply on certified devices; ADB installs are exempt.
 ## Status
 
 The project compiles and packages with Gradle on Windows (`:app:assembleRelease`, `:app:bundleRelease`
-and `:app:assembleTrial` for preview 2, `--preview=1`, with AGP's lint-vital check passing; the
+and `:app:assembleTrial` for 1.4.1, `--preview=1`, with AGP's lint-vital check passing; the
 release outputs unsigned).
 No release key exists, so the signed paths and the partial-key errors have never run. The app has
 never run on a device or emulator, so every runtime behaviour described above is

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   GizeCat for Android tablets (android/README.md). Every permission below serves the floating cat
-  (1.4.0 preview 2) and nothing else; the app is fully usable without any of them being granted:
+  (1.4.1) and nothing else; the app is fully usable without any of them being granted:
   - SYSTEM_ALERT_WINDOW ("Display over other apps"): draws the cat in a small transparent window
     above other apps. A special permission: it is never granted by the install; the user turns it on
     in Android's own settings page, which the app opens only when asked to

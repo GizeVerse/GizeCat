@@ -1,5 +1,5 @@
 // The floating cat's bridge messages (src/web/floatingProtocol.ts): strict parsing both ways.
-// Written for 1.4.0 preview 2 and NOT RUN by the agent that wrote it (owner rule: no tests); the
+// Written for 1.4.1 and NOT RUN by the agent that wrote it (owner rule: no tests); the
 // owner's run of `node .claude/scripts/verify.mjs fast` is the first execution.
 import { describe, expect, it } from 'vitest';
 import {

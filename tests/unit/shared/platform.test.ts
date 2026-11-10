@@ -55,7 +55,7 @@ describe('capability table: honesty rules', () => {
     }
   });
 
-  it('Android 1.4.0 preview 2 draws a small overlay window behind a permission: implemented, never verified on a device', () => {
+  it('Android 1.4.1 draws a small overlay window behind a permission: implemented, never verified on a device', () => {
     // A native app, not an in-page host: its overlay is a small window, not a click-through screen.
     expect(CAPABILITY_MATRIX.android.overlay.status).toBe('IMPLEMENTED_BUT_NOT_PLATFORM_VERIFIED');
     expect(CAPABILITY_MATRIX.android.overlay.note).toContain('Display over other apps');

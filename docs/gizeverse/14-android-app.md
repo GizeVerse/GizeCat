@@ -7,7 +7,7 @@ Status: accepted for the 1.4.0 release candidate, 2026-11-08. Code: `android/` (
 ## Context
 
 - [08-mobile-boundaries.md](08-mobile-boundaries.md) ruled out a desktop-style overlay on Android, and recommended the web host, optionally wrapped with Capacitor for a store.
-- 1.4.0 made the web host an installable PWA ([07-web-host.md](07-web-host.md#140-the-installable-tablet-web-app)). The Android app is a second way to deliver the **same** production bundle (`out/web`), with an app icon, offline start without a browser, and (as first built) no permissions; preview 2 adds four opt-in ones for the optional floating cat, see the notes below.
+- 1.4.0 made the web host an installable PWA ([07-web-host.md](07-web-host.md#140-the-installable-tablet-web-app)). The Android app is a second way to deliver the **same** production bundle (`out/web`), with an app icon, offline start without a browser, and (as first built) no permissions; 1.4.1 adds four opt-in ones for the optional floating cat, see the notes below.
 
 ## Decisions
 
@@ -16,7 +16,7 @@ Status: accepted for the 1.4.0 release candidate, 2026-11-08. Code: `android/` (
 | Criterion | Native WebView + WebViewAssetLoader | Capacitor |
 |---|---|---|
 | Reuse of the cat | The same unchanged bundle | The same unchanged bundle (the page uses no Capacitor API) |
-| Fit with the invariants | Zero permissions when decided (preview 2: four opt-in ones, all for the floating cat), no JavaScript interface object, every WebView setting set explicitly | Defaults to override and re-check on every upgrade: the INTERNET permission, a FileProvider, `allowBackup=true`, the `androidBridge` JS interface, built-in plugins (Http, Cookies, WebView, SystemBars), geolocation-enabled settings, an inline-script fallback that the CSP blocks |
+| Fit with the invariants | Zero permissions when decided (1.4.1: four opt-in ones, all for the floating cat), no JavaScript interface object, every WebView setting set explicitly | Defaults to override and re-check on every upgrade: the INTERNET permission, a FileProvider, `allowBackup=true`, the `androidBridge` JS interface, built-in plugins (Http, Cookies, WebView, SystemBars), geolocation-enabled settings, an inline-script fallback that the CSP blocks |
 | Dependencies | 0 npm packages; 2 Maven artifacts (`androidx.webkit:webkit:1.14.0`, `androidx.core:core:1.17.0`) | 3 npm packages (the CLI brings 18 direct dependencies) plus appcompat, fragment, coordinatorlayout, activity, core-splashscreen and the Cordova framework through Gradle |
 | Maintenance | One Activity on a standard Android Gradle Plugin setup | Yearly major versions; files that `cap sync` regenerates; an Android build that depends on `node_modules` paths |
 
@@ -36,7 +36,7 @@ Both main values live in `src/shared/identity.ts` (`androidApplicationId`, `andr
 
 - No `INTERNET`, so Android itself forbids network access. This is the third layer after the page's CSP (`connect-src 'none'`) and the native layer, which answers every request outside `https://appassets.androidplatform.net/assets/` with an empty 404.
 - No storage permission: files go through the Storage Access Framework.
-- **1.4.0 preview 2 changed this on the owner's request:** the manifest now declares `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` and `POST_NOTIFICATIONS`, all for an optional floating cat (a user-started foreground service with a small transparent window that follows the cat; [android-overlay.md](../platforms/android-overlay.md)). Everything above still holds: nothing asks for them until the user taps Float over apps, and the app is fully usable without them. A desktop-style click-through overlay stays BLOCKED_BY_PLATFORM (since Android 12, touches pass through another app's overlay only at ≤ 80 % opacity, and an app window has no input region), which is why the window is only the cat and a small margin. The floating cat has never run on a device.
+- **1.4.1 changed this on the owner's request:** the manifest now declares `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` and `POST_NOTIFICATIONS`, all for an optional floating cat (a user-started foreground service with a small transparent window that follows the cat; [android-overlay.md](../platforms/android-overlay.md)). Everything above still holds: nothing asks for them until the user taps Float over apps, and the app is fully usable without them. A desktop-style click-through overlay stays BLOCKED_BY_PLATFORM (since Android 12, touches pass through another app's overlay only at ≤ 80 % opacity, and an app window has no input region), which is why the window is only the cat and a small margin. The floating cat has never run on a device.
 - androidx.core's `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` is removed from the merged manifest. Two AndroidX library components remain for baseline-profile installation: `InitializationProvider` (not exported) and `ProfileInstallReceiver` (exported, guarded by `android.permission.DUMP`).
 - WebView usage metrics are opted out; cleartext traffic is off.
 - No alarm, job, wake lock or battery-optimisation request. Out of sight the app's own WebView is paused and its timers stop, except while the floating cat's service runs (the timers are process-wide, so the app then leaves them running for the floating window; the service pauses them when it ends with the app out of sight).
@@ -103,5 +103,5 @@ No forced orientation, `resizeableActivity="true"` (split screen, free-form wind
 ## Rejected alternatives
 
 - **Capacitor** (A1).
-- **A SYSTEM_ALERT_WINDOW overlay** as the *only* experience: it needs a reviewed permission and a foreground service, and the 80 % opacity rule rules out a click-through cat. (Superseded for 1.4.0 preview 2: it is built as an **optional** extra, with the in-app cat as the default.)
+- **A SYSTEM_ALERT_WINDOW overlay** as the *only* experience: it needs a reviewed permission and a foreground service, and the 80 % opacity rule rules out a click-through cat. (Superseded for 1.4.1: it is built as an **optional** extra, with the in-app cat as the default.)
 - **A separate app-shell page** for Android: the app serves the PWA's own bundle, which detects the Android host by its origin and skips the service worker there.

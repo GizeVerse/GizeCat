@@ -21,7 +21,14 @@ function fail(message) {
 }
 
 if (!noBuild) {
-  const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'build.mjs'), '--web-only'], { cwd: root, stdio: 'inherit' });
+  // The bundle reports the Android app's own version (android/version.properties), not package.json's.
+  const androidVersion = /^versionName=(\d+\.\d+\.\d+)\s*$/m.exec(fs.readFileSync(path.join(root, 'android', 'version.properties'), 'utf8'))?.[1];
+  if (!androidVersion) fail('android/version.properties has no versionName=MAJOR.MINOR.PATCH');
+  const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'build.mjs'), '--web-only'], {
+    cwd: root,
+    stdio: 'inherit',
+    env: { ...process.env, GIZECAT_WEB_APP_VERSION: androidVersion },
+  });
   if (r.status !== 0) fail(`the web build failed (exit ${r.status ?? r.signal})`);
 }
 

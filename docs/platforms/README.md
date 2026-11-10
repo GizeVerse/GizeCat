@@ -17,7 +17,7 @@ Pages:
 - [signing-overview.md](signing-overview.md): where signing stands on every platform, and each artifact's exact signing status.
 - [windows-signing.md](windows-signing.md): Authenticode for the Windows installers (SignPath, or your own certificate).
 - [macos-signing.md](macos-signing.md): Developer ID signing, notarization and stapling.
-- [android-overlay.md](android-overlay.md): the floating cat over other apps on Android (1.4.0 preview 2): design, permissions, touch limits, install.
+- [android-overlay.md](android-overlay.md): the floating cat over other apps on Android (1.4.1): design, permissions, touch limits, install.
 - [android-signing.md](android-signing.md): the owner's procedure for the Android release key.
 - [release-owner-actions.md](release-owner-actions.md): everything only the owner can do, in order.
 
@@ -36,7 +36,7 @@ It is the same cat everywhere. Every version runs the same behaviour simulation 
 
 | Topic | Windows | macOS | iPad | Android tablet |
 |---|---|---|---|---|
-| Over other apps | Yes: a transparent overlay; only the cat takes clicks | Yes: the same overlay as a floating panel | No. iPadOS has no API for it (BLOCKED_BY_PLATFORM) | Opt-in, from preview 2: a small transparent window that follows the cat, behind "Display over other apps" (IMPLEMENTED, never run; [guide](android-overlay.md)). Exact click-through is BLOCKED_BY_PLATFORM: touches in the window's margin around the cat are consumed |
+| Over other apps | Yes: a transparent overlay; only the cat takes clicks | Yes: the same overlay as a floating panel | No. iPadOS has no API for it (BLOCKED_BY_PLATFORM) | Opt-in, from 1.4.1: a small transparent window that follows the cat, behind "Display over other apps" (IMPLEMENTED, never run; [guide](android-overlay.md)). Exact click-through is BLOCKED_BY_PLATFORM: touches in the window's margin around the cat are consumed |
 | Where the cat walks | Floor, window tops and sides, the auto-hiding taskbar, Edge and Chrome tab strips | The floor of each screen only | The floor of the app window | The floor of the app window, or of the whole screen with the floating cat |
 | Input | Mouse | Mouse or trackpad | Touch | Touch |
 | Starts at sign-in | On by default (a one-time notice says so; you can turn it off) | Off by default; you can turn on "Open at login" | Not applicable | Not applicable |
@@ -74,7 +74,7 @@ The per-feature [capability matrix](../gizeverse/capability-matrix.md) uses an o
 | macOS Apple Silicon (arm64) | IMPLEMENTED | COMPILED_OR_PACKAGED: ad-hoc zip, statically inspected only | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Ad-hoc signed, not notarized. Developer ID and notarization: REQUIRES_OWNER_CREDENTIALS | IMPLEMENTED |
 | macOS universal | IMPLEMENTED (configuration) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED (it can only be built on a Mac) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS | IMPLEMENTED |
 | iPadOS web app (Safari, Home Screen) | IMPLEMENTED | COMPILED_OR_PACKAGED (static web bundle) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Public HTTPS hosting: REQUIRES_OWNER_CREDENTIALS (expected address `https://gizeverse.github.io/GizeCat/`, not deployed). App Store app: NOT_IMPLEMENTED | BLOCKED_BY_PLATFORM |
-| Android tablet app | IMPLEMENTED | COMPILED_OR_PACKAGED (trial APK; release APK and AAB unsigned) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (release key, Google Play, developer verification). The signing pipeline is IMPLEMENTED and has never run | Floating cat over other apps (native app, opt-in, preview 2): IMPLEMENTED, COMPILED_OR_PACKAGED, runtime THEORETICALLY_COMPATIBLE_NOT_EXECUTED ([guide](android-overlay.md)). Exact click-through: BLOCKED_BY_PLATFORM |
+| Android tablet app | IMPLEMENTED | COMPILED_OR_PACKAGED (trial APK; release APK and AAB unsigned) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | REQUIRES_OWNER_CREDENTIALS (release key, Google Play, developer verification). The signing pipeline is IMPLEMENTED and has never run | Floating cat over other apps (native app, opt-in, 1.4.1): IMPLEMENTED, COMPILED_OR_PACKAGED, runtime THEORETICALLY_COMPATIBLE_NOT_EXECUTED ([guide](android-overlay.md)). Exact click-through: BLOCKED_BY_PLATFORM |
 | Android tablet web app (Chrome) | IMPLEMENTED | COMPILED_OR_PACKAGED (same web bundle) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED | Public HTTPS hosting: REQUIRES_OWNER_CREDENTIALS (same expected address, not deployed) | BLOCKED_BY_PLATFORM |
 
 Two Windows details: the x64 build on Windows 11 on Arm runs under emulation (THEORETICALLY_COMPATIBLE_NOT_EXECUTED), and the x64 build cannot run on Windows 10 on Arm, which has no x64 emulation (BLOCKED_BY_PLATFORM).

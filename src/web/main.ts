@@ -90,7 +90,7 @@ function boot(): void {
   let settings = storage.loadSettings();
   const catLoad = storage.loadCat(Math.random, Date.now());
 
-  // ---- the floating cat (Android app, 1.4.0 preview 2): this page is either the app screen, or the
+  // ---- the floating cat (Android app, 1.4.1): this page is either the app screen, or the
   // transparent window the foreground service floats over other apps (`?surface=overlay`). Only the
   // app's own origin has either bridge; anywhere else both are null and the page is the plain web host.
   const root = document.documentElement;

@@ -1,4 +1,4 @@
-# The floating cat on Android (1.4.0 preview 2)
+# The floating cat on Android (1.4.1)
 
 GizeCat on an Android tablet can float over the launcher and other apps, like the desktop cat. This page is the design, the permissions, the limits and the install steps. Status words: [README.md](README.md#status-vocabulary-for-140).
 
@@ -113,26 +113,43 @@ What is and is not possible, stated plainly:
 - The notification is low-importance and silent. There is no wake lock, no alarm, no job and no boot receiver.
 - Not measured: battery drain was never measured on a device (UNVERIFIED).
 
-## Install and distribute the preview
+## Version, and what 1.4.1 updates
 
-The preview 2 files are in `release/1.4.0-overlay.1/android/` on the build machine (not published; see below). They are named by what they are:
+**GizeCat 1.4.1 is an Android-focused update. Windows and macOS are not updated:** the Windows installers stay the 1.4.0 Preview files (`Desktop-Cat-Setup-1.4.0-x64.exe` and `-arm64.exe`), macOS and iPadOS are not part of this release, and `package.json`, the desktop version, the hosted web app and the browser build stay 1.4.0. The Android app has its own version in `android/version.properties`: versionName `1.4.1`, versionCode `10402`. (The earlier trial APKs were 10400 for 1.4.0 and 10401 for the unpublished 1.4.0-overlay.1 build.) The bundled web app's About line shows 1.4.1 inside the Android app only.
 
-| File | What it is |
-|---|---|
-| `GizeCat-1.4.0-overlay.1-android-trial-debugsigned.apk` | Sideload trial. Signed with the **Android debug key**; its own application id `io.github.gizeverse.gizecat.trial`, labelled "GizeCat (trial)". **Never a production release.** |
-| `GizeCat-1.4.0-overlay.1-android-unsigned.apk`, `…-unsigned.aab` | Unsigned release builds. Android will not install the APK and Google Play will not take the AAB until the owner signs them with the upload key ([android-signing.md](android-signing.md)) |
+The one published file is `GizeCat-1.4.1-android-trial-debugsigned.apk`, a **sideload preview signed with the Android debug key**:
+- application id `io.github.gizeverse.gizecat.trial` (unchanged), label "GizeCat (trial)", versionName `1.4.1-trial`, versionCode 10402, not debuggable;
+- signing certificate SHA-256 `162fffa6298efb7c668a7b4f41ae87720c90caa383b460449737e53dadcd53a1`, the same as the published 1.4.0 trial APK, so it installs **over** it and keeps the cat and the settings;
+- **never a production release, and not a Google Play build.** The unsigned release APK and AAB are not published and cannot be installed (Android refuses an unsigned APK, Google Play an unsigned AAB) until the owner signs them with the upload key ([android-signing.md](android-signing.md)).
 
-Built on 2026-11-10 from this branch (static checks: the APK's manifest, permissions, signature and bundled files were read; nothing was run):
+The release page lists the APK's size and SHA-256 in `SHA256SUMS.txt`; check it before installing.
 
-| File | Bytes | SHA-256 |
-|---|---|---|
-| `GizeCat-1.4.0-overlay.1-android-trial-debugsigned.apk` | 690,909 | `a00262a2b15cfae9b263850c01ec899db864e1f9fa3928fd92b26c007954897b` |
-| `GizeCat-1.4.0-overlay.1-android-unsigned.apk` | 686,797 | `f23862541822fd17f70ed6807741516a495fa8cabec97c295a367c15336bf2e2` |
-| `GizeCat-1.4.0-overlay.1-android-unsigned.aab` | 679,534 | `b8f22aba41a0eaef099c4015282b638bf3a9b403c2722f6f8ca546534f51f232` |
+## Install
 
-The trial APK reads version `1.4.0-overlay.1-trial`, code 10401, id `io.github.gizeverse.gizecat.trial`, not debuggable, debug certificate SHA-256 `162fffa6298efb7c668a7b4f41ae87720c90caa383b460449737e53dadcd53a1`, and exactly the four permissions above. The unsigned APK and AAB carry no signature (`apksigner` and `jarsigner` refuse them), version `1.4.0-overlay.1`, code 10400. The published 1.4.0 Android files in `release/1.4.0/android/` were not touched.
+1. On the tablet, download `GizeCat-1.4.1-android-trial-debugsigned.apk` from the release page, in Chrome or the Files app.
+2. Optional, on a computer: `Get-FileHash .\GizeCat-1.4.1-android-trial-debugsigned.apk -Algorithm SHA256` and compare it with `SHA256SUMS.txt`.
+3. Open the APK. Android asks you to allow installs from that app (Chrome or Files): turn on **Allow from this source**, go back, tap **Install**. Google Play Protect may warn about an app from outside Play; that is expected.
+4. Open **GizeCat (trial)**.
 
-To try the trial APK on a tablet you own: copy it to the tablet, open it from the file manager or browser (allow "Install unknown apps" for that app when asked), then open GizeCat (trial) and tap **Float over apps**. It installs as an update over the earlier 1.4.0 trial APK of the same key (the cat is kept). It is not guaranteed to upgrade in place to a production-signed build: uninstall first, after saving the cat to a file (Settings, **Take your cat to another device**).
+With a computer and USB debugging: `adb install -r GizeCat-1.4.1-android-trial-debugsigned.apk`.
+
+## Upgrade from an earlier debug-signed preview
+
+- **From the 1.4.0 trial APK** (versionCode 10400) **or the 1.4.0-overlay.1 build** (10401): just install the new APK the same way. It has the same application id and the same debug signing certificate, and a higher versionCode, so Android treats it as an update and keeps your cat and settings. You do not uninstall first.
+- If Android refuses with a signature conflict, the older app was signed with a different debug key (another computer's). Then the update cannot work: save the cat to a file first (Settings, **Take your cat to another device**), uninstall the old app, install this one and load the file.
+- From a **production-signed** build later: not guaranteed. A debug-signed preview can never be updated in place by an app signed with another key, so save the cat to a file first, uninstall, install, load.
+- A downgrade is refused by Android: never install an APK with a lower versionCode over a higher one.
+
+## Grant and revoke the overlay permission
+
+- **Grant:** in the app tap **Float over apps**, read the explanation, tap **Open Android settings**, switch **Allow display over other apps** on for GizeCat, then go back. The cat starts by itself when you return with the permission on. Android's page can also be reached by hand: Settings, Apps, GizeCat (trial), **Display over other apps** (or Settings, Apps, Special app access, **Display over other apps**; the names vary by maker).
+- **Android 13 and later** also asks once whether GizeCat may show notifications. Allow it to get Pause, Hide and Stop in the notification; declining changes nothing else, the same buttons are in the app.
+- **Revoke:** switch the same setting off. The floating cat stops at once with a plain message, and the app keeps working with the cat inside it. Nothing asks again until you tap **Float over apps** again.
+- **Stop the cat without revoking:** **Stop floating cat** in the app or **Stop** in the notification.
+
+## The foreground service notification
+
+While the cat floats, Android requires a notification (it is the foreground service's, low-importance, silent and hidden on the lock screen). It has **Pause** or **Resume**, **Hide** or **Show**, and **Stop**; tapping it opens GizeCat's settings. With notifications turned off for the app, the service still runs and the controls are in the app, and Android's list of running apps can stop it.
 
 ## Limits and unverified behaviour
 

@@ -1,5 +1,5 @@
 // The messages between the Android app's native code and the web bundle for the floating cat
-// (1.4.0 preview 2). Two bridges, both JSON strings over androidx.webkit's addWebMessageListener, so
+// (1.4.1). Two bridges, both JSON strings over androidx.webkit's addWebMessageListener, so
 // they exist only in frames of the app's own origin:
 //
 // - the OVERLAY bridge (`window.gizecatOverlay`): inside the transparent window the foreground

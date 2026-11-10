@@ -31,9 +31,15 @@ const webDir = path.join(outDir, 'web');
 const webTestDir = path.join(outDir, 'web-test');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
+// The version the web bundle reports (About line, service worker version). It is package.json's,
+// except for the Android app's own bundle, which scripts/build-web-app.mjs builds with
+// GIZECAT_WEB_APP_VERSION set to android/version.properties' versionName: an update that changes only
+// Android must not make the desktop or the hosted web app claim a new version.
+const appVersion = /^\d+\.\d+\.\d+$/.test(process.env.GIZECAT_WEB_APP_VERSION ?? '') ? process.env.GIZECAT_WEB_APP_VERSION : pkg.version;
+
 const define = {
   __DEV__: JSON.stringify(dev),
-  __APP_VERSION__: JSON.stringify(pkg.version),
+  __APP_VERSION__: JSON.stringify(appVersion),
   'process.env.NODE_ENV': JSON.stringify(dev ? 'development' : 'production'),
 };
 
@@ -143,7 +149,7 @@ async function buildServiceWorker(dir) {
     hash.update(fs.readFileSync(path.join(dir, ...f.split('/'))));
     hash.update('\0');
   }
-  const version = `${pkg.version}-${hash.digest('hex').slice(0, 16)}`;
+  const version = `${appVersion}-${hash.digest('hex').slice(0, 16)}`;
   await build({
     bundle: true,
     minify: true,

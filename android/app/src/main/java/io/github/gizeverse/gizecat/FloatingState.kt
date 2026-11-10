@@ -12,7 +12,7 @@ import androidx.core.app.NotificationManagerCompat
 import org.json.JSONObject
 
 /**
- * Process-wide state of the floating cat (1.4.0 preview 2), read by the foreground service, the app
+ * Process-wide state of the floating cat (1.4.1), read by the foreground service, the app
  * screen's bridge and the Activity. Main thread only: every writer and every listener runs on it,
  * so there are no locks. It holds no cat and no setting, only what the controls need to show.
  */

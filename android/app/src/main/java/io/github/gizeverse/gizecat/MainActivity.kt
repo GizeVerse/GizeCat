@@ -38,7 +38,7 @@ import java.io.ByteArrayInputStream
  * - the page's native bridges are two narrow web message listeners: [FileBridge] (the system file
  *   picker for `<input type=file>` and a save-to-file message, both through the Storage Access
  *   Framework, no storage permission) and [FloatingBridge] (start, stop, pause and hide the floating
- *   cat, preview 2). The floating cat's own window has a third, `gizecatOverlay`, in [OverlayWindow];
+ *   cat, 1.4.1). The floating cat's own window has a third, `gizecatOverlay`, in [OverlayWindow];
  * - Back runs one fixed script, [CLOSE_TOP_DIALOG_JS], that closes the page's open `<dialog>` (the
  *   settings sheet), and the notification's "open settings" runs one more fixed script,
  *   [OPEN_SETTINGS_JS]; no page data is ever put into a script. On any other page of ours (the

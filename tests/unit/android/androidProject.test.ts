@@ -1,6 +1,6 @@
 // The Android app (android/, guide in android/README.md), checked statically: no Gradle, no device.
 // These pins keep the 1.4.0 design's privacy and security choices from drifting: only the four
-// permissions the floating cat needs (1.4.0 preview 2, docs/platforms/android-overlay.md), no cloud
+// permissions the floating cat needs (1.4.1, docs/platforms/android-overlay.md), no cloud
 // backup, a WebView that loads nothing but the app's own bundle, narrow native bridges, no DevTools
 // outside developer builds, and the frozen identifiers in src/shared/identity.ts.
 import crypto from 'node:crypto';
@@ -23,7 +23,7 @@ const manifest = stripXml(read('android', 'app', 'src', 'main', 'AndroidManifest
 const activity = stripCode(read(...KOTLIN_DIR, 'MainActivity.kt'));
 const bridge = stripCode(read(...KOTLIN_DIR, 'FileBridge.kt'));
 const kotlin = `${activity}\n${bridge}`;
-// The floating cat (1.4.0 preview 2).
+// The floating cat (1.4.1).
 const overlayWindow = stripCode(read(...KOTLIN_DIR, 'OverlayWindow.kt'));
 const floatingService = stripCode(read(...KOTLIN_DIR, 'FloatingCatService.kt'));
 const floatingBridge = stripCode(read(...KOTLIN_DIR, 'FloatingBridge.kt'));
@@ -248,7 +248,7 @@ describe('Android back and lifecycle', () => {
   });
 });
 
-describe('Android floating cat (1.4.0 preview 2)', () => {
+describe('Android floating cat (1.4.1)', () => {
   it('draws one small transparent application-overlay window: not focusable, not touch-modal, never full screen', () => {
     expect(overlayWindow).toContain('WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY');
     expect(overlayWindow).toContain('WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE');
@@ -425,7 +425,20 @@ describe('Android Gradle build', () => {
     expect(gradle).toMatch(/minSdk = 29\b/);
     expect(gradle).toContain('repoRoot.resolve("package.json")');
     expect(gradle).toContain('appMajor * 10000 + appMinor * 100 + appPatch');
-    expect(gradle).toContain('versionName = appVersion');
+    // 1.4.1: the Android app has its own version (android/version.properties); package.json stays the
+    // desktop and web version, and the code can never fall below what package.json's formula gives.
+    expect(gradle).toContain('versionName = androidVersionName');
+    expect(gradle).toContain('versionCode = androidVersionCode');
+    expect(gradle).toContain('require(it >= appVersionCode)');
+    const props = read('android', 'version.properties')
+      .split(/\r?\n/)
+      .filter((l) => l.trim() && !l.trim().startsWith('#'));
+    expect(props).toEqual(['versionName=1.4.1', 'versionCode=10402']);
+    // Above the earlier trial APKs (10400 for 1.4.0, 10401 for 1.4.0-overlay.1), so it installs over them.
+    expect(Number(props[1]?.split('=')[1])).toBeGreaterThan(10401);
+    const buildWebApp = read('scripts', 'build-web-app.mjs');
+    expect(buildWebApp).toContain('GIZECAT_WEB_APP_VERSION: androidVersion');
+    expect(read('scripts', 'build.mjs')).toContain('process.env.GIZECAT_WEB_APP_VERSION');
     const version = (JSON.parse(read('package.json')) as { version: string }).version;
     const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
     expect(m, `package.json version ${version} must be MAJOR.MINOR.PATCH for versionCode`).not.toBeNull();

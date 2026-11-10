@@ -1,4 +1,4 @@
-// The floating cat's display service (1.4.0 preview 2): one display, the whole physical screen, in
+// The floating cat's display service (1.4.1): one display, the whole physical screen, in
 // the same logical world as the web host (world px = dp = CSS px, scaleFactor 1), but the renderer's
 // canvas is only the small transparent window that follows the cat. So overlay-local DIP is the
 // world minus the window's origin (setOrigin), not minus the work area's origin as in display.ts.

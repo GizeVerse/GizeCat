@@ -2,7 +2,27 @@
 
 GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is the first public release; earlier versions were built and tested locally but not published.
 
-## 1.4.0 (release candidate, unreleased)
+## 1.4.1 (Android-focused Preview)
+
+**An Android-only update.** Windows and macOS are **not** updated: the Windows installers stay the 1.4.0 Preview files, macOS and iPadOS are not part of it, and `package.json` (the desktop and web version) stays 1.4.0. The Android app has its own version, 1.4.1 (`android/version.properties`, versionCode 10402). The APK is a **debug-signed preview**, not a production release and not a Google Play build. **Nothing in 1.4.1 has run on a device, an emulator or a simulator.** A build is not a test.
+
+### Added
+- **The floating cat on Android (owner-requested)** ([guide](docs/platforms/android-overlay.md)): an optional, user-started foreground service draws the cat in a small transparent overlay window that follows it over the launcher and other apps, running the same web bundle and shared cat engine. Touch, pet, drag and throw work through raw touches read natively; Pause, Hide, Stop and Settings are on the app screen and in a minimal notification; the app asks for "Display over other apps" only after an in-app explanation, only when you tap Float over apps, and works fully without it. It adds four permissions (`SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`), pinned by tests, and it never starts by itself. The 1.4.1 APK is collected into `release/1.4.1/android/`, never into `release/1.4.0/`. Exact click-through is BLOCKED_BY_PLATFORM (touches in the window's margin around the cat are consumed). **Compiled and packaged, never run on a device, emulator or simulator.** Windows, macOS and the browser web host are unchanged.
+
+### Changed
+- **The Android app's manifest** declares four permissions for the floating cat (it declared none); the privacy page, the privacy policy, the threat model (T23), the Play permission drafts and the capability matrix say so. The web privacy page's Permissions section now separates the browser (asks for nothing) from the Android app.
+- **The Android version** is its own: `android/version.properties` (1.4.1, versionCode 10402) feeds Gradle, the Android build script and the bundled web app's About line. The desktop installers, the hosted web app and `package.json` keep 1.4.0.
+- **Start over and loading a profile** are refused while the floating cat runs (stop it first): it owns the stored cat.
+
+### Not done
+- No test, emulator, simulator or device run. The floating cat is IMPLEMENTED and COMPILED_OR_PACKAGED only.
+- Touch pass-through is limited by Android: the window is only the cat and a margin, and touches in the margin are consumed.
+- Floor-only movement: other apps' windows are invisible to an app.
+- Some secure or system screens hide overlays or block touches while one is above them.
+- No Google Play approval is assumed or claimed; the permission and foreground-service declarations are drafted, not filed.
+- The tail's inertia and the held cat's swing are reduced in the floating window.
+
+## 1.4.0 (published 2026-11-10 as a Preview: Windows x64 and ARM64 installers and an Android trial APK)
 
 **Not released.** 1.3.0 stays the current release until the owner publishes 1.4.0. **Nothing in 1.4.0 has run on any device.** A build is not a test. Statuses use the release vocabulary: IMPLEMENTED, COMPILED_OR_PACKAGED, THEORETICALLY_COMPATIBLE_NOT_EXECUTED, REQUIRES_OWNER_CREDENTIALS, BLOCKED_BY_PLATFORM, NOT_IMPLEMENTED. Every target and artifact: [docs/platforms/](docs/platforms/README.md).
 
@@ -50,7 +70,6 @@ GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is th
 - **Release automation** ([guide](docs/platforms/release-automation.md)). Four workflows, each manual only: `macos-packages.yml`, `android-release.yml`, `release.yml` (now with a `signpath` path that signs through SignPath, verifies every signature and compares each signed file with its unsigned input, and draft attachment) and `pages.yml`. Signing secrets live in the protected GitHub Environments `macos-signing`, `android-signing` and `windows-signing`. **None has ever been started.** `macos-packages.yml`, `pages.yml` and `android-release.yml` are not on `main`, so they cannot be started until the owner brings them there.
 - **Documentation:** [troubleshooting by device](docs/platforms/troubleshooting.md), [moving a cat to another device](docs/platforms/profile-transfer.md), [Android signing](docs/platforms/android-signing.md).
 - **Diagnostics:** `os.arm64Translation` (true when an x64 build runs under Rosetta or Windows on Arm emulation).
-- **The floating cat on Android (preview 2, owner-requested)** ([guide](docs/platforms/android-overlay.md)): an optional, user-started foreground service draws the cat in a small transparent overlay window that follows it over the launcher and other apps, running the same web bundle and shared cat engine. Touch, pet, drag and throw work through raw touches read natively; Pause, Hide, Stop and Settings are on the app screen and in a minimal notification; the app asks for "Display over other apps" only after an in-app explanation, only when you tap Float over apps, and works fully without it. It adds four permissions (`SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`), pinned by tests, and it never starts by itself. Preview builds carry `-overlay.N` in their version (`--preview=N`) and are collected into their own folder, never into `release/1.4.0/`. Exact click-through is BLOCKED_BY_PLATFORM (touches in the window's margin around the cat are consumed). **Compiled and packaged, never run on a device, emulator or simulator.** Windows, macOS and the browser web host are unchanged.
 - **Signing readiness** ([overview](docs/platforms/signing-overview.md)), all never run because no credential exists:
   - Windows: SignPath CI signing in `release.yml` and a local token or cloud-HSM script (`scripts/sign-windows.ps1`), with SHA-256 and RFC 3161 timestamps. Two check tools read files without running them: `scripts/verify-windows-signature.ps1` and `scripts/compare-signed-pe.mjs`.
   - macOS: the Developer ID job checks the identity, hardened runtime, timestamp, notarization and stapling, also inside the shipped zips. It signs, notarizes (blocking) and staples each DMG. `scripts/check-mac-payload.mjs --expect-signature adhoc|cms` tells ad-hoc from real signatures.
@@ -58,7 +77,6 @@ GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is th
   - Owner steps: [release-owner-actions.md](docs/platforms/release-owner-actions.md).
 
 ### Changed
-- **The Android app's manifest** declares four permissions for the floating cat (it declared none); the privacy page, the privacy policy, the threat model (T23), the Play permission drafts and the capability matrix say so. The web privacy page's Permissions section now separates the browser (asks for nothing) from the Android app.
 - **Windows installer file names** gain the architecture: `-x64` / `-arm64`. Shortcuts, the Apps entry and the install folder still say "Desktop Cat". The same appId means installing over 1.3.0 is an upgrade that keeps your cat (the upgrade to 1.4.0 has not been run).
 - **macOS overlay level** is `floating` instead of `screen-saver`, so menus, the menu bar, the Dock and system alerts draw over the cat.
 - **Web host CSP:** no `data:` images; `manifest-src` and `worker-src 'self'` added. The 1.3.0 wording "no network after load" is replaced by a precise one: the page itself can make no requests, and the only traffic is the browser loading the app's own files.

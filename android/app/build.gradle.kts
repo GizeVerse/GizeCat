@@ -18,9 +18,23 @@ val (appMajor, appMinor, appPatch) = versionParts
 require(appMinor < 100 && appPatch < 100) { "versionCode needs MINOR and PATCH below 100, got $appVersion" }
 val appVersionCode: Int = appMajor * 10000 + appMinor * 100 + appPatch
 
+// The Android app's own version (android/version.properties, 1.4.1): package.json stays the desktop
+// and web version, so a release that updates only Android does not claim the unchanged Windows and
+// macOS builds are new. The code may never be lower than package.json's formula would give.
+val androidVersionFile: File = rootProject.file("version.properties")
+val androidVersionProps: Properties = Properties().apply {
+    require(androidVersionFile.isFile) { "android/version.properties is missing" }
+    androidVersionFile.inputStream().use { load(it) }
+}
+val androidVersionName: String = androidVersionProps.getProperty("versionName")?.trim().orEmpty()
+    .also { require(Regex("""\d+\.\d+\.\d+""").matches(it)) { "android/version.properties: versionName must be MAJOR.MINOR.PATCH, got \"$it\"" } }
+val androidVersionCode: Int = androidVersionProps.getProperty("versionCode")?.trim()?.toIntOrNull()
+    ?.also { require(it >= appVersionCode) { "android/version.properties: versionCode $it is lower than package.json's ($appVersionCode)" } }
+    ?: error("android/version.properties: versionCode must be a whole number")
+
 // Preview builds (docs/platforms/android-overlay.md): -PgizecatPreview=N (1..99) names a build that
 // is not the release, so it can never be mistaken for it: versionName gets "-overlay.N" (every build
-// type), and the sideload TRIAL build's versionCode becomes appVersionCode + N, so it installs as an
+// type), and the sideload TRIAL build's versionCode becomes androidVersionCode + N, so it installs as an
 // update over an earlier trial APK of the same version (same applicationId, same debug key). The
 // release build's versionCode is left alone: a real release must never be older than a preview.
 val previewNumber: Int? = providers.gradleProperty("gizecatPreview").orNull?.let { raw ->
@@ -79,8 +93,8 @@ android {
         applicationId = "io.github.gizeverse.gizecat"
         minSdk = 29
         targetSdk = 36
-        versionCode = appVersionCode
-        versionName = appVersion
+        versionCode = androidVersionCode
+        versionName = androidVersionName
         versionNameSuffix = previewNumber?.let { "-overlay.$it" } ?: ""
     }
 
@@ -129,7 +143,7 @@ android {
 // The trial build of a preview installs over an earlier trial APK (see previewNumber above).
 androidComponents {
     onVariants(selector().withBuildType("trial")) { variant ->
-        previewNumber?.let { n -> variant.outputs.forEach { it.versionCode.set(appVersionCode + n) } }
+        previewNumber?.let { n -> variant.outputs.forEach { it.versionCode.set(androidVersionCode + n) } }
     }
 }
 

@@ -1,6 +1,6 @@
 // The floating cat's page side: the display service, the window rectangle and the surface that turns
 // native messages into the cat's input and the cat's position into a window position
-// (src/web/overlayDisplay.ts, src/web/overlaySurface.ts). Written for 1.4.0 preview 2 and NOT RUN
+// (src/web/overlayDisplay.ts, src/web/overlaySurface.ts). Written for 1.4.1 and NOT RUN
 // by the agent that wrote it (owner rule: no tests).
 import { describe, expect, it, vi } from 'vitest';
 import type { OverlayInbound, OverlayOutbound, ScreenMetrics } from '../../../src/web/floatingProtocol';

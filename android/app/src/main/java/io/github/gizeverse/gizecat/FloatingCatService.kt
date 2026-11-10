@@ -20,7 +20,7 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 
 /**
- * The floating cat's foreground service (1.4.0 preview 2). It owns one [OverlayWindow] (never two),
+ * The floating cat's foreground service (1.4.1). It owns one [OverlayWindow] (never two),
  * the notification Android requires for a foreground service, and the lifecycle:
  *
  * - START (from the app screen, with the app in the foreground): enters the foreground first, then

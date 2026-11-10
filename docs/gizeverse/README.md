@@ -64,7 +64,7 @@ Branch `release/1.4.0-universal-devices`. **Not released**; 1.3.0 stays the curr
 | Windows x64 and ARM64 | One installer per architecture; an ARM64-only guard; a static payload check | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
 | macOS Intel and Apple Silicon | Floating panel, template menu-bar icon, Dock switch, opt-in login item, packaging routes, ad-hoc zips (COMPILED_OR_PACKAGED, not notarized) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
 | iPad | The installable web app (expected project-site address not deployed) | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
-| Android tablets | A native WebView app with a ready signing pipeline (no key exists), an optional floating cat over other apps (preview 2: four permissions, only for it), and the installable web app | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
+| Android tablets | A native WebView app with a ready signing pipeline (no key exists), an optional floating cat over other apps (1.4.1: four permissions, only for it), and the installable web app | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
 | Every host | A portable profile file and "Take your cat to another device" to save and load it | THEORETICALLY_COMPATIBLE_NOT_EXECUTED |
 
 ## Risks and next milestone

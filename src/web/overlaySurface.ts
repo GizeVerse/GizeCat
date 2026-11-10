@@ -1,4 +1,4 @@
-// The floating cat's page side (1.4.0 preview 2): what the web bundle does when it runs inside the
+// The floating cat's page side (1.4.1): what the web bundle does when it runs inside the
 // transparent overlay window of the Android foreground service (`index.html?surface=overlay`).
 //
 // The engine is the same one the app and the browser run (createCatSim, createCatHost,
