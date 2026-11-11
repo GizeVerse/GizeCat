@@ -126,6 +126,15 @@ const SETTINGS_LABELS: Readonly<Record<string, string>> = {
   'interaction.throwing': S.interaction.throwingTitle,
   'interaction.patience': S.interaction.patienceTitle,
   'interaction.reactionIntensity': S.behavior.reactionsTitle,
+  'companion.personality': S.companion.personalityTitle,
+  'companion.events.enabled': S.behavior.worldEnabledTitle,
+  'companion.events.rare': S.behavior.worldRareTitle,
+  'companion.events.pace': S.behavior.worldPaceTitle,
+  'companion.events.disabled': S.behavior.groupWorldList,
+  'companion.reducedMotion': S.access.reducedTitle,
+  'companion.journal.enabled': S.journal.enabledTitle,
+  'sound.cat': S.audio.catTitle,
+  'sound.world': S.audio.worldTitle,
 };
 
 const lastSegment = (field: string): string => field.slice(field.lastIndexOf('.') + 1);

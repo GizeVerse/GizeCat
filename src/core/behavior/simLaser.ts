@@ -245,7 +245,7 @@ export abstract class SimLaser extends SimCompanion {
   /** A sleeping cat is woken by the light through the existing wake path, after a short delay (never at once). */
   private laserWake(dot: Point | null): void {
     const a = this.act;
-    if (!ASLEEP_STATES.has(a.state) || a.variant === 'intro' || !dot || this.laserBlocked() !== null) {
+    if (!ASLEEP_STATES.has(a.state) || a.variant === 'intro' || a.variant === 'forced' || a.cause === 'command' || !dot || this.laserBlocked() !== null) {
       this.laserWakeSince = null;
       return;
     }

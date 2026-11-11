@@ -352,7 +352,7 @@ const NORMAL: readonly EventDef[] = [
         b(0.8, 'settle', { clip: 'loaf', urgency: 0.2 }),
         b(1, 'settle', { clip: 'loaf', urgency: 0.2 }),
       ]),
-      outcome('restedBeside', 0.8, true, { calm: 0.6, playfulness: -0.2 }, [
+      outcome('rested_beside', 0.8, true, { calm: 0.6, playfulness: -0.2 }, [
         b(0, 'watch'),
         b(0.2, 'approach', { pace: 'slow', standoff: 1.0 }),
         b(0.4, 'settle', { clip: 'loaf', urgency: 0.2 }),

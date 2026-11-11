@@ -37,7 +37,7 @@ import type { SettingsStore } from '../store/settingsStore';
 export const PROFILE_TOKEN_TTL_MS = 10 * 60_000;
 
 /** The only settings sections (and general keys) an imported patch may touch. */
-const IMPORT_SECTIONS: ReadonlySet<string> = new Set(['general', 'appearance', 'behavior', 'interaction', 'sound']);
+const IMPORT_SECTIONS: ReadonlySet<string> = new Set(['general', 'appearance', 'behavior', 'interaction', 'sound', 'companion']);
 const IMPORT_GENERAL_KEYS: ReadonlySet<string> = new Set(['catName']);
 
 export interface ProfileDialogs {

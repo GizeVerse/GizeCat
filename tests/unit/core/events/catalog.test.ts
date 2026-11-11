@@ -113,6 +113,24 @@ describe('catalogue', () => {
   });
 });
 
+describe('outcome tokens and persistence', () => {
+  it('every outcome id, and every journal token, is a persistable token (lowercase, digits, underscore; 1 to 24)', () => {
+    // The persisted history and journal drop any entry whose outcome fails this pattern on load, so an id with a
+    // capital letter would silently vanish after a restart (a real bug the review caught: 'restedBeside').
+    const TOKEN = /^[a-z0-9_]{1,24}$/;
+    for (const id of ALL_EVENT_IDS) {
+      for (const o of EVENT_CATALOG[id].outcomes) expect(o.id, `${id} outcome ${o.id}`).toMatch(TOKEN);
+      for (const t of EVENT_OUTCOME_TOKENS[id]) expect(t, `${id} token ${t}`).toMatch(TOKEN);
+    }
+  });
+
+  it('journalText never returns a non-string, even for an outcome that names an Object.prototype member', () => {
+    for (const id of ALL_EVENT_IDS) {
+      for (const bad of ['constructor', '__proto__', 'hasownproperty']) expect(typeof journalText(id, bad)).toBe('string');
+    }
+  });
+});
+
 describe('world text', () => {
   it('covers every event with a name, a description and a sentence for every engine outcome', () => {
     for (const id of ALL_EVENT_IDS) {

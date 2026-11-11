@@ -312,7 +312,7 @@ describe('profile apply', () => {
     await r.service.openForImport(3);
     r.service.applyImport(3, { token: TOKEN, parts: { cat: true, appearance: true, preferences: true, memory: true } });
     for (const p of r.patches) {
-      expect(Object.keys(p).every((k) => ['general', 'appearance', 'behavior', 'interaction', 'sound'].includes(k))).toBe(true);
+      expect(Object.keys(p).every((k) => ['general', 'appearance', 'behavior', 'interaction', 'sound', 'companion'].includes(k))).toBe(true);
       expect(Object.keys(p.general ?? {})).not.toContain('shortcutsEnabled');
     }
     expect(r.settings.perception.visualMode).toBe('off');
@@ -323,6 +323,9 @@ describe('profile apply', () => {
 describe('rejectImportPatch (defense in depth)', () => {
   it('refuses consent, main-owned sections, unknown sections, other general keys and activityPreset', () => {
     expect(rejectImportPatch({ appearance: { skin: 'gray' } })).toBeNull();
+    // The Living Companion choices (personality, events, reduced motion, journal switch) are carried by profiles.
+    expect(rejectImportPatch({ companion: { personality: 'shy' } })).toBeNull();
+    expect(rejectImportPatch({ companion: { events: { enabled: false, rare: false, pace: 1.5, disabled: [] } } })).toBeNull();
     expect(rejectImportPatch({ perception: { visualMode: 'local-stats' } })).not.toBeNull();
     expect(rejectImportPatch({ perception: { consentAt: '2026-01-01T00:00:00.000Z' } })).not.toBeNull();
     expect(rejectImportPatch({ ai: { allowCloud: true } })).not.toBeNull();

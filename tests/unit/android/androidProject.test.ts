@@ -317,7 +317,7 @@ describe('Android floating cat (1.4.1)', () => {
     expect(overlayWindow).not.toContain('evaluateJavascript');
     // Page -> native: only hello, win and saved; native -> page: only ptr, cmd and metrics.
     for (const t of ['"hello"', '"win"', '"saved"']) expect(overlayWindow).toContain(`${t} ->`);
-    expect(overlayWindow).toContain('setOf("t", "x", "y", "w", "h", "vis", "touch")');
+    expect(overlayWindow).toContain('setOf("t", "x", "y", "w", "h", "vis", "touch", "tx", "ty", "tw", "th")');
   });
 
   it('the app-screen bridge accepts a fixed set of operations from the app origin only', () => {

@@ -87,7 +87,7 @@ export const EVENT_TEXT: Readonly<Record<AnyEventId, EventText>> = {
     outcomes: {
       investigated: 'A cardboard box appeared. The cat gave it a thorough sniff.',
       entered: 'A cardboard box appeared. The cat climbed in and sat there, perfectly content.',
-      restedBeside: 'A cardboard box appeared. The cat settled down beside it for a rest.',
+      rested_beside: 'A cardboard box appeared. The cat settled down beside it for a rest.',
     },
   },
   mysteriousBall: {
@@ -202,7 +202,7 @@ export const EVENT_TEXT: Readonly<Record<AnyEventId, EventText>> = {
   },
   fallingStar: {
     name: 'Falling Star',
-    description: 'A star streaks across the upper sky.',
+    description: 'A star crosses the upper sky.',
     fallback: 'A star streaked across the sky and was gone.',
     outcomes: {
       watched: 'A star streaked across the sky. The cat watched it go.',
@@ -253,7 +253,7 @@ export const EVENT_TEXT: Readonly<Record<AnyEventId, EventText>> = {
   },
   meteorShower: {
     name: 'Meteor Shower',
-    description: 'A rare shower of small meteors streaks across the upper sky.',
+    description: 'A rare shower of small meteors crosses the upper sky.',
     fallback: 'A small meteor shower streaked across the sky.',
     outcomes: {
       watched: 'A small meteor shower streaked across the sky. The cat watched every one.',
@@ -302,7 +302,9 @@ export function eventDescription(id: AnyEventId): string {
 export function journalText(id: AnyEventId, outcome: OutcomeId): string {
   const t = EVENT_TEXT[id];
   if (!t) return GENERIC;
-  return t.outcomes[outcome] ?? t.fallback;
+  // Own properties only: an outcome token that happens to name an Object.prototype member (a hand-edited
+  // file can carry 'constructor') must fall back to the event's sentence, never return a non-string.
+  return Object.prototype.hasOwnProperty.call(t.outcomes, outcome) ? (t.outcomes[outcome] ?? t.fallback) : t.fallback;
 }
 
 /**
