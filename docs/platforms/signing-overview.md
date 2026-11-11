@@ -1,4 +1,29 @@
-# Signing overview: GizeCat 1.4.0
+# Signing overview: GizeCat 1.5.0 release candidate (1.4.0 record below)
+
+## 1.5.0 release candidate: current state
+
+Windows and Android only; macOS and iPad are not part of this release candidate. Details and exact owner steps: [1.5.0 signing readiness report](../releases/1.5.0-signing-readiness.md).
+
+**No GizeCat 1.5.0 file is signed with a release credential.** No certificate, SignPath project or production Android keystore exists, and nothing was bought or applied for. No test, emulator, simulator or app launch was performed for 1.5.0 code; all of it is IMPLEMENTED and statically verified only. Nothing is published or tagged.
+
+| File (in `release/1.5.0/`, named by the build; hashes are not recorded in repository docs) | Signature |
+|---|---|
+| `windows/Desktop-Cat-Setup-1.5.0-x64.exe`, `windows/Desktop-Cat-Setup-1.5.0-arm64.exe` | **Unsigned** (NSIS). Windows shows no verified publisher; SmartScreen or Smart App Control may warn or block. Not yet checked with `scripts/verify-windows-signature.ps1` for 1.5.0 |
+| `android/GizeCat-1.5.0-android-unsigned.apk` | **Unsigned**: Android will not install it |
+| `android/GizeCat-1.5.0-android-unsigned.aab` | **Unsigned**: Google Play will not accept it |
+| `android/GizeCat-1.5.0-android-trial-debugsigned.apk` | **Android debug certificate**, application id `io.github.gizeverse.gizecat.trial`, for sideload trials only |
+| `SHA256SUMS.txt` | Checksums of the files above, written by `npm run release:sums` |
+
+- The signing infrastructure in the repository is unchanged since 1.4.0 (`electron-builder.yml` SHA-256 and timestamp settings, `scripts/sign-windows.ps1`, the SignPath path of `release.yml`, `android/app/build.gradle.kts` key selection, `android-release.yml`). It is IMPLEMENTED and has never been run on a GizeCat file.
+- A production-signed Android app cannot update the debug-signed trial: the certificate and the application id both differ, so they are separate apps. See the upgrade warning in the readiness report.
+- A signature shows who published a file and that it is unchanged. It does not show that the app works, that Windows or Google trusts it, or that it is free of malware.
+- The Android 1.4.2 floating cat was OWNER-VERIFIED on one physical phone; Windows 1.3.0 ran on Windows 11 hardware. Neither says anything about the signing of 1.5.0.
+
+---
+
+## 1.4.0 record (historical)
+
+The sections below describe the 1.4.0 candidate as checked on 2026-11-10 and stay as they were. Their hashes and sizes belong to the 1.4.0 files only.
 
 Where signing stands on every platform, what is prepared, and what only the owner can do. Status words: [README.md](README.md#status-vocabulary-for-140). Checked on 2026-11-10 on the candidate branch `release/1.4.0-universal-devices`.
 

@@ -3,6 +3,10 @@
 Status: **static review only**. Nothing here was run on a device. No appeal has been filed, no
 store account was touched, and none of this is a promise that an install is warning-free.
 
+## 1.5.0 note (release candidate)
+
+Nothing about the permission set changed in 1.5.0 (the Living Companion): the manifest still declares exactly the four permissions in the table below, there is still no `INTERNET` permission, and the new world-event props, stage window and Laser Mode use no new permission, accessibility service or other sensitive API. The static findings below were written for 1.4.1 and 1.4.2 and still describe the manifest; they were not re-run as a scan or on a device for 1.5.0, and no one has installed a 1.5.0 build. Whether Play Protect warns about a 1.5.0 APK is unknown. The trial APK is still signed with the Android debug certificate and the release APK and AAB are unsigned. No appeal has been filed, no store account was touched, and nothing here claims a warning-free or malware-free install.
+
 ## What the owner saw
 
 Installing the 1.4.1 sideload APK on a real phone showed Google Play Protect's **"Harmful app

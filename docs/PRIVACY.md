@@ -25,14 +25,16 @@ Two more things stay on your PC and never reach the logs (v1.2):
 - **Click guard.** The rectangles of all visible top-level windows, private ones included, are used only inside the main process to keep the overlay click-through while the cat clings to a screen edge or hops off a covered surface. They are never passed to the behaviour engine, logged or exported.
 - **Behaviour profile.** Settings → Diagnostics → Behaviour and the diagnostics export show counts and durations for this session (time calm and active, trips up, stays and how they ended, hunts, falls, reactions, time spent typing-like or with a maximized window in front), never which windows or apps. The log lines (`stay ended`, `behavior summary`) carry the same kind of numbers, without typing time.
 
-**Sound (v1.2).** Off by default. When you turn it on, the cat's sounds are synthesized in the overlay; there are no recordings and no microphone access.
+**Sound (v1.2).** Off by default. When you turn it on, the cat's sounds are synthesized in the overlay; there are no recordings and no microphone access. Since 1.5.0 the cat's sounds and the world's sounds have separate switches (see [Living Companion](#living-companion-150-release-candidate)).
+
+The Living Companion of 1.5.0 (world events, the Cat Journal, Laser Mode, world sounds) adds no new signal to this table and no network request. What it stores and does is listed in [Living Companion (1.5.0 release candidate)](#living-companion-150-release-candidate).
 
 ## What is stored on disk
 
 All in `%APPDATA%\Desktop Cat\` (removed by deleting that folder; kept on uninstall unless you delete it):
 
 - `settings.json` (+ `settings.json.bak`, the previous version) — your preferences, including the launch-at-sign-in state (preference, who decided it, and the program path last registered — which contains your Windows user folder; the diagnostics export replaces that path, and any other path inside your user profile, with `%USERPROFILE%`).
-- `cat-state.json` (+ `cat-state.json.bak`) — the cat's personality numbers (e.g. curiosity 0.62), mood numbers, counters (how often it was petted), learned favourite resting spots (display + horizontal position) and a short list of recent cat events ("nap", "pet"). **No window titles, app names, screenshots or text.**
+- `cat-state.json` (+ `cat-state.json.bak`) — the cat's personality numbers (e.g. curiosity 0.62), mood numbers, counters (how often it was petted), learned favourite resting spots (display + horizontal position) and a short list of recent cat events ("nap", "pet"). **No window titles, app names, screenshots or text.** Since 1.5.0 the file also holds the cat's world memory (a bounded event history, per-event counters and the Cat Journal; see below).
 - Up to 3 `*.corrupt-<time>.json` copies per file, kept only if a file was unreadable, for inspection.
 - `secrets.json` — only if you enter an AI API key: the key encrypted with Windows DPAPI via Electron `safeStorage` (readable only by your Windows account). **No backup or quarantine copy of this file is ever kept; removing a key deletes it from disk.**
 - `relaunch-history.json` — timestamps of automatic restarts after crashes (bounded).
@@ -56,6 +58,37 @@ Screen analysis only runs after you explicitly opt in from the Privacy page; the
 - **Preview what the cat sees** (Settings → Privacy) shows the masked frame that is analysed or, in AI mode, the masked JPEG exactly as it would be sent. It is not saved and not sent.
 
 Screenshots are never written to disk.
+
+## Living Companion (1.5.0 release candidate)
+
+1.5.0 is a release candidate, not a release. Nothing in it has been run: this section describes what the code does (IMPLEMENTED, statically verified), not something observed on a device or a PC. Sources: `src/shared/companion.ts`, `src/shared/catState.ts`, `src/core/behavior/worldMemory.ts`, `src/shared/settings.ts`.
+
+**What it stores.** Only in the cat file (`cat-state.json` on Windows; the cat's localStorage key on the web and Android hosts), in a `world` section:
+
+- **Event history:** the last 16 world events that ended, each as an event id from the fixed catalogue (20 normal and 6 rare events), the wall-clock time it ended and a short outcome word (lower-case letters, digits and underscores, at most 24 characters).
+- **Counters:** how many times each event has played (whole numbers, capped at 1,000,000).
+- **The Cat Journal:** at most the newest 60 entries of the same kind (event id, time, outcome word). The text you read in the journal is built from those three fields by the app when it is shown; no sentence is stored.
+- **When the last event ended** (one time stamp).
+
+All of it is local and bounded. It holds no window title, app name, file name, screenshot, cursor position, typed text or free text. On load, every entry is checked one by one: an unknown id, a bad time or an outcome word that does not fit is dropped, lists are capped, and a damaged or hand-edited `world` section can only lose its diary, never change anything else.
+
+**What you can do about it.** *Settings → Journal* has a switch (on by default): when it is off nothing new is written to the journal, and what is there stays until you clear it. **Clear** (with a confirmation on Android) empties the journal, the event history behind it and the counters, and saves at once. **Clear history** in Personality forgets the world memory as well. Loading a different cat from a profile file replaces the world memory with an empty one. Deleting the cat file (or, on the web and Android, using Start over) removes everything. With *World events* off, no event is started and nothing new enters the history.
+
+**What is never exported.** A profile file never contains the event history, the counters or the journal: they are one device's diary of one cat. It carries only your choices: the personality, which events the cat meets and how often, reduced motion, whether a journal is kept, and the sound switches. Importing a profile never touches the stored journal of the same cat and never turns on screen analysis, AI or consent.
+
+**What is not stored at all.**
+
+- **Mood.** The cat's mood (happy, curious, sleepy, startled…) is worked out again from its stats, drives and recent events and fades within seconds or minutes. It is never written to disk (the cat's needs and drives, which the file has held since 1.2, are unchanged). The settings pages show it live only.
+- **The event schedule and any event in progress.** A restart starts a fresh random wait (5 to 30 minutes at the default pace, counted from the end of the previous event).
+- **Laser Mode and "pause events".** Both are session choices: off at every start, not part of the settings, never in a profile.
+
+**Laser Mode.** Off by default and only for the session. On Windows the red dot is drawn on the overlay at the pointer position the app already reads while it runs (`GetCursorPos`, see the table above); it reads nothing more, does not move or change the system cursor, and the position is used for the next frame only: never stored, never logged (the log records only that the mode went on or off), never sent. No dot is drawn over a display with a full-screen app in front unless you told the cat to ignore full-screen apps. On Android the dot follows only what Android hands GizeCat: touches and mouse hover on the cat's own small touch window, and touches inside GizeCat's own app window, for about 1.8 seconds after the last one. There is no global pointer tracking and no new permission. On Android a two-value record (`laser`, `eventsPaused`: two booleans, no position, no cat) in the app's private storage passes the two session switches from the app's screen to the floating cat's page; the app clears it every time it starts.
+
+**Sound.** Still **off by default** (`sound.enabled`). Sounds are synthesized in the overlay; there are no recordings and no microphone access. 1.5.0 adds two categories with their own switches, both on once sound is on: the **cat's** sounds (meow, chirp, trill, purr, hiss, growl, thud) and the **world's** sounds (squeak, rumble, chime, splash). With sound off, neither category plays.
+
+**Props.** The things world events show (a mouse, a butterfly, a paper plane, rain, a small UFO…) are drawn by the app as small pictures made of shapes, never as downloaded images, and are not read from the screen. They are never part of the region that takes clicks, so they cannot make the overlay block your desktop. Nothing about them is stored except the event id, time and outcome word above.
+
+**Network and telemetry.** None. The Living Companion code makes no request and sends nothing; there is still no telemetry or analytics. The event engine runs entirely in the app on your device. The AI vision feature (if you turned it on) is unchanged: a model may still only pick from the reaction allow-list.
 
 ## Network access
 

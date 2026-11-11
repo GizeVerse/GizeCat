@@ -65,6 +65,18 @@ What it does not do:
 - Open links to other apps or websites. Navigation never leaves the app's own pages.
 - Show a cat on an outdated Android System WebView: the page says "GizeCat has not started" instead. Update Android System WebView from Google Play ([steps](troubleshooting.md#the-android-system-webview-is-too-old)).
 
+### Living Companion on Android (1.5.0 release candidate)
+
+Android 1.5.0 (versionName 1.5.0, versionCode 10500) is not published; the published Android release is 1.4.2. **No 1.5.0 code has run on any device, emulator or simulator.** Everything below is IMPLEMENTED and statically verified, and NOT RUN, on phones and tablets alike. The 1.4.2 floating cat (overlay, drag and throw, edge climbing, touch, rotation, panel, app switching) was OWNER-VERIFIED on one physical Android phone; tablets and other phones are not individually verified.
+
+- **Files** (`scripts/android-gradle.mjs` names them, into `release/1.5.0/android/`): `GizeCat-1.5.0-android-trial-debugsigned.apk` (signed with the Android **Debug** certificate: trials only, not a Play package, Play Protect may warn), `GizeCat-1.5.0-android-unsigned.apk` and `GizeCat-1.5.0-android-unsigned.aab` (unsigned: an unsigned APK cannot be installed, and an AAB is for Google Play after the owner signs it). Signed names carry no `-unsigned`. Nothing is on Google Play.
+- **Home panel** (`src/web/androidPanel.ts`): Companion (live mood, activity, personality, world event), Appearance, Personality (seven profiles or Auto), Behavior (including world events, rare events, pace, a switch per event and **Pause world events**), Interactions (including **Laser mode**), Audio (Sound, Cat sounds, World sounds, volume), Accessibility (Reduced motion) and Journal.
+- **World events** on the floating cat: when props exist, the visual window widens into a wide, short stage strip (`src/web/stageWindow.ts`) and shrinks back about 1.5 seconds after the last prop is gone. The touch window is not part of it.
+- **Laser Mode** follows only what Android delivers legitimately: touches and mouse or trackpad hover over the cat's small touch window, and position hints from GizeCat's own app window. It cannot follow your finger over other apps and goes away when those inputs stop. No global tracking, no accessibility service, no new permission. It needs **Hunt and pounce** on, is off every time you open the app, and is never saved in a profile.
+- **Permissions: still exactly four** (`SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`). No network permission.
+- **Journal:** kept on the device, newest 60, never part of a saved profile. While the floating cat runs, the app page shows the journal as last saved and cannot clear it; stop the floating cat first.
+- Android's "Remove animations" setting is honoured in addition to the Reduced motion switch.
+
 ### Data
 
 - The cat and its settings live in the app's private storage on the tablet. Nothing syncs.

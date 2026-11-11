@@ -60,10 +60,22 @@ Run on a Windows 10/11 x64 machine. Heavy steps go through `node scripts/with-lo
 ## Package: Android
 
 - [ ] `npm run android:release` (or `npm run android:apk` and `npm run android:aab`) and `npm run android:trial` from the final commit, **without** `--no-web` → `release/<version>/android/` with `SHA256SUMS-android.txt` (a build by-product, not attached). Note the commit you built from: the APK does not record it.
-- [ ] Inspect the merged manifest: no `<uses-permission>` (an inspection, not a test). Confirm `licenses.html` is in the app's assets.
+- [ ] Inspect the merged manifest: since 1.4.1 exactly four `<uses-permission>` entries (`SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`), no network permission (an inspection, not a test). Confirm `licenses.html` is in the app's assets.
 - [ ] Owner only: sign the release APK and AAB with the owner's upload key. The key comes from the `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` environment variables, or else from `android/keystore.properties`; in CI, from the `android-signing` environment through `android-release.yml` ([android-signing.md](platforms/android-signing.md)). Unsigned outputs keep `-unsigned` in their names and are described as unsigned.
 - [ ] The trial APK, if attached at all, is labelled as debug-signed and for trials only.
 - [ ] Google Play, only if wanted: [docs/store/google-play/release-readiness.md](store/google-play/release-readiness.md). No document may say GizeCat is on Google Play until a listing is live.
+
+## 1.5.0 (Living Companion) additions
+
+1.5.0 is a release candidate for Windows and Android only (draft notes: [docs/releases/1.5.0-release-candidate.md](releases/1.5.0-release-candidate.md)). Its artifacts are `release/1.5.0/windows/Desktop-Cat-Setup-1.5.0-x64.exe` and `-arm64.exe`, `release/1.5.0/android/GizeCat-1.5.0-android-trial-debugsigned.apk`, `-android-unsigned.apk` and `-android-unsigned.aab` (the build's own names), and `release/1.5.0/SHA256SUMS.txt`. None of the boxes below was ticked by the build tooling: nothing in 1.5.0 has been run.
+
+- [ ] `package.json` is 1.5.0 and `android/version.properties` is versionName 1.5.0, versionCode 10500.
+- [ ] The tests, E2E and web tests of "Before tagging" run on the final commit (they have not been run for 1.5.0).
+- [ ] Windows, on a real Windows 11 PC: a world event appears and never takes a click; Laser Mode starts from the tray, the dot follows the pointer, the system cursor is unchanged, and **Stop laser mode** from the tray and the cat's menu ends it; the Companion, Audio, Accessibility & Focus and Journal pages open; world events off, paused, and fullscreen behaviour; the journal fills and **Clear journal** works; Reduced motion; sounds stay off until turned on.
+- [ ] Android, on a real phone (and a tablet if any claim is made for tablets): the panel's sections work; a world event appears over another app with the stage window widening and shrinking and touches still reaching the app underneath; Laser mode follows only what Android allows and stops when switched off; the journal.
+- [ ] The merged Android manifest still has exactly four permissions, and the Windows and Android privacy statements still say nothing new is collected.
+- [ ] Every status in the notes, README, CHANGELOG and platform pages matches what was actually run; "OWNER-VERIFIED" is used only for what the owner ran on real hardware.
+- [ ] `<hash>` and `<size>` in the release notes are filled from `npm run release:sums` output only.
 
 ## Workflows (owner)
 

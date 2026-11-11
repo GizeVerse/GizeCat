@@ -2,6 +2,8 @@
 
 How the Windows x64 and ARM64 installers get signed, which certificate route fits an individual developer in Türkiye with an MIT-licensed project, and exactly what the owner has to do. Status words: [README.md](README.md#status-vocabulary-for-140).
 
+**1.5.0 release candidate update.** The 1.5.0 installers, `release/1.5.0/windows/Desktop-Cat-Setup-1.5.0-x64.exe` and `-arm64.exe`, are **unsigned** (no certificate and no SignPath project exist; `electron-builder.yml` signs nothing without a certificate). They were built by `npm run package:win` and are COMPILED_OR_PACKAGED only: nobody has run them, and they have not yet been checked with `scripts/verify-windows-signature.ps1`. Nothing is published. The signing routes below are unchanged since 1.4.0 and still IMPLEMENTED, never run. Without a signature Windows shows no verified publisher, and SmartScreen or Smart App Control may warn or block (signing alone would not guarantee otherwise, section 3). Unsigned installers must never be described as having a verified publisher, SmartScreen trust or a malware-free guarantee. The 1.5.0 owner steps are in the [1.5.0 signing readiness report](../releases/1.5.0-signing-readiness.md). The 1.4.0 inventory and provenance in sections 10 and 11 below are historical and stay true for the 1.4.0 files only.
+
 **Nothing on this page has been signed or run.** No certificate exists, no SignPath project exists, and the signing workflow and scripts have never processed a GizeCat file.
 
 | Item | Status |

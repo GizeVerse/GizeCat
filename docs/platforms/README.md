@@ -51,6 +51,26 @@ It is the same cat everywhere. Every version runs the same behaviour simulation 
 
 **Moving a cat between devices.** 1.4.0 adds a portable profile file. **Take your cat to another device** saves the cat to a file and loads one. Before anything changes you see what the file would change and choose what to load. Nothing is uploaded: it is a copy, not a sync. The full guide is [profile-transfer.md](profile-transfer.md). IMPLEMENTED; like everything in 1.4.0, it has never run on a device. Without it, each device and each app has its own cat.
 
+## Living Companion (1.5.0 release candidate)
+
+GizeCat 1.5.0 is a release candidate for **Windows and Android only**; it is not published or tagged (the published releases are Windows 1.3.0 and Android 1.4.2). macOS and iPad are not part of it, and the macOS and iPad rows above stay as the 1.4.0 Preview left them. Overview: [../living-companion/README.md](../living-companion/README.md); draft notes: [../releases/1.5.0-release-candidate.md](../releases/1.5.0-release-candidate.md).
+
+**No 1.5.0 code has run anywhere**: no test, emulator, simulator or application launch. "Statically verified" means type-check, lint and read-only review. The status words: IMPLEMENTED (code exists), COMPILED_OR_PACKAGED (it builds or packages), statically verified, OWNER-VERIFIED (the owner ran it on real hardware), NOT RUN.
+
+| Living Companion feature | Windows 10/11 (x64, ARM64 installers) | Android phones and tablets (native app) |
+|---|---|---|
+| Seven personalities plus Auto | IMPLEMENTED, statically verified, NOT RUN. Settings → Personality | IMPLEMENTED, statically verified, NOT RUN. Home panel → Personality |
+| Mood, sleep depth, new scratch, shake and confused clips | IMPLEMENTED, statically verified, NOT RUN | The same shared code and renderer; IMPLEMENTED, statically verified, NOT RUN. The floating overlay drew the 1.4.2 cat (OWNER-VERIFIED on one phone); the 1.5.0 drawing was not run |
+| World events (20 everyday, 6 rare, 5 to 30 minutes apart) | IMPLEMENTED, statically verified, NOT RUN. Props are drawn on the overlay and never take clicks | IMPLEMENTED, statically verified, NOT RUN. While props exist, the floating visual window widens into a short "stage" strip and shrinks back after they are gone; the touch window is unchanged |
+| Laser Mode | IMPLEMENTED, statically verified, NOT RUN. A dot at the real pointer position; the system cursor is untouched | IMPLEMENTED, statically verified, NOT RUN. Limited by Android: only touches and mouse hover that Android delivers to the cat's small touch window, and position hints from GizeCat's own app window; no global tracking. Needs Hunt and pounce on |
+| Cat Journal (newest 60, local, clearable) | IMPLEMENTED, statically verified, NOT RUN | IMPLEMENTED, statically verified, NOT RUN. While the floating cat runs, the panel shows what it last saved and cannot clear it |
+| Reduced motion | IMPLEMENTED, statically verified, NOT RUN. Also follows the system "reduce animations" setting | IMPLEMENTED, statically verified, NOT RUN. Also honours Android's "Remove animations" |
+| Sound cues (cat, world), off by default | IMPLEMENTED, statically verified, NOT RUN | IMPLEMENTED, statically verified, NOT RUN; the device's volume and silent mode apply |
+| Settings and panel pages | Companion, Audio, Accessibility & Focus and Journal pages, plus Personality and Behaviour additions: IMPLEMENTED, statically verified, NOT RUN | The home panel's Companion, Personality, Behavior, Interactions, Audio, Accessibility and Journal sections: IMPLEMENTED, statically verified, NOT RUN |
+| Permissions | None added | None added: still exactly four ([android-overlay.md](android-overlay.md#permissions-declared-in-the-manifest)) |
+| Tablets | Not applicable | The same code as phones; tablets and other phones are not individually verified, and the 1.4.2 phone check covered only the 1.4.2 floating cat on one phone |
+| Signing | Installers unsigned (REQUIRES_OWNER_CREDENTIALS for signing) | Trial APK signed with the Android Debug certificate; release APK and AAB unsigned until the owner signs them |
+
 ## Status vocabulary for 1.4.0
 
 | Status | Meaning |

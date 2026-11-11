@@ -16,6 +16,8 @@ On a desktop, everything except the cat's own body stays clickable. On a tablet,
 
 **Windows: 1.3.0, for Windows x64** ([Releases](https://github.com/GizeVerse/GizeCat/releases), [how to install](#download-and-install-windows-1011)). It stays the current Windows release. The 1.4.0 Preview installers (x64 and ARM64) are on the [v1.4.0 pre-release](https://github.com/GizeVerse/GizeCat/releases/tag/v1.4.0); 1.4.2 does not update any Windows or macOS binary.
 
+**Living Companion (1.5.0 release candidate).** 1.5.0 is a **release candidate: it is not published and not tagged**, and the current published releases are still Windows v1.3.0 and Android v1.4.2. It makes the cat feel more alive on **Windows and Android**: seven selectable personalities, a mood the cat shows, small world events (a mouse, a butterfly, a little storm), Laser Mode, a Cat Journal, reduced motion and optional sound cues. Every feature is IMPLEMENTED and statically verified (type check, lint, read-only review) only: **nothing in 1.5.0 has been run**, not a test, an emulator, a simulator or the app itself. The Windows 1.5.0 installers are unsigned. Android 1.5.0 builds are the debug-signed trial APK and an unsigned release APK and AAB. What it is, what each platform does and what is not verified: [docs/living-companion/README.md](docs/living-companion/README.md), [draft release notes](docs/releases/1.5.0-release-candidate.md).
+
 **The 1.4.0 Preview (Windows, macOS, iPad) was published only as a pre-release, and nothing in it has been run on a device by its builders.** The table shows where each device stands. A build is not a test.
 
 | Device | 1.4.0 candidate | Status | Signing | Guide |
@@ -32,6 +34,7 @@ What the status words mean, and the status of every file: [docs/platforms/](docs
 ## Features
 
 - **A living cat.** A 24-state behaviour simulation with needs, moods, a personality and a small memory. It explores on its own, stays on windows for minutes, hunts the pointer and reacts to throws in varied ways.
+- **Living Companion (1.5.0 release candidate; implemented, never run).** Seven selectable personalities plus Auto, a mood and sleep depth derived from what the cat is doing, bounded local memory, and a quiet **world** around it: 20 everyday and 6 rare events, one every 5 to 30 minutes by default, each a short, harmless visit drawn on the overlay (never clickable). **Laser Mode** (a red dot the cat chases and never catches, off at every start), a **Cat Journal** kept only on your device, reduced motion, new scratch, shake and confused animations, and optional world and cat sound cues (audio stays off by default). Everything can be switched off. [Details](docs/living-companion/README.md).
 - **Original procedural art.** A vector rig drawn in code: 36 animation clips, 7 coats, an optional pixel style, and no third-party assets.
 - **Click-through by design.** Only the cat's body catches the pointer. There are no global mouse or keyboard hooks.
 - **Works offline; no AI required.** Screen perception is optional and **off by default**; see [Privacy and AI vision](#privacy-and-ai-vision).
@@ -41,7 +44,7 @@ What the status words mean, and the status of every file: [docs/platforms/](docs
 
 ## Download and install (Windows 10/11)
 
-**Current release: 1.3.0**, for Windows x64. **1.4.0 is a release candidate and is not published yet.** It adds a Windows on Arm installer, macOS support (ad-hoc signed, not notarized test zips), an installable web app for iPads and Android tablets, and a native Android tablet app. None of the 1.4.0 builds has run on a device. Install guides and the status of every target: [docs/platforms/](docs/platforms/README.md).
+**Current release: 1.3.0**, for Windows x64. **1.5.0 (Living Companion) is a release candidate, not published or tagged.** Its Windows installers are `Desktop-Cat-Setup-1.5.0-x64.exe` and `Desktop-Cat-Setup-1.5.0-arm64.exe` (NSIS, **unsigned**: SmartScreen warns and Smart App Control may block them), built into `release/1.5.0/windows/` and never run by the build tooling; the owner reviews and publishes them. Windows 1.5.0 status: IMPLEMENTED, COMPILED_OR_PACKAGED, statically verified, NOT RUN (the 1.3.0 baseline ran on Windows 11 hardware). **1.4.0 is a release candidate and is not published yet.** It adds a Windows on Arm installer, macOS support (ad-hoc signed, not notarized test zips), an installable web app for iPads and Android tablets, and a native Android tablet app. None of the 1.4.0 builds has run on a device. Install guides and the status of every target: [docs/platforms/](docs/platforms/README.md).
 
 Download the latest `Desktop-Cat-Setup-<version>.exe` from **[Releases](https://github.com/GizeVerse/GizeCat/releases)** (from 1.4.0: `Desktop-Cat-Setup-<version>-x64.exe`, or `-arm64.exe` for Windows on Arm PCs), check its SHA-256 against the release notes, and run it.
 - **No admin needed.** It is a per-user install into `%LOCALAPPDATA%\Programs\DesktopCat`.
@@ -66,7 +69,9 @@ You can also build it yourself; see [Build, run, test](#build-run-test).
 
 **Please read:** the APK is signed with the **Android Debug certificate**, so it is **not a production Google Play package**, and **Google Play Protect may show a warning**. Do not turn Play Protect off on our account; install only if you trust this source. A static review found nothing unusual ([report](docs/platforms/android-play-protect.md)), but that does not prove the app is safe. Limits: the cat looks slightly dimmer on Android 12 and later, a small area around the cat takes touches, there is no global cursor tracking, and movement is the floor and side edges with no ceiling pose.
 
-The owner has confirmed this feature set on **one physical Android phone**. Tablets and other manufacturers' phones may behave differently (vendor battery managers and overlay rules in particular). **Please report what works and what does not** through [GitHub Issues](https://github.com/GizeVerse/GizeCat/issues): your device model, Android version and what you saw. Details, grant and revoke steps, uninstall: [docs/platforms/android-overlay.md](docs/platforms/android-overlay.md).
+**1.5.0 release candidate (not published).** Android 1.5.0 (versionName 1.5.0, versionCode 10500) adds the Living Companion (a new home panel section for personality, world events, Laser mode, audio, accessibility and the journal) and still declares exactly the same four permissions. Its candidate files are built into `release/1.5.0/android/` by `scripts/android-gradle.mjs`: `GizeCat-1.5.0-android-trial-debugsigned.apk` (Android Debug certificate, for trials), and the release APK and AAB, which are **unsigned** (`GizeCat-1.5.0-android-unsigned.apk`, `GizeCat-1.5.0-android-unsigned.aab`) until the owner signs them with a release key. An unsigned APK cannot be installed. The owner checked the **1.4.2** floating cat on one physical phone; **no 1.5.0 code has run on any Android device, emulator or simulator**, and tablets and other phones are not individually verified. The install steps above are the published 1.4.2 steps.
+
+The owner has confirmed the 1.4.2 feature set on **one physical Android phone**. Tablets and other manufacturers' phones may behave differently (vendor battery managers and overlay rules in particular). **Please report what works and what does not** through [GitHub Issues](https://github.com/GizeVerse/GizeCat/issues): your device model, Android version and what you saw. Details, grant and revoke steps, uninstall: [docs/platforms/android-overlay.md](docs/platforms/android-overlay.md).
 
 ## Platforms
 
@@ -74,14 +79,14 @@ The owner has confirmed this feature set on **one physical Android phone**. Tabl
 
 | Platform | What exists | What has actually run |
 |---|---|---|
-| Windows 10/11 (x64) | The full app | Validated on Windows 11 hardware through 1.3.0 ([tested environments](#tested-environments)); the 1.4.0 installer has not been run |
+| Windows 10/11 (x64) | The full app; the 1.5.0 release candidate adds the Living Companion | Validated on Windows 11 hardware through 1.3.0 ([tested environments](#tested-environments)); the 1.4.0 and 1.5.0 installers have not been run |
 | Windows on Arm (ARM64) | 1.4.0 candidate: the full app as an ARM64 installer | Built on an x64 PC and checked statically; **never run on Arm hardware** ([guide](docs/platforms/windows.md)) |
 | Web browser | The real cat in a page, with mouse and touch; 1.4.0 makes it an installable web app | 1.3.0: automated tests in Chrome 156 and Edge 156 on Windows; phone layouts only under desktop-browser emulation ([report](docs/gizeverse/07-web-host.md)). The 1.4.0 web app has not run in a browser. |
 | Linux, X11 session with a compositing window manager | The overlay on the screen floor (no window climbing) | Builds and passes its tests on Linux; the app has run only in a container under a virtual X server, never on a real Linux desktop. One known one-pixel click-through gap ([report](docs/gizeverse/05-linux.md)). |
 | Linux, Wayland session | No overlay, on purpose: Wayland gives apps no way to stay on top and pass clicks through safely. Tray and Settings only. | Blocked by the platform |
 | macOS (Intel, Apple Silicon) | 1.4.0 candidate: the desktop app on the screen floor (no window climbing), a menu-bar icon, a Dock switch, an opt-in "Open at login", no permission prompts. Ad-hoc signed, not notarized zips exist for both architectures, built in a disposable WSL 2 distro on the Windows build PC. DMG and universal builds need a Mac: the manual workflow's `adhoc` job makes them without secrets, and its `developer-id` job makes signed and notarized builds with the owner's Apple credentials. It has never been started. | Implemented and packaged; **never run on a Mac** ([guide](docs/platforms/macos.md), [report](docs/gizeverse/04-macos.md)) |
 | iPad | 1.4.0 candidate: the installable web app (Safari → Share → Add to Home Screen), prepared for a GitHub project site that is not deployed. No App Store app; the cat lives inside its own window, because iPadOS lets no app draw over other apps. | **Never run on an iPad** or in Safari ([guide](docs/platforms/ipados.md)) |
-| Android phones and tablets | A native app with no internet permission, and the web app installed from Chrome. **1.4.2 floats the cat over other apps** (opt-in: four permissions, only for that): it walks the bottom and side edges, and you can touch, drag and throw it ([guide](docs/platforms/android-overlay.md)). The APK is Android-Debug signed, not a Play package. | **The owner used 1.4.2 on one physical Android phone** and reports the floating-cat checklist worked. Other models, tablets and vendor battery or overlay rules: not individually verified ([guide](docs/platforms/android.md), [limits of Android overlays](docs/gizeverse/08-mobile-boundaries.md)) |
+| Android phones and tablets | A native app with no internet permission, and the web app installed from Chrome. **1.5.0 release candidate (not published) adds the Living Companion** (same four permissions); 1.5.0 has never run on a device. **1.4.2 floats the cat over other apps** (opt-in: four permissions, only for that): it walks the bottom and side edges, and you can touch, drag and throw it ([guide](docs/platforms/android-overlay.md)). The APK is Android-Debug signed, not a Play package. | **The owner used 1.4.2 on one physical Android phone** and reports the floating-cat checklist worked. Other models, tablets and vendor battery or overlay rules: not individually verified ([guide](docs/platforms/android.md), [limits of Android overlays](docs/gizeverse/08-mobile-boundaries.md)) |
 
 ## Privacy and AI vision
 
@@ -109,11 +114,11 @@ Details: [docs/PRIVACY.md](docs/PRIVACY.md), [docs/AI_SETUP.md](docs/AI_SETUP.md
 | Move the cursor back and forth over the cat | Petting (purrs, leans in) |
 | Click / double-click | Ear flick or meow / happy hop (too many clicks annoy it) |
 | Drag | Carry it; drop it on the floor, a window, another monitor; fling to throw |
-| Right-click the cat | Pet, Call, Play, Sleep/Wake, Pause, Hide, Settings, Quit |
-| Tray icon | Left-click show/hide; right-click menu (pause, interactions on/off, vision privacy pause, call, settings, quit) |
+| Right-click the cat | Pet, Call, Play, Sleep/Wake, Laser mode (Stop laser mode while it is on), Pause, Hide, Settings, Quit |
+| Tray icon | Left-click show/hide; right-click menu (pause, interactions on/off, vision privacy pause, call, laser mode, settings, quit) |
 | `Ctrl+Alt+Shift+C` | Show/hide (configurable) |
 
-In the web host: tap the cat, stroke it with a finger to pet it, or hold it and drag. On macOS (1.4.0 candidate) a click on the menu-bar icon opens its menu instead of hiding the cat, and the shortcut is `Control+Option+Shift+C`. Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
+Laser Mode (1.5.0 candidate) is started from the Companion page of Settings, the tray menu or the cat's menu, and is off every time GizeCat starts. In the web host: tap the cat, stroke it with a finger to pet it, or hold it and drag. On macOS (1.4.0 candidate) a click on the menu-bar icon opens its menu instead of hiding the cat, and the shortcut is `Control+Option+Shift+C`. Full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## What is implemented
 
@@ -149,7 +154,7 @@ Design and review: [ADR 0004](docs/adr/0004-gizeverse-platform.md). Reports: [do
 ## Not implemented / future possibilities
 
 - Top, left and right taskbars as surfaces (they are tracked, but only bottom auto-hide taskbars are ledges); Firefox and vertical-tab layouts for tab strips.
-- Sounds (meows/purrs) — not implemented.
+- Recorded sounds: not implemented. The optional meows, purrs and (1.5.0 candidate) world sound cues are synthesized on your device and off by default.
 - Multiple skins per cat at once, localisation beyond English.
 - Auto-update: not implemented.
 - Code signing: no build is signed with a publisher's key yet. For 1.4.0, the signing paths for Windows, macOS (Developer ID and notarization) and Android exist in manual workflows that have never been started, and they need the owner's credentials ([release automation](docs/platforms/release-automation.md)). Google Play and public web hosting also need the owner.
@@ -189,6 +194,7 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 
 | Environment | What ran | Result |
 |---|---|---|
+| 1.5.0 release candidate (Living Companion): Windows x64 and ARM64 installers, the Android trial APK, release APK and AAB, the web bundle | Builds, type checks, lint and read-only review. **No test, emulator, simulator or application launch was performed for any 1.5.0 code.** | **not run**; IMPLEMENTED and statically verified only, see [the draft release notes](docs/releases/1.5.0-release-candidate.md) |
 | 1.4.0 release candidate: Windows x64 and ARM64, macOS, iPad, Android tablets, the installable web app | Builds and static checks only (type checks, lint, the web bundle, both Windows installers, the ad-hoc macOS zips, the Android APK and AAB, and static inspection of what was built). No test was executed for 1.4.0. | **not run on any device**, see [docs/platforms/](docs/platforms/README.md) |
 | GizeVerse foundation (2026-11-06): Windows 11, same machine | verify full (3790 unit/integration tests, 30 Playwright tests against the real app), REAL lively scenarios (window, throws, covered support, hunt, screen edge), builder-config equivalence, packaged smoke | pass, see [docs/gizeverse/03-windows-regression.md](docs/gizeverse/03-windows-regression.md) |
 | Web host: Windows 11, Chrome 156, Edge 156 | 25 Playwright tests (drawing, click routing, petting, drag, persistence, no network, no key listeners), plus the same under desktop Chrome Pixel 7 emulation | pass (REAL in the browsers; phone layout SIMULATED), see [docs/gizeverse/07-web-host.md](docs/gizeverse/07-web-host.md) |
@@ -207,7 +213,7 @@ On shared machines wrap heavy commands: `node scripts/with-lock.mjs <label> -- <
 
 ## Documentation
 
-[Android floating cat](docs/platforms/android-overlay.md) · [Android Play Protect review](docs/platforms/android-play-protect.md) · [Platforms and install guides](docs/platforms/README.md) · [Troubleshooting by device](docs/platforms/troubleshooting.md) · [Take your cat to another device](docs/platforms/profile-transfer.md) · [Release automation](docs/platforms/release-automation.md) · [GizeVerse platform (ADR 0004)](docs/adr/0004-gizeverse-platform.md) · [Capability matrix](docs/gizeverse/capability-matrix.md) · [GizeVerse reports](docs/gizeverse/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Roadmap](ROADMAP.md) · [Architecture decision record](docs/adr/0001-architecture.md) · [User guide](docs/USER_GUIDE.md) · [Privacy](docs/PRIVACY.md) · [Threat model](docs/THREAT_MODEL.md) · [AI setup](docs/AI_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Test report](docs/TEST_REPORT.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Example settings](docs/settings.example.json) · [Research notes](docs/research/)
+[Living Companion (1.5.0 release candidate)](docs/living-companion/README.md) · [1.5.0 draft release notes](docs/releases/1.5.0-release-candidate.md) · [Android floating cat](docs/platforms/android-overlay.md) · [Android Play Protect review](docs/platforms/android-play-protect.md) · [Platforms and install guides](docs/platforms/README.md) · [Troubleshooting by device](docs/platforms/troubleshooting.md) · [Take your cat to another device](docs/platforms/profile-transfer.md) · [Release automation](docs/platforms/release-automation.md) · [GizeVerse platform (ADR 0004)](docs/adr/0004-gizeverse-platform.md) · [Capability matrix](docs/gizeverse/capability-matrix.md) · [GizeVerse reports](docs/gizeverse/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Roadmap](ROADMAP.md) · [Architecture decision record](docs/adr/0001-architecture.md) · [User guide](docs/USER_GUIDE.md) · [Privacy](docs/PRIVACY.md) · [Threat model](docs/THREAT_MODEL.md) · [AI setup](docs/AI_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Test report](docs/TEST_REPORT.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Example settings](docs/settings.example.json) · [Research notes](docs/research/)
 
 ## License
 

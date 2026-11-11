@@ -1,5 +1,7 @@
 # Signing the GizeCat Android app (owner procedure)
 
+**1.5.0 release candidate update.** `android/version.properties` is `versionName` 1.5.0, `versionCode` 10500, and the signing logic in `android/app/build.gradle.kts` is unchanged since 1.4.2. The 1.5.0 outputs in `release/1.5.0/android/` are `GizeCat-1.5.0-android-unsigned.apk` and `GizeCat-1.5.0-android-unsigned.aab` (**unsigned**, because no production keystore exists) and `GizeCat-1.5.0-android-trial-debugsigned.apk` (the **Android debug certificate**, application id `io.github.gizeverse.gizecat.trial`). They are COMPILED_OR_PACKAGED only; no 1.5.0 code was run on an emulator or device, and nothing is published. A production-signed app will **not** update over the debug-signed trial (different certificate and different application id: they are separate apps); the user saves the cat, installs the production app, loads the file and uninstalls the trial. The app still requests exactly four permissions. The current secure keystore workflow summary, the upgrade warning and the exact owner actions for 1.5.0 are in the [1.5.0 signing readiness report](../releases/1.5.0-signing-readiness.md); the full procedure below is still correct. The 2026-11-10 check below is historical.
+
 Only the owner does this. **No release key exists yet.** On 2026-11-10 these were checked, by name only, without reading any value:
 - no `android/keystore.properties`;
 - no `%USERPROFILE%\.gizecat-keys`;

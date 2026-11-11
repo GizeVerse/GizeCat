@@ -53,13 +53,17 @@ Left-click the tray icon to show/hide the cat. The tooltip always shows the stat
 
 | Page | What you can change |
 |---|---|
+| Companion (1.5.0 candidate) | Live status (mood, activity, personality, current or next world event), **Start/Stop laser mode**, **Pause events** for this session |
+| Audio (1.5.0 candidate) | Sound on/off (off by default), **Cat sounds**, **World sounds**, volume |
+| Accessibility & Focus (1.5.0 candidate) | Reduced motion, pause all autonomous activity, disable all world events, full-screen quiet mode |
+| Journal (1.5.0 candidate) | Keep a journal on/off, the entries, clear journal |
 | General | Name, launch at Windows sign-in (on by default; shows whether Windows will really start it, e.g. "Disabled in Startup apps"), how it starts (visible, hidden, paused, or as you left it), shortcut, pause/show/call |
 | Appearance | Coat (ginger, gray, black, tuxedo, calico, siamese, cream), smooth or pixel style, size, opacity, animation speed, shadow, emotes, hide from screenshots/screen sharing; **Sound** (v1.2): cat sounds on/off (off by default) and volume |
-| Behavior | **Personality** (v1.2, see below): a Calm / Playful / Mischievous preset or your own Custom mix; *Activity*, *Cursor hunting* and *Play near my work* up front; *Fine-tune* for exploring, heights and climbing, mischief, stays on windows and tabs, reactions to rough handling, and the newer behaviours one by one. **Habits**: movement speed, chase length, attention seeking, sensitivity to window/activity events, minutes of inactivity before it sleeps. Multi-monitor roaming, reactions to typing/windows, fullscreen behaviour, individual behaviours on/off (incl. v1.1: *Play with the taskbar*, *Climb windows*, *Walk on browser tabs*) |
-| Interaction | Interactions on/off, petting, dragging, throwing, patience (how quickly repeated clicks annoy it) |
+| Behavior | (1.5.0 candidate, called Behaviour in Settings) **World events**, **Rare events**, **How often**, and a switch per event. **Personality** (v1.2, see below): a Calm / Playful / Mischievous preset or your own Custom mix; *Activity*, *Cursor hunting* and *Play near my work* up front; *Fine-tune* for exploring, heights and climbing, mischief, stays on windows and tabs, reactions to rough handling, and the newer behaviours one by one. **Habits**: movement speed, chase length, attention seeking, sensitivity to window/activity events, minutes of inactivity before it sleeps. Multi-monitor roaming, reactions to typing/windows, fullscreen behaviour, individual behaviours on/off (incl. v1.1: *Play with the taskbar*, *Climb windows*, *Walk on browser tabs*) |
+| Interaction | Interactions on/off, petting, dragging, throwing, patience (how quickly repeated clicks annoy it); (1.5.0 candidate) an explanation of Laser mode |
 | Privacy & Vision | Screen analysis mode and consent, privacy pause, capture region, interval, excluded apps and window titles, "Preview what the cat sees" |
 | AI | Optional AI provider (Ollama, OpenAI-compatible server, Anthropic), model, API key, limits, connection test — see [AI_SETUP.md](AI_SETUP.md) |
-| Personality | Traits, current mood numbers, counters, learned preferences, recent memories; reset personality; clear history |
+| Personality | (1.5.0 candidate) **Choose a personality**: seven profiles or Auto. Then: traits, current mood numbers, counters, learned preferences, recent memories; reset personality; clear history |
 | Diagnostics | Window-awareness mode, taskbar / window-surface / browser-tab-strip status (e.g. tab strips unavailable if the helper was blocked), **Surfaces** (v1.1.1: why the cat can or cannot leave the floor — edges found, usable and reachable, what it stands on, tab-strip helper state; optional on-desktop outlines of what it sees, off after a restart), **Behaviour** (v1.2: what the cat did since Desktop Cat started — time by activity, trips up high and how they ended, hunts, falls, slips, screen-edge climbs, reactions, time spent wary or scared, and how long you were typing or had a maximized window in front; counts and durations only, never which windows or apps), resource use, log level, export diagnostics (includes the Behaviour numbers), open logs folder, GPU compatibility switch |
 | About | Version, license, privacy promise |
 
@@ -74,6 +78,46 @@ Settings → Behavior → **Personality** sets how lively the cat is.
 - **Sound** (Settings → Appearance → Sound) is off by default. The sounds are made on this PC (no recordings, never the microphone), at most one every 1.5 seconds, none while an app is full screen or the cat is hidden or asleep (a purr excepted); Windows' volume and mute apply.
 - **Going back to 1.1.1.** 1.1.1 reads the newer settings file and keeps your v1.1 settings and switches. The v1.2-only sliders are not known to it, so after upgrading again they are back at their defaults. The newer behaviours you switched off stay off: Desktop Cat 1.2 also keeps that list in `behavior-opt-outs.json` in the data folder, which 1.1.1 never touches.
 
+## Living Companion (1.5.0 release candidate)
+
+**Status.** 1.5.0 is a release candidate and is not published; the published releases are Windows 1.3.0 and Android 1.4.2. Everything in this section is implemented and statically checked, and **none of it has been run**. This describes what the code is written to do, from the settings text and the source. Overview: [living-companion/README.md](living-companion/README.md).
+
+### Choose a personality
+
+Settings → **Personality** → **Choose a personality** shows seven profiles and **Auto**: Curious, Playful, Energetic, Lazy, Shy, Mischievous and Calm. Each card says in a sentence how that cat behaves and gives a few lines of "How it behaves". **Auto** (the default) keeps the traits the cat was born with, and Settings elsewhere shows its nearest profile. The choice is yours alone: the cat never changes it. Over weeks small habits can form (a cat that is petted a lot grows a little fonder), but never enough to turn it into a different personality. Choosing a profile does not rewrite the traits listed lower on the page. The Calm, Playful and Mischievous activity presets under Behaviour are a separate, older control.
+
+### World events
+
+Now and then something small happens around the cat: a little mouse, a butterfly, a falling leaf, a cardboard box, a small thunderstorm. There are 20 everyday events and 6 rare ones. They are only pictures drawn on the overlay: **they never take clicks**, and each is a short, harmless visit. The cat reacts according to its personality and mood and may not react at all.
+
+- **Pace.** After an event ends, the next one comes after a random wait of 5 to 30 minutes (counted from the end of the previous one). Settings → **Behaviour** → **How often** moves this between half as often and twice as often; events are never less than 2 minutes apart. Several of the recent events are not repeated.
+- **Rare events.** Settings → Behaviour → **Rare events** (a golden butterfly, a treasure chest, a tiny dragon, a meteor shower and others). Both world events and rare events are on by default. When rare events are on, a due event comes from the rare pool only about 6 times in 100. The Midnight Visitor appears only between 22:00 and 05:00.
+- **Switch individual events off** under Behaviour → **Everyday events** and **Rare events**.
+- **Turn all world events off:** Settings → Behaviour → **World events**, or Settings → Accessibility & Focus → **Disable all world events** (the same switch). Off: the cat lives on its own, as before.
+- **Hold events for this session only:** Settings → **Companion** → **Pause events**. Events return when GizeCat restarts. A pause, a hidden cat, a full-screen app in front, Laser Mode or sustained typing also stop events from starting, and one that is running winds down. A sleeping cat is not woken for a gentle event; events that need an awake cat wait for it.
+
+### Laser Mode
+
+A small red dot follows your pointer and the cat chases it, and **never catches it**: it stops short, reaches with a paw and sometimes hops, then tires, grooms or yawns and returns to the light later. It is off every time GizeCat starts (it is never saved).
+
+- **Windows.** Start it with Settings → Companion → **Start laser mode**, the tray menu's **Laser mode**, or the cat's right-click menu. The dot is drawn on the overlay at your real pointer position; your system cursor is untouched, the dot never takes clicks, and the position is never saved or sent. A pressed button, typing, dragging, a pause, a hidden cat or a full-screen app make the cat let go of the light. **To stop:** right-click the cat or use the tray menu (**Stop laser mode**), or press **Stop laser mode** on the Companion page.
+- **Android.** Start it with **Laser mode** in the home panel's Interactions section. It needs **Hunt and pounce** (Behavior) to be on. Android lets GizeCat see only touches and a mouse or trackpad pointer on the cat's own small touch window, plus position hints from GizeCat's own app window, so over other apps the dot follows only those and goes away when they stop; it cannot follow your finger over other apps. Inside the GizeCat app the dot follows your finger or mouse on the page. No global tracking, no new permission. **To stop:** turn the switch off in the panel. It is also off every time you open the app.
+
+### The Journal
+
+Settings → **Journal** (Android: the panel's Journal section) holds a short note for each event worth remembering, such as "A little mouse ran across the floor. The cat watched it go." It is kept only on your device, never sent anywhere, and has no streaks, scores or reminders. The newest 60 entries are kept. **Keep a journal** turns writing off (existing lines stay until you clear them). **Clear journal** deletes every entry and the short event history they came from, after a confirmation. The journal is not part of a saved profile; a copied cat starts a new one. If it is empty, see [Troubleshooting](platforms/troubleshooting.md#the-journal-is-empty).
+
+### Reduced motion and quiet settings
+
+Settings → **Accessibility & Focus**: **Reduced motion** (no sudden pounces or big jumps, gentler effects; it is also on automatically when the system setting that reduces animations is on, and Android's "Remove animations" is honoured too), **Pause all autonomous activity** (the cat settles and a running event winds down; it still answers when you pet or call it), **Disable all world events** and **Full-screen quiet mode** (Hide, Stay quiet or Carry on). The cat and its pictures never block your desktop.
+
+### Sound categories
+
+Settings → **Audio**: sound is **off by default**. Turn on **Sound**, then choose **Cat sounds** (meows, chirps, purrs, the odd hiss) and **World sounds** (soft chimes, a rumble of thunder, a splash) separately, and the volume. Every sound is synthesized on your device: no recordings, never the microphone. Windows' volume and mute apply.
+
+### What the cat shows
+
+Its **mood** (Happy, Curious, Sleepy, Startled, Scared, Excited, Relaxed or Confused) is derived from what it is doing and how it is, and shows in its expression. A cat that sleeps for a while sleeps deeper. There are new scratch, shake and confused animations. Settings → **Companion** shows the mood, activity, personality and the current or next world event ("Next in about ...").
 ## Uninstalling
 
 Windows Settings → Apps → Installed apps → **Desktop Cat** → Uninstall. Your cat (settings and memories in `%APPDATA%\Desktop Cat`) is kept so a reinstall brings it back; delete that folder to remove it completely. The uninstaller removes the launch-at-sign-in entry; if you reinstall later and the entry was on, startup is switched on again (a Task Manager disable is kept).

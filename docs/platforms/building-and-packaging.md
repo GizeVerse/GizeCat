@@ -1,6 +1,60 @@
-# Building and packaging GizeCat (1.4.0)
+# Building and packaging GizeCat (1.4.0, with the 1.5.0 release candidate)
 
-How to set up a development environment for each platform, and the exact commands that produce each 1.4.0 artifact. The commands come from `package.json` and the scripts in `scripts/`. **A build is not a test**: an artifact that builds is COMPILED_OR_PACKAGED, nothing more ([status vocabulary](README.md#status-vocabulary-for-140)).
+How to set up a development environment for each platform, and the exact commands that produce each artifact (the 1.5.0 release candidate section comes first; the step lists below were written for 1.4.0). The commands come from `package.json` and the scripts in `scripts/`. **A build is not a test**: an artifact that builds is COMPILED_OR_PACKAGED, nothing more ([status vocabulary](README.md#status-vocabulary-for-140)).
+
+## 1.5.0 release candidate
+
+GizeCat 1.5.0 ("Living Companion") is a **release candidate**: `package.json` says 1.5.0, `android/version.properties` says `versionName` 1.5.0 and `versionCode` 10500. Nothing is published or tagged; the owner reviews and publishes. The rest of this page was written for 1.4.0 and its commands still apply; the 1.4.0 macOS and iPad material is unchanged and is not part of this release candidate (Windows and Android only).
+
+**Status of the artifacts.** They are COMPILED_OR_PACKAGED. No test, emulator, simulator or application launch was performed for any 1.5.0 code, so everything new is IMPLEMENTED and statically verified only. The Android 1.4.2 floating cat was OWNER-VERIFIED on one physical phone; tablets and other phones are not individually verified. The Windows 1.3.0 baseline ran on Windows 11 hardware; the 1.4.0 Preview and 1.5.0 were never run by the build tooling.
+
+### Which commands built what
+
+The release candidate was produced by one detached script, `.claude/state/publish/build-150.mjs`. It runs one heavy step at a time, each under `scripts/with-lock.mjs`, logs each step to `.claude/state/logs/build-150-<step>.log`, runs no tests and launches no application, and stops at the first failing step.
+
+| Step | Command | Output |
+|---|---|---|
+| 1. Windows installers | `node scripts/with-lock.mjs win-150 -- npm run package:win` (stages the ARM64 koffi package, runs `node scripts/build.mjs`, then `electron-builder --win nsis --x64 --arm64 --publish never`) | `Desktop-Cat-Setup-1.5.0-x64.exe`, `Desktop-Cat-Setup-1.5.0-arm64.exe`, `win-unpacked/`, `win-arm64-unpacked/` written flat into `release/` |
+| 2. Collect | The script moves those files (and `builder-debug.yml`) into `release/1.5.0/windows/`, the 1.4.0 layout | `release/1.5.0/windows/` |
+| 3. Android release | `node scripts/with-lock.mjs android-150 -- node scripts/android-gradle.mjs :app:assembleRelease :app:bundleRelease` (rebuilds `out/web` first, copies it into the app assets, then Gradle) | `release/1.5.0/android/GizeCat-1.5.0-android-unsigned.apk` and `GizeCat-1.5.0-android-unsigned.aab` (unsigned because no production key exists) |
+| 4. Android trial | `node scripts/with-lock.mjs android-150t -- node scripts/android-gradle.mjs :app:assembleTrial` | `release/1.5.0/android/GizeCat-1.5.0-android-trial-debugsigned.apk` (Android debug certificate, application id `.trial`) |
+| 5. Checksums | `node scripts/release-sums.mjs` (same as `npm run release:sums`) | `release/1.5.0/SHA256SUMS.txt` |
+
+The step 3 and 4 output names are fixed by `scripts/android-gradle.mjs`, which also writes `release/1.5.0/android/SHA256SUMS-android.txt` (a by-product, not attached). Windows signing and Android signing are not part of this build: the installers are unsigned, the release APK and AAB are unsigned and the trial APK carries the debug certificate. See the [signing readiness report](../releases/1.5.0-signing-readiness.md). Hashes and sizes are not recorded in repository documents; the maintainer fills them in later from `SHA256SUMS.txt`.
+
+Two differences from the 1.4.0 step list below: this run packaged with `npm run package:win` into `release/` and then moved the files, instead of passing `-c.directories.output=release/<version>/windows`; and it ran neither the optional payload checker nor the packaged smoke test. `node scripts/check-win-payload.mjs` reads files only and may be run afterwards.
+
+### Test-free commands (safe when tests are prohibited)
+
+These type-check, lint, bundle or package. They launch no GizeCat window and run no test runner:
+
+- `npm run typecheck` (two `tsc` projects), `npm run lint` (ESLint).
+- `npm run build`, `npm run build:web`, `npm run android:web` (esbuild bundles; `build` also compiles the UIA helper with `csc.exe` when present, without running it).
+- `npm run package`, `npm run package:win`, `npm run package:win:arm64`, `npm run package:dir` (electron-builder; the ARM64 routes download packages from the npm registry and Electron's win32-arm64 build, so they need the network).
+- `npm run android:apk`, `android:aab`, `android:release`, `android:trial` (Gradle; they need the JDK, the Android SDK and, on first use, the network).
+- `npm run package:web` (builds the static web zip).
+- `npm run release:sums`, and the read-only inspectors `node scripts/check-win-payload.mjs ...`, `scripts/verify-windows-signature.ps1`, `scripts/compare-signed-pe.mjs`.
+- Read-only git (`git log`, `git diff`, `git show`) and the documentation link checker `node .claude/state/publish/doc-linkcheck.cjs`.
+
+A build that finishes proves only that it builds. It says nothing about whether the cat behaves.
+
+### Commands that run tests or launch the app (do not use when tests are prohibited)
+
+| Command | Why it is excluded |
+|---|---|
+| `npm test`, `npm run test:unit` | Vitest runs the unit and integration suites |
+| `npm run test:e2e`, `npm run test:web` | Playwright starts the real app (a real cat on the desktop) or a browser |
+| `npm run check`, `npm run verify` | Run type-check, lint **and** `npm test` |
+| `node .claude/scripts/verify.mjs fast` and `full` | The repository's definition of done: test tiers, and `full` also builds and runs the Playwright suite |
+| `npm run dev`, `npm start` | Launch Electron |
+| `node scripts/smoke-packaged.mjs` | Launches the packaged `DesktopCat.exe` |
+| `powershell -File scripts/install-test.ps1`, `scripts/upgrade-test.ps1` | Install the app and touch the startup entry; only for a disposable Windows user or VM |
+| `scripts/qa-*.mjs`, `scripts/bench.mjs`, `scripts/win32-probe.cjs`, `scripts/taskbar-probe.mjs`, `scripts/uia-probe.mjs`, `scripts/login-item-probe.mjs` | Start the app or probe the live desktop |
+| `.github/workflows/ci.yml` (push, pull request or manual) and `installer-check.yml` | Run `npm test`, Playwright, the smoke test and the install test on GitHub runners. Pushing a branch can start `ci.yml`; the owner's note says private-repository Actions have not started jobs since 2026-10-02 (billing), so treat CI as absent until a run really starts |
+| `scripts/sign-windows.ps1`, `scripts/android-create-upload-key.ps1` | Owner tools that use credentials; agents never run them |
+| Emulators, simulators, `gradlew test` or `connectedAndroidTest` | Nothing in this release candidate was run on an emulator or device |
+
+Heavy commands go one at a time on a shared machine (`node scripts/with-lock.mjs <label> -- <command>`).
 
 ## Common setup (every platform)
 

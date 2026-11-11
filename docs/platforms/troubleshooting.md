@@ -198,6 +198,35 @@ That is expected. Android's touch rules rule out a click-through overlay (BLOCKE
 
 They do not share a cat. Use a [profile file](profile-transfer.md) to move one.
 
+## Living Companion (1.5.0 release candidate, Windows and Android)
+
+None of this has been run on a device; these are the likely causes from reading the code.
+
+### The cat ignores world events, or no event happens
+
+World events are rare by design: the first comes 5 to 30 minutes after the app starts, and the next 5 to 30 minutes after each one ends (Settings → Behaviour → How often can halve or double that, never below 2 minutes). Check, in order:
+- **Off.** Settings → Behaviour → **World events** (or Accessibility & Focus → **Disable all world events**), or the individual event is switched off. Android: Behavior → World events.
+- **Paused.** Settings → Companion → **Pause events** holds events until you resume or restart GizeCat; the Companion page says "World events are paused for this session". The cat itself paused (**Pause**) also stops them. Android: Behavior → **Pause world events**.
+- **Fullscreen.** While a game, video or presentation is full screen on the cat's monitor, events do not start and a running one winds down (unless Full-screen quiet mode is Carry on).
+- **Laser Mode is on**, or you are typing a lot, or the cat is hidden: events do not start.
+- **Asleep.** A sleeping cat is not woken by a gentle event; it waits (20 to 90 seconds) and tries later, so events cluster while the cat is awake.
+- **The cat is busy or being handled** (carried, thrown, petted): the event waits or the cat finishes first. A given event also needs room: a very small screen or window may rule some out.
+- **Rare events** are on by default and can be switched off under Behaviour → Rare events; even when on, a due event comes from the rare pool only about 6 times in 100.
+- The cat may simply not react: a lazy, shy or calm personality ignores small things. Settings → Companion shows the current event or "Next in about ...".
+
+### The laser dot does not follow my pointer
+
+- **Windows:** Laser Mode must be on (Settings → Companion, tray, or the cat's menu). The dot follows the pointer on the cat's display only, and is not drawn over a display with a full-screen app in front. While you are pressing a button, typing, dragging or have the cat paused or hidden, the cat lets go of the light. Right-click the cat or use the tray menu to stop it.
+- **Android:** this is a limit of Android, not a fault. Over other apps GizeCat sees only touches and mouse or trackpad hover on the cat's own small touch window, and position hints from its own app window, so the dot follows just those and goes away when they stop; it cannot follow your finger over other apps. Also check that **Hunt and pounce** is on (Laser mode is greyed out without it) and that Laser mode is switched on again after opening the app, because it is off every time.
+- The cat never catches the dot, and a sleeping cat wakes to it only after the dot has been around for a moment.
+
+### The journal is empty
+
+- **Keep a journal** is off (Settings → Journal; Android: panel → Journal). Nothing new is written while it is off.
+- No event worth remembering has happened yet, or World events are off or paused, so nothing was written.
+- You used **Clear journal**, which also clears the short event history, or you loaded a profile onto a device: a profile never carries the journal.
+- Settings could not load it ("The journal could not be loaded") or the version does not have it; it retries. Android: while the floating cat runs, the panel shows what it last saved; stop the floating cat to clear.
+
 ## Importing a profile
 
 Nothing changes until you confirm the preview. If you see one of these messages, your cat on this device is untouched.

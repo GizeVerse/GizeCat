@@ -53,6 +53,16 @@ What it does not do:
 - appear above exclusive-fullscreen games, the lock screen or UAC prompts, or take input over windows of apps running as administrator (Windows rules);
 - walk on top, left or right taskbars, or on Firefox tab strips.
 
+## Living Companion on Windows (1.5.0 release candidate)
+
+1.5.0 is not published; the published Windows release is 1.3.0. Installers: `Desktop-Cat-Setup-1.5.0-x64.exe` and `Desktop-Cat-Setup-1.5.0-arm64.exe` in `release/1.5.0/windows/` (NSIS, **unsigned**: SmartScreen warns and Smart App Control may block them; nothing claims a verified publisher). **Nothing in 1.5.0 has been run**: the Windows features below are IMPLEMENTED, COMPILED_OR_PACKAGED where packaged, statically verified, and NOT RUN. The 1.3.0 baseline ran on Windows 11 hardware; the 1.4.0 Preview and 1.5.0 builds never ran.
+
+- Seven personalities plus Auto (Settings → Personality), a derived mood and deeper sleep, and the Companion, Audio, Accessibility & Focus and Journal pages in Settings.
+- World events: props drawn on the same click-through overlay (never part of the click region), 5 to 30 minutes apart by default, switchable in Settings → Behaviour.
+- Laser Mode: a red dot drawn at your real pointer position on the overlay. The system cursor is untouched and the position is never stored or sent. It is off at every start. Start it from Settings → Companion, the tray menu or the cat's right-click menu; stop it from the same places (the tray and the cat's menu show **Stop laser mode** while it is on). The dot is not drawn over a display with a full-screen app in front, unless the full-screen setting is Carry on.
+- No new permission, no new network use, no keyboard hook. Window titles still never leave `src/main/win32`.
+- Windows on Arm: the ARM64 installer carries the same code and has never run on Arm hardware.
+
 ## Limitations
 
 - Windows 10 and multi-monitor or mixed-DPI setups have not been tested on hardware.

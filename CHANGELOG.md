@@ -2,6 +2,48 @@
 
 GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is the first public release; earlier versions were built and tested locally but not published.
 
+## 1.5.0 (Living Companion; RELEASE CANDIDATE, unpublished)
+
+**Not published and not tagged.** The current published releases are Windows v1.3.0 and Android v1.4.2; the owner reviews and publishes 1.5.0. It covers **Windows and Android only** (macOS and iPad are not part of this release; the 1.4.0 Preview notes about them stay as they were). Desktop and web version 1.5.0 (`package.json`), Android 1.5.0, versionCode 10500 (`android/version.properties`). **Nothing in 1.5.0 has been run: no test, emulator, simulator or application launch was performed for any 1.5.0 code.** Every item below is IMPLEMENTED and statically verified (type-check, lint, read-only review) only. Overview: [docs/living-companion/README.md](docs/living-companion/README.md); draft notes: [docs/releases/1.5.0-release-candidate.md](docs/releases/1.5.0-release-candidate.md).
+
+### Added
+- **Seven selectable personalities plus Auto** (Curious, Playful, Energetic, Lazy, Shy, Mischievous, Calm; `src/core/behavior/personalityProfiles.ts`). Auto keeps the traits the cat was born with; the cat never changes the choice.
+- **Mood and sleep depth** (`mood.ts`): eight moods derived from the cat's state, shown in its expression, and a sleep that deepens over time.
+- **Bounded local world memory and the Cat Journal** in the persisted cat (`catState.ts`, `worldMemory.ts`): the last 16 events and the newest 60 journal entries, on this device only, clearable.
+- **World events** (`src/core/events`, props in `src/renderer/overlay/props.ts`): a pure, deterministic engine with 20 everyday and 6 rare events, a random wait of 5 to 30 minutes counted from the end of the previous event, repetition control, interruption and recovery. Props are pictures: never clickable, never part of the click-through region. Wired into the simulation by `simCompanion.ts`.
+- **Laser Mode** (`simLaser.ts`): a red dot the cat chases and never catches; session-only and off at every start.
+- **Reduced motion**, also following the system setting (Windows and Android "remove animations").
+- **New clips:** scratch, shake and confused; deep sleep; mood expression layers.
+- **Sound cues** with separate Cat sounds and World sounds switches. Audio stays off by default.
+- **Desktop settings:** new Companion, Audio, Accessibility & Focus and Journal pages; Personality gains the seven-profile chooser; Behaviour gains world-event settings; Interaction explains Laser mode; the tray menu and the cat's menu gain **Laser mode** / **Stop laser mode**.
+- **Windows host wiring** (`src/main`): the laser dot at the real pointer position (the system cursor is untouched; not drawn over a full-screen display), the events pause, and the new actions.
+- **Web and Android host** (`src/web`): the Android home panel's Companion, Personality, Behavior (world events), Interactions (Laser mode), Audio, Accessibility and Journal sections (`androidPanel.ts`), and the "stage" window that widens the floating cat's visual window while event props or the laser dot exist (`stageWindow.ts`).
+- Release files named by the build: `release/1.5.0/windows/Desktop-Cat-Setup-1.5.0-x64.exe` and `-arm64.exe` (NSIS, unsigned); `release/1.5.0/android/GizeCat-1.5.0-android-trial-debugsigned.apk`, `GizeCat-1.5.0-android-unsigned.apk`, `GizeCat-1.5.0-android-unsigned.aab`; `release/1.5.0/SHA256SUMS.txt`.
+
+### Changed
+- **Companion choices travel with a saved profile** (personality, which events, pace, reduced motion, whether a journal is kept); the journal and event history themselves do not (`src/shared/profileTransfer.ts`).
+- **Android panel rebuilt** around the Companion sections. The Android app version is again released together with the desktop and web version.
+- Settings pages and the Android panel show live mood, activity, personality and the current or next event.
+- Documentation updated: README, user guide, platform pages, release checklist.
+
+### Privacy and permission changes
+- **None new.** Screen analysis and cloud egress are still off by default; no telemetry, no keyboard hook, no clipboard capture. The laser pointer position is used only to draw the dot and is never stored, logged or sent. The journal never leaves the device. **Android still declares exactly four permissions** (`SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`) and no network permission.
+
+### Platform limitations
+- **Android Laser Mode** follows only touches and mouse or trackpad hover that Android delivers to the cat's small touch window, plus position hints from GizeCat's own app window. No global tracking; over other apps it cannot follow a finger. It needs Hunt and pounce on.
+- The Android touch-window limit from 1.4.2 remains (a small area around the cat consumes touches).
+- Windows: the 1.4.0 limits remain (exclusive-fullscreen games, the lock screen and administrator windows).
+- Signing: the Windows installers are unsigned (SmartScreen warns, Smart App Control may block). The Android trial APK is signed with the Android **Debug** certificate and is not a Google Play package; the release APK and AAB are unsigned. No verified publisher, Play approval or malware-free claim is made.
+
+### Known issues
+- Everything is untested at runtime, so unknown defects are likely, in drawing the props and the dot, in the Android stage window, in event timing and in the new settings pages.
+- Tablets and phones other than the one the owner used for 1.4.2 are not individually verified; vendor battery and overlay rules may differ.
+
+### Not done
+- No test, emulator, simulator or application launch for 1.5.0; no install of the Windows installers; no run of the Android APK. Windows on Arm has never run.
+- Not published, not tagged, no hashes recorded in the repository documents (the maintainer fills them in later).
+- No macOS or iPad work in this release.
+
 ## 1.4.2 (Android Floating Desktop Pet; stable Android release, 2026-11-10)
 
 **An Android-only stable release** ([v1.4.2](https://github.com/GizeVerse/GizeCat/releases/tag/v1.4.2), tag at commit `fb0c920`; first published as a pre-release and promoted to stable and latest the same day with the same APK). Windows, macOS and the desktop/web version (`package.json`, 1.4.0) are not touched. Android 1.4.2, versionCode 10403 (`android/version.properties`), same application id and the same debug-signing identity as 1.4.1, so it installs over it. **The owner used this exact APK on one physical Android phone and reports that overlay visibility, dragging and throwing, screen-edge movement and climbing, touch interaction, interacting with apps underneath, rotation and landscape, the control panel, and app switching with persistence all worked.** That is one phone, owner-reported: other phones and tablets are not individually verified, and no automated test, emulator or simulator was used. The APK is still signed with the Android Debug certificate (not a Google Play package) and Play Protect may warn; static review is not proof of safety.
