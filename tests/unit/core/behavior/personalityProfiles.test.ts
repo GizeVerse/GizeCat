@@ -146,11 +146,17 @@ describe('adaptTraits', () => {
   });
 });
 
+/** The numeric axes of a temperament (EventTemperament also carries the two boolean personality flags). */
+const numericEntries = (t: object): Array<[string, number]> => Object.entries(t).filter((e): e is [string, number] => typeof e[1] === 'number');
+
 describe('temperamentFor', () => {
   it('auto is neutral: the knobs are the neutral ones and nothing moves away from the cat\'s own traits', () => {
     expect(knobsFor('auto')).toBe(NEUTRAL_KNOBS);
     const t = temperamentFor(input());
-    for (const [key, v] of Object.entries(t)) {
+    // An 'auto' cat never carries the shy or lazy flags: its events play exactly as they always did.
+    expect(t.watchFirst ?? false).toBe(false);
+    expect(t.ignoreMinor ?? false).toBe(false);
+    for (const [key, v] of numericEntries(t)) {
       expect(Number.isFinite(v), key).toBe(true);
       expect(v, key).toBeGreaterThanOrEqual(key === 'persistence' ? 0.5 : 0);
       expect(v, key).toBeLessThanOrEqual(key === 'persistence' ? 1.6 : 1);
@@ -204,12 +210,12 @@ describe('temperamentFor', () => {
     expect(temperamentFor(input({ mood: 'sleepy' })).alertness).toBeLessThan(calm.alertness);
     for (const mood of MOODS) {
       const t = temperamentFor(input({ mood }));
-      for (const [k, v] of Object.entries(t)) expect(Number.isFinite(v), `${mood}.${k}`).toBe(true);
+      for (const [k, v] of numericEntries(t)) expect(Number.isFinite(v), `${mood}.${k}`).toBe(true);
     }
   });
 
   it('stays total on odd input (non-finite hour, extreme stats)', () => {
     const t = temperamentFor(input({ localHour: Number.NaN, stats: stats({ energy: 0, fear: 1 }), drives: drives({ sleepiness: 1, wariness: 1 }) }));
-    for (const v of Object.values(t)) expect(Number.isFinite(v)).toBe(true);
+    for (const [, v] of numericEntries(t)) expect(Number.isFinite(v)).toBe(true);
   });
 });

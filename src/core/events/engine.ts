@@ -11,7 +11,8 @@ import type { Point } from '../../shared/geometry';
 import { safeRandom } from '../behavior/random';
 import { EVENT_CATALOG, isJournalWorthy, type Beat, type EventDef, type OutcomeDef, type TempKey } from './catalog';
 import { MECHANICS, RUN_ID_SPAN, createRun, type Ctx, type Frame, type Run } from './mechanics';
-import { MAX_COUNTDOWN_STEP_MS, canOffer, chooseEvent, clampPace, drawGraceMs, drawRawDelayMs, effectiveDelayMs } from './schedule';
+import { MAX_COUNTDOWN_STEP_MS, canOffer, chooseEvent, clampPace, drawGraceMs, drawRawDelayMs, effectiveDelayMs, noticeNoveltyFactor } from './schedule';
+import { WORLD_COUNT_MAX, normalizeWorldCounts } from '../../shared/catState';
 import type {
   CreateEventEngineOptions,
   EventEngineMemory,
@@ -36,6 +37,27 @@ const SAFETY_MS = 20_000;
 const MIN_MAIN_MS = 2500;
 const MAX_OUTCOME_LEN = 32;
 
+/** Lazy (ignoreMinor): the chance that a minor event passes unnoticed, decided once when it starts. */
+export const LAZY_IGNORE_PROBABILITY = 0.6;
+/** Shy (watchFirst): the cat only watches for 6 to 12 s (event clock) after noticing, at most this fraction of the engaged window. */
+export const SHY_WATCH_MIN_MS = 6000;
+export const SHY_WATCH_MAX_MS = 12_000;
+export const SHY_WATCH_FRACTION = 0.45;
+/** Shy: stand-off multiplier once it does approach, and the stand-off (body widths) for an approach that names none. */
+export const SHY_STANDOFF_FACTOR = 1.5;
+const SHY_DEFAULT_STANDOFF_BW = 1.2;
+/** Intents a shy cat first watches instead of performing; anything more urgent than SHY_URGENCY_LIMIT (thunder, waves, scares) is never delayed. */
+const SHY_DELAYED_KINDS: ReadonlySet<string> = new Set(['approach', 'sneak', 'chase', 'play', 'inspect', 'settle']);
+const SHY_STANDOFF_KINDS: ReadonlySet<string> = new Set(['approach', 'sneak', 'chase', 'play', 'inspect', 'settle']);
+const SHY_URGENCY_LIMIT = 0.5;
+/** An event with any beat at or above this urgency counts as urgent: its notice delay is never tilted by familiarity. */
+const URGENT_BEAT = 0.5;
+
+function isUrgentEvent(def: EventDef): boolean {
+  for (const o of def.outcomes) for (const bt of o.beats) if ((bt.urgency ?? 0.15) >= URGENT_BEAT) return true;
+  return false;
+}
+
 const finite = (v: number, d: number): number => (Number.isFinite(v) ? v : d);
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
@@ -53,6 +75,8 @@ function cleanTemperament(t: EventTemperament): EventTemperament {
     mischief: unit(t.mischief),
     alertness: unit(t.alertness),
     energy: unit(t.energy),
+    watchFirst: t.watchFirst === true,
+    ignoreMinor: t.ignoreMinor === true,
   };
 }
 
@@ -134,7 +158,7 @@ function pacingFactor(def: EventDef, t: EventTemperament): number {
 }
 
 /** When (event clock ms) the cat notices: alertness and interest, whether it is facing the thing, how far away it is. */
-function noticeDelay(def: EventDef, t: EventTemperament, catX: number, facing: 1 | -1, unit: number, focus: Point | null, random: () => number): number {
+function noticeDelay(def: EventDef, t: EventTemperament, catX: number, facing: 1 | -1, unit: number, focus: Point | null, random: () => number, familiarity = 1): number {
   const base = def.noticeMs[0] + (def.noticeMs[1] - def.noticeMs[0]) * random();
   let f = 2.2 - 1.4 * (0.6 * t.alertness + 0.4 * t.interest);
   if (t.alertness < 0.25) f *= 1.8;
@@ -143,7 +167,7 @@ function noticeDelay(def: EventDef, t: EventTemperament, catX: number, facing: 1
     f *= (dx >= 0 ? 1 : -1) === facing ? 0.7 : 1.4;
     f *= 1 + Math.min(1.5, Math.abs(dx) / (8 * unit));
   }
-  return base * f;
+  return base * f * familiarity;
 }
 
 // ---- beats -> intent ----------------------------------------------------------------------------
@@ -204,11 +228,20 @@ interface Active {
   doneAt: number | null;
   lastBeat: number;
   stopReq: 'quick' | 'wind' | null;
+  /** A lazy cat let this minor event pass: props play, no intent, ends 'unnoticed'. */
+  ignored: boolean;
+  /** A shy cat: larger stand-off once it approaches. */
+  shy: boolean;
+  /** A shy cat only watches until this long (event clock ms) after noticing; 0 for everyone else. */
+  watchMs: number;
 }
 
 export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEventEngine {
   const idleRandom = safeRandom(opts.random);
   let history: EventHistoryEntry[] = sanitizeHistory(opts.memory?.history);
+  // Per-event play counts (novelty). The engine keeps its own copy, raised when an event finishes, so
+  // behaviour stays right without a restart; the sim persists the same counts through appendEventHistory.
+  let counts: Partial<Record<AnyEventId, number>> = normalizeWorldCounts(opts.memory?.counts);
   let active: Active | null = null;
   let nextId = 1;
   // The countdown: `rawDelay` is the draw at pace 1 (the pace in force counts when it is checked), or a fixed grace.
@@ -234,7 +267,7 @@ export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEve
 
   // ---- starting ----
 
-  function startRun(def: EventDef, input: EventTickInput, random: () => number): void {
+  function startRun(def: EventDef, input: EventTickInput, random: () => number, forced = false): void {
     const t = cleanTemperament(input.temperament);
     const ctx = makeCtx(input, random);
     const reduced = input.choices.reducedMotion;
@@ -248,7 +281,9 @@ export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEve
     run.mainMs = Math.max(MIN_MAIN_MS, run.mainMs);
     const frame0 = mech.update(run, ctx, 0);
     run.lastFocus = frame0.focus;
-    let noticeAt = noticeDelay(def, t, ctx.cat.x, ctx.cat.facing, ctx.unit, frame0.focus, random);
+    // Novelty: an unfamiliar event is noticed a little sooner, a very familiar one a little later (urgent events never).
+    const familiarity = isUrgentEvent(def) ? 1 : noticeNoveltyFactor(counts[def.id]);
+    let noticeAt = noticeDelay(def, t, ctx.cat.x, ctx.cat.facing, ctx.unit, frame0.focus, random, familiarity);
     if (def.canMiss) {
       if (noticeAt > 0.8 * run.mainMs) noticeAt = Infinity;
     } else {
@@ -260,9 +295,24 @@ export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEve
       const hi = run.mainMs - 300;
       run.keyAt = lo < hi ? clamp(run.keyAt, lo, hi) : null;
     }
+    // Personality: drawn from `random` ONLY when the flag is set, so every other cat's sequence is untouched.
+    // A lazy cat decides once, here, whether a minor event passes it by (a forced event, from the dev menu or
+    // "play one now", is always engaged with).
+    const ignored = !forced && t.ignoreMinor === true && def.minor === true && def.canMiss && random() < LAZY_IGNORE_PROBABILITY;
+    if (ignored) noticeAt = Infinity;
+    // A shy cat watches from where it stands for 6 to 12 s, but never for more than a fraction of the window it is engaged for.
+    let watchMs = 0;
+    const shy = t.watchFirst === true && !ignored && Number.isFinite(noticeAt);
+    if (shy) {
+      const drawnWatch = SHY_WATCH_MIN_MS + (SHY_WATCH_MAX_MS - SHY_WATCH_MIN_MS) * random();
+      watchMs = Math.max(0, Math.min(drawnWatch, SHY_WATCH_FRACTION * (run.mainMs - noticeAt)));
+    }
     active = {
       run,
       snapshot: { id: def.id, rare: isRareEvent(def.id), startedAt: input.now },
+      ignored,
+      shy,
+      watchMs,
       noticeAt,
       noticed: false,
       phase: 'live',
@@ -289,7 +339,7 @@ export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEve
 
   function dueCheck(input: EventTickInput, random: () => number): void {
     if (input.cat.busy) return; // stays due until the cat is free
-    const id = chooseEvent(random, offerContext(input, false), history, input.wallNow);
+    const id = chooseEvent(random, offerContext(input, false), history, input.wallNow, counts);
     const def = id ? EVENT_CATALOG[id] : undefined;
     if (!def) {
       redraw(random); // nothing fits right now (small stage, switched off): try again later
@@ -306,9 +356,11 @@ export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEve
 
   function finish(a: Active, input: EventTickInput, random: () => number): EventTickOutput {
     const def = a.run.def;
-    const outcome: OutcomeId = a.cut ? 'cut' : def.canMiss && !a.noticed ? 'unnoticed' : a.run.outcome.id;
+    const outcome: OutcomeId = a.ignored ? 'unnoticed' : a.cut ? 'cut' : def.canMiss && !a.noticed ? 'unnoticed' : a.run.outcome.id;
     const entry: EventHistoryEntry = { id: def.id, at: input.wallNow, outcome };
     history = [...history, entry].slice(-EVENT_HISTORY_MAX);
+    // The same increment appendEventHistory makes in the persisted world.counts (every finished event counts once).
+    counts = { ...counts, [def.id]: Math.min(WORLD_COUNT_MAX, (counts[def.id] ?? 0) + 1) };
     const journal: JournalEntry | null = isJournalWorthy(def, outcome) ? { id: def.id, at: input.wallNow, outcome } : null;
     active = null;
     redraw(random);
@@ -378,13 +430,23 @@ export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEve
     const beat = beats[idx];
     if (!beat) return null;
     const first = idx !== a.lastBeat;
-    a.lastBeat = idx;
     const focus = frame.focus ?? run.lastFocus;
+    // Shy: until the watching period is over, a gentle invitation to go near becomes "look at it from here".
+    // The beat is not marked as begun, so its emote and sound still come out when it really starts.
+    if (a.shy && run.age - a.noticeAt < a.watchMs && SHY_DELAYED_KINDS.has(beat.kind) && (beat.urgency ?? 0.15) < SHY_URGENCY_LIMIT) {
+      const look: EventIntent = { kind: 'watch', urgency: clamp(beat.urgency ?? 0.15, 0, 1) };
+      if (focus) look.target = { x: focus.x, y: focus.y };
+      look.mood = { mood: (beat.mood ?? def.mood).mood, strength: (beat.mood ?? def.mood).strength };
+      return look;
+    }
+    a.lastBeat = idx;
     const mode = beat.target ?? defaultTarget(beat.kind);
     const intent: EventIntent = { kind: beat.kind, urgency: clamp(beat.urgency ?? 0.15, 0, 1) };
     if (focus && mode !== 'none') intent.target = mode === 'ground' ? { x: focus.x, y: ctx.floorY } : { x: focus.x, y: focus.y };
-    if (beat.standoff !== undefined) {
-      let standoff = beat.standoff * ctx.unit * (1.3 - 0.6 * t.boldness);
+    const walks = beat.kind === 'approach' || beat.kind === 'sneak' || beat.kind === 'chase';
+    if (beat.standoff !== undefined || (a.shy && walks)) {
+      let standoff = (beat.standoff ?? SHY_DEFAULT_STANDOFF_BW) * ctx.unit * (1.3 - 0.6 * t.boldness);
+      if (a.shy && SHY_STANDOFF_KINDS.has(beat.kind)) standoff *= SHY_STANDOFF_FACTOR;
       if (beat.kind === 'approach' || beat.kind === 'sneak' || beat.kind === 'chase') standoff = Math.max(standoff, def.minStandoffBody * ctx.unit);
       intent.standoffPx = standoff;
     }
@@ -422,7 +484,7 @@ export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEve
     const def = EVENT_CATALOG[id];
     if (!def || active || !input.allowed || !input.choices.enabled) return false;
     if (!canOffer(def, offerContext(input, true))) return false;
-    startRun(def, input, safeRandom(input.random));
+    startRun(def, input, safeRandom(input.random), true);
     return true;
   }
 
@@ -449,11 +511,12 @@ export function createWorldEventEngine(opts: CreateEventEngineOptions): WorldEve
     },
     restore(memory: EventEngineMemory): void {
       history = sanitizeHistory(memory.history);
+      counts = normalizeWorldCounts(memory.counts);
       active = null;
       redraw(idleRandom);
     },
     snapshot(): EventEngineMemory {
-      return { history: history.map((h) => ({ ...h })) };
+      return { history: history.map((h) => ({ ...h })), counts: { ...counts } };
     },
     trigger,
     debugInfo(): Record<string, unknown> {

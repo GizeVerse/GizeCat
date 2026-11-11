@@ -34,6 +34,17 @@ export interface EventTemperament {
   alertness: number;
   /** Energy 0..1: movement intensity, run versus walk. */
   energy: number;
+  /**
+   * Shy cats (personality knob watchFromDistance): look at a new thing from where they stand for a
+   * bounded while before going near it, and keep a larger stand-off afterwards. Absent or false: a
+   * bold cat's behaviour, bit for bit (no random draw is made for it).
+   */
+  watchFirst?: boolean;
+  /**
+   * Lazy cats (personality knob ignoreMinorEvents): may let a gentle, low-stakes event (EventDef.minor)
+   * pass without getting up. Absent or false: every event is engaged with (no random draw is made).
+   */
+  ignoreMinor?: boolean;
 }
 
 /** What the engine may know about the cat this tick. Coordinates are the sim's world px. */
@@ -142,6 +153,12 @@ export type InterruptReason = 'user' | 'drag' | 'pause' | 'hidden' | 'sleep' | '
 /** Everything of the engine that survives a restart: history and counters only, never a half-played event. */
 export interface EventEngineMemory {
   history: readonly EventHistoryEntry[];
+  /**
+   * How many times each event has played (the persisted world.counts). Drives novelty: a cat is a
+   * little more drawn to events it has seen less often. Optional (absent = nothing seen yet), whole
+   * numbers, sanitised on restore (unknown ids, negatives, NaN and huge values are dropped or capped).
+   */
+  counts?: Partial<Record<AnyEventId, number>>;
 }
 
 export interface WorldEventEngine {

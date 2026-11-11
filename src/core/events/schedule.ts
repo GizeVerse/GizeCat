@@ -73,6 +73,37 @@ export function recencyFactor(id: AnyEventId, history: readonly EventHistoryEntr
   return factor;
 }
 
+// ---- novelty -------------------------------------------------------------------------------------
+// A cat is a little more drawn to what it has seen less often. Purely a tilt on the pick and on how
+// fast the cat notices; there is no reward, streak or goal behind it.
+
+/** The novelty factor of an event never seen (the maximum) and of a very familiar one (the floor). */
+export const NOVELTY_MAX = 1.25;
+export const NOVELTY_MIN = 0.75;
+/** The count at which the factor is halfway between its extremes. */
+export const NOVELTY_HALF_COUNT = 5;
+/** The notice delay is scaled within this range: unfamiliar events are noticed sooner, very familiar ones later. */
+export const NOTICE_FACTOR_MIN = 0.85;
+export const NOTICE_FACTOR_MAX = 1.2;
+
+const safeCount = (count: number | undefined): number => (typeof count === 'number' && Number.isFinite(count) && count > 0 ? count : 0);
+
+/** 0.75 + 0.5 / (1 + count / 5): 1.25 for an unseen event, falling monotonically towards 0.75. Total: junk counts read as 0. */
+export function noveltyFactor(count: number | undefined): number {
+  return NOVELTY_MIN + (NOVELTY_MAX - NOVELTY_MIN) / (1 + safeCount(count) / NOVELTY_HALF_COUNT);
+}
+
+/** The selection weight multiplier: noveltyFactor relative to an unseen event, so no counts (or all zero) multiplies by exactly 1. */
+export function noveltyWeight(count: number | undefined): number {
+  return noveltyFactor(count) / NOVELTY_MAX;
+}
+
+/** Multiplier on the notice delay: NOTICE_FACTOR_MIN for an unseen event up to NOTICE_FACTOR_MAX for a very familiar one. */
+export function noticeNoveltyFactor(count: number | undefined): number {
+  const t = (NOVELTY_MAX - noveltyFactor(count)) / (NOVELTY_MAX - NOVELTY_MIN); // 0 unseen .. 1 infinitely familiar
+  return NOTICE_FACTOR_MIN + (NOTICE_FACTOR_MAX - NOTICE_FACTOR_MIN) * t;
+}
+
 /** What the eligibility rules need to know about the world right now. */
 export interface OfferContext {
   stage: Rect;
@@ -99,13 +130,22 @@ export function canOffer(def: EventDef, o: OfferContext): boolean {
   return true;
 }
 
-function poolFor(rare: boolean, o: OfferContext, history: readonly EventHistoryEntry[], wallNow: number, exclude: number): { id: AnyEventId; w: number }[] {
+type EventCounts = Partial<Record<AnyEventId, number>>;
+
+function poolFor(
+  rare: boolean,
+  o: OfferContext,
+  history: readonly EventHistoryEntry[],
+  wallNow: number,
+  exclude: number,
+  counts?: EventCounts,
+): { id: AnyEventId; w: number }[] {
   const recent = exclude > 0 ? history.slice(-exclude).map((h) => h.id) : [];
   const out: { id: AnyEventId; w: number }[] = [];
   for (const id of rare ? RARE_POOL : NORMAL_POOL) {
     const def = EVENT_CATALOG[id];
     if (!def || !canOffer(def, o) || recent.includes(id)) continue;
-    const w = def.weight * timeFactor(def, o.localHour) * recencyFactor(id, history, wallNow);
+    const w = def.weight * timeFactor(def, o.localHour) * recencyFactor(id, history, wallNow) * (counts ? noveltyWeight(counts[id]) : 1);
     if (w > 0) out.push({ id, w });
   }
   return out;
@@ -129,13 +169,19 @@ function weightedPick(random: () => number, items: readonly { id: AnyEventId; w:
  * the rare pool never blocks it. The repeat exclusion is relaxed step by step (all, the last one only,
  * none) only when the user has switched off so much that nothing else would be left.
  */
-export function chooseEvent(random: () => number, o: OfferContext, history: readonly EventHistoryEntry[], wallNow: number): AnyEventId | null {
+export function chooseEvent(
+  random: () => number,
+  o: OfferContext,
+  history: readonly EventHistoryEntry[],
+  wallNow: number,
+  counts?: EventCounts,
+): AnyEventId | null {
   if (o.rare && random() < RARE_EVENT_PROBABILITY) {
-    const rare = weightedPick(random, poolFor(true, o, history, wallNow, RARE_REPEAT_EXCLUDE));
+    const rare = weightedPick(random, poolFor(true, o, history, wallNow, RARE_REPEAT_EXCLUDE, counts));
     if (rare) return rare;
   }
   for (const exclude of [NORMAL_REPEAT_EXCLUDE, 1, 0]) {
-    const id = weightedPick(random, poolFor(false, o, history, wallNow, exclude));
+    const id = weightedPick(random, poolFor(false, o, history, wallNow, exclude, counts));
     if (id) return id;
   }
   return null;

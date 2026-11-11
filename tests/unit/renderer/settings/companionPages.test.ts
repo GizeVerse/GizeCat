@@ -291,6 +291,12 @@ describe('journal rows', () => {
     expect(S.journal.intro).toMatch(/only on this PC/);
     expect(S.journal.intro).toMatch(/no streaks, scores or reminders/);
     expect(S.journal.clearConfirmText).toMatch(/cannot be undone/);
+    // Clear journal also clears the event history and the per-event counters (forgetWorld): say so.
+    for (const text of [S.journal.clearDesc, S.journal.clearConfirmText]) {
+      expect(text).toMatch(/event history/);
+      expect(text).toMatch(/event counters/);
+    }
+    expect(S.journal.clearConfirmText).toMatch(/other memories stay/);
     expect(S.journal.count(1, JOURNAL_MAX)).toBe(`1 entry (the newest ${JOURNAL_MAX} are kept)`);
     expect(S.journal.count(2, JOURNAL_MAX)).toBe(`2 entries (the newest ${JOURNAL_MAX} are kept)`);
   });

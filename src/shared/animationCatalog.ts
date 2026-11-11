@@ -300,7 +300,7 @@ export const BEHAVIOR_CATALOG = {
   sleepy: { clip: 'sit', realization: 'variant', note: 'mood sleepy: slow blinks, heavy lids, yawn' },
   confused: { clip: 'confused', realization: 'clip', note: 'new' },
   excited: { clip: 'tailChase', realization: 'variant', note: 'mood excited: wide pupils, fast tail; tailChase, rollOver or sprint' },
-  mischievous: { clip: 'crouch', realization: 'variant', note: 'mood mischievous: crouch and wiggle, swat, narrowed eyes' },
+  mischievous: { clip: 'crouch', realization: 'variant', note: 'temperament (the mischievous personality profile, not a mood): crouch and wiggle, swat, narrowed eyes' },
   relaxed: { clip: 'loaf', realization: 'variant', note: 'mood relaxed: half-closed eyes, slow tail, optional purr' },
   edgeClimbing: { clip: 'climb', realization: 'clip', note: 'screen edges on every platform, window sides on Windows' },
   cornerTransition: { clip: 'climb', realization: 'composite', note: 'floor to wall through the sim wall manoeuvre (balance at the top corner)' },

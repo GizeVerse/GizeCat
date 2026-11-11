@@ -38,9 +38,15 @@ export interface PersonalityKnobs {
   readonly mischief: number;
   /** Appetite for toys and games: how long it stays with a toy. */
   readonly playAppetite: number;
-  /** Observes something new from a distance before (if ever) approaching it. */
+  /**
+   * Read by the event engine (EventTemperament.watchFirst): only watches a new thing for a few
+   * seconds before going near it, then keeps a larger stand-off.
+   */
   readonly watchFromDistance: boolean;
-  /** Does not bother with minor events (a falling leaf); only the big ones wake its interest. */
+  /**
+   * Read by the event engine (EventTemperament.ignoreMinor): lets a minor event (EventDef.minor, for
+   * instance a falling leaf) pass about 60% of the time; the bigger ones always get its attention.
+   */
   readonly ignoreMinorEvents: boolean;
 }
 
@@ -373,5 +379,8 @@ export function temperamentFor(input: TemperamentInput): EventTemperament {
     mischief: clamp01(shifted(mischief, k.mischief, span('mischief')) + n('mischief')),
     alertness: clamp01(alertness + n('alertness')),
     energy: clamp01(shifted(energy, 1 - k.restBias, span('energy')) + n('energy')),
+    // The two flags the engine acts on (false for 'auto' and every profile that does not set them).
+    watchFirst: k.watchFromDistance === true,
+    ignoreMinor: k.ignoreMinorEvents === true,
   };
 }

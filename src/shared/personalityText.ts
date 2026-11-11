@@ -33,12 +33,12 @@ export const PERSONALITY_TEXT: Readonly<Record<PersonalityId, PersonalityText>> 
   lazy: {
     name: 'Lazy',
     summary: 'Happiest curled up somewhere comfortable.',
-    behaves: ['Rests most of the time.', 'Lets small things, such as a falling leaf, go by.', 'Keeps chases short and plays little.'],
+    behaves: ['Rests most of the time.', 'Often lets small things, such as a falling leaf, go by.', 'Keeps chases short and plays little.'],
   },
   shy: {
     name: 'Shy',
     summary: 'Careful with anything new.',
-    behaves: ['Watches new things from a distance first.', 'Startles easily.', 'Comes closer slowly, if at all.'],
+    behaves: ['Watches new things from a distance for a few seconds first, then keeps a wider gap.', 'Startles easily.', 'Comes closer slowly, if at all.'],
   },
   mischievous: {
     name: 'Mischievous',

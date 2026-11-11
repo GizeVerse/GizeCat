@@ -12,6 +12,12 @@ describe('web strings', () => {
     expect(WS.presets).toEqual(S.behavior.presets);
   });
 
+  it('the Android clear-journal confirmation names what the clear deletes, like the desktop page', () => {
+    expect(WS.panel.journal.clearAsk).toMatch(/event history/);
+    expect(WS.panel.journal.clearAsk).toMatch(/event counters/);
+    expect(WS.panel.journal.clearAsk).toMatch(/cannot be undone/);
+  });
+
   it('has a line for every offline state, and links the notices from About', () => {
     for (const state of ['unavailable', 'preparing', 'ready', 'update-ready', 'failed'] as const) expect(WS.offline[state]).toMatch(/\S/);
     expect(WS.offline.ready).toContain('Ready to work offline');

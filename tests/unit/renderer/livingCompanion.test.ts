@@ -108,6 +108,14 @@ describe('the animation catalogue and the renderer agree', () => {
     expect(BEHAVIOR_CATALOG.confused.clip).toBe('confused');
   });
 
+  it('mischievous is a temperament, not a mood: the clip and realization stay, the note says so', () => {
+    expect((MOODS as readonly string[]).includes('mischievous')).toBe(false);
+    expect(BEHAVIOR_CATALOG.mischievous.clip).toBe('crouch');
+    expect(BEHAVIOR_CATALOG.mischievous.realization).toBe('variant');
+    expect(BEHAVIOR_CATALOG.mischievous.note).toMatch(/temperament/);
+    expect(BEHAVIOR_CATALOG.mischievous.note).not.toMatch(/^mood mischievous/);
+  });
+
   it('the shake-off cross-fades in as quickly as the other quick reactions', () => {
     expect(crossFadeMs('stand', 'shake')).toBe(crossFadeMs('stand', 'startle'));
   });

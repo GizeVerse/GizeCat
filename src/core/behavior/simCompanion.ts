@@ -84,6 +84,8 @@ const NEUTRAL_TEMPERAMENT: EventTemperament = Object.freeze({
   mischief: 0.5,
   alertness: 1,
   energy: 0.5,
+  watchFirst: false,
+  ignoreMinor: false,
 });
 
 /** States a gentle invitation may take over (the cat is free: calm or wandering). */
@@ -158,7 +160,7 @@ export abstract class SimCompanion extends SimActivities {
   constructor(opts: CatSimOptions, hooks: SimHooks = {}) {
     super(opts, hooks);
     this.companionRandom = mulberry32(hashSeed(this.cat.catId, this.cat.memory.counters.sessions, Math.floor(this.wall() / 1000)));
-    this.events = createWorldEventEngine({ now: this.now, random: this.companionRandom, memory: { history: this.cat.world.events } });
+    this.events = createWorldEventEngine({ now: this.now, random: this.companionRandom, memory: { history: this.cat.world.events, counts: this.cat.world.counts } });
     this.syncPersonality();
   }
 
@@ -191,14 +193,14 @@ export abstract class SimCompanion extends SimActivities {
   protected onCatReplaced(): void {
     this.personalityKey = '';
     this.syncPersonality();
-    this.events.restore({ history: this.cat.world.events });
+    this.events.restore({ history: this.cat.world.events, counts: this.cat.world.counts });
     this.dropEventState();
   }
 
   /** Forgets the whole world (history, counters, journal) and any running event. */
   protected forgetWorld(): void {
     this.cat.world = clearWorldMemory();
-    this.events.restore({ history: [] });
+    this.events.restore({ history: this.cat.world.events, counts: this.cat.world.counts }); // the cleared (empty) memory: novelty starts over
     this.dropEventState();
     this.markDirty(true);
   }

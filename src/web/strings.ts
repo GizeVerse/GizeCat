@@ -217,7 +217,7 @@ export const WS = {
       empty: 'Nothing yet. When something happens around your cat, it is written here.',
       emptyOff: 'The journal is off, so nothing new is written.',
       clear: 'Clear journal',
-      clearAsk: 'Clear every journal entry? This cannot be undone.',
+      clearAsk: 'Clear the journal? This deletes the entries, the short event history and the event counters the cat uses to tell familiar events from new ones. The cat and its other memories stay. This cannot be undone.',
       clearConfirm: 'Clear it',
       clearCancel: 'Keep it',
       cleared: 'Journal cleared.',

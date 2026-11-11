@@ -78,6 +78,12 @@ export interface EventDef {
   noticeMs: readonly [number, number];
   /** A drowsy or distracted cat may miss it entirely (outcome 'unnoticed'). Loud events cannot be missed. */
   canMiss: boolean;
+  /**
+   * A gentle, low-stakes event: every beat is a low-urgency invitation (nothing frightening, nothing
+   * time-critical), so a lazy cat may let it pass (engine: ignoreMinor). Only events that can be missed
+   * qualify (they already have the 'unnoticed' ending).
+   */
+  minor?: boolean;
   outcomes: readonly OutcomeDef[];
   mood: { mood: Mood; strength: number };
   interrupt: InterruptStyle;
@@ -236,6 +242,7 @@ const NORMAL: readonly EventDef[] = [
     pacing: [],
     noticeMs: [800, 2400],
     canMiss: true,
+    minor: true, // a leaf drifting down: every beat is a watch, a slow walk or a pat (urgency <= 0.2)
     mood: { mood: 'curious', strength: 0.35 },
     interrupt: 'fade',
     recoverMs: 1200,
@@ -563,6 +570,7 @@ const NORMAL: readonly EventDef[] = [
     pacing: ['persistence'],
     noticeMs: [500, 1800],
     canMiss: true,
+    minor: true, // a paper plane gliding by: nothing at stake, default urgency throughout
     mood: { mood: 'curious', strength: 0.4 },
     interrupt: 'fade',
     recoverMs: 1400,
@@ -598,6 +606,7 @@ const NORMAL: readonly EventDef[] = [
     pacing: [],
     noticeMs: [600, 2000],
     canMiss: true,
+    minor: true, // sparkles drifting at night: calm, default urgency throughout
     mood: { mood: 'excited', strength: 0.4 },
     interrupt: 'dissolve',
     recoverMs: 1200,
@@ -699,6 +708,7 @@ const NORMAL: readonly EventDef[] = [
     pacing: [],
     noticeMs: [400, 1400],
     canMiss: true,
+    minor: true, // soap bubbles: a toy, never a scare, default urgency throughout
     mood: { mood: 'happy', strength: 0.5 },
     interrupt: 'pop',
     recoverMs: 1200,
@@ -764,6 +774,7 @@ const NORMAL: readonly EventDef[] = [
     pacing: [],
     noticeMs: [600, 2200],
     canMiss: true,
+    minor: true, // a shooting star: a quiet watch, a sit or a soft meow (urgency <= 0.25)
     mood: { mood: 'relaxed', strength: 0.5 },
     interrupt: 'fade',
     recoverMs: 1800,
