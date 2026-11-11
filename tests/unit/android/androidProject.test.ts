@@ -446,9 +446,9 @@ describe('Android Gradle build', () => {
     const props = read('android', 'version.properties')
       .split(/\r?\n/)
       .filter((l) => l.trim() && !l.trim().startsWith('#'));
-    expect(props).toEqual(['versionName=1.4.2', 'versionCode=10403']);
-    // Above the earlier trial APKs (10400 for 1.4.0, 10401 for 1.4.0-overlay.1), so it installs over them.
-    expect(Number(props[1]?.split('=')[1])).toBeGreaterThan(10401);
+    expect(props).toEqual(['versionName=1.5.0', 'versionCode=10500']);
+    // Above the earlier trial APKs (10400 for 1.4.0, 10401 for 1.4.0-overlay.1, 10402 for 1.4.1, 10403 for 1.4.2), so it installs over them.
+    expect(Number(props[1]?.split('=')[1])).toBeGreaterThan(10403);
     const buildWebApp = read('scripts', 'build-web-app.mjs');
     expect(buildWebApp).toContain('GIZECAT_WEB_APP_VERSION: androidVersion');
     expect(read('scripts', 'build.mjs')).toContain('process.env.GIZECAT_WEB_APP_VERSION');
