@@ -23,6 +23,14 @@ had time to notice, an *intent* (watch, approach, sneak, chase, flee, play, insp
   clearance of `goTo()` apply to every event walk.
 - `intent.sound` and `intent.emote` are one-shots (present only on the tick a beat begins); everything else is
   re-emitted every tick, so the body is released when no intent arrives for `BODY_STALE_MS`.
+- Personality reaches the engine as an event temperament (`temperamentFor`), including two flags: a shy cat
+  (`watchFirst`) only watches a calm beat for 6 to 12 s before performing it and then keeps a 1.5 times wider
+  stand-off; a lazy cat (`ignoreMinor`) lets a minor event (leaf, paper plane, sparkles, bubbles, falling star)
+  pass 60 % of the time: props play, no intent is sent, the outcome is 'unnoticed' (never journalled). Urgent
+  beats are never delayed and forced events are never ignored.
+- Novelty: `SimCompanion` hands `cat.world.counts` to the engine at construction, on `onCatReplaced` and in
+  `forgetWorld` (so Clear journal and Clear history reset it). Rarely met events are chosen up to 1/0.6 times
+  more often than very familiar ones and noticed about 0.85x to 1.2x as fast (never for urgent events).
 - While Laser Mode is on, `eventsAllowed()` is false: a running event winds down, none starts.
 
 ## 2. Laser Mode (`laser.ts`, `simLaser.ts`)

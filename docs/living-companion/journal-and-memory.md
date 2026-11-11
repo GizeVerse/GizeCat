@@ -13,7 +13,7 @@ The persisted cat gets one new section, `world` (the "world memory"). It is addi
 | Field | What it holds | Bound |
 |---|---|---|
 | `events` | The events that ended recently: event id, the wall-clock time it ended, and a short outcome token. It feeds the repetition control of the scheduler. | The newest 16 (`EVENT_HISTORY_MAX`). |
-| `counts` | How many times each event has played. No scheduling rule reads it in 1.5.0 (a search of `src/` finds it read only by a test hook); the scheduler's repetition control uses `events`. | Whole numbers up to 1,000,000 per event; known event ids only. |
+| `counts` | How many times each event has finished (including events that were cut short or went unnoticed). It gives the cat a sense of novelty: an unseen event is picked a little more often and noticed a little sooner than a very familiar one (see [World events](events.md#personality-and-novelty)). The repetition control still uses `events`. The engine reads the counts when the cat is loaded, replaced or cleared, and the sim saves them through the same history append as before. | Whole numbers up to 1,000,000 per event; known event ids only. |
 | `lastEndedAt` | Wall-clock time the last event ended (0 if none). The schedule restarts from a fresh delay anyway. | One number, in the range a date can show. |
 | `journal` | The diary: meaningful moments, newest last. Same shape as an `events` entry. | The newest 60 (`JOURNAL_MAX`). |
 
@@ -23,7 +23,7 @@ What the journal does not hold: the screen, window titles, the pointer position,
 
 ### Which moments are written
 
-An event writes a journal line only when its outcome is marked as worth one in the catalogue (the asterisks in [World events](events.md#the-26-events)). Outcomes such as `cut` (the event was wound down while its props were still on screen) and `unnoticed` are never journalled. A line is written only when "Keep a journal" is on. With it off, nothing new is written, existing lines stay until you clear them, and the short event history and counters are still kept (they steer which events play, not what you read).
+An event writes a journal line only when its outcome is marked as worth one in the catalogue (the asterisks in [World events](events.md#the-26-events)). Outcomes such as `cut` (the event was wound down while its props were still on screen) and `unnoticed` are never journalled. A line is written only when "Keep a journal" is on. With it off, nothing new is written, existing lines stay until you clear them, and the short event history and counters are still kept (they steer which events play and how new each one feels, not what you read).
 
 ### Bounds and safety on load
 
@@ -42,7 +42,7 @@ It is never uploaded, synced or sent anywhere. There is no network code in this 
 
 - **Read:** Windows, the Journal page; Android, the Journal section of the home panel (newest first). While the Android floating cat runs, its own page owns the cat, so the panel shows what the floating cat last saved.
 - **Switch off:** "Keep a journal" on the same page or section. Stored in `settings.companion.journal.enabled` (default on).
-- **Clear:** the "Clear journal" button, which asks you to confirm. In the code this forgets the whole world memory: every journal entry, the short event history and the per-event counters, and it ends any running event (`clearJournal` calls `forgetWorld` in `simCompanion.ts`). The Windows page text names the journal and the event history; the counters go with them. Nothing else about the cat changes: its traits, stats and learned preferences stay.
+- **Clear:** the "Clear journal" button, which asks you to confirm. In the code this forgets the whole world memory: every journal entry, the short event history and the per-event counters, and it ends any running event (`clearJournal` calls `forgetWorld` in `simCompanion.ts`). Both the Windows page (description and confirmation) and the Android panel's confirmation say so plainly: the entries, the short event history and the event counters the cat uses to tell familiar events from new ones are deleted, and every event feels new to the cat again. Nothing else about the cat changes: its traits, stats and learned preferences stay.
   - On Android the panel cannot clear it while the floating cat is running (it would not be the page that owns the cat); stop the floating cat first.
 - **Clear history** (Personality page on Windows) also forgets the world, together with the learned memory. Resetting the personality (a new cat) and adopting a different cat through a profile import give the new cat an empty world, because the journal belongs to the cat it was written for. On Android and the web host, "Start over" removes the stored cat and settings.
 

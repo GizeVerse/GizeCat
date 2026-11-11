@@ -24,6 +24,10 @@ GizeCat (formerly Desktop Cat). Versions follow semantic versioning. 1.3.0 is th
 - **Companion choices travel with a saved profile** (personality, which events, pace, reduced motion, whether a journal is kept); the journal and event history themselves do not (`src/shared/profileTransfer.ts`).
 - **Android panel rebuilt** around the Companion sections. The Android app version is again released together with the desktop and web version.
 - Settings pages and the Android panel show live mood, activity, personality and the current or next event.
+- **Shy and Lazy now do something.** The two personality flags are read by the event engine: a shy cat watches a new event for 6 to 12 seconds before coming closer and keeps a wider stand-off; a lazy cat lets minor events (falling leaf, paper plane, sparkles, bubbles, falling star) pass 60 % of the time (outcome `unnoticed`, never journalled). Auto cats and the other profiles are unaffected.
+- **Per-event counters have a purpose:** novelty. Events the cat has rarely met are picked slightly more often and noticed slightly sooner than very familiar ones.
+- **Clear journal wording** (Windows page and Android panel) now says it also deletes the short event history and the event counters. The behaviour was already so; only the words were incomplete.
+- **Mischievous is documented as a temperament** (a personality profile), not a mood, in the animation catalogue note and the docs.
 - Documentation updated: README, user guide, platform pages, release checklist.
 
 ### Privacy and permission changes

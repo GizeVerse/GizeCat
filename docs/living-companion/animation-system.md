@@ -180,7 +180,7 @@ Counts: 17 clip, 11 variant, 2 alias, 4 composite, 4 layer, 5 sim (43 in all).
 | sleepy | `sit` | variant | mood sleepy: slow blinks, heavy lids, yawn |
 | confused | `confused` | clip | new |
 | excited | `tailChase` | variant | mood excited: wide pupils, fast tail; tailChase, rollOver or sprint |
-| mischievous | `crouch` | variant | "mood mischievous": crouch and wiggle, swat, narrowed eyes (see the note below) |
+| mischievous | `crouch` | variant | temperament (the mischievous personality profile, not a mood): crouch and wiggle, swat, narrowed eyes (see the note below) |
 | relaxed | `loaf` | variant | mood relaxed: half-closed eyes, slow tail, optional purr |
 | edgeClimbing | `climb` | clip | screen edges on every platform, window sides on Windows |
 | cornerTransition | `climb` | composite | floor to wall through the sim wall manoeuvre (`balance` at the top corner) |
@@ -189,7 +189,7 @@ Counts: 17 clip, 11 variant, 2 alias, 4 composite, 4 layer, 5 sim (43 in all).
 | safeFalling | `fall` | composite | fall, land, impact, `landRecover`; never breaks the cat |
 | eventMovement | `walk` | sim | world events steer the same mover and clips |
 
-Note on `mischievous`: the catalogue note says "mood mischievous", but the `Mood` type has eight moods and none of them is mischievous (`MOODS` in `src/shared/companion.ts`). Mischief reaches the cat as a personality knob and as a temperament value, not as a mood layer; the table row records what the catalogue says. Also note that the behaviour keys `happy`, `curious`, `scared`, `sleepy`, `excited` and `relaxed` are variants because the mood layers change the same clip rather than adding a clip.
+Note on `mischievous`: Mischievous is a temperament, not a mood. The `Mood` type has eight moods and none of them is mischievous (`MOODS` in `src/shared/companion.ts`). It is a personality profile whose `mischief` knob raises the temperament's `mischief` value, which makes the cat more likely to try the crouch-and-wiggle, the swat and other unusual reactions. The catalogue note (`BEHAVIOR_CATALOG` in `src/shared/animationCatalog.ts`) now says so; the clip (`crouch`) and the realization (`variant`) are unchanged. Also note that the behaviour keys `happy`, `curious`, `scared`, `sleepy`, `excited` and `relaxed` are variants because the mood layers change the same clip rather than adding a clip.
 
 ## Consistency checks
 

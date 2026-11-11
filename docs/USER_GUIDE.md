@@ -105,7 +105,7 @@ A small red dot follows your pointer and the cat chases it, and **never catches 
 
 ### The Journal
 
-Settings → **Journal** (Android: the panel's Journal section) holds a short note for each event worth remembering, such as "A little mouse ran across the floor. The cat watched it go." It is kept only on your device, never sent anywhere, and has no streaks, scores or reminders. The newest 60 entries are kept. **Keep a journal** turns writing off (existing lines stay until you clear them). **Clear journal** deletes every entry and the short event history they came from, after a confirmation. The journal is not part of a saved profile; a copied cat starts a new one. If it is empty, see [Troubleshooting](platforms/troubleshooting.md#the-journal-is-empty).
+Settings → **Journal** (Android: the panel's Journal section) holds a short note for each event worth remembering, such as "A little mouse ran across the floor. The cat watched it go." It is kept only on your device, never sent anywhere, and has no streaks, scores or reminders. The newest 60 entries are kept. **Keep a journal** turns writing off (existing lines stay until you clear them). **Clear journal** deletes the entries, the short event history and the event counters the cat uses to tell familiar events from new ones, after a confirmation. The cat, its settings and its other memories stay. The journal is not part of a saved profile; a copied cat starts a new one. If it is empty, see [Troubleshooting](platforms/troubleshooting.md#the-journal-is-empty).
 
 ### Reduced motion and quiet settings
 

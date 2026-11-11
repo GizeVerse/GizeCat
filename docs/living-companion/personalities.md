@@ -21,12 +21,12 @@ The words are the ones the settings pages show (`src/shared/personalityText.ts`)
 | Curious | Wants to know what everything is, and goes to look. | Notices world events quickly, walks over to look, goes close to anything new, explores more than it rests. |
 | Playful | Turns almost anything into a game. | Stays longest with toys and games, chases a little longer than most, rests less than average. |
 | Energetic | Always on the move. | Moves a lot and rests very little, chases for the longest of all, bold with new things. |
-| Lazy | Happiest curled up somewhere comfortable. | Rests most of the time, keeps chases short, plays little. |
-| Shy | Careful with anything new. | Startles easily, comes closer slowly if at all, stays a little further from things. |
+| Lazy | Happiest curled up somewhere comfortable. | Rests most of the time, often lets small things such as a falling leaf go by, keeps chases short, plays little. |
+| Shy | Careful with anything new. | Watches new things from a distance for a few seconds first, startles easily, comes closer slowly if at all, stays further from things. |
 | Mischievous | Always up to something a little cheeky. | Tries unusual reactions, walks straight up to new things, hard to startle. |
 | Calm | Relaxed and composed, whatever happens. | Few sudden movements, very hard to startle, reacts to surprises with a quiet look. |
 
-Two lines in the settings text describe flags the code does not yet act on, see the note under the knob table.
+Mischievous is a temperament (a personality profile), not one of the eight moods. The Shy and Lazy lines about watching first and letting small things go are carried out by two flags the event engine reads, see the knob table below.
 
 ## The tunable parameters
 
@@ -69,7 +69,9 @@ What each knob does, as the code reads it:
 - `calmness`: moves `calm` (span 0.7) and becomes a multiplier of 0.7 to 1.3 on sudden activity (`liveliness`).
 - `mischief`: moves the temperament's `mischief` (span 0.7), the weight of unusual, playful or sneaky outcomes.
 - `playAppetite`: moves `playfulness` (span 0.6) and sets how readily the cat reaches toward the laser dot.
-- `watchFromDistance` and `ignoreMinorEvents`: **declared in the table (shy and lazy set them to true), but a search of `src/` finds no code that reads them.** The shy cat's distance and the lazy cat's indifference come from the numeric knobs above (`approachBoldness`, `eventInterest`), not from these two flags. Treat them as reserved until a later change wires them in.
+- `watchFromDistance` (only shy sets it): `temperamentFor` turns it into `watchFirst` on the event temperament. After a shy cat notices an event it first only watches for 6 to 12 seconds (at most 45 % of the time the event has left), then comes closer, and while it does it keeps a stand-off 1.5 times wider than other cats. Urgent beats (scares, thunder, waves) are never delayed, and a shy cat never catches anything.
+- `ignoreMinorEvents` (only lazy sets it): becomes `ignoreMinor`. When a minor event starts (a falling leaf, paper plane, magic sparkles, bubble party or falling star: gentle, low-stakes and able to be missed), a lazy cat lets it pass 60 % of the time. The props still play, the cat does not react, and the event ends as `unnoticed`, which never writes a journal line. Events you start yourself with "play one now" or from the dev menu are never ignored.
+- Both flags are `false` for Auto and for every other profile, and they add no random draws on that path, so an Auto cat behaves exactly as before. The final model: two numeric knobs steer how much of everything a cat does, and these two flags add one distinct behaviour each (watch first, let small things go). Details: [World events](events.md#personality-and-novelty).
 
 ### How a knob becomes behaviour
 
