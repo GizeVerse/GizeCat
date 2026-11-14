@@ -17,7 +17,9 @@ import { adoptCatInto, createCatSim } from '../core/behavior';
 import { simWorld } from '../core/display/simWorld';
 import { createGestureRecognizer } from '../core/interaction/gestures';
 import type { PersistedCat } from '../shared/catState';
+import type { CatRenderState } from '../shared/cat';
 import type { Point } from '../shared/geometry';
+import type { OverlayApi } from '../shared/ipc';
 import { PROFILE_MIME } from '../shared/profileTransfer';
 import type { Settings } from '../shared/settings';
 import type { SimEvent } from '../shared/sim';
@@ -43,6 +45,7 @@ import { createProfileUi } from './profileUi';
 import { readSafeAreaInsets } from './safeArea';
 import { NO_SESSION_FLAGS, readSessionFlags, writeSessionFlags, type SessionFlags } from './sessionFlags';
 import { applyWebPatch, patchFor, resetWebSettings, type WebPatchResult } from './settingsModel';
+import { createWebSecretName } from './secretName';
 import { createSettingsPanel, type SettingsPanel } from './settingsPanel';
 import { describeCat, isAsleep } from './status';
 import { createWebCatStore, openWebStorage, requestPersistence, type PersistenceState } from './storage';
@@ -151,6 +154,43 @@ function boot(): void {
     onCatGone: () => router.cancel(),
     onPresence: surface ? (out, info) => surface.onPresence(out, info) : undefined,
   });
+  // The name-dependent extra: the accessory is added to every frame the renderer receives while it is on
+  // (the sim, the stored cat and the settings never see it). A flip redraws at once, even a sleeping cat.
+  const secret = createWebSecretName();
+  const renderSinks = new Set<(s: CatRenderState) => void>();
+  let lastFrame: CatRenderState | null = null;
+  let lastSynthSeq = Number.NEGATIVE_INFINITY;
+  const withAccessory = (s: CatRenderState): CatRenderState => {
+    const accessory = secret.accessory();
+    return accessory ? { ...s, accessory } : s;
+  };
+  const overlayApi: OverlayApi = {
+    ...overlays.api,
+    onRender(cb) {
+      const off = overlays.api.onRender((s) => {
+        lastFrame = s;
+        lastSynthSeq = Number.NEGATIVE_INFINITY;
+        cb(withAccessory(s));
+      });
+      renderSinks.add(cb);
+      return () => {
+        renderSinks.delete(cb);
+        off();
+      };
+    },
+  };
+  secret.onAccessoryChange(() => {
+    const frame = lastFrame;
+    if (!frame) return;
+    // Strictly increasing synthetic seq, always below the next real frame (an integer, seq + 1): each step
+    // halves the gap to it. The cue is never replayed.
+    const base = Math.max(frame.seq, lastSynthSeq);
+    const nextSeq = base + (Math.floor(frame.seq) + 1 - base) / 2;
+    lastSynthSeq = nextSeq;
+    const again = withAccessory({ ...frame, seq: nextSeq, snap: false, sound: null });
+    for (const cb of [...renderSinks]) cb(again);
+  });
+  secret.setName(settings.general.catName);
   const deliverSimEvents = (events: SimEvent[]): void => {
     host?.enqueueAll(events);
     recorder?.noteEvents(events);
@@ -309,6 +349,7 @@ function boot(): void {
     }
     settings = r.settings;
     catHost.updateSettings(settings);
+    secret.setName(settings.general.catName);
     if (save) {
       storage.saveSettings(settings);
       // The floating cat lives in another WebView of this app: native tells it to re-read the settings.
@@ -353,6 +394,7 @@ function boot(): void {
       onResetSettings: () => {
         settings = resetWebSettings();
         catHost.updateSettings(settings);
+        secret.setName(settings.general.catName);
         storage.saveSettings(settings);
         if (floatingUi?.state.running) controlPort?.send('settingsChanged');
         refreshUi();
@@ -360,6 +402,7 @@ function boot(): void {
       },
       onStartOver: startOver,
       host: mode,
+      secret,
       installHint: () => installHint(mode, installPrompt !== null),
       onInstall: () => {
         const p = installPrompt;
@@ -398,12 +441,14 @@ function boot(): void {
       const before = settings;
       settings = next;
       catHost.updateSettings(settings);
+      secret.setName(settings.general.catName);
       try {
         if (!adoptCatInto(sim, nextCat)) throw new Error('this simulation cannot adopt a cat');
       } catch (err) {
         log.warn('the loaded cat could not be adopted', { error: err instanceof Error ? err.message : String(err) });
         settings = before;
         catHost.updateSettings(settings);
+        secret.setName(settings.general.catName);
         return false;
       }
       refreshUi();
@@ -549,7 +594,7 @@ function boot(): void {
 
   let runtime: OverlayRuntime | null = null;
   try {
-    runtime = new OverlayRuntime(canvas, overlays.api, { audio: audio.factory, viewport });
+    runtime = new OverlayRuntime(canvas, overlayApi, { audio: audio.factory, viewport });
   } catch (err) {
     log.error('the cat renderer could not start', { error: err instanceof Error ? err.message : String(err) });
   }
@@ -585,6 +630,7 @@ function boot(): void {
       reloadSettings: () => {
         settings = storage.loadSettings();
         catHost.updateSettings(settings);
+        secret.setName(settings.general.catName);
         // Laser Mode and the events pause travel the same way: the app page wrote them, native said "changed".
         applyFlags(readSessionFlags(localStore));
       },
@@ -648,6 +694,7 @@ function boot(): void {
         },
       },
       onSoundGesture: () => audio.unlock(),
+      secret,
       onCustomize: () => {
         router.cancel();
         sheet.open();

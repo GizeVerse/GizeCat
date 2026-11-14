@@ -42,6 +42,8 @@ import {
   type WebPatchResult,
 } from './settingsModel';
 import { activityLabel } from './status';
+import { attachSecretNote } from './secretNote';
+import type { WebSecretName } from './secretName';
 import { WS } from './strings';
 
 /** What the status chips show: the in-page sim's companion status plus its behaviour state. */
@@ -84,6 +86,8 @@ export interface AndroidPanelDeps {
   version: string;
   /** The panel opened or closed (the in-app cat steps aside while it is open). */
   onOpenChange?: (open: boolean) => void;
+  /** The name-dependent extra (secretName.ts); absent: the name field is plain. */
+  secret?: WebSecretName;
 }
 
 export interface AndroidPanel {
@@ -243,11 +247,14 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
       nameInput.value = r.settings.general.catName;
     }
   });
+  // Registered after the change handler above, so it reads the value that handler settled on.
+  const nameField = h('div', { class: 'field' }, [h('label', { for: nameId, text: WS.cat.nameLabel }), nameInput, nameErr]);
+  attachSecretNote(nameInput, deps.secret);
   const coat = radioCards<SkinId>('coat', WS.cat.coatLabel, SKINS, (s) => [coatArt(s), h('span', { class: 'title', text: WS.skins[s] })], (s) => change({ field: 'skin', value: s }));
   const size = slider(WS.cat.sizeLabel, SIZE_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'size', value: v }, save));
   const moreBtn = h('button', { type: 'button', text: WS.panel.cat.more });
   moreBtn.addEventListener('click', () => deps.onCustomize());
-  const catCard = pcard(WS.panel.cat.title, [h('div', { class: 'field' }, [h('label', { for: nameId, text: WS.cat.nameLabel }), nameInput, nameErr]), coat.root, size.root, h('div', { class: 'actions' }, [moreBtn])]);
+  const catCard = pcard(WS.panel.cat.title, [nameField, coat.root, size.root, h('div', { class: 'actions' }, [moreBtn])]);
 
   // ---- personality: the seven profiles and Auto (the cat never changes the choice)
   const PERSONALITY_VALUES: readonly PersonalityChoice[] = ['auto', ...PERSONALITY_IDS];
@@ -457,6 +464,7 @@ export function createAndroidPanel(deps: AndroidPanelDeps): AndroidPanel {
     const s = deps.getSettings();
     const off = disabledBehaviorSet(s.behavior);
     if (document.activeElement !== nameInput) nameInput.value = s.general.catName;
+    deps.secret?.setName(s.general.catName);
     coat.set(s.appearance.skin);
     size.set(s.appearance.size);
     personality.set(s.companion.personality);

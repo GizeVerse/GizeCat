@@ -2,6 +2,8 @@
 // facing); everything here is in cat-local DIP. Groups of shapes are drawn as an
 // outline pass followed by a fill pass so that overlapping parts merge into one
 // clean silhouette with a single exterior outline. No per-frame allocation.
+import type { CatAccessory } from '../../../shared/cat';
+import { computeNecklace, createNecklaceGeom, drawNecklace } from './accessory';
 import { clamp, clamp01, lerp, TAU } from './math';
 import { LEG_BF, LEG_BN, LEG_FF, LEG_FN, type Pose } from './pose';
 import type { CatPuppet } from './puppet';
@@ -17,6 +19,8 @@ export interface DrawOptions {
   shadow: boolean;
   /** Device pixels per cat-local unit; small values drop fine detail. */
   pixelsPerUnit: number;
+  /** Optional worn accessory (absent = none). */
+  accessory?: CatAccessory | undefined;
 }
 
 const DASH_NONE: number[] = [];
@@ -40,6 +44,7 @@ const tailPts = new Float64Array(TAIL_SAMPLES * 2);
 const tailRad = new Float64Array(TAIL_SAMPLES);
 const tailLen = new Float64Array(TAIL_SAMPLES);
 const ear = new Float64Array(6);
+const necklace = createNecklaceGeom();
 // Per-call drawing state (set at the start of drawCat; drawing is never re-entrant).
 let unit = 1;
 let pixelMode = false;
@@ -97,6 +102,17 @@ export function drawCat(ctx: Ctx2D, puppet: CatPuppet, skin: Skin, o: DrawOption
   torsoMarks(ctx, rig, skin, fine);
   legDetails(ctx, rig.legs[LEG_FN]!, LEG_FN, skin, false, fine);
 
+  // Accessory: after the torso, neck and standing front leg fills, before the lifted-paw layer
+  // (a raised paw stays in front of the pendant) and before the head (the chin overlaps the collar,
+  // so the necklace can never cover the face, ears or eyes).
+  // With the tail in front (sit, loaf, sleep) the necklace is drawn after the tail instead, so the
+  // tail can never cover the heart (never drawn twice).
+  const wearing = o.accessory === 'heartPendant';
+  if (wearing) {
+    computeNecklace(rig, p, necklace);
+    if (!tail.front) drawNecklace(ctx, necklace, skin.outline, ol, o.pixelsPerUnit);
+  }
+
   // A front paw lifted off the ground (grooming, batting) gets its own outline so it
   // reads in front of the chest; a shoulder patch hides the stroke's root cap.
   const lift = frontLift(rig.legs[LEG_FN]!);
@@ -132,7 +148,10 @@ export function drawCat(ctx: Ctx2D, puppet: CatPuppet, skin: Skin, o: DrawOption
   ctx.stroke();
   ctx.globalAlpha = a0;
 
-  if (tail.front) drawTail(ctx, tail, skin, ol, fine);
+  if (tail.front) {
+    drawTail(ctx, tail, skin, ol, fine);
+    if (wearing) drawNecklace(ctx, necklace, skin.outline, ol, o.pixelsPerUnit);
+  }
 
   drawHead(ctx, rig, p, skin, ol, fine);
   ctx.restore();

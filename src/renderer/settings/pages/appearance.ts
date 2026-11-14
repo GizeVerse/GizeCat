@@ -7,6 +7,7 @@ import { NUMERIC_FIELDS } from '../fields';
 import { fieldId } from '../patch';
 import { coatArt } from '../skins';
 import type { FieldBinding } from '../store';
+import { attachSecretNote } from '../secretNote';
 import { platformWording, S } from '../strings';
 import { validateCatName } from '../validate';
 
@@ -53,6 +54,7 @@ export function appearancePage(ctx: PageContext): PageView {
     maxLength: MAX_CAT_NAME_LENGTH + 8,
     spellcheck: false,
   });
+  attachSecretNote({ row: name.parts.row, before: name.parts.note, input: name.input, subscribe: (cb) => ctx.store.subscribe(() => cb()) });
   const style = segmentedRow(
     ctx,
     'appearance',

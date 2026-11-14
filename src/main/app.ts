@@ -39,6 +39,7 @@ import { createQuitSequence } from './lifecycle/quitSequence';
 import { createSessionEndSaver, type SessionEndWindow } from './lifecycle/sessionEnd';
 import { createShortcutManager } from './lifecycle/shortcuts';
 import { createOverlayManager } from './overlay/overlayManager';
+import { createSecretName, type SecretName } from './secretName';
 import { WAYLAND_NO_OVERLAY_REASON } from './overlay/overlayProfile';
 import { createPlatformServices, probeFromProcess } from './platform';
 import { guardedCipher, keychainCheckDeferred } from './platform/secrets';
@@ -515,6 +516,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       }
     : undefined;
 
+  let secretName: SecretName | null = null;
   const overlays = createOverlayManager({
     logger: logger.child('overlay'),
     display,
@@ -523,6 +525,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
     devTools: boot.flags.dev,
     debugOverlay: boot.flags.dev && process.argv.includes('--debug-overlay'),
     getSettings: () => settings.get(),
+    getAccessory: () => secretName?.accessory(),
     gestures: createGestureRecognizer(),
     onSimEvents: (events) => host?.enqueueAll(events),
     onContextMenu: (win) => {
@@ -695,6 +698,9 @@ export function startApp(boot: AppBootstrap): RunningApp {
     refreshUi();
   });
 
+  // After the settings listener, so a rename reaches the host first; a flip re-sends the last frame.
+  secretName = createSecretName({ settings, onChange: () => attempt(log, 'accessory refresh', () => overlays.refresh()) });
+
   // 1.4.0 "Take your cat to another device": main-side export/import (profileService.ts). Files come
   // only from these dialogs; the settings renderer gets previews and reason codes, never paths.
   const profiles = createProfileTransferService({
@@ -784,6 +790,7 @@ export function startApp(boot: AppBootstrap): RunningApp {
       ['ipc', () => ipc.dispose()],
       ['ui throttle', () => broadcast.cancel()],
       ['settings listener', () => offSettings()],
+      ['name listener', () => secretName?.dispose()],
       ['display listener', () => offDisplay()],
       ['perception listener', () => offPerceptionStatus?.()],
       [

@@ -119,6 +119,7 @@ export function isRenderState(v: unknown): v is CatRenderState {
     s.laser = typeof l === 'object' && l !== null && isNum(l.x) && isNum(l.y) ? { x: l.x, y: l.y } : null;
   }
   if (s.reducedMotion !== undefined && typeof s.reducedMotion !== 'boolean') delete s.reducedMotion;
+  if (s.accessory !== undefined && s.accessory !== 'heartPendant') delete s.accessory;
   return true;
 }
 

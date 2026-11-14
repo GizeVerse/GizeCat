@@ -1,7 +1,7 @@
 // One cat on one overlay: maps a render snapshot to the puppet, owns the view
 // transform (anchor, scale, facing turn), computes bounds and hit rects, and draws
 // in smooth or pixel style. Uses only the Canvas 2D context it is given (no DOM).
-import type { CatRenderState, Emote, RenderStyle } from '../../shared/cat';
+import type { CatAccessory, CatRenderState, Emote, RenderStyle } from '../../shared/cat';
 import type { Rect } from '../../shared/geometry';
 import { drawCat, drawShadow, earCorners, type Ctx2D } from './cat/draw';
 import { drawEmote, EMOTE_RADIUS, EMOTE_SIZE, emoteFrame, type EmoteFrame } from './cat/emotes';
@@ -80,6 +80,7 @@ export class CatScene {
   private skin: Skin = getSkin('ginger');
   private style: RenderStyle = 'smooth';
   private shadow = true;
+  private accessory: CatAccessory | undefined = undefined;
   private opacity = 1;
   private visible = false;
   private emote: Emote | null = null;
@@ -169,6 +170,7 @@ export class CatScene {
     this.skin = getSkin(s.skin);
     this.style = s.style === 'pixel' ? 'pixel' : 'smooth';
     this.shadow = s.shadow;
+    this.accessory = s.accessory === 'heartPendant' ? 'heartPendant' : undefined;
     this.sleeping = s.state === 'sleeping';
     this.stateName = s.state;
     this.clipName = s.clip;
@@ -560,7 +562,7 @@ export class CatScene {
   /** Paints cat (+shadow, +emote unless pixel) with device scale k and device offset (tx, ty). */
   private paint(ctx: Ctx2D, k: number, tx: number, ty: number, outline: number, withExtras: boolean): void {
     this.setCatTransform(ctx, k, tx, ty);
-    drawCat(ctx, this.puppet, this.skin, { outline, shadow: this.shadow && withExtras, pixelsPerUnit: k * this.scale });
+    drawCat(ctx, this.puppet, this.skin, { outline, shadow: this.shadow && withExtras, pixelsPerUnit: k * this.scale, accessory: this.accessory });
     if (withExtras) this.paintEmote(ctx, k, tx, ty);
   }
 

@@ -27,3 +27,6 @@ android/captures/
 *.keystore
 *.apk
 *.aab
+
+# Owner-provisioned secret payload (scripts/egg-provision.mjs): local only, never committed
+secrets/

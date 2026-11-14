@@ -37,7 +37,29 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 // Android must not make the desktop or the hosted web app claim a new version.
 const appVersion = /^\d+\.\d+\.\d+$/.test(process.env.GIZECAT_WEB_APP_VERSION ?? '') ? process.env.GIZECAT_WEB_APP_VERSION : pkg.version;
 
+// The owner-provisioned, encrypted secret-name payload (scripts/egg-provision.mjs). It is a local,
+// git-ignored file; without it the feature is simply off. Only the ciphertext is embedded: the build
+// never sees, and cannot print, the trigger or the message. The payload's own structure is checked at
+// run time by src/shared/secretEgg.ts; here it only has to be a JSON object with the expected format.
+function readEggPayload() {
+  const file = process.env.GIZECAT_EGG_PAYLOAD_FILE || path.join(root, 'secrets', 'easter-egg.payload.json');
+  if (!fs.existsSync(file)) return { text: '', note: 'absent (the feature is off in this build)' };
+  const text = fs.readFileSync(file, 'utf8').trim();
+  let ok = false;
+  try {
+    const o = JSON.parse(text);
+    ok = typeof o === 'object' && o !== null && o.v === 1 && o.kdf === 'pbkdf2-sha256';
+  } catch {
+    ok = false;
+  }
+  if (!ok) throw new Error('the provisioned payload file is not a valid payload: run scripts/egg-provision.mjs again');
+  return { text, note: `embedded (sha256 ${crypto.createHash('sha256').update(text).digest('hex').slice(0, 12)})` };
+}
+const eggPayload = readEggPayload();
+console.log(`build: secret-name payload ${eggPayload.note}`);
+
 const define = {
+  __EGG_PAYLOAD__: JSON.stringify(eggPayload.text),
   __DEV__: JSON.stringify(dev),
   __APP_VERSION__: JSON.stringify(appVersion),
   'process.env.NODE_ENV': JSON.stringify(dev ? 'development' : 'production'),

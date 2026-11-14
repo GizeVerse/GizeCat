@@ -14,6 +14,8 @@ import { h, uid } from '../renderer/settings/dom';
 import { coatArt } from '../renderer/settings/skins';
 import { showEvictionNote, type HostMode, type InstallHint } from './hostMode';
 import { CAT_NAME_MAX, patchFor, selectedPreset, SIZE_RANGE, VOLUME_RANGE, type WebField, type WebPatchResult } from './settingsModel';
+import { attachSecretNote } from './secretNote';
+import type { WebSecretName } from './secretName';
 import { installText, WS } from './strings';
 import type { OfflineState } from './swRegister';
 
@@ -39,6 +41,8 @@ export interface SettingsPanelDeps {
   offlineState: () => OfflineState | null;
   version: string;
   onOpenChange?: (open: boolean) => void;
+  /** The name-dependent extra (secretName.ts); absent: the name field is plain. */
+  secret?: WebSecretName;
 }
 
 export interface SettingsPanel {
@@ -160,6 +164,9 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
       nameInput.value = r.settings.general.catName;
     }
   });
+  const nameField = h('div', { class: 'field' }, [h('label', { for: nameId, text: WS.cat.nameLabel }), nameInput, nameErr]);
+  // Registered after the change handler above, so it reads the value that handler settled on.
+  attachSecretNote(nameInput, deps.secret);
   const coat = radioCards<SkinId>('coat', WS.cat.coatLabel, SKINS, (s) => [coatArt(s), h('span', { class: 'title', text: WS.skins[s] })], (s) => change({ field: 'skin', value: s }));
   const style = radioCards<RenderStyle>('style', WS.cat.styleLabel, RENDER_STYLES, (s) => [h('span', { class: 'title', text: WS.styles[s] })], (s) => change({ field: 'style', value: s }));
   const size = range(WS.cat.sizeLabel, SIZE_RANGE, (v) => `${Math.round(v * 100)}%`, (v, save) => change({ field: 'size', value: v }, save));
@@ -167,7 +174,7 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   const emotes = switchRow(WS.cat.emotesLabel, (on) => change({ field: 'emotes', value: on }));
   const catSection = h('section', {}, [
     h('h3', { text: WS.cat.title }),
-    h('div', { class: 'field' }, [h('label', { for: nameId, text: WS.cat.nameLabel }), nameInput, nameErr]),
+    nameField,
     coat.root,
     style.root,
     size.root,
@@ -297,6 +304,7 @@ export function createSettingsPanel(deps: SettingsPanelDeps): SettingsPanel {
   function refresh(): void {
     const s = deps.getSettings();
     if (document.activeElement !== nameInput) nameInput.value = s.general.catName;
+    deps.secret?.setName(s.general.catName);
     coat.set(s.appearance.skin);
     style.set(s.appearance.style);
     size.set(s.appearance.size);

@@ -249,7 +249,12 @@ export interface CatRenderState {
   laser?: { x: number; y: number } | null;
   /** Reduced motion: softer pose swings, no particle-like effects, props at half speed. */
   reducedMotion?: boolean;
+  /** Worn accessory drawn by the renderer; absent = none. */
+  accessory?: CatAccessory;
 }
+
+/** Accessories the renderer can draw on the cat. */
+export type CatAccessory = 'heartPendant';
 
 /** Hit region reported by a renderer for its current pose, overlay-local DIP. */
 export interface HitRegion {

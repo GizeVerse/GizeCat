@@ -135,6 +135,8 @@ export interface OverlayManagerOptions {
   devTools: boolean;
   debugOverlay: boolean;
   getSettings: () => Settings;
+  /** Worn accessory for every overlay's render state; absent or undefined = none. */
+  getAccessory?: () => 'heartPendant' | undefined;
   gestures: GestureRecognizer;
   /** Gesture results for the simulation. */
   onSimEvents: (events: SimEvent[]) => void;
@@ -226,6 +228,8 @@ export interface OverlayManager extends SurfaceLinesSink {
   handleHitRegion(webContentsId: number, region: HitRegion): void;
   handleRendererError(webContentsId: number, message: string): void;
   applySettings(next: Settings, prev: Settings | null): void;
+  /** Re-sends the last frame to the overlays (an accessory changed while the cat is idle). */
+  refresh(): void;
   /** Test hook: true/false forces every overlay interactive/click-through; null restores routing. */
   forceInteractive(value: boolean | null): void;
   /**
@@ -814,6 +818,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     displaysShowingProps(out, world.displays, hidden).forEach((id) => showing.add(id));
     const laserOn = extras?.laser !== undefined;
     const laserPoint = laserOn && extras?.laser && !hidden && out.visible ? extras.laser : null;
+    const accessory = opts.getAccessory?.();
     const laserQuiet = extras?.laserQuietDisplayIds ?? [];
     const laserDisplayId = laserPoint ? opts.display.displayAt(laserPoint) : null;
     if (laserDisplayId !== null && !laserQuiet.includes(laserDisplayId)) showing.add(laserDisplayId);
@@ -855,6 +860,7 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
           // Quiet displays and a cat out of sight get no dot; after Laser Mode ends one null clears it.
           ...(laserOn || clearLaser ? { laser: laserPoint && !laserQuiet.includes(e.displayId) ? laserPoint : null } : {}),
           ...(reducedMotion ? { reducedMotion: true } : {}),
+          ...(accessory !== undefined ? { accessory } : {}),
         });
         // An overlay that shows only props or the dot still gets a visible frame: the cat's own
         // visibility is about the cat, which is not drawn there (it lies on another display).
@@ -1306,6 +1312,9 @@ export function createOverlayManager(opts: OverlayManagerOptions): OverlayManage
     handleRendererError(wcId, message) {
       const e = byWc.get(wcId);
       log.warn('overlay renderer reported an error', { displayId: e?.displayId ?? null, message });
+    },
+    refresh() {
+      if (!disposed && lastOutput) render(lastOutput, lastSimNow, lastHidden, lastExtras);
     },
     applySettings(next, prev) {
       if (prev && prev.appearance.hideFromScreenCapture === next.appearance.hideFromScreenCapture) return;

@@ -57,6 +57,8 @@ export interface RenderMapContext {
   laser?: Point | null;
   /** Living Companion: the user's reduced-motion choice, carried to the renderer (absent = not sent). */
   reducedMotion?: boolean;
+  /** Worn accessory, the same on every display; absent = none. */
+  accessory?: 'heartPendant';
 }
 
 /**
@@ -177,6 +179,7 @@ export function mapRenderState(out: SimOutput, appearance: Appearance, ctx: Rend
     ...(out.sleepDepth !== undefined && Number.isFinite(out.sleepDepth) ? { sleepDepth: clamp01(out.sleepDepth) } : {}),
     ...(ctx.laser !== undefined ? { laser: mapLaser(ctx.laser, ctx) } : {}),
     ...(ctx.reducedMotion !== undefined ? { reducedMotion: ctx.reducedMotion === true } : {}),
+    ...(ctx.accessory !== undefined ? { accessory: ctx.accessory } : {}),
   };
 }
 
